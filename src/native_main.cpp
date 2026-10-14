@@ -17,6 +17,7 @@
 #include "recovered/service47_native.h"
 #include "recovered/bulk_array_native.h"
 #include "recovered/manager_queue_native.h"
+#include "recovered/context_owner_native.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -149,6 +150,85 @@ bool VerifiedBulkStartup(const dokodemo::startup::Trace& trace,const std::string
         &&state.known&&state.calls==1&&state.cursor_bytes==112&&state.decoded_words==54
         &&state.guard==0&&state.state==0xFFFF&&state.released_entities==0;
 }
+dokodemo::recovered::StringFixture ConditionalStringFixture() {
+    dokodemo::recovered::StringFixture fixture;
+    fixture.enabled=fixture.bss_window_mapped=fixture.heap_ready=true;
+    fixture.memory_disjoint=fixture.allocator_policy_known=true;
+    fixture.initial_heap.assign(fixture.heap_size,0xCC);
+    // BOOT D8AD4 literal copied into an explicit mapped BSS window. Actual
+    // producer execution/readiness is a premise, rather than inferred BSS data.
+    fixture.bss_window={0x83,0x41,0x83,0x43,0x83,0x52,0,0,0x30,0x34,0x32,0x35,0x34,0x30,0x33,0x33};
+    return fixture;
+}
+dokodemo::startup::StringService20Projection ConditionalStringGetters() {
+    dokodemo::startup::StringService20Projection getters;
+    getters.enabled=getters.memory_disjoint=getters.date_record_mapped=getters.shared_global_table_mapped=true;
+    const auto padded=[](const char* text) {
+        std::vector<uint8_t> bytes(16,0);
+        std::copy_n(reinterpret_cast<const uint8_t*>(text),std::char_traits<char>::length(text),bytes.begin());
+        return bytes;
+    };
+    getters.string_windows={{1,padded("TORO")},{5,padded("PORTABLE")},{7,padded("Tokyo")},{8,padded("BIRTHDAY")}};
+    getters.scalar_words={{2,3},{4,7},{6,11},{9,14},{10,1}};
+    getters.date_words={0,0,23,9,14,10,2026};
+    return getters;
+}
+dokodemo::startup::Service48Projection ConditionalService48Projection() {
+    dokodemo::startup::Service48Projection projection;
+    auto& fixture=projection.fixture;
+    fixture.enabled=fixture.manager_cell_mapped=fixture.manager_record_mapped=true;
+    fixture.singleton_mapped=fixture.arena_pointer_mapped=fixture.memory_disjoint=true;
+    fixture.manager_stable_during_call=fixture.pool_pointer_cell_mapped=true;
+    fixture.original_return_word=0x10000000;
+    projection.general_heap=ConditionalStringFixture();
+    projection.general_heap.bss_window_mapped=false;
+    projection.general_heap.bss_window.clear();
+    projection.general_heap.heap_base=0x600000;
+    const auto append=[&](uint32_t word) {
+        for(unsigned i=0;i<4;++i) projection.prepared_payload.push_back(static_cast<uint8_t>(word>>(8*i)));
+    };
+    // Explicit loaded NONNULL record; actual producer/loading is still unknown.
+    append(0x900000A2);
+    for(unsigned i=0;i<162;++i) append(0x80000000);
+    return projection;
+}
+dokodemo::startup::Trace StorageStartup(const dokodemo::script::Program& program,uint8_t host) {
+    const auto record=host?dokodemo::startup::Service48Projection{}:ConditionalService48Projection();
+    dokodemo::startup::StartupProbe probe(program,host,512,{true,true,true,true,true,0},
+        ConditionalService47Fixture(),ConditionalStringFixture(),ConditionalStringGetters(),record);
+    return RunToBoundary(probe);
+}
+bool VerifiedStorageStartup(const dokodemo::startup::Trace& trace,const std::string& source,uint8_t host,
+                            const dokodemo::script::Program& program) {
+    const std::map<std::string,uint32_t> host1_counts={
+        {"INU",15207},{"KAERU",14297},{"NEKO",15277},{"ROBO",13702},{"USAGI",14752}};
+    const auto& context=trace.context;
+    const auto& old=context.service47;
+    const auto& bytes=program.bytes();
+    const size_t offset=28u+trace.pc;
+    if(offset+2>=bytes.size() ||bytes[offset]!=0x8B
+        ||bytes[offset+1]!=(host?0xF0:9) ||(!host&&bytes[offset+2]!=0)) return false;
+    if(host>1 || trace.status!=dokodemo::startup::Status::Halted ||trace.diagnostic.opcode!=0x8B
+        ||trace.executed!=(host?host1_counts.at(source):8504u) ||trace.fp!=(host?12:10) ||trace.sp!=(host?15:13)
+        ||!context.global_writes_complete ||context.local_writes.size()!=2
+        ||context.global_writes.size()!=(host?1414u:1404u) ||!old.known ||old.calls!=1
+        ||old.cursor_bytes!=112 ||old.decoded_words!=54 ||old.guard!=0 ||old.state!=0xFFFF) return false;
+    if(host) return context.string_arena.known &&context.string_arena.live_allocations==7
+        &&context.string_arena.allocations==17 &&context.string_arena.releases==10 &&context.string_arena.copies==17
+        &&context.string_arena.conversion_cursor==0
+        &&context.string_arena.sha256=="142e94eb9e9be9d0e759e1314a6ed628a4b2d74a0f374e38440e3a76914d62b7"
+        &&context.host_reference_bindings.size()==7 &&bytes[offset+2]==2
+        &&context.stack_window.at(13).word==0x20000027
+        &&context.stack_window.at(14).kind==dokodemo::startup::Value::Kind::StackReference
+        &&context.stack_window.at(14).index==12 &&trace.result.word==0;
+    return context.general_arena.known &&context.general_arena.live_allocations==0
+        &&context.general_arena.allocations==2 &&context.general_arena.releases==2
+        &&context.general_arena.sha256=="40ad7e5e5b312cc629b2939128b5759ddd9a3218bc7d6449c44b3423e6ef21a1"
+        &&context.service48.completed_calls==1 &&context.service48.heap_release_calls==2
+        &&context.service48.cursor_bytes==652 &&context.service48.decoded_words==163
+        &&context.service48.manager_record==0 &&context.service48.manager_clears==1
+        &&context.host_reference_bindings.size()==8 &&trace.result.word==0x10000000;
+}
 class Service47TestCells final : public dokodemo::recovered::Service47Cells {
 public:
     std::array<dokodemo::recovered::Service47Cell,4> slots{};
@@ -163,11 +243,15 @@ public:
 };
 struct OwnedManagerPrefix {
     std::unique_ptr<dokodemo::recovered::OwnedManagerQueue> manager;
+    std::unique_ptr<dokodemo::recovered::OwnedContextOwner> callbackOwner;
     dokodemo::recovered::ManagerDrainResult drain;
     dokodemo::recovered::ManagerSnapshot snapshot;
+    dokodemo::recovered::ContextOwnerSnapshot ownerSnapshot;
+    dokodemo::recovered::ContextOwnerBoundary initializationCut, callbackCut;
+    bool ownerCheckpoint=false, ownerVerified=false;
     bool verified=false;
 };
-OwnedManagerPrefix ConstructManagerPrefix() {
+OwnedManagerPrefix ConstructManagerPrefix(bool ownerCheckpoint=false) {
     using namespace dokodemo::recovered;
     OwnedManagerPrefix result;
     auto made=OwnedManagerQueue::Create(15,32);
@@ -189,6 +273,32 @@ OwnedManagerPrefix ConstructManagerPrefix() {
         &&result.snapshot.terminal&&result.snapshot.allocated_bytes==1136
         &&result.snapshot.queue_cursor_bytes==0&&result.snapshot.registries.size()==1
         &&result.snapshot.registries[0].occupied==5;
+    // The callback owner is an independently owned96-byte CKingKai payload,
+    // separate from the manager's28-byte registry projection and CLoadMan4F4.
+    auto owner=OwnedContextOwner::Create();
+    if(!owner.owner) throw std::runtime_error("Owned callback payload allocation failed");
+    result.initializationCut=owner.boundary;
+    result.callbackOwner=std::move(owner.owner);
+    const auto binding=result.callbackOwner->BindManagerRegistry(*result.manager,registry.token);
+    result.ownerCheckpoint=ownerCheckpoint;
+    if(ownerCheckpoint) {
+        // Explicit post-external-setup fixture; unresolved1B188 is not executed
+        // or reported as successful. These mapped words do not enable host flags.
+        const auto tail=result.callbackOwner->ApplyInitializationTailFromCheckpoint();
+        if(tail.kind!=ContextOwnerStop::None) throw std::runtime_error("Owned suffix checkpoint refused");
+        ContextOwnerCallbackInputs inputs;
+        inputs.gate_segment1_10fd4={true,0};
+        inputs.kernel_context_segment1_e5880={true,0};
+        result.callbackCut=result.callbackOwner->ContinueManagerCallback(*result.manager,result.drain.boundary,inputs);
+    }
+    result.ownerSnapshot=result.callbackOwner->Snapshot();
+    result.ownerVerified=binding.kind==ContextOwnerStop::None&&result.ownerSnapshot.bound_records_match
+        &&result.ownerSnapshot.blocks.size()==2&&result.ownerSnapshot.blocks[0].bytes.size()==96
+        &&result.ownerSnapshot.blocks[1].bytes.size()==164
+        &&result.initializationCut.kind==ContextOwnerStop::InitializationCall
+        &&(!ownerCheckpoint||(result.callbackCut.kind==ContextOwnerStop::KernelCall
+            &&result.callbackCut.source_pc==0x74DBC&&result.callbackCut.callee==0xCB288
+            &&result.callbackCut.scheduler_budget_low==2000&&result.callbackCut.scheduler_budget_high==0));
     return result;
 }
 int SelfTest(const Options& options) {
@@ -212,6 +322,13 @@ int SelfTest(const Options& options) {
         for(const auto& block:owned.snapshot.allocations) allocated+=block.bytes;
         check(allocated==1136&&allocated==owned.snapshot.allocated_bytes,
             "owned fixed allocations retain exact initialized source-layout storage");
+        check(owned.ownerVerified&&!owned.ownerSnapshot.initialization_tail_applied
+            &&owned.ownerSnapshot.blocks[0].initialized.at(0x2C)==0,
+            "owned CKingKai payload preserves unknown pre-initialization budget");
+        auto checkpoint=ConstructManagerPrefix(true);
+        check(checkpoint.verified&&checkpoint.ownerVerified&&checkpoint.ownerCheckpoint
+            &&checkpoint.callbackCut.arguments==std::array<uint32_t,4>{{0,0,0,0}},
+            "explicit owner checkpoint joins callback23424 to actual unresolved kernel boundary");
         auto tiny=OwnedManagerQueue::Create(15,1);
         auto registry=tiny.manager->CreateRegistry(1);
         auto dropped=tiny.manager->RegisterCallback(registry.token,1,{0x23424,0},0x202);
@@ -332,6 +449,8 @@ int SelfTest(const Options& options) {
                     (std::string("conditional mapped service47 and ctx28 startup / ")+name+" / "+std::to_string(hostByte)).c_str());
                 check(VerifiedBulkStartup(RunToBoundary(service),name,hostByte),
                     (std::string("joined builtin97 and resumed original branch / ")+name+" / "+std::to_string(hostByte)).c_str());
+                check(VerifiedStorageStartup(StorageStartup(program,hostByte),name,hostByte,program),
+                    (std::string("joined owned strings or NONNULL record lifecycle / ")+name+" / "+std::to_string(hostByte)).c_str());
             }
         }
         bool dicLoaded = dictionary.load_original(base / (std::string(name) + ".DIC"), diagnostic);
@@ -387,7 +506,9 @@ struct Application {
     bool messageVisible=false;
     bool savedSuccessfully=false, loadedSuccessfully=false, startupPrefixVerified=false, service47Verified=false, bulkVerified=false;
     std::unique_ptr<dokodemo::recovered::OwnedManagerQueue> managerQueue;
-    bool managerVerified=false;
+    std::unique_ptr<dokodemo::recovered::OwnedContextOwner> callbackOwner;
+    bool managerVerified=false, storageVerified=false;
+    std::array<std::unique_ptr<dokodemo::startup::StartupProbe>,2> storageProbes;
     int width = 1080, height = 760; HDC bufferDC = nullptr; HBITMAP buffer = nullptr; HGDIOBJ oldBuffer = nullptr; void* pixels = nullptr;
     explicit Application(Options value) : options(std::move(value)) {
         images = FindImages(options.assets);
@@ -470,7 +591,7 @@ struct Application {
         auto source = messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
         Text(dc, L"Исходный ресурс: " + source, {24,y,width-24,y+28}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
         Text(dc, status, {24,y+30,width-24,y+78}, RGB(211,219,223));
-        Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
+        Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
         std::wostringstream metrics; metrics << L"Win32 · " << frames << L" кадров · " << inputEvents << L" событий ввода · " << images.size() << L" ресурсов";
         Text(dc, metrics.str(), {24,height-31,width-24,height-8}, RGB(125,149,163));
     }
@@ -513,6 +634,7 @@ struct Application {
         else if (key == VK_F5) Save();
         else if (key == VK_F6) Service47Probe();
         else if (key == VK_F7) ManagerProbe();
+        else if (key == VK_F8) StorageProbe();
         else if (key == VK_F9) Load();
         else if (key == VK_F12) Capture();
         else if (key == VK_ESCAPE) DestroyWindow(window);
@@ -578,10 +700,11 @@ struct Application {
     }
     void ManagerProbe() {
         messageVisible=false;
-        auto built=ConstructManagerPrefix();
-        managerVerified=built.verified;
+        auto built=ConstructManagerPrefix(true);
+        managerVerified=built.verified&&built.ownerVerified;
         managerQueue=std::move(built.manager); // Keep real owned storage alive in the application.
-        status=L"Нативная очередь: пять исходных регистраций связаны; остановка перед callback. Игровой host ещё не подтверждён.";
+        callbackOwner=std::move(built.callbackOwner);
+        status=L"Очередь и owner созданы; условная callback-проба достигла kernel-барьера. Исходная инициализация host не подтверждена.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence/L"manager-queue-probe.json",std::ios::binary);
         report<<"{\"native_owned_storage\":true,\"allocated_bytes\":"<<built.snapshot.allocated_bytes
@@ -591,8 +714,57 @@ struct Application {
             <<",\"boundary_pc\":"<<built.drain.boundary.source_pc
             <<",\"callback_symbol\":"<<built.drain.boundary.descriptor.function
             <<",\"terminal\":"<<(built.snapshot.terminal?"true":"false")
+            <<",\"callback_owner_bytes\":260,\"callback_owner_type\":\"CKingKai96\""
+            <<",\"owner_base_projection_distinct\":true,\"owner_verified\":"<<(built.ownerVerified?"true":"false")
+            <<",\"unexecuted_initialization_pc\":"<<built.initializationCut.source_pc
+            <<",\"unexecuted_initialization_callee\":"<<built.initializationCut.callee
+            <<",\"conditional_owner_checkpoint\":true,\"kernel_boundary_pc\":"<<built.callbackCut.source_pc
+            <<",\"kernel_callee\":"<<built.callbackCut.callee
+            <<",\"scheduler_budget_low\":"<<built.callbackCut.scheduler_budget_low
+            <<",\"kernel_return_observed\":false"
             <<",\"verified\":"<<(managerVerified?"true":"false")
             <<",\"actual_psp_manager_available\":false,\"host_flags_enabled\":false,\"full_game\":false}\n";
+    }
+    void StorageProbe() {
+        messageVisible=false;
+        if(!program.loaded()) {status=L"NEKO.KSC не загружен.";return;}
+        std::filesystem::create_directories(options.evidence);
+        std::ofstream report(options.evidence/L"owned-storage-probe.json",std::ios::binary);
+        report<<"{\"conditional_sources\":true,\"actual_producers_observed\":false,\"full_game\":false,\"routes\":[";
+        storageVerified=true;
+        for(uint8_t host:{uint8_t(0),uint8_t(1)}) {
+            const auto record=host?dokodemo::startup::Service48Projection{}:ConditionalService48Projection();
+            storageProbes[host]=std::make_unique<dokodemo::startup::StartupProbe>(program,host,uint16_t{512},
+                dokodemo::startup::HostAbiProjection{true,true,true,true,true,0},
+                ConditionalService47Fixture(),ConditionalStringFixture(),ConditionalStringGetters(),record);
+            // Retain the actual arenas in the application at the next ABI cut;
+            // report summaries do not stand in for owned live string storage.
+            const auto trace=RunToBoundary(*storageProbes[host]);
+            const bool ok=VerifiedStorageStartup(trace,"NEKO",host,program);
+            storageVerified=storageVerified&&ok;
+            if(host) report<<',';
+            const auto& context=trace.context;
+            const auto& heap=host?context.string_arena:context.general_arena;
+            const auto& bytes=program.bytes();
+            const size_t commandOffset=28u+trace.pc;
+            const uint8_t nextId=bytes.at(commandOffset+1),nextArgc=bytes.at(commandOffset+2);
+            report<<"{\"host\":"<<unsigned(host)<<",\"executed\":"<<trace.executed
+                <<",\"pc\":"<<trace.pc<<",\"sp\":"<<trace.sp<<",\"fp\":"<<trace.fp
+                <<",\"result_raw\":"<<trace.result.word<<",\"globals\":"<<context.global_writes.size()
+                <<",\"globals_sha256\":"<<JsonString(context.global_writes_sha256)
+                <<",\"locals\":"<<context.local_writes.size()<<",\"bindings\":"<<context.host_reference_bindings.size()
+                <<",\"heap_sha256\":"<<JsonString(heap.sha256)<<",\"allocations\":"<<heap.allocations
+                <<",\"releases\":"<<heap.releases<<",\"live_allocations\":"<<heap.live_allocations
+                <<",\"service48_calls\":"<<context.service48.completed_calls
+                <<",\"next_builtin\":"<<unsigned(nextId)<<",\"next_argc\":"<<unsigned(nextArgc);
+            if(nextId==0xF0 &&trace.sp>=nextArgc &&nextArgc>0) {
+                const auto& service=context.stack_window.at(static_cast<size_t>(trace.sp-nextArgc));
+                report<<",\"next_host_service_word\":"<<service.word;
+            }
+            report<<",\"verified\":"<<(ok?"true":"false")<<",\"barrier\":"<<JsonString(trace.diagnostic.text())<<'}';
+        }
+        report<<"],\"persistent_owned_contexts\":2,\"verified\":"<<(storageVerified?"true":"false")<<"}\n";
+        status=L"Условные storage-пробы: строки и ненулевая запись выполнены; следующие ABI остаются барьерами. Исходные producers не подтверждены.";
     }
     void MessageFixture() {
         messageVisible=false;
@@ -635,7 +807,7 @@ struct Application {
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;
-            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
+            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F8,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
         }
         if (options.smoke && elapsed > 2.0) {
             Capture();
@@ -648,6 +820,7 @@ struct Application {
                 << ",\n  \"conditional_service47_verified\": " << (service47Verified ? "true" : "false")
                 << ",\n  \"conditional_bulk_startup_verified\": " << (bulkVerified ? "true" : "false")
                 << ",\n  \"owned_manager_queue_verified\": " << (managerVerified ? "true" : "false")
+                << ",\n  \"conditional_owned_storage_verified\": " << (storageVerified ? "true" : "false")
                 << ",\n  \"actual_buffer_available\": false"
                 << ",\n  \"original_message_rendered\": " << (messageVisible ? "true" : "false")
                 << ",\n  \"full_game\": false,\n  \"source\": " << JsonString(messageVisible ? "scripts/original/NEKO.KSC" : Utf8(image.path.wstring())) << "\n}\n";

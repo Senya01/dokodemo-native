@@ -1,6 +1,8 @@
 #pragma once
 #include "script_vm.h"
 #include "recovered/service47_native.h"
+#include "recovered/string_native.h"
+#include "recovered/service48_native.h"
 #include <array>
 #include <cstdint>
 #include <map>
@@ -41,6 +43,9 @@ struct Snapshot {
     std::map<uint32_t, Value> local_writes; // Small original ctx+24 table, complete in every snapshot.
     std::map<uint32_t, Value> host_reference_bindings; // Singleton fields by byte offset; symbolic Arena pointer identity.
     recovered::Service47State service47;
+    recovered::StringArenaSummary string_arena;
+    recovered::StringArenaSummary general_arena;
+    recovered::Service48State service48;
     // Final contexts keep the full map. Event snapshots carry a canonical
     // digest/count instead; replay Event.global_write_delta to reconstruct it.
     bool global_writes_complete = true;
@@ -69,6 +74,26 @@ struct HostAbiProjection {
         return linked_context_mapped && selected_record_mapped && singleton_mapped &&
                arena_mapping_disjoint && constants_initialized && selected_record_index <= 1;
     }
+};
+
+// Separately supplied mapped source getters, never implied by selector0 or
+// native allocation. Actual profile/date producer and readiness remain unknown.
+struct StringService20Projection {
+    bool enabled = false, memory_disjoint = false, date_record_mapped = false;
+    //Stronger than readability: independently mapped cell1C949C points to
+    //THIS Program's global table with its CURRENT live overrides and bound.
+    //No source initializer/alias relation is inferred from host/KSC metadata.
+    bool shared_global_table_mapped = false;
+    std::map<uint32_t,std::vector<uint8_t>> string_windows; //selectors1,5,7,8; exactly16 readable bytes.
+    std::map<uint32_t,uint32_t> scalar_words; //selectors2,4,6,9,10; explicit raw source cells.
+    std::array<uint32_t,7> date_words{}; //24F34(0): +8minute,+12hour,+16day,+20month,+24year.
+};
+struct Service48Projection {
+    recovered::Service48Fixture fixture; //all source manager/singleton/pool availability defaultsfalse.
+    //Separate GENERAL allocator identity1C93D4, distinct from STRING1C94A8.
+    //Sharing the portable class does not alias the actual source managers.
+    recovered::StringFixture general_heap;
+    std::vector<uint8_t> prepared_payload; //explicit NONNULL post2E7C mode1 fixture, producerunknown.
 };
 
 struct BuiltinCall {
@@ -110,7 +135,8 @@ public:
     // exposed for bounded failure checks; ordinary callers use the default.
     StartupProbe(const script::Program& program, uint8_t host_byte,
                  uint16_t stack_slot_limit = 512, HostAbiProjection projection = {},
-                 recovered::Service47Fixture service47 = {});
+                 recovered::Service47Fixture service47 = {}, recovered::StringFixture strings = {},
+                 StringService20Projection string_getters = {}, Service48Projection service48 = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -129,12 +155,18 @@ private:
         std::map<uint32_t, Value> local_writes;
         std::map<uint32_t, Value> host_reference_bindings;
         recovered::Service47State service47;
+        recovered::StringArena strings;
+        recovered::StringArena general_heap;
+        recovered::Service48State service48;
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
     uint16_t stack_slot_limit_ = 512;
     HostAbiProjection host_abi_projection_;
     recovered::Service47Fixture service47_fixture_;
+    recovered::StringFixture string_fixture_;
+    StringService20Projection string_getters_;
+    Service48Projection service48_projection_;
     Context context_;
     Status status_ = Status::Running;
     script::Diagnostic diagnostic_;

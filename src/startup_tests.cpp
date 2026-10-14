@@ -1,6 +1,7 @@
 #include "startup_probe.h"
 #include "recovered/calendar_native.h"
 #include "recovered/bulk_array_native.h"
+#include "core_hash.h"
 #ifdef DOKODEMO_STARTUP_VERIFY_MAIN
 #include <algorithm>
 #include <filesystem>
@@ -45,6 +46,8 @@ struct StartupTestAccess {
         return probe.snapshot(probe.context_);
     }
     static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
+    static void set_strings(StartupProbe& probe,recovered::StringArena arena) {probe.context_.strings=std::move(arena);}
+    static void discard_events(StartupProbe& probe) {probe.events_.clear();}
     static Snapshot set_service(StartupProbe& probe, recovered::Service47State state) {
         probe.context_.service47=state;return probe.snapshot(probe.context_);
     }
@@ -110,7 +113,8 @@ void snapshot_json(const startup::Snapshot& snapshot) {
     value_json(snapshot.result);
     std::cout << ",\"stack_window\":[";
     for (size_t i = 0; i < snapshot.stack_window.size(); ++i) {
-        if (i) std::cout << ','; value_json(snapshot.stack_window[i]);
+        if (i) std::cout << ',';
+        value_json(snapshot.stack_window[i]);
     }
     std::cout << "],\"timer_base_set_at_pc\":";
     if (snapshot.timer_base_set) std::cout << '"' << hexadecimal(snapshot.timer_base_pc) << '"';
@@ -121,7 +125,8 @@ void snapshot_json(const startup::Snapshot& snapshot) {
     std::cout << ",\"reference_bindings\":{";
     bool binding_first = true;
     for (const auto& entry : snapshot.host_reference_bindings) {
-        if (!binding_first) std::cout << ','; binding_first = false;
+        if (!binding_first) std::cout << ',';
+        binding_first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
     std::cout << '}';
@@ -134,18 +139,38 @@ void snapshot_json(const startup::Snapshot& snapshot) {
                   << ",\"format_return\":" << s.format_return << ",\"null_free_calls\":" << s.null_free_calls
                   << ",\"released_entities\":" << s.released_entities << '}';
     }
+    if(snapshot.string_arena.known) {
+        const auto& s=snapshot.string_arena;
+        std::cout<<",\"string_arena\":{\"known\":true,\"allocations\":"<<s.allocations
+            <<",\"reallocations\":"<<s.reallocations<<",\"releases\":"<<s.releases<<",\"copies\":"<<s.copies
+            <<",\"live_allocations\":"<<s.live_allocations<<",\"conversion_cursor\":"<<s.conversion_cursor
+            <<",\"sha256\":\""<<s.sha256<<"\"}";
+    }
+    if(snapshot.general_arena.known) {
+        const auto& a=snapshot.general_arena;const auto& s=snapshot.service48;
+        std::cout<<",\"general_arena\":{\"known\":true,\"allocations\":"<<a.allocations<<",\"reallocations\":"<<a.reallocations
+            <<",\"releases\":"<<a.releases<<",\"copies\":"<<a.copies<<",\"live_allocations\":"<<a.live_allocations
+            <<",\"conversion_cursor\":"<<a.conversion_cursor<<",\"sha256\":\""<<a.sha256<<"\"}";
+        std::cout<<",\"service48\":{\"manager_record\":"<<s.manager_record<<",\"destination_registered\":"<<(s.destination_registered?"true":"false")
+            <<",\"registered_word\":"<<s.registered_word<<",\"format_called\":"<<(s.format_called?"true":"false")
+            <<",\"cursor_bytes\":"<<s.cursor_bytes<<",\"decoded_words\":"<<s.decoded_words<<",\"format_return\":"<<s.format_return
+            <<",\"payload_clears\":"<<s.payload_clears<<",\"record_releases\":"<<s.record_releases<<",\"manager_clears\":"<<s.manager_clears
+            <<",\"completed_calls\":"<<s.completed_calls<<",\"heap_release_calls\":"<<s.heap_release_calls<<",\"null_release_calls\":"<<s.null_release_calls<<"}";
+    }
     std::cout << "},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
               << ",\"global_writes_count\":" << snapshot.global_writes_count
               << ",\"global_writes_sha256\":\"" << snapshot.global_writes_sha256 << "\",\"global_writes\":{";
     bool first = true;
     for (const auto& entry : snapshot.global_writes) {
-        if (!first) std::cout << ','; first = false;
+        if (!first) std::cout << ',';
+        first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
     std::cout << "},\"local_writes\":{";
     first = true;
     for (const auto& entry : snapshot.local_writes) {
-        if (!first) std::cout << ','; first = false;
+        if (!first) std::cout << ',';
+        first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
     std::cout << "}}";
@@ -155,7 +180,8 @@ void builtin_json(const startup::BuiltinCall& builtin) {
     std::cout << "{\"pc\":\"" << hexadecimal(builtin.pc) << "\",\"id\":" << unsigned(builtin.id)
               << ",\"argc\":" << unsigned(builtin.argc) << ",\"arguments\":[";
     for (size_t i = 0; i < builtin.arguments.size(); ++i) {
-        if (i) std::cout << ','; value_json(builtin.arguments[i]);
+        if (i) std::cout << ',';
+        value_json(builtin.arguments[i]);
     }
     std::cout << "],\"boot_handler_va\":\"" << hexadecimal(builtin.handler_va)
               << "\",\"host_service\":" << builtin.host_service << ",\"host_handler_va\":\""
@@ -189,7 +215,8 @@ void output(const char* name, const script::Program& program, const startup::Tra
         std::cout << ",\"global_write_delta\":{";
         bool first = true;
         for (const auto& entry : event.global_write_delta) {
-            if (!first) std::cout << ','; first = false;
+            if (!first) std::cout << ',';
+            first = false;
             std::cout << '"' << entry.first << "\":"; value_json(entry.second);
         }
         std::cout << "}}";
@@ -203,6 +230,8 @@ bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
         a.timer_base_set == b.timer_base_set && a.timer_base_pc == b.timer_base_pc &&
         a.host_flag_104_known == b.host_flag_104_known && a.host_flag_104 == b.host_flag_104 &&
         a.host_reference_bindings == b.host_reference_bindings && a.service47 == b.service47 &&
+        a.string_arena==b.string_arena && a.general_arena==b.general_arena &&
+        a.service48.manager_record==b.service48.manager_record && a.service48.completed_calls==b.service48.completed_calls &&
         a.global_writes == b.global_writes && a.local_writes == b.local_writes && a.global_writes_complete == b.global_writes_complete &&
         a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256;
 }
@@ -548,6 +577,180 @@ void service47_traces(const std::filesystem::path& base, bool full_slots = false
     }
     std::cout << "{\"service47_connected_resume_checks\":\"pass\",\"traces\":10,\"repeat_ready_barriers\":10,\"repeat_null_successes\":10}\n";
 }
+recovered::StringFixture natural_string_fixture() {
+    recovered::StringFixture f;f.enabled=f.bss_window_mapped=f.heap_ready=f.memory_disjoint=f.allocator_policy_known=true;
+    f.initial_heap.assign(f.heap_size,0xCC);
+    //Explicit source-proved literal D8AD4 as supplied BSS window. The producer
+    //route/readiness is a premise; no zero BSS or observed PSP heap is inferred.
+    f.bss_window={0x83,0x41,0x83,0x43,0x83,0x52,0,0,0x30,0x34,0x32,0x35,0x34,0x30,0x33,0x33};
+    return f;
+}
+startup::StringService20Projection natural_string_getters() {
+    startup::StringService20Projection g;g.enabled=g.memory_disjoint=g.date_record_mapped=g.shared_global_table_mapped=true;
+    const auto padded=[](const char* s) {std::vector<uint8_t> b(16,0);std::copy_n(reinterpret_cast<const uint8_t*>(s),std::char_traits<char>::length(s),b.begin());return b;};
+    g.string_windows={{1,padded("TORO")},{5,padded("PORTABLE")},{7,padded("Tokyo")},{8,padded("BIRTHDAY")}};
+    g.scalar_words={{2,3},{4,7},{6,11},{9,14},{10,1}};
+    g.date_words={0,0,23,9,14,10,2026};return g;
+}
+startup::Service48Projection natural_service48_projection() {
+    startup::Service48Projection p;auto& f=p.fixture;
+    f.enabled=f.manager_cell_mapped=f.manager_record_mapped=f.singleton_mapped=f.arena_pointer_mapped=true;
+    f.memory_disjoint=f.manager_stable_during_call=f.pool_pointer_cell_mapped=true;f.original_return_word=0x10000000;
+    p.general_heap=natural_string_fixture();p.general_heap.bss_window_mapped=false;p.general_heap.bss_window.clear();p.general_heap.heap_base=0x600000;
+    const auto append=[&](uint32_t w) {for(unsigned i=0;i<4;++i)p.prepared_payload.push_back(static_cast<uint8_t>(w>>(8*i)));};
+    append(0x900000A2);for(uint32_t i=0;i<162;++i)append(0x80000000);return p;
+}
+void string_traces(const std::filesystem::path& base,bool all_hosts=false) {
+    stream_events=true;script::Program program;script::Diagnostic error;
+    for(const char* name:{"INU","KAERU","NEKO","ROBO","USAGI"}) {
+        require(program.load_original(base/(std::string(name)+".KSC"),error),error.text());
+        for(uint8_t host:{uint8_t(0),uint8_t(1)}) {
+        if(!all_hosts && host==0)continue;
+        const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
+        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        startup::Trace trace;do {trace=probe.run(10000);} while(trace.status==startup::Status::BudgetExhausted);
+        require(trace.status==startup::Status::Halted && (host==1 ? trace.context.string_arena.known && trace.context.string_arena.copies>0 : trace.context.service48.completed_calls==1),
+                "Stage8 continuation failed: "+trace.diagnostic.reason);
+        require(same_context(trace.context,probe.run(1).context),"String repeated halt changed state");
+        output(name,program,trace);
+        std::cout<<"{\"all512_final\":true,\"source\":\""<<name<<".KSC\",\"host\":"<<unsigned(host)<<",\"slots\":[";
+        const auto& slots=startup::StartupTestAccess::all_slots(probe);
+        for(size_t i=0;i<slots.size();++i){if(i)std::cout<<',';value_json(slots[i]);}std::cout<<"]}\n";
+        startup::StartupProbe resumed(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        startup::Trace other;do {other=resumed.run(127);} while(other.status==startup::Status::BudgetExhausted);
+        require(same_context(trace.context,other.context) && slots==startup::StartupTestAccess::all_slots(resumed),"String resumed full512/context differs");
+        }
+    }
+    std::cout<<"{\"string_connected_resume_checks\":\"pass\",\"traces\":"<<(all_hosts?10:5)<<",\"full512\":true}\n";
+}
+void string_component_vectors(const std::filesystem::path& path) {
+    std::ifstream in(path,std::ios::binary);require(bool(in),"String vectors missing");
+    const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"String vector truncated");return v;};
+    const auto bytes=[&](uint32_t n) {std::vector<uint8_t> v(n);if(n)in.read(reinterpret_cast<char*>(v.data()),n);require(bool(in),"String bytes truncated");return v;};
+    require(u32()==0x38525453u,"String vector magic");const uint32_t count=u32();
+    for(uint32_t i=0;i<count;++i) {
+        const uint32_t entry=u32(),arg0=u32(),arg1=u32(),arg2=u32(),common=u32(),heapbase=u32(),size=u32();
+        const uint32_t cursor=u32(),expected_cursor=u32(),expected_return=u32(),prior=u32(),sourceword=u32(),expected_word=u32();
+        const uint32_t source_address=u32(),source_count=u32();
+        const auto ctl=bytes(32),heap=bytes(size),source=bytes(source_count),expected_ctl=bytes(32),expected_heap=bytes(size);
+        recovered::StringFixture f;f.enabled=f.bss_window_mapped=f.heap_ready=f.memory_disjoint=f.allocator_policy_known=true;
+        f.common_base=common;f.heap_base=heapbase;f.heap_size=size;f.initial_heap=heap;f.forward_positive=ctl[16]!=0;f.conversion_cursor=cursor;
+        recovered::StringArena arena=recovered::StringArena::FromMappedStorage(f,ctl,heap);
+        uint32_t word=prior,result=0;
+        if(entry==0x63318)result=arena.allocate(static_cast<int32_t>(arg1));
+        else if(entry==0x63378)arena.free(arg1);
+        else if(entry==0x63680)result=arena.reallocate(arg1,arg2);
+        else if(entry==0x753E0) {
+            if(source_address>=heapbase && source_address<heapbase+size)arena.assign753E0(word,source_address);
+            else arena.assign_mapped753E0(word,source,source_address);
+        } else if(entry==0x7581C)arena.copy7581C(word,sourceword);
+        else if(entry==0x7515C)arena.release7515C(word);
+        else if(entry==0x75778)result=arena.resolve75778(prior);
+        else if(entry==0x1D43C || entry==0x1C184) {
+            f.bss_window=source;if(entry==0x1C184)word=0x10000000u;
+            recovered::StringService20Selector0(arena,f,0,word);
+        } else throw std::runtime_error("String vector unsupported entry "+hexadecimal(entry));
+        const std::string label="String vector"+std::to_string(i)+" "+hexadecimal(entry);
+        require(arena.control_bytes()==expected_ctl && arena.heap_bytes()==expected_heap,label+" full source manager/heap bytes differ");
+        require(arena.conversion_cursor()==expected_cursor,label+" cursor differs");
+        if(entry==0x63318 || entry==0x63680 || entry==0x75778)require(result==expected_return,label+" returned pointer differs");
+        if(entry==0x753E0 || entry==0x7581C || entry==0x7515C || entry==0x1D43C || entry==0x1C184)require(word==expected_word,label+" output word differs");
+        (void)arg0;
+    }
+    require(in.peek()==EOF,"String vectors trailing bytes");
+    std::cout<<"{\"string_component_original_word_checks\":\"pass\",\"cases\":"<<count<<",\"comparison\":\"full current heap/control bytes, pointer, tag word, conversion cursor\"}\n";
+}
+void string_connected_vectors(const std::filesystem::path& path,const std::filesystem::path& base) {
+    std::ifstream in(path,std::ios::binary);require(bool(in),"String connected vectors missing");
+    const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"String connected vector truncated");return v;};
+    const auto digest=[&]() {core::Sha256Digest v{};in.read(reinterpret_cast<char*>(v.data()),32);require(bool(in),"String digest truncated");return core::hex_digest(v);};
+    const auto value=[&]() {startup::Value v;v.kind=static_cast<startup::Value::Kind>(u32());v.word=u32();v.index=u32();v.source_file_offset=u32();return v;};
+    const auto mapping=[&]() {std::map<uint32_t,startup::Value> map;const auto n=u32();for(uint32_t i=0;i<n;++i){const uint32_t k=u32();map[k]=value();}return map;};
+    const uint32_t magic=u32();const bool all_hosts=magic==0x38585653u;
+    require(all_hosts || magic==0x384D5653u,"String connected schema");const uint32_t runs=u32();uint32_t total=0;
+    const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
+    for(uint32_t run=0;run<runs;++run) {
+        const uint32_t index=u32();const uint8_t host=all_hosts?static_cast<uint8_t>(u32()):1;
+        const uint32_t accepted=u32(),count=u32();require(index<names.size() && host<=1,"String run name index");
+        script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
+        const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
+        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        uint32_t remain=accepted;while(remain){const auto n=std::min(remain,10000u);require(probe.run(n).status==startup::Status::BudgetExhausted,"Connected prefix halted");remain-=n;}
+        for(uint32_t step=0;step<count;++step) {
+            const uint32_t pc=u32();const int32_t sp=static_cast<int32_t>(u32()),fp=static_cast<int32_t>(u32());const auto result=value();
+            const uint32_t slot_count=u32();require(slot_count==512,"Connected all512 input missing");std::array<startup::Value,512> slots{};for(auto& v:slots)v=value();
+            const uint32_t global_count=u32();const auto globals_sha=digest();const auto locals=mapping(),bindings=mapping();
+            recovered::Service47State service;
+            service.known=u32()!=0;service.control_present=u32()!=0;service.source_present=u32()!=0;
+            service.guard=static_cast<uint8_t>(u32());service.state=static_cast<uint16_t>(u32());service.calls=u32();service.cursor_bytes=u32();service.decoded_words=u32();
+            service.format_called=u32()!=0;service.format_return=static_cast<int32_t>(u32());service.null_free_calls=u32();service.released_entities=u32();
+            recovered::StringArenaSummary strings;strings.known=u32()!=0;
+            if(strings.known){strings.allocations=u32();strings.reallocations=u32();strings.releases=u32();strings.copies=u32();strings.live_allocations=u32();strings.conversion_cursor=u32();strings.sha256=digest();}
+            recovered::StringArenaSummary general;std::array<uint32_t,13> state48{};
+            if(all_hosts) {
+                general.known=u32()!=0;
+                if(general.known){general.allocations=u32();general.reallocations=u32();general.releases=u32();general.copies=u32();general.live_allocations=u32();general.conversion_cursor=u32();general.sha256=digest();for(auto& v:state48)v=u32();}
+            }
+            //Only verification discards historical event objects; VM state is
+            //unchanged, and literal run(1) retains candidate/commit behavior.
+            startup::StartupTestAccess::discard_events(probe);const auto actual=probe.run(1);
+            const auto& c=actual.context;const std::string label=std::string(names[index])+" step"+std::to_string(step);
+            require(actual.events.size()==1 && c.pc==pc && c.sp==sp && c.fp==fp && c.result==result,label+" source VM scalar state differs");
+            require(startup::StartupTestAccess::all_slots(probe)==slots,label+" original full512 differs");
+            require(c.global_writes_count==global_count && c.global_writes_sha256==globals_sha && c.local_writes==locals && c.host_reference_bindings==bindings,label+" original CURRENT full map differs");
+            require(c.service47==service && c.string_arena==strings,label+" original lifecycle/heap/cursor differs");++total;
+            if(all_hosts) {
+                require(c.general_arena==general,label+" original GENERAL1C93D4 heap differs");
+                if(general.known) {
+                    const auto& s=c.service48;
+                    const std::array<uint32_t,13> actual48{s.manager_record,uint32_t(s.destination_registered),s.registered_word,uint32_t(s.format_called),s.cursor_bytes,s.decoded_words,
+                        static_cast<uint32_t>(s.format_return),s.payload_clears,s.record_releases,s.manager_clears,s.completed_calls,s.heap_release_calls,s.null_release_calls};
+                    require(actual48==state48,label+" original service48 CURRENT state differs");
+                }
+            }
+        }
+        const auto before=probe.run(1);require(before.status==startup::Status::Halted && before.events.size()==1,"Connected next ABI cut missing");
+        require(same_context(before.context,probe.run(1).context),"Connected ABI repeat changed state");
+    }
+    require(in.peek()==EOF,"Connected vector trailing bytes");std::cout<<"{\"string_full_vm_original_word_checks\":\"pass\",\"runs\":"<<runs<<",\"commands\":"<<total<<",\"all512_and_maps\":true}\n";
+}
+void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem::path& base) {
+    std::ifstream in(path,std::ios::binary);require(bool(in),"String VM fixtures missing");
+    const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"VM fixture truncated");return v;};
+    const auto bytes=[&](uint32_t n) {std::vector<uint8_t> b(n);if(n)in.read(reinterpret_cast<char*>(b.data()),n);require(bool(in),"VM bytes truncated");return b;};
+    const auto value=[&]() {startup::Value v;v.kind=static_cast<startup::Value::Kind>(u32());v.word=u32();v.index=u32();v.source_file_offset=u32();return v;};
+    const auto slots=[&]() {const auto n=u32();require(n==512,"VM fixture needs512slots");std::vector<startup::Value> s(n);for(auto& v:s)v=value();return s;};
+    const auto mapping=[&]() {std::map<uint32_t,startup::Value> map;const auto n=u32();for(uint32_t i=0;i<n;++i){const auto k=u32();map[k]=value();}return map;};
+    const auto read_service=[&]() {recovered::Service47State s;s.known=u32()!=0;s.control_present=u32()!=0;s.source_present=u32()!=0;s.guard=static_cast<uint8_t>(u32());s.state=static_cast<uint16_t>(u32());s.calls=u32();s.cursor_bytes=u32();s.decoded_words=u32();s.format_called=u32()!=0;s.format_return=static_cast<int32_t>(u32());s.null_free_calls=u32();s.released_entities=u32();return s;};
+    const auto digest=[&]() {core::Sha256Digest d{};in.read(reinterpret_cast<char*>(d.data()),32);require(bool(in),"VM digest truncated");return core::hex_digest(d);};
+    const auto summary=[&]() {recovered::StringArenaSummary s;s.known=u32()!=0;if(s.known){s.allocations=u32();s.reallocations=u32();s.releases=u32();s.copies=u32();s.live_allocations=u32();s.conversion_cursor=u32();s.sha256=digest();}return s;};
+    require(u32()==0x38584653u,"VM fixture schema");const auto count=u32();uint32_t successes=0,barriers=0;
+    const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
+    for(uint32_t row=0;row<count;++row) {
+        const auto length=u32();const auto start=in.tellg();const auto index=u32(),pc=u32();const int32_t sp=static_cast<int32_t>(u32()),fp=static_cast<int32_t>(u32());const auto prior=value();const auto input=slots();
+        const auto globals=mapping(),locals=mapping(),bindings=mapping();const auto service=read_service();
+        auto f=natural_string_fixture();auto getters=natural_string_getters();
+        f.enabled=u32()!=0;f.bss_window_mapped=u32()!=0;f.heap_ready=u32()!=0;f.memory_disjoint=u32()!=0;f.allocator_policy_known=u32()!=0;
+        getters.enabled=u32()!=0;getters.shared_global_table_mapped=u32()!=0;f.heap_size=u32();const auto bss_count=u32();f.bss_window=bytes(bss_count);f.initial_heap.assign(f.heap_size,0xCC);
+        const bool imported=u32()!=0;recovered::StringArena arena;
+        if(imported){auto current=f;current.heap_base=u32();current.heap_size=u32();current.conversion_cursor=u32();const auto ctl=bytes(32),heap=bytes(current.heap_size);current.initial_heap=heap;arena=recovered::StringArena::FromMappedStorage(current,ctl,heap);}
+        const bool barrier=u32()!=0;const auto expected_pc=u32();const int32_t expected_sp=static_cast<int32_t>(u32()),expected_fp=static_cast<int32_t>(u32());const auto result=value();const auto expected_slots=slots();
+        const auto globals_count=u32();const auto globals_hash=digest();const auto expected_locals=mapping(),expected_bindings=mapping();const auto expected_service=read_service();const auto expected_strings=summary(),expected_general=summary();
+        require(!expected_general.known,"General arena is outside this string VM fixture schema");
+        require(in.tellg()-start==static_cast<std::streamoff>(length),"VM record byte length differs");require(index<names.size(),"VM fixture source index");
+        script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
+        startup::StartupProbe probe(program,1,512,conditional_abi,natural_service47_fixture(),f,getters);
+        startup::StartupTestAccess::chain_initial(probe,pc,sp,fp,input,prior,globals,locals,bindings);startup::StartupTestAccess::set_service(probe,service);if(imported)startup::StartupTestAccess::set_strings(probe,arena);
+        const auto before=probe.run(0).context;const auto before_slots=startup::StartupTestAccess::all_slots(probe);const auto actual=probe.run(1);const auto& c=actual.context;
+        const std::string label="String VM fixture"+std::to_string(row);
+        if(barrier){++barriers;require(actual.status==startup::Status::Halted && actual.events.empty() && same_context(before,c) && before_slots==startup::StartupTestAccess::all_slots(probe),label+" protective refusal changed state");}
+        else {++successes;require(actual.events.size()==1,label+" unexpectedly refused: "+actual.diagnostic.reason);}
+        require(c.pc==expected_pc && c.sp==expected_sp && c.fp==expected_fp && c.result==result && std::equal(expected_slots.begin(),expected_slots.end(),startup::StartupTestAccess::all_slots(probe).begin()),label+" full512/scalar result differs");
+        require(c.global_writes_count==globals_count && c.global_writes_sha256==globals_hash && c.local_writes==expected_locals && c.host_reference_bindings==expected_bindings && c.service47==expected_service,label+" current maps/lifecycle differs");
+        require(c.string_arena==expected_strings,label+" source physical heap/cursor/copy/release differs");
+    }
+    require(in.peek()==EOF,"VM fixture trailing bytes");std::cout<<"{\"string_vm_fixture_checks\":\"pass\",\"cases\":"<<count<<",\"successes\":"<<successes<<",\"protective_barriers\":"<<barriers<<"}\n";
+}
 // Independent research corpus backend: finite raw address maps are test data.
 // This backend is never used by StartupProbe or a production host allocator.
 class RawBulkCells final : public recovered::BulkCells {
@@ -622,6 +825,11 @@ void bulk_raw_checks(const std::filesystem::path& path) {
 }
 int main(int argc, char** argv) {
     try {
+        if(argc==3 && std::string(argv[1])=="--string-component-vectors"){string_component_vectors(argv[2]);return 0;}
+        if(argc==4 && std::string(argv[1])=="--string-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
+        if(argc==4 && std::string(argv[1])=="--string-vm-fixtures"){string_vm_fixtures(argv[3],argv[2]);return 0;}
+        if(argc==3 && std::string(argv[1])=="--string-traces"){string_traces(argv[2]);return 0;}
+        if(argc==3 && std::string(argv[1])=="--stage8-traces"){string_traces(argv[2],true);return 0;}
         if(argc==3 && std::string(argv[1])=="--bulk-raw-vectors"){bulk_raw_checks(argv[2]);return 0;}
         if(argc==3 && std::string(argv[1])=="--bulk-traces"){service47_traces(argv[2],true);return 0;}
         if(argc==4 && std::string(argv[1])=="--bulk-vectors"){chain_oracle_checks(argv[3],argv[2],"bulk_original_word_checks");return 0;}

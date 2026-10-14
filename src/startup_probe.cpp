@@ -22,10 +22,6 @@ int32_t signed28(uint32_t word) {
 void require(bool condition, const std::string& reason) {
     if (!condition) throw std::runtime_error(reason);
 }
-void release_supported(const Value& value) {
-    require(value.kind != Value::Kind::Word || value.word >> 28 != 6,
-            "Owned tag6 string release/copy is outside this reference trace");
-}
 std::string hex(uint32_t value) {
     std::ostringstream out; out << "0x" << std::uppercase << std::hex << value; return out.str();
 }
@@ -116,9 +112,11 @@ const char* status_name(Status status) {
 }
 
 StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
-                          uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47)
+                          uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47,
+                          recovered::StringFixture strings,StringService20Projection string_getters,Service48Projection service48_projection)
     : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection),
-      service47_fixture_(std::move(service47)) {
+      service47_fixture_(std::move(service47)), string_fixture_(std::move(strings)),string_getters_(std::move(string_getters)),
+      service48_projection_(std::move(service48_projection)) {
     context_.pc = program.header().entrypoint;
     context_.service47 = recovered::Service47InitialState(service47_fixture_);
     const auto* command = program.command(context_.pc);
@@ -231,6 +229,8 @@ Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) co
     result.local_writes = context.local_writes;
     result.host_reference_bindings = context.host_reference_bindings;
     result.service47 = context.service47;
+    result.string_arena = context.strings.summary();
+    result.general_arena = context.general_heap.summary();result.service48=context.service48;
     result.global_writes_complete = include_globals;
     result.global_writes_count = static_cast<uint32_t>(context.global_writes.size());
     core::Sha256 digest;
@@ -265,6 +265,19 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
     const int op = command.opcode;
     const auto operand = [&](uint32_t at, uint8_t width) { return program_.operand(command, at, width); };
     uint32_t next = command.pc + command.size;
+    const auto release_supported = [&](const Value& value) {
+        if(value.kind==Value::Kind::Word && value.word>>28==6) {
+            require(candidate.strings.ready(),"Owned tag6 string release/copy is outside this reference trace without a mapped live string arena");
+            uint32_t word=value.word;candidate.strings.release7515C(word);
+        }
+    };
+    const auto copied_value = [&](Value destination,const Value& source) {
+        if(source.kind!=Value::Kind::Word || source.word>>28!=6)return source;
+        require(destination.kind==Value::Kind::Word,"Owned copy destination symbolic raw payload/reuse is outside bounded string domain");
+        require(candidate.strings.ready(),"Owned tag6 string release/copy is outside this reference trace without a mapped live string arena");
+        candidate.strings.copy7581C(destination.word,source.word);return destination;
+    };
+    const auto copy_push = [&](const Value& source) {push(candidate,copied_value(slot(candidate,candidate.sp),source));};
     if (op == 0x03) {
         // Actual handler is the common 6B9B8 instruction-cost path.
     } else if (op == 0x10 || op == 0x11 || op == 0x12) {
@@ -292,10 +305,9 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         const Value header = read_reference(candidate, right);
         require(header.kind == Value::Kind::Word && header.word >> 28 == 9, "Opcode14: not an array");
         const Value first = read_reference(candidate, right, 1);
-        release_supported(first); // 7581C copies all words except owned tag6.
         // 7581C overwrites without releasing the old destination. Both operands
         // remain; 6BF50..6BF90 pushes exactly I(1), irrespective of array count.
-        write_reference(candidate, left, first);
+        write_reference(candidate, left, copied_value(first.kind==Value::Kind::Word && first.word>>28==6 ? read_reference(candidate,left) : Value{},first));
         push(candidate, Value::integer(1));
     } else if (op == 0x15) {
         require(candidate.sp >= 3, "Opcode15 requires destination/source/index");
@@ -326,10 +338,9 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             else if (element.kind == Value::Kind::LocalReference)
                 element.source_file_offset = program_.header().pool_end() + element.index * 4;
             const Value copied = read_reference(candidate, element);
-            release_supported(copied); // copy7581C: owned clone75778 is a barrier.
             // No release of old destination, even when its tag is6. The source
             // is read before store; saved index controls update under aliasing.
-            write_reference(candidate, destination, copied);
+            write_reference(candidate, destination, copied_value(copied.kind==Value::Kind::Word && copied.word>>28==6 ? read_reference(candidate,destination) : Value{},copied));
             slot(candidate, candidate.sp - 1) = Value::integer(index + 1);
             const uint32_t destination_pc = operand(1, 3);
             require_target(destination_pc); next = destination_pc;
@@ -367,8 +378,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         //70EEC..70F20 copies ctx+30 into the old top (7581C performs no
         //destination release), then clears ctx+30 with7515C. Owned clone is
         //unproved. Arena slots/result are disjoint in the symbolic model.
-        release_supported(candidate.result);
-        push(candidate, candidate.result); candidate.result = {};
+        copy_push(candidate.result);release_supported(candidate.result);candidate.result = {};
     } else if (op == 0x84) {
         //70D90 copy of constant cellE5948, zeroed by initializer76B38.
         push(candidate, {});
@@ -378,7 +388,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         Value value; value.word = boolean_false; push(candidate, value);
     } else if (op == 0x90) {
         int32_t index = candidate.fp + static_cast<int32_t>(operand(1, 2));
-        Value value = slot(candidate, index); release_supported(value); push(candidate, value);
+        Value value = slot(candidate, index);copy_push(value);
     } else if (op == 0x91) {
         int32_t index = candidate.fp + static_cast<int32_t>(operand(1, 2));
         slot(candidate, index); push(candidate, Value::stack_reference(static_cast<uint32_t>(index)));
@@ -386,6 +396,12 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         uint32_t index = operand(1, 2);
         require(index < program_.header().global_count, "Global reference outside original table");
         push(candidate, Value::global_reference(index, program_.header().global_start() + index * 4));
+    } else if (op == 0x94) {
+        require(string_getters_.enabled && string_getters_.shared_global_table_mapped && host_abi_projection_.allows_direct_registrations(),
+                "Opcode94 needs explicit shared cell1C949C/current global-table identity; producer mapping unproved");
+        const uint32_t index=operand(1,2);
+        require(index<program_.header().global_count,"Opcode94 shared global index outside mapped table");
+        copy_push(read_reference(candidate,Value::global_reference(index,program_.header().global_start()+4*index)));
     } else if (op == 0x93) {
         // 71214..712A0: ctx+24 is the loader's copied local table, not ctx+2C globals.
         // No read/release of its target or of the overwritten stack word occurs.
@@ -413,7 +429,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         const Value reference = pop(candidate);
         candidate.result = reference; // Original result retains consumed tagB.
         Value value = read_reference(candidate, reference);
-        if (op == 0x52) { release_supported(value); push(candidate, value); value = read_reference(candidate, reference); }
+        if (op == 0x52) {copy_push(value);value = read_reference(candidate, reference);}
         if (value.kind == Value::Kind::Word && (value.word >> 28 == 1 || value.word >> 28 == 2 || value.word >> 28 == 3)) {
             value.word = recovered::increment_value(value.word);
             write_reference(candidate, reference, value);
@@ -466,7 +482,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         //740FC pops/clears the reference slot BEFORE copy7581C reads target.
         const Value reference = pop(candidate);
         const Value value = read_reference(candidate, reference);
-        release_supported(value); push(candidate, value);
+        copy_push(value);
     } else if (op == 0xF4) {
         //74278 pops both raw operands before checking/dereferencing the array.
         //743E0 copies the element through7581C, retaining symbolic identity.
@@ -480,7 +496,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                 index >= 0 && static_cast<uint32_t>(index) < (header.word & 0xFFF),
                 "OpcodeF4 array/bounds original error path remains a cut");
         const Value value = read_reference(candidate, reference, static_cast<uint32_t>(index) + 1);
-        release_supported(value); push(candidate, value);
+        copy_push(value);
     } else if (op == 0xF5) {
         require(candidate.sp >= 2, "OpcodeF5 requires reference and integer index");
         const Value reference = slot(candidate, candidate.sp - 2), index_value = slot(candidate, candidate.sp - 1);
@@ -645,18 +661,100 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                 else require(second.index < (second.kind == Value::Kind::GlobalReference ? program_.header().global_count :
                                              program_.header().local_count), "Service47 argument outside mapped table");
                 require(service47_fixture_.enabled, "Service47 conditional buffer/control availability is not supplied");
+            } else if (service == 20) {
+                require(host_abi_projection_.allows_direct_registrations(),
+                        "Service20 requires mapped linked host ABI premises; construction unproved");
+                require(second.kind==Value::Kind::Word && second.word>>28==2 && signed28(second.word)>=0 && signed28(second.word)<=10,
+                        "Service20 selector conversion/type outside recovered literal tag2 selector0..10 domain");
+                require(string_fixture_.enabled,"Service20 source string availability/owned allocator readiness is not supplied");
+                if(second.word!=0x20000000u)require(string_getters_.enabled && string_getters_.memory_disjoint,
+                        "Service20 extra selector source window/record availability is not supplied");
+            } else if(service==48) {
+                require(host_abi_projection_.allows_direct_registrations(),"Service48 legacy linked host mapping premises unavailable");
+                (void)service47_address(second);
+                require(service48_projection_.fixture.enabled && service48_projection_.general_heap.enabled &&
+                        !service48_projection_.prepared_payload.empty(),
+                        "Service48 requires explicit NONNULL record/payload and separate GENERAL heap readiness; producerunknown");
             } else require(service == 78 && second.kind == Value::Kind::Word && second.word == boolean_false,
                            "Unimplemented F0 host service/arguments: service=" + std::to_string(service));
             release_supported(candidate.result);
             builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
             builtin.handler_va = 0x6AD88; builtin.host_service = service;
-            builtin.host_handler_va = service == 47 ? 0x1C958 : registration == registrations.end() ? 0x1D2FC : registration->second.second;
+            builtin.host_handler_va = service == 48 ? 0x1C9E4 : service == 20 ? 0x1C408 : service == 47 ? 0x1C958 : registration == registrations.end() ? 0x1D2FC : registration->second.second;
             builtin.arguments = {first, second}; builtin.result.word = boolean_false;
             //684DC releases prior result;6ADC4/6AE10 clear arguments before
             //the host handler. Destination/argument aliases see these clears.
             candidate.result = {};
             pop(candidate); pop(candidate);
-            if (service == 47) {
+            if (service == 20) {
+                if(!candidate.strings.ready())candidate.strings=recovered::StringArena(string_fixture_);
+                //Host1C184 first writes false into result; selector0's7515C
+                //therefore sees false. F0 has already released prior ctx+30.
+                uint32_t result_word=boolean_false;
+                const uint32_t selector=static_cast<uint32_t>(signed28(second.word));
+                if(selector==0)recovered::StringService20Selector0(candidate.strings,string_fixture_,0,result_word);
+                else if(selector==1 || selector==5 || selector==7 || selector==8) {
+                    const auto window=string_getters_.string_windows.find(selector);
+                    require(window!=string_getters_.string_windows.end() && window->second.size()==16,
+                            "Service20 selector string producer window not explicitly mapped");
+                    candidate.strings.release7515C(result_word);
+                    if((selector!=7 && selector!=8) || window->second[0]!=0) {
+                        const uint32_t address=selector==1?0x10E480u:selector==5?0x10E4ACu:selector==7?0x10E4D0u:0x10E4C0u;
+                        candidate.strings.assign_mapped753E0(result_word,window->second,address);
+                    }
+                } else if(selector==3) {
+                    require(string_getters_.date_record_mapped,"Service20 date24F34(0) record producer/readability unavailable");
+                    const auto& d=string_getters_.date_words;
+                    require(d[24/4]<=65535 && d[20/4]<=255 && d[16/4]<=255 && d[12/4]<=255 && d[8/4]<=255,
+                            "Service20 date1D354 bounded fields outside proved calendar arithmetic relation");
+                    recovered::CalendarRecord record{static_cast<uint8_t>(d[6]),static_cast<uint8_t>(d[6]>>8),
+                        static_cast<uint8_t>(d[5]),static_cast<uint8_t>(d[4]),static_cast<uint8_t>(d[3]),static_cast<uint8_t>(d[2]),0};
+                    result_word=0x30000000u|(recovered::CalendarScalar7C660(record)&payload_mask);
+                } else {
+                    const auto scalar=string_getters_.scalar_words.find(selector);
+                    require(scalar!=string_getters_.scalar_words.end(),"Service20 scalar producer cell not explicitly mapped");
+                    require(selector!=10 || scalar->second<=255,"Service20 selector10 byte cell value outside mapped u8 domain");
+                    if(selector==9) {
+                        const auto w=string_getters_.string_windows.find(8);
+                        require(w!=string_getters_.string_windows.end() && w->second.size()==16,"Service20 selector9 conditional string guard unavailable");
+                        if(w->second[0]==0)result_word=0;
+                        else result_word=0x20000000u|(scalar->second&payload_mask);
+                    } else result_word=(selector==10?0x10000000u:0x20000000u)|(scalar->second&payload_mask);
+                }
+                //6AD88 host result lives in a stack TEMP. 6AE24 copies that
+                //value through7581C into cleared ctx+30, then7515C releases
+                //TEMP. Owned results therefore require two allocations and
+                //one release here, before later opcode89 performs its copy.
+                Value temporary;temporary.word=result_word;
+                builtin.result=copied_value(candidate.result,temporary);
+                release_supported(temporary);
+            } else if(service==48) {
+                if(!candidate.general_heap.ready()) {
+                    candidate.general_heap=recovered::StringArena(service48_projection_.general_heap);
+                    auto record=recovered::OwnedService48Record::Create(candidate.general_heap);
+                    record.SupplyLoadedPayload(candidate.general_heap,service48_projection_.prepared_payload,-1);
+                    candidate.service48.manager_record=record.pointer();
+                }
+                MappedService47Cells cells;
+                cells.reader=[&](recovered::Service47Address a) {
+                    const Value v=read_reference(candidate,service47_value(a,program_));
+                    recovered::Service47Cell c;c.word=v.word;c.is_reference=v.kind!=Value::Kind::Word;
+                    if(c.is_reference)c.reference=service47_address(v);
+                    return c;
+                };
+                cells.writer=[&](recovered::Service47Address a,recovered::Service47Cell c) {
+                    Value v;v.word=c.word;if(c.is_reference)v=service47_value(c.reference,program_);
+                    write_reference(candidate,service47_value(a,program_),v);
+                };
+                auto fixture=service48_projection_.fixture;
+                fixture.arena_base=candidate.general_heap.common_base();
+                fixture.destination_offset=second.kind==Value::Kind::StackReference?second.index*4:
+                    (second.kind==Value::Kind::GlobalReference?0x40000u:0x200000u)+4*second.index-fixture.arena_base;
+                const auto result48=recovered::Service48Host1C9E4(cells,service47_address(second),fixture,candidate.service48,candidate.general_heap);
+                require(result48.completed,"Service48 boundary "+hex(result48.boundary.source_pc)+" target"+hex(result48.boundary.target)+": "+result48.boundary.detail);
+                candidate.host_reference_bindings[0x58]=second;
+                builtin.result.word=result48.return_word;
+            } else if (service == 47) {
                 candidate.host_reference_bindings[0x54] = second; //1C970 JAL delay slot.
                 MappedService47Cells cells;
                 cells.reader = [&](recovered::Service47Address a) {

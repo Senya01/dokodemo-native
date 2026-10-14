@@ -11,6 +11,9 @@
 #include "recovered/service47_native.h"
 #include "recovered/bulk_array_native.h"
 #include "recovered/manager_queue_native.h"
+#include "recovered/string_native.h"
+#include "recovered/service48_native.h"
+#include "recovered/context_owner_native.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -357,11 +360,125 @@ void manager_queue_tests() {
         "Native allocation failure is a structured boundary rather than PSP null-store equivalence");
     std::cout<<"{\"test\":\"owned_manager_queue_smoke\",\"checks\":9,\"actual_psp_manager_available\":false,\"passed\":true}\n";
 }
+void owned_string_tests() {
+    using namespace dokodemo::recovered;
+    StringArena unavailable;
+    require(!unavailable.ready(), "Default storage does not imply original string availability");
+    StringFixture fixture;
+    fixture.enabled=fixture.bss_window_mapped=fixture.heap_ready=true;
+    fixture.memory_disjoint=fixture.allocator_policy_known=true;
+    fixture.initial_heap.resize(fixture.heap_size,0xCC);
+    fixture.bss_window.resize(16,0);
+    fixture.bss_window[0]='a'; fixture.bss_window[1]='b'; fixture.bss_window[2]='c';
+    StringArena arena(fixture);
+    uint32_t result=0;
+    StringService20Selector0(arena,fixture,0,result);
+    const auto pointer=arena.pointer(result);
+    require((result>>28)==6 && arena.bytes(pointer,4)==Bytes({'a','b','c',0})
+        && arena.live_blocks().size()==1, "Joined selector0 owns exact NUL-terminated source bytes");
+    StringArena preserved=arena;
+    const auto digest=preserved.summary().sha256;
+    arena.release7515C(result);
+    require(result==0 && arena.live_blocks().empty() && preserved.live_blocks().size()==1
+        && preserved.summary().sha256==digest,
+        "Protective candidate storage has isolated copy-on-write lifetime");
+    uint32_t borrowed=0x50000001;
+    const auto live=preserved.live_blocks().size();
+    preserved.release7515C(borrowed);
+    require(borrowed==0 && preserved.live_blocks().size()==live,
+        "Borrowed tag5 clear does not free unrelated owned storage");
+    StringArena aliased(fixture);
+    const auto original=aliased.allocate(64);
+    Bytes text(64,'x');text.back()=0;aliased.store(original,text);
+    auto value=aliased.owned_word(original);
+    aliased.assign753E0(value,original+32);
+    require(aliased.pointer(value)==original &&aliased.allocation_size(original)==32
+        &&aliased.bytes(original,2)==Bytes({0x20,0}) &&aliased.bytes(original+2,1)==Bytes({'x'}),
+        "Interior alias reads realloc's current free-header bytes before strcpy, rather than a captured suffix");
+    std::cout<<"{\"test\":\"owned_string_smoke\",\"checks\":5,\"actual_source_string_available\":false,\"passed\":true}\n";
+}
+void context_owner_tests() {
+    using namespace dokodemo::recovered;
+    auto created=OwnedContextOwner::Create();
+    require(created.owner && created.boundary.kind==ContextOwnerStop::InitializationCall
+        &&created.boundary.source_pc==0x2318C &&created.boundary.callee==0x1B188,
+        "Real callback owner remains stopped before unresolved initialization");
+    auto& owner=*created.owner;
+    const auto initial=owner.Snapshot();
+    require(initial.blocks.size()==2 && initial.blocks[0].bytes.size()==96
+        &&initial.blocks[1].bytes.size()==164 &&initial.blocks[0].initialized.at(0x2C)==0,
+        "96-byte callback owner is distinct from registry28 and has an unknown pre-tail budget");
+    ContextOwnerCallbackInputs inputs; inputs.gate_segment1_10fd4={true,0};
+    inputs.kernel_context_segment1_e5880={true,0};
+    require(owner.InvokeCallback23424(inputs).kind==ContextOwnerStop::UninitializedField,
+        "Unknown owner budget is not silently supplied");
+    require(owner.ApplyInitializationTailFromCheckpoint().kind==ContextOwnerStop::None,
+        "Explicit post-callee checkpoint applies only the proved initialization suffix");
+    auto made=OwnedManagerQueue::Create(15,32);
+    auto registry=made.manager->CreateRegistry(5,2);
+    for(const auto& record:OwnedContextOwner::CallbackRecords()) {
+        auto entry=made.manager->RegisterCallback(registry.token,record.event_index,record.descriptor,record.mask);
+        require(entry.accepted&&entry.enqueued,"Five exact source records are enqueued");
+    }
+    const auto drain=made.manager->Drain();
+    require(owner.BindManagerRegistry(*made.manager,registry.token).kind==ContextOwnerStop::None
+        &&owner.Snapshot().bound_records_match,
+        "Owned96 identity binds an exact distinct live base projection");
+    auto wrong=drain.boundary; wrong.descriptor.function=0x2345C;
+    require(owner.ContinueManagerCallback(*made.manager,wrong,inputs).kind==ContextOwnerStop::NativeDomain,
+        "Logical identity binding rejects a different callback");
+    const auto kernel=owner.ContinueManagerCallback(*made.manager,drain.boundary,inputs);
+    require(kernel.kind==ContextOwnerStop::KernelCall &&kernel.source_pc==0x74DBC
+        &&kernel.callee==0xCB288 &&kernel.scheduler_budget_low==2000 &&kernel.scheduler_budget_high==0
+        &&made.manager->Snapshot().allocated_bytes==1136,
+        "Bound callback preserves the manager and reaches the actual kernel cut");
+    owner.Close();
+    require(owner.Snapshot().blocks.empty() &&owner.InvokeCallback23424(inputs).kind==ContextOwnerStop::Closed,
+        "Closed native owner cannot be used through a stale logical binding");
+    std::cout<<"{\"test\":\"owned_context_owner_smoke\",\"checks\":8,\"actual_psp_owner_available\":false,\"passed\":true}\n";
+}
+void service48_owned_tests() {
+    using namespace dokodemo::recovered;
+    StringFixture heap;
+    heap.enabled=heap.heap_ready=heap.memory_disjoint=heap.allocator_policy_known=true;
+    heap.heap_base=0x600000;
+    heap.initial_heap.assign(heap.heap_size,0xCC);
+    StringArena arena(heap);
+    auto record=OwnedService48Record::Create(arena);
+    require(arena.word(record.pointer())==0 && arena.word(record.pointer()+4)==0xFFFFFFFF,
+        "Owned nonNULL record has the exact two source constructor fields");
+    record.SupplyLoadedPayload(arena,{0x2A,0,0,0x20});
+    const auto preserved=arena;
+    Service47SmokeCells cells;
+    cells.slots[0].word=0x20000001;
+    Service48Fixture fixture;
+    fixture.enabled=fixture.manager_cell_mapped=fixture.manager_record_mapped=true;
+    fixture.singleton_mapped=fixture.arena_pointer_mapped=fixture.memory_disjoint=true;
+    fixture.manager_stable_during_call=fixture.pool_pointer_cell_mapped=true;
+    Service48State state;state.manager_record=record.pointer();
+    const auto completed=Service48Host1C9E4(cells,{Service47Address::Table::Stack,0},fixture,state,arena);
+    require(completed.completed && !completed.boundary && cells.slots[0].word==0x2000002A
+        &&state.completed_calls==1 &&state.heap_release_calls==2 &&state.manager_record==0
+        &&state.payload_clears==1 &&state.record_releases==1 &&state.manager_clears==1
+        &&arena.live_blocks().empty(),
+        "NonNULL service48 executes parser and releases both actual owned allocations");
+    require(preserved.live_blocks().size()==2 &&preserved.word(record.pointer())!=0,
+        "Joined record cleanup leaves a COW pre-call arena intact");
+    const auto again=Service48Host1C9E4(cells,{Service47Address::Table::Stack,0},fixture,state,arena);
+    require(again.completed &&state.completed_calls==2 &&state.heap_release_calls==2,
+        "Repeated call observes cleared current manager rather than a fresh record");
+    auto refused=preserved;state={};state.manager_record=record.pointer();fixture.pool_pointer_cell_mapped=false;
+    const auto boundary=Service48Host1C9E4(cells,{Service47Address::Table::Stack,0},fixture,state,refused);
+    require(!boundary.completed &&boundary.boundary.kind==Service48Boundary::Kind::NativeDomain
+        &&state.destination_registered &&refused.live_blocks().size()==2,
+        "Required pool-cell mapping refusal preserves supported prefix effects separately");
+    std::cout<<"{\"test\":\"service48_owned_smoke\",\"checks\":5,\"actual_source_record_available\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests(); bulk_primitive_tests(); manager_queue_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests(); bulk_primitive_tests(); manager_queue_tests(); owned_string_tests(); context_owner_tests(); service48_owned_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
