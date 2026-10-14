@@ -3,6 +3,8 @@
 #include "recovered/service47_native.h"
 #include "recovered/string_native.h"
 #include "recovered/service48_native.h"
+#include "recovered/clock_native.h"
+#include "recovered/service39_native.h"
 #include <array>
 #include <cstdint>
 #include <map>
@@ -95,6 +97,16 @@ struct Service48Projection {
     recovered::StringFixture general_heap;
     std::vector<uint8_t> prepared_payload; //explicit NONNULL post2E7C mode1 fixture, producerunknown.
 };
+struct Service39Projection {
+    bool enabled = false, router_context_mapped = false;
+    bool reference_tables_mapped = false, memory_disjoint = false;
+    //memory_disjoint also proves the writable abstract TEMP backing distinct
+    //from every heap/controller/table/input/output/global-state object. The
+    //helper's result_address0 is this explicit premise, not a physical NULL.
+    // Additional readonly borrowed string windows, with explicit addresses.
+    // Reached H1 tag6 inputs use CURRENT StringArena live storage instead.
+    std::vector<recovered::Service39Mapping> borrowed_windows;
+};
 
 struct BuiltinCall {
     bool valid = false;
@@ -136,7 +148,8 @@ public:
     StartupProbe(const script::Program& program, uint8_t host_byte,
                  uint16_t stack_slot_limit = 512, HostAbiProjection projection = {},
                  recovered::Service47Fixture service47 = {}, recovered::StringFixture strings = {},
-                 StringService20Projection string_getters = {}, Service48Projection service48 = {});
+                 StringService20Projection string_getters = {}, Service48Projection service48 = {},
+                 recovered::ClockDependency clock = {}, Service39Projection service39 = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -167,6 +180,8 @@ private:
     recovered::StringFixture string_fixture_;
     StringService20Projection string_getters_;
     Service48Projection service48_projection_;
+    recovered::ClockDependency clock_dependency_;
+    Service39Projection service39_projection_;
     Context context_;
     Status status_ = Status::Running;
     script::Diagnostic diagnostic_;

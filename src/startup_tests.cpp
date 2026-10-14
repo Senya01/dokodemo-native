@@ -600,14 +600,42 @@ startup::Service48Projection natural_service48_projection() {
     const auto append=[&](uint32_t w) {for(unsigned i=0;i<4;++i)p.prepared_payload.push_back(static_cast<uint8_t>(w>>(8*i)));};
     append(0x900000A2);for(uint32_t i=0;i<162;++i)append(0x80000000);return p;
 }
-void string_traces(const std::filesystem::path& base,bool all_hosts=false) {
+constexpr uint64_t stage9_literal_cached_tick=UINT64_C(0x0123456789ABCDEF);
+recovered::ClockDependency natural_clock_dependency(uint64_t tick=stage9_literal_cached_tick) {
+    recovered::ClockDependency d;d.callback_slot_mapped=d.installed_getter_returns_cache=true;
+    d.provider=[tick]() {return recovered::ClockCallbackReturn{true,tick};};return d;
+}
+startup::Service39Projection natural_service39_projection() {
+    startup::Service39Projection p;p.enabled=p.router_context_mapped=p.reference_tables_mapped=p.memory_disjoint=true;return p;
+}
+void clock_component_vectors(const std::filesystem::path& path) {
+    std::ifstream in(path,std::ios::binary);require(bool(in),"Clock vectors missing");
+    const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"Clock vector truncated");return v;};
+    require(u32()==0x394B4C43u,"Clock vector schema");const auto count=u32();
+    for(uint32_t row=0;row<count;++row) {
+        const uint64_t low=u32(),high=u32(),tick=low|(high<<32);const auto scalar=u32(),word=u32();
+        require(recovered::ClockScalar7C694(tick)==scalar && recovered::ClockWord689B8(tick)==word,
+                "Clock original unsigned64/word differs at row"+std::to_string(row));
+    }
+    require(in.peek()==EOF,"Clock vector trailing bytes");
+    recovered::ClockDependency d;require(!d.available(),"Default clock fabricated availability");
+    d.provider=[]() {return recovered::ClockCallbackReturn{true,0};};require(!d.available(),"Provider alone fabricated mapping");
+    d.callback_slot_mapped=true;require(!d.available(),"Mapped slot alone fabricated installed getter");
+    d.installed_getter_returns_cache=true;require(d.available(),"Explicit clock dependency unavailable");
+    d.callback_slot_mapped=false;require(!d.available(),"Getter fabricated slot mapping");
+    d=natural_clock_dependency();d.provider={};require(!d.available(),"Empty provider fabricated returned clock");
+    std::cout<<"{\"clock_original_word_checks\":\"pass\",\"cases\":"<<count<<",\"dependency_checks\":6}\n";
+}
+void string_traces(const std::filesystem::path& base,bool all_hosts=false,bool stage9=false,uint64_t tick=stage9_literal_cached_tick) {
     stream_events=true;script::Program program;script::Diagnostic error;
     for(const char* name:{"INU","KAERU","NEKO","ROBO","USAGI"}) {
         require(program.load_original(base/(std::string(name)+".KSC"),error),error.text());
         for(uint8_t host:{uint8_t(0),uint8_t(1)}) {
         if(!all_hosts && host==0)continue;
         const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
-        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        const auto clock=stage9?natural_clock_dependency(tick):recovered::ClockDependency{};
+        const auto projection39=stage9?natural_service39_projection():startup::Service39Projection{};
+        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39);
         startup::Trace trace;do {trace=probe.run(10000);} while(trace.status==startup::Status::BudgetExhausted);
         require(trace.status==startup::Status::Halted && (host==1 ? trace.context.string_arena.known && trace.context.string_arena.copies>0 : trace.context.service48.completed_calls==1),
                 "Stage8 continuation failed: "+trace.diagnostic.reason);
@@ -616,12 +644,12 @@ void string_traces(const std::filesystem::path& base,bool all_hosts=false) {
         std::cout<<"{\"all512_final\":true,\"source\":\""<<name<<".KSC\",\"host\":"<<unsigned(host)<<",\"slots\":[";
         const auto& slots=startup::StartupTestAccess::all_slots(probe);
         for(size_t i=0;i<slots.size();++i){if(i)std::cout<<',';value_json(slots[i]);}std::cout<<"]}\n";
-        startup::StartupProbe resumed(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        startup::StartupProbe resumed(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39);
         startup::Trace other;do {other=resumed.run(127);} while(other.status==startup::Status::BudgetExhausted);
         require(same_context(trace.context,other.context) && slots==startup::StartupTestAccess::all_slots(resumed),"String resumed full512/context differs");
         }
     }
-    std::cout<<"{\"string_connected_resume_checks\":\"pass\",\"traces\":"<<(all_hosts?10:5)<<",\"full512\":true}\n";
+    std::cout<<"{\""<<(stage9?"stage9_connected_resume_checks":"string_connected_resume_checks")<<"\":\"pass\",\"traces\":"<<(all_hosts?10:5)<<",\"full512\":true}\n";
 }
 void string_component_vectors(const std::filesystem::path& path) {
     std::ifstream in(path,std::ios::binary);require(bool(in),"String vectors missing");
@@ -666,15 +694,19 @@ void string_connected_vectors(const std::filesystem::path& path,const std::files
     const auto digest=[&]() {core::Sha256Digest v{};in.read(reinterpret_cast<char*>(v.data()),32);require(bool(in),"String digest truncated");return core::hex_digest(v);};
     const auto value=[&]() {startup::Value v;v.kind=static_cast<startup::Value::Kind>(u32());v.word=u32();v.index=u32();v.source_file_offset=u32();return v;};
     const auto mapping=[&]() {std::map<uint32_t,startup::Value> map;const auto n=u32();for(uint32_t i=0;i<n;++i){const uint32_t k=u32();map[k]=value();}return map;};
-    const uint32_t magic=u32();const bool all_hosts=magic==0x38585653u;
+    const uint32_t magic=u32();const bool stage9=magic==0x39585653u;
+    const bool all_hosts=magic==0x38585653u || stage9;
     require(all_hosts || magic==0x384D5653u,"String connected schema");const uint32_t runs=u32();uint32_t total=0;
     const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
     for(uint32_t run=0;run<runs;++run) {
         const uint32_t index=u32();const uint8_t host=all_hosts?static_cast<uint8_t>(u32()):1;
         const uint32_t accepted=u32(),count=u32();require(index<names.size() && host<=1,"String run name index");
+        uint64_t tick=stage9_literal_cached_tick;
+        if(stage9){const uint64_t low=u32(),high=u32();tick=low|(high<<32);}
         script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
         const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
-        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48);
+        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,
+            stage9?natural_clock_dependency(tick):recovered::ClockDependency{},stage9?natural_service39_projection():startup::Service39Projection{});
         uint32_t remain=accepted;while(remain){const auto n=std::min(remain,10000u);require(probe.run(n).status==startup::Status::BudgetExhausted,"Connected prefix halted");remain-=n;}
         for(uint32_t step=0;step<count;++step) {
             const uint32_t pc=u32();const int32_t sp=static_cast<int32_t>(u32()),fp=static_cast<int32_t>(u32());const auto result=value();
@@ -714,7 +746,7 @@ void string_connected_vectors(const std::filesystem::path& path,const std::files
     }
     require(in.peek()==EOF,"Connected vector trailing bytes");std::cout<<"{\"string_full_vm_original_word_checks\":\"pass\",\"runs\":"<<runs<<",\"commands\":"<<total<<",\"all512_and_maps\":true}\n";
 }
-void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem::path& base) {
+void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem::path& base,bool stage9=false) {
     std::ifstream in(path,std::ios::binary);require(bool(in),"String VM fixtures missing");
     const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"VM fixture truncated");return v;};
     const auto bytes=[&](uint32_t n) {std::vector<uint8_t> b(n);if(n)in.read(reinterpret_cast<char*>(b.data()),n);require(bool(in),"VM bytes truncated");return b;};
@@ -724,7 +756,7 @@ void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem:
     const auto read_service=[&]() {recovered::Service47State s;s.known=u32()!=0;s.control_present=u32()!=0;s.source_present=u32()!=0;s.guard=static_cast<uint8_t>(u32());s.state=static_cast<uint16_t>(u32());s.calls=u32();s.cursor_bytes=u32();s.decoded_words=u32();s.format_called=u32()!=0;s.format_return=static_cast<int32_t>(u32());s.null_free_calls=u32();s.released_entities=u32();return s;};
     const auto digest=[&]() {core::Sha256Digest d{};in.read(reinterpret_cast<char*>(d.data()),32);require(bool(in),"VM digest truncated");return core::hex_digest(d);};
     const auto summary=[&]() {recovered::StringArenaSummary s;s.known=u32()!=0;if(s.known){s.allocations=u32();s.reallocations=u32();s.releases=u32();s.copies=u32();s.live_allocations=u32();s.conversion_cursor=u32();s.sha256=digest();}return s;};
-    require(u32()==0x38584653u,"VM fixture schema");const auto count=u32();uint32_t successes=0,barriers=0;
+    require(u32()==(stage9?0x39584653u:0x38584653u),"VM fixture schema");const auto count=u32();uint32_t successes=0,barriers=0;
     const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
     for(uint32_t row=0;row<count;++row) {
         const auto length=u32();const auto start=in.tellg();const auto index=u32(),pc=u32();const int32_t sp=static_cast<int32_t>(u32()),fp=static_cast<int32_t>(u32());const auto prior=value();const auto input=slots();
@@ -734,12 +766,22 @@ void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem:
         getters.enabled=u32()!=0;getters.shared_global_table_mapped=u32()!=0;f.heap_size=u32();const auto bss_count=u32();f.bss_window=bytes(bss_count);f.initial_heap.assign(f.heap_size,0xCC);
         const bool imported=u32()!=0;recovered::StringArena arena;
         if(imported){auto current=f;current.heap_base=u32();current.heap_size=u32();current.conversion_cursor=u32();const auto ctl=bytes(32),heap=bytes(current.heap_size);current.initial_heap=heap;arena=recovered::StringArena::FromMappedStorage(current,ctl,heap);}
+        recovered::ClockDependency clock;startup::Service39Projection projection39;
+        uint32_t cap=512;
+        if(stage9) {
+            clock.callback_slot_mapped=u32()!=0;clock.installed_getter_returns_cache=u32()!=0;
+            const bool has_provider=u32()!=0,returned=u32()!=0;const uint64_t low=u32(),high=u32();
+            if(has_provider)clock.provider=[returned,tick=low|(high<<32)]() {return recovered::ClockCallbackReturn{returned,tick};};
+            projection39.enabled=u32()!=0;projection39.router_context_mapped=u32()!=0;
+            projection39.reference_tables_mapped=u32()!=0;projection39.memory_disjoint=u32()!=0;cap=u32();
+        }
         const bool barrier=u32()!=0;const auto expected_pc=u32();const int32_t expected_sp=static_cast<int32_t>(u32()),expected_fp=static_cast<int32_t>(u32());const auto result=value();const auto expected_slots=slots();
         const auto globals_count=u32();const auto globals_hash=digest();const auto expected_locals=mapping(),expected_bindings=mapping();const auto expected_service=read_service();const auto expected_strings=summary(),expected_general=summary();
         require(!expected_general.known,"General arena is outside this string VM fixture schema");
         require(in.tellg()-start==static_cast<std::streamoff>(length),"VM record byte length differs");require(index<names.size(),"VM fixture source index");
         script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
-        startup::StartupProbe probe(program,1,512,conditional_abi,natural_service47_fixture(),f,getters);
+        require(cap<=512,"Stage9 test stack cap exceeds original512");
+        startup::StartupProbe probe(program,1,static_cast<uint16_t>(cap),conditional_abi,natural_service47_fixture(),f,getters,{},clock,projection39);
         startup::StartupTestAccess::chain_initial(probe,pc,sp,fp,input,prior,globals,locals,bindings);startup::StartupTestAccess::set_service(probe,service);if(imported)startup::StartupTestAccess::set_strings(probe,arena);
         const auto before=probe.run(0).context;const auto before_slots=startup::StartupTestAccess::all_slots(probe);const auto actual=probe.run(1);const auto& c=actual.context;
         const std::string label="String VM fixture"+std::to_string(row);
@@ -749,7 +791,7 @@ void string_vm_fixtures(const std::filesystem::path& path,const std::filesystem:
         require(c.global_writes_count==globals_count && c.global_writes_sha256==globals_hash && c.local_writes==expected_locals && c.host_reference_bindings==expected_bindings && c.service47==expected_service,label+" current maps/lifecycle differs");
         require(c.string_arena==expected_strings,label+" source physical heap/cursor/copy/release differs");
     }
-    require(in.peek()==EOF,"VM fixture trailing bytes");std::cout<<"{\"string_vm_fixture_checks\":\"pass\",\"cases\":"<<count<<",\"successes\":"<<successes<<",\"protective_barriers\":"<<barriers<<"}\n";
+    require(in.peek()==EOF,"VM fixture trailing bytes");std::cout<<"{\""<<(stage9?"stage9_vm_fixture_checks":"string_vm_fixture_checks")<<"\":\"pass\",\"cases\":"<<count<<",\"successes\":"<<successes<<",\"protective_barriers\":"<<barriers<<"}\n";
 }
 // Independent research corpus backend: finite raw address maps are test data.
 // This backend is never used by StartupProbe or a production host allocator.
@@ -825,6 +867,11 @@ void bulk_raw_checks(const std::filesystem::path& path) {
 }
 int main(int argc, char** argv) {
     try {
+        if(argc==3 && std::string(argv[1])=="--clock-component-vectors"){clock_component_vectors(argv[2]);return 0;}
+        if(argc==3 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true);return 0;}
+        if(argc==4 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true,std::stoull(argv[3],nullptr,0));return 0;}
+        if(argc==4 && std::string(argv[1])=="--stage9-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
+        if(argc==4 && std::string(argv[1])=="--stage9-vm-fixtures"){string_vm_fixtures(argv[3],argv[2],true);return 0;}
         if(argc==3 && std::string(argv[1])=="--string-component-vectors"){string_component_vectors(argv[2]);return 0;}
         if(argc==4 && std::string(argv[1])=="--string-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
         if(argc==4 && std::string(argv[1])=="--string-vm-fixtures"){string_vm_fixtures(argv[3],argv[2]);return 0;}

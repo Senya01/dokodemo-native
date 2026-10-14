@@ -14,6 +14,9 @@
 #include "recovered/string_native.h"
 #include "recovered/service48_native.h"
 #include "recovered/context_owner_native.h"
+#include "recovered/clock_native.h"
+#include "recovered/service39_native.h"
+#include "recovered/producer_native.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -474,11 +477,92 @@ void service48_owned_tests() {
         "Required pool-cell mapping refusal preserves supported prefix effects separately");
     std::cout<<"{\"test\":\"service48_owned_smoke\",\"checks\":5,\"actual_source_record_available\":false,\"passed\":true}\n";
 }
+void service39_current_storage_tests() {
+    using namespace dokodemo::recovered;
+    StringFixture fixture;
+    fixture.enabled=fixture.heap_ready=fixture.memory_disjoint=fixture.allocator_policy_known=true;
+    fixture.initial_heap.assign(fixture.heap_size,0xCC);
+    StringArena arena(fixture);
+    uint32_t source_word=0;
+    arena.assign_mapped753E0(source_word,{'T','O','R','O',0,0,0,0});
+    const auto preserved=arena;
+    const auto original_heap=arena.heap_bytes(),original_control=arena.control_bytes();
+    Service39Input input;
+    input.enabled=input.reference_readable=input.router_context_readable=true;
+    input.reference={Service39Space::Stack,0x200000,8};
+    Service39Mapping reference;reference.address=0x200008;
+    for(unsigned i=0;i<4;++i) reference.bytes.push_back(static_cast<uint8_t>(source_word>>(i*8)));
+    input.mappings.push_back(reference);
+    uint32_t result=0;
+    const auto observation=Service39Apply(arena,input,result);
+    require(observation.reference.space==Service39Space::Stack&&observation.reference_word==source_word
+        &&result>>28==6&&arena.bytes(arena.pointer(result),5)==Bytes({'T','O','R','O',0}),
+        "Service39 resolves a current table-aware owned string into real independent TEMP storage");
+    require(preserved.heap_bytes()==original_heap&&preserved.control_bytes()==original_control,
+        "Service39 COW mutation preserves the earlier live physical heap");
+    arena.release7515C(result);
+    require(result==0&&arena.live_blocks().size()==1
+        &&arena.bytes(arena.pointer(source_word),5)==Bytes({'T','O','R','O',0}),
+        "Releasing service39 TEMP retains the original owned input storage");
+    const auto guarded_heap=arena.heap_bytes(),guarded_control=arena.control_bytes();
+    result=0x2000007B;input.result_address=fixture.heap_base;
+    bool refused=false;
+    try { Service39Apply(arena,input,result); } catch(const std::runtime_error&) { refused=true; }
+    require(refused&&result==0x2000007B&&arena.heap_bytes()==guarded_heap&&arena.control_bytes()==guarded_control,
+        "Physical result addresses refuse before mutation under the precise service39 result domain");
+    std::cout<<"{\"test\":\"service39_current_storage_smoke\",\"checks\":4,\"actual_producer_available\":false,\"passed\":true}\n";
+}
+void clock_boundary_tests() {
+    using namespace dokodemo::recovered;
+    ClockDependency dependency;
+    require(!dependency.available(),"Clock callback mapping is not inferred from construction");
+    unsigned reads=0;
+    dependency.provider=[&reads]() { ++reads; return ClockCallbackReturn{true,UINT64_C(63082281600000000)}; };
+    require(!dependency.available(),"Supplying a callback alone does not install source getter premises");
+    dependency.callback_slot_mapped=dependency.installed_getter_returns_cache=true;
+    const auto cached=dependency.provider();
+    require(dependency.available()&&cached.returned&&reads==1&&ClockWord689B8(cached.cached_psp_tick_us)==0x30000000,
+        "Clock uses already shifted cached tick and source minute2000 anchor");
+    require(ClockWord689B8(cached.cached_psp_tick_us-1)==0x3FFFFFFF
+        &&ClockWord689B8(cached.cached_psp_tick_us+60000000)==0x30000001,
+        "Clock division/unsigned wrap/tag low28 preserves minute boundary");
+    require(ClockScalar7C694(0)==0xC15558A0&&ClockWord689B8(0)==0x315558A0,
+        "Literal raw tick0 is a boundary input, not a fabricated current date");
+    std::cout<<"{\"test\":\"cached_clock_boundary_smoke\",\"checks\":5,\"RTC_epoch_firmware_verified\":false,\"passed\":true}\n";
+}
+void producer_backing_tests() {
+    using namespace dokodemo::recovered;
+    auto unavailable=OwnedProducer::Create({});
+    require(unavailable.owner&&unavailable.owner->Snapshot().live_blocks.empty()
+        &&unavailable.initialization.boundary.kind==ProducerStop::MissingInput,
+        "Producer does not invent readable F6980 input");
+    auto made=OwnedProducer::Create({true,0});
+    require(made.owner&&made.initialization.completed&&made.owner->Snapshot().live_blocks.size()==1
+        &&made.owner->Snapshot().live_blocks[0].bytes.size()==108,
+        "Concrete1B188 payload has actual108-byte owned backing distinct from96-byte callback owner");
+    auto& producer=*made.owner;
+    bool selected=false;uint8_t flag=0;
+    require(producer.SelectionIsZero1B214(selected)&&selected&&producer.SelectionFlag1B228(flag)&&flag==0,
+        "Fresh producer initializes source selection and byte flag");
+    require(producer.SetSelection1B2DC(5,0xA5).completed&&producer.SelectionIsZero1B214(selected)&&!selected
+        &&producer.SelectionFlag1B228(flag)&&flag==0xA5,
+        "Source selection setters/getters are linked to current backing");
+    ProducerAllocationPlan repeat;repeat.source_address=0x10000200;
+    require(producer.Initialize1B188(repeat).completed&&producer.Snapshot().live_blocks.size()==2,
+        "Repeat source initialization preserves the earlier orphan until native cleanup");
+    require(producer.Release1B578().completed&&producer.Snapshot().live_blocks.size()==1
+        &&!producer.SelectionIsZero1B214(selected),
+        "Source freshchild0 release clears publication but retains the original orphan");
+    producer.Close();
+    require(producer.Snapshot().closed&&producer.Snapshot().live_blocks.empty(),
+        "Native RAII closes remaining source orphans without claiming PSP destructor equivalence");
+    std::cout<<"{\"test\":\"owned_producer_backing_smoke\",\"checks\":7,\"actual_game_singleton_available\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests(); bulk_primitive_tests(); manager_queue_tests(); owned_string_tests(); context_owner_tests(); service48_owned_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests(); bulk_primitive_tests(); manager_queue_tests(); owned_string_tests(); context_owner_tests(); service48_owned_tests(); service39_current_storage_tests(); clock_boundary_tests(); producer_backing_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

@@ -7,6 +7,7 @@
 #include "asset_store.h"
 #include "save_native.h"
 #include "save_time.h"
+#include "clock_backend_win32.h"
 #include "script_vm.h"
 #include "audio_native.h"
 #include "game_font.h"
@@ -18,6 +19,7 @@
 #include "recovered/bulk_array_native.h"
 #include "recovered/manager_queue_native.h"
 #include "recovered/context_owner_native.h"
+#include "recovered/producer_native.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -34,7 +36,7 @@
 
 using namespace native_port;
 namespace {
-struct Options { bool selfTest = false, smoke = false; std::filesystem::path assets, evidence; };
+struct Options { bool selfTest = false, smoke = false; std::filesystem::path assets, evidence, clockSample; };
 Options ParseOptions() {
     Options options;
     int count = 0; auto args = CommandLineToArgvW(GetCommandLineW(), &count);
@@ -44,13 +46,56 @@ Options ParseOptions() {
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
         else if (arg == L"--evidence" && i + 1 < count) options.evidence = args[++i];
+        else if (arg == L"--clock-sample" && i + 1 < count) options.clockSample = args[++i];
         else { LocalFree(args); throw std::runtime_error("Unknown or incomplete command line argument"); }
     }
     LocalFree(args);
     options.assets = ResolveAssets(options.assets);
     if (options.evidence.empty()) options.evidence = std::filesystem::current_path() / L"evidence";
     options.evidence = std::filesystem::absolute(options.evidence);
+    if(options.clockSample.empty()&&(options.selfTest||options.smoke)) {
+        const auto cwd=std::filesystem::current_path();
+        const auto relative=L"research/verification/stage9/clock-sample/actual-sample.json";
+        for(const auto& base:{options.assets.parent_path().parent_path(),cwd,cwd.parent_path(),cwd.parent_path().parent_path()}) {
+            const auto candidate=base/relative;
+            if(std::filesystem::is_regular_file(candidate)) {options.clockSample=candidate;break;}
+        }
+        if(options.clockSample.empty()) throw std::runtime_error("Self-test requires the captured Windows input via --clock-sample");
+    }
     return options;
+}
+uint64_t ClockSampleInteger(const std::string& json,const char* field) {
+    const std::string token=std::string("\"")+field+'"';
+    const auto key=json.find(token);
+    const auto colon=key==std::string::npos?key:json.find(':',key+token.size());
+    if(colon==std::string::npos) throw std::runtime_error("Missing captured clock sample field");
+    auto start=json.find_first_not_of(" \t\r\n",colon+1);
+    if(start==std::string::npos) throw std::runtime_error("Missing captured clock integer");
+    if(json[start]=='"') ++start;
+    const auto end=json.find_first_not_of("0123456789",start);
+    if(end==start) throw std::runtime_error("Captured clock field is not an unsigned integer");
+    const auto value=json.substr(start,end-start);
+    size_t consumed=0;
+    const auto result=std::stoull(value,&consumed,10);
+    if(consumed!=value.size()) throw std::runtime_error("Invalid captured clock integer");
+    return result;
+}
+dokodemo::recovered::ClockCallbackReturn ReadCapturedClockSample(const std::filesystem::path& path) {
+    if(path.extension()!=L".json") throw std::runtime_error("Captured clock input must be a JSON sample");
+    std::ifstream input(path,std::ios::binary);
+    if(!input) throw std::runtime_error("Cannot read captured native Windows clock sample");
+    std::array<char,16385> buffer{};
+    input.read(buffer.data(),static_cast<std::streamsize>(buffer.size()));
+    const auto count=input.gcount();
+    if(count==static_cast<std::streamsize>(buffer.size())) throw std::runtime_error("Captured clock sample exceeds size limit");
+    const std::string json(buffer.data(),static_cast<size_t>(count));
+    const auto filetime=ClockSampleInteger(json,"filetime_100ns");
+    const auto cached=ClockSampleInteger(json,"cached_psp_tick_us");
+    uint64_t converted=0;
+    if(!dokodemo::platform::FileTimeUtcToCachedPspTick(filetime,converted)||converted!=cached
+        ||dokodemo::recovered::ClockWord689B8(cached)!=ClockSampleInteger(json,"source_word"))
+        throw std::runtime_error("Captured sample does not match the explicit Windows/RTC ABI conversion");
+    return {true,cached};
 }
 void Output(const std::string& text) {
     DWORD written = 0; auto handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -229,6 +274,62 @@ bool VerifiedStorageStartup(const dokodemo::startup::Trace& trace,const std::str
         &&context.service48.manager_record==0 &&context.service48.manager_clears==1
         &&context.host_reference_bindings.size()==8 &&trace.result.word==0x10000000;
 }
+dokodemo::startup::Service39Projection ConditionalService39Projection() {
+    dokodemo::startup::Service39Projection projection;
+    projection.enabled=projection.router_context_mapped=projection.reference_tables_mapped=true;
+    // Strong caller premise: the abstract writable TEMP backing is distinct
+    // from all heaps/controllers/tables/input/output/global state. No physical
+    // result address is admitted or inferred from generic memory readability.
+    projection.memory_disjoint=true;
+    return projection;
+}
+std::unique_ptr<dokodemo::startup::StartupProbe> ClockStorageProbe(
+    const dokodemo::script::Program& program,uint8_t host,dokodemo::recovered::ClockDependency clock) {
+    const auto record=host?dokodemo::startup::Service48Projection{}:ConditionalService48Projection();
+    return std::make_unique<dokodemo::startup::StartupProbe>(program,host,uint16_t{512},
+        dokodemo::startup::HostAbiProjection{true,true,true,true,true,0},
+        ConditionalService47Fixture(),ConditionalStringFixture(),ConditionalStringGetters(),record,
+        std::move(clock),ConditionalService39Projection());
+}
+bool VerifiedClockStorageStartup(const dokodemo::startup::Trace& trace,const std::string& source,
+                                uint8_t host,const dokodemo::script::Program& program) {
+    // These are source-linked captured-sample validation constants, never
+    // input values for the executing VM. Live Windows input is separately
+    // reported as observed execution, rather than this exact fixture verdict.
+    const std::map<std::string,uint32_t> host1_counts={
+        {"INU",15365},{"KAERU",14455},{"NEKO",15435},{"ROBO",13860},{"USAGI",14910}};
+    const std::map<std::string,std::array<const char*,2>> hashes={
+        {"INU",{"7a364c3e5550457d0fd8c8eaa880036d0c33170f3aebb80ecdb97b8c23422d10","f20fdbb5e3306c0b36b22d24a63c401c0fdc07739fc9e5f57ac06b068cabdd7d"}},
+        {"KAERU",{"10936e0bbe87939c146d78fc0f9dc25c7152498769988f070597338bba29e95c","2197fd53b7cac444bd58bf4af98a439186caf272641b91729b0ebbd4263c7533"}},
+        {"NEKO",{"32ad8fe928f475718d795813fff4805b90ac15cb7c0998eeec70c22e9ab57588","e99229d38532f6e5f83e086a25309b6b80841f9d95e2fc8411c9b8b17b785bce"}},
+        {"ROBO",{"942511e5cbb5d4816c4866f1b12377860c47aa1690cac437fec372ff95204065","5e829d60a2ece5f6cefb3b25f2e480efc26d099a586e6a4e24c3dde2073ae370"}},
+        {"USAGI",{"d3b64718f1a9ee25400b99a9a7f2a45a7cc0d39cc4b5244ec4b3bed84b7c9148","742fb9a48a85964556f55abc2db9ea50905fa707c16ffde228b8dfe597ec4789"}}};
+    if(host>1||trace.status!=dokodemo::startup::Status::Halted) return false;
+    const auto& context=trace.context;
+    const auto& old=context.service47;
+    const auto& bytes=program.bytes();
+    const auto offset=28u+trace.pc;
+    if(offset+2>=bytes.size()||trace.executed!=(host?host1_counts.at(source):10650u)
+        ||trace.sp!=16||trace.fp!=(host?11:10)||trace.result.kind!=dokodemo::startup::Value::Kind::Word
+        ||trace.result.word!=0||!context.global_writes_complete
+        ||context.global_writes.size()!=(host?1427u:1565u)
+        ||context.global_writes_sha256!=hashes.at(source)[host]
+        ||context.local_writes.size()!=2||context.host_reference_bindings.size()!=(host?7u:8u)
+        ||!old.known||old.calls!=1||old.cursor_bytes!=112||old.decoded_words!=54
+        ||old.guard!=0||old.state!=0xFFFF) return false;
+    if(host) return trace.pc==0x17A6&&bytes[offset]==0xF6
+        &&context.string_arena.known&&context.string_arena.allocations==29
+        &&context.string_arena.releases==18&&context.string_arena.copies==29
+        &&context.string_arena.live_allocations==11&&context.string_arena.conversion_cursor==0
+        &&context.string_arena.sha256=="65f39eec7c302a27a3aee2471ce9e3b651fa370a1608892d9ce77813ec073777";
+    return trace.pc==((source=="NEKO"||source=="ROBO")?0x180Au:0x181Fu)
+        &&bytes[offset]==0x8B&&bytes[offset+1]==98&&bytes[offset+2]==3
+        &&context.stack_window.at(13).kind==dokodemo::startup::Value::Kind::GlobalReference
+        &&context.stack_window.at(14).kind==dokodemo::startup::Value::Kind::Ctx28Reference
+        &&context.stack_window.at(15).kind==dokodemo::startup::Value::Kind::Ctx28Reference
+        &&context.general_arena.known&&context.general_arena.live_allocations==0
+        &&context.general_arena.sha256=="40ad7e5e5b312cc629b2939128b5759ddd9a3218bc7d6449c44b3423e6ef21a1";
+}
 class Service47TestCells final : public dokodemo::recovered::Service47Cells {
 public:
     std::array<dokodemo::recovered::Service47Cell,4> slots{};
@@ -301,11 +402,53 @@ OwnedManagerPrefix ConstructManagerPrefix(bool ownerCheckpoint=false) {
             &&result.callbackCut.scheduler_budget_low==2000&&result.callbackCut.scheduler_budget_high==0));
     return result;
 }
+struct OwnedProducerPrefix {
+    OwnedManagerPrefix prefix;
+    std::unique_ptr<dokodemo::recovered::OwnedProducer> producer;
+    dokodemo::recovered::ProducerMutation initialization;
+    dokodemo::recovered::ProducerSnapshot snapshot;
+    bool verified=false;
+};
+OwnedProducerPrefix ConstructProducerPrefix(dokodemo::recovered::ProducerInput input) {
+    using namespace dokodemo::recovered;
+    OwnedProducerPrefix result;
+    result.prefix=ConstructManagerPrefix();
+    // The96-byte owner stops at its actual call to1B188. Close that callee
+    // with separately owned108-byte backing and explicit source-input and
+    // allocator-return premises. Do not apply the later owner checkpoint or
+    // infer completion of the caller's remaining initialization instructions.
+    if(result.prefix.initializationCut.kind!=ContextOwnerStop::InitializationCall
+        ||result.prefix.initializationCut.source_pc!=0x2318C
+        ||result.prefix.initializationCut.callee!=0x1B188) return result;
+    auto made=OwnedProducer::Create(input);
+    result.initialization=made.initialization;
+    result.producer=std::move(made.owner);
+    if(!result.producer) return result;
+    result.snapshot=result.producer->Snapshot();
+    result.verified=result.prefix.verified&&result.prefix.ownerVerified
+        &&result.initialization.completed
+        &&result.snapshot.live_blocks.size()==1
+        &&result.snapshot.live_blocks[0].bytes.size()==108
+        &&std::all_of(result.snapshot.live_blocks[0].initialized.begin(),
+            result.snapshot.live_blocks[0].initialized.end(),[](uint8_t known){return known==1;})
+        &&!result.prefix.ownerSnapshot.initialization_tail_applied
+        &&result.prefix.ownerSnapshot.blocks[0].initialized.at(0x2C)==0;
+    return result;
+}
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     std::ostringstream report;
     int failures = 0, passed = 0;
     auto check = [&](bool ok, const char* name) { report << (ok ? "PASS " : "FAIL ") << name << '\n'; if (ok) ++passed; else ++failures; };
+    const auto capturedClock=ReadCapturedClockSample(options.clockSample);
+    check(capturedClock.returned,"captured real Windows sample validates FILETIME/cached RTC ABI conversion");
+    dokodemo::platform::WindowsClockCache liveClock;
+    check(!liveClock.ReadCached().returned,"Windows clock cache stays unavailable before actual sampling");
+    const bool refreshed=liveClock.RefreshFromWindows();
+    const auto currentClock=liveClock.ReadCached();
+    check(refreshed&&currentClock.returned&&liveClock.Snapshot().updates==1
+        &&liveClock.ReadCached().cached_psp_tick_us==currentClock.cached_psp_tick_us,
+        "actual Windows clock refresh and stable cached getter are linked in the application");
     check(Utf8(Utf8(std::string(u8"トロ / Игрок"))) == std::string(u8"トロ / Игрок"), "Japanese/Russian UTF-8 round trip");
     check(std::filesystem::is_directory(options.assets), "native asset directory exists");
     const auto calendar = dokodemo::recovered::CalendarRecord689B8({2004,11,16,0,0});
@@ -339,6 +482,20 @@ int SelfTest(const Options& options) {
         auto failure=OwnedManagerQueue::Create(15,32,{0});
         check(!failure.manager&&failure.boundary.kind==ManagerStopKind::NativeAllocationFailure,
             "native owned allocation failure remains separate from original null-pointer effects");
+        auto initialized=ConstructProducerPrefix({true,0});
+        check(initialized.verified&&initialized.snapshot.allocator_transcript.size()==1
+            &&initialized.snapshot.allocator_transcript[0].callee==0x63318
+            &&initialized.snapshot.allocator_transcript[0].bytes==108,
+            "owner initialization call joins real distinct108-byte producer backing under explicit allocator premise");
+        check(initialized.prefix.snapshot.allocated_bytes==1136
+            &&initialized.prefix.ownerSnapshot.blocks[0].bytes.size()==96
+            &&initialized.prefix.ownerSnapshot.blocks[1].bytes.size()==164
+            &&initialized.prefix.ownerSnapshot.blocks[0].initialized.at(0x2C)==0,
+            "producer completion preserves manager and CKingKai identities and unknown caller suffix");
+        auto unavailable=ConstructProducerPrefix({});
+        check(!unavailable.verified&&unavailable.initialization.boundary.kind==ProducerStop::MissingInput
+            &&unavailable.producer&&unavailable.snapshot.live_blocks.empty(),
+            "linked producer remains unavailable without explicit mapped source input");
     }
     {
         using namespace dokodemo::recovered;
@@ -451,6 +608,12 @@ int SelfTest(const Options& options) {
                     (std::string("joined builtin97 and resumed original branch / ")+name+" / "+std::to_string(hostByte)).c_str());
                 check(VerifiedStorageStartup(StorageStartup(program,hostByte),name,hostByte,program),
                     (std::string("joined owned strings or NONNULL record lifecycle / ")+name+" / "+std::to_string(hostByte)).c_str());
+                dokodemo::recovered::ClockDependency dependency;
+                dependency.callback_slot_mapped=dependency.installed_getter_returns_cache=true;
+                dependency.provider=[capturedClock]() {return capturedClock;};
+                auto advanced=ClockStorageProbe(program,hostByte,std::move(dependency));
+                check(VerifiedClockStorageStartup(RunToBoundary(*advanced),name,hostByte,program),
+                    (std::string("captured source clock and service39 ownership continuation / ")+name+" / "+std::to_string(hostByte)).c_str());
             }
         }
         bool dicLoaded = dictionary.load_original(base / (std::string(name) + ".DIC"), diagnostic);
@@ -507,8 +670,12 @@ struct Application {
     bool savedSuccessfully=false, loadedSuccessfully=false, startupPrefixVerified=false, service47Verified=false, bulkVerified=false;
     std::unique_ptr<dokodemo::recovered::OwnedManagerQueue> managerQueue;
     std::unique_ptr<dokodemo::recovered::OwnedContextOwner> callbackOwner;
-    bool managerVerified=false, storageVerified=false;
+    std::unique_ptr<dokodemo::recovered::OwnedProducer> producer;
+    bool managerVerified=false, storageVerified=false, clockStorageVerified=false;
     std::array<std::unique_ptr<dokodemo::startup::StartupProbe>,2> storageProbes;
+    std::array<std::unique_ptr<dokodemo::startup::StartupProbe>,2> clockStorageProbes;
+    std::shared_ptr<dokodemo::platform::WindowsClockCache> sourceClockCache=
+        std::make_shared<dokodemo::platform::WindowsClockCache>();
     int width = 1080, height = 760; HDC bufferDC = nullptr; HBITMAP buffer = nullptr; HGDIOBJ oldBuffer = nullptr; void* pixels = nullptr;
     explicit Application(Options value) : options(std::move(value)) {
         images = FindImages(options.assets);
@@ -591,7 +758,7 @@ struct Application {
         auto source = messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
         Text(dc, L"Исходный ресурс: " + source, {24,y,width-24,y+28}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
         Text(dc, status, {24,y+30,width-24,y+78}, RGB(211,219,223));
-        Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
+        Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F10 clock  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
         std::wostringstream metrics; metrics << L"Win32 · " << frames << L" кадров · " << inputEvents << L" событий ввода · " << images.size() << L" ресурсов";
         Text(dc, metrics.str(), {24,height-31,width-24,height-8}, RGB(125,149,163));
     }
@@ -636,6 +803,7 @@ struct Application {
         else if (key == VK_F7) ManagerProbe();
         else if (key == VK_F8) StorageProbe();
         else if (key == VK_F9) Load();
+        else if (key == VK_F10) ClockStorageProbe();
         else if (key == VK_F12) Capture();
         else if (key == VK_ESCAPE) DestroyWindow(window);
         InvalidateRect(window,nullptr,FALSE);
@@ -700,11 +868,13 @@ struct Application {
     }
     void ManagerProbe() {
         messageVisible=false;
-        auto built=ConstructManagerPrefix(true);
-        managerVerified=built.verified&&built.ownerVerified;
+        auto initialized=ConstructProducerPrefix({true,0});
+        auto& built=initialized.prefix;
+        managerVerified=initialized.verified;
         managerQueue=std::move(built.manager); // Keep real owned storage alive in the application.
         callbackOwner=std::move(built.callbackOwner);
-        status=L"Очередь и owner созданы; условная callback-проба достигла kernel-барьера. Исходная инициализация host не подтверждена.";
+        producer=std::move(initialized.producer);
+        status=L"Очередь, owner и producer созданы с явными входными условиями. Остальная инициализация owner и kernel остаются барьерами.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence/L"manager-queue-probe.json",std::ios::binary);
         report<<"{\"native_owned_storage\":true,\"allocated_bytes\":"<<built.snapshot.allocated_bytes
@@ -716,11 +886,13 @@ struct Application {
             <<",\"terminal\":"<<(built.snapshot.terminal?"true":"false")
             <<",\"callback_owner_bytes\":260,\"callback_owner_type\":\"CKingKai96\""
             <<",\"owner_base_projection_distinct\":true,\"owner_verified\":"<<(built.ownerVerified?"true":"false")
-            <<",\"unexecuted_initialization_pc\":"<<built.initializationCut.source_pc
-            <<",\"unexecuted_initialization_callee\":"<<built.initializationCut.callee
-            <<",\"conditional_owner_checkpoint\":true,\"kernel_boundary_pc\":"<<built.callbackCut.source_pc
-            <<",\"kernel_callee\":"<<built.callbackCut.callee
-            <<",\"scheduler_budget_low\":"<<built.callbackCut.scheduler_budget_low
+            <<",\"initialization_call_pc\":"<<built.initializationCut.source_pc
+            <<",\"initialization_callee\":"<<built.initializationCut.callee
+            <<",\"initialization_subcall_closed\":"<<(initialized.initialization.completed?"true":"false")
+            <<",\"producer_payload_bytes\":108,\"producer_live_allocations\":"<<initialized.snapshot.live_blocks.size()
+            <<",\"producer_source_input_explicit\":true,\"allocator_return_explicit\":true"
+            <<",\"conditional_owner_checkpoint\":false,\"owner_remaining_initialization_unknown\":true"
+            <<",\"owner_budget_initialized\":false"
             <<",\"kernel_return_observed\":false"
             <<",\"verified\":"<<(managerVerified?"true":"false")
             <<",\"actual_psp_manager_available\":false,\"host_flags_enabled\":false,\"full_game\":false}\n";
@@ -766,6 +938,56 @@ struct Application {
         report<<"],\"persistent_owned_contexts\":2,\"verified\":"<<(storageVerified?"true":"false")<<"}\n";
         status=L"Условные storage-пробы: строки и ненулевая запись выполнены; следующие ABI остаются барьерами. Исходные producers не подтверждены.";
     }
+    void ClockStorageProbe() {
+        messageVisible=false;
+        if(!program.loaded()) {status=L"NEKO.KSC не загружен.";return;}
+        const bool captured=!options.clockSample.empty();
+        dokodemo::recovered::ClockDependency dependency;
+        if(captured) {
+            const auto sample=ReadCapturedClockSample(options.clockSample);
+            dependency.provider=[sample]() {return sample;};
+        } else {
+            if(!sourceClockCache->RefreshFromWindows()) {
+                status=L"Windows clock не предоставил допустимый cached tick; выполнение остановлено.";
+                return;
+            }
+            dependency.provider=[cache=sourceClockCache]() {return cache->ReadCached();};
+        }
+        // Explicit narrow native cache/getter mapping; no PSP callback slot or
+        // broad host readiness is inferred from refreshing the Windows clock.
+        dependency.callback_slot_mapped=dependency.installed_getter_returns_cache=true;
+        const auto cached=dependency.provider();
+        std::filesystem::create_directories(options.evidence);
+        std::ofstream report(options.evidence/L"clock-service39-probe.json",std::ios::binary);
+        report<<"{\"conditional_sources\":true,\"captured_windows_sample\":"<<(captured?"true":"false")
+            <<",\"live_windows_cache\":"<<(!captured?"true":"false")
+            <<",\"cached_psp_tick_us\":"<<cached.cached_psp_tick_us
+            <<",\"RTC_epoch_firmware_verified\":false,\"actual_producers_observed\":false,\"full_game\":false,\"routes\":[";
+        clockStorageVerified=captured;
+        for(uint8_t host:{uint8_t(0),uint8_t(1)}) {
+            clockStorageProbes[host]=::ClockStorageProbe(program,host,dependency);
+            const auto trace=RunToBoundary(*clockStorageProbes[host]);
+            const bool ok=captured&&VerifiedClockStorageStartup(trace,"NEKO",host,program);
+            clockStorageVerified=clockStorageVerified&&ok;
+            if(host) report<<',';
+            const auto& context=trace.context;
+            report<<"{\"host\":"<<unsigned(host)<<",\"executed\":"<<trace.executed
+                <<",\"pc\":"<<trace.pc<<",\"sp\":"<<trace.sp<<",\"fp\":"<<trace.fp
+                <<",\"result_raw\":"<<trace.result.word<<",\"next_opcode\":"<<trace.diagnostic.opcode
+                <<",\"globals\":"<<context.global_writes.size()
+                <<",\"globals_sha256\":"<<JsonString(context.global_writes_sha256)
+                <<",\"locals\":"<<context.local_writes.size()<<",\"bindings\":"<<context.host_reference_bindings.size()
+                <<",\"STRING_sha256\":"<<JsonString(context.string_arena.sha256)
+                <<",\"GENERAL_sha256\":"<<JsonString(context.general_arena.sha256)
+                <<",\"source_fixture_verified\":"<<(ok?"true":"false")
+                <<",\"barrier\":"<<JsonString(trace.diagnostic.text())<<'}';
+        }
+        report<<"],\"persistent_owned_contexts\":2,\"source_fixture_verified\":"
+            <<(clockStorageVerified?"true":"false")<<"}\n";
+        status=captured
+            ?L"Связанные clock/string-пробы достигли array/RNG-барьеров; проверяется сохранённый Windows sample. Реальная готовность игры неизвестна."
+            :L"Windows cached clock и строковое владение выполнены; достигнутые array/RNG-вызовы остаются барьерами. Это условная проба.";
+    }
     void MessageFixture() {
         messageVisible=false;
         if(!vm) {status=L"NEKO.KSC не загружен.";return;}
@@ -807,7 +1029,7 @@ struct Application {
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;
-            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F8,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
+            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F8,VK_F10,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
         }
         if (options.smoke && elapsed > 2.0) {
             Capture();
@@ -821,6 +1043,8 @@ struct Application {
                 << ",\n  \"conditional_bulk_startup_verified\": " << (bulkVerified ? "true" : "false")
                 << ",\n  \"owned_manager_queue_verified\": " << (managerVerified ? "true" : "false")
                 << ",\n  \"conditional_owned_storage_verified\": " << (storageVerified ? "true" : "false")
+                << ",\n  \"conditional_clock_service39_verified\": " << (clockStorageVerified ? "true" : "false")
+                << ",\n  \"producer_backing_owned\": " << (producer ? "true" : "false")
                 << ",\n  \"actual_buffer_available\": false"
                 << ",\n  \"original_message_rendered\": " << (messageVisible ? "true" : "false")
                 << ",\n  \"full_game\": false,\n  \"source\": " << JsonString(messageVisible ? "scripts/original/NEKO.KSC" : Utf8(image.path.wstring())) << "\n}\n";
@@ -862,6 +1086,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }
         }
         return options.smoke && (!app.imageLoaded || app.frames < 30 || app.inputEvents < 9 || !app.savedSuccessfully || !app.loadedSuccessfully
-            || !app.startupPrefixVerified || !app.service47Verified || !app.bulkVerified || !app.managerVerified || !app.messageVisible) ? 1 : 0;
+            || !app.startupPrefixVerified || !app.service47Verified || !app.bulkVerified || !app.managerVerified
+            || !app.storageVerified || !app.clockStorageVerified || !app.producer || !app.messageVisible) ? 1 : 0;
     } catch (const std::exception& error) { Output(std::string("ERROR: ")+error.what()+"\n"); return 2; }
 }

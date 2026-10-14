@@ -23,7 +23,10 @@ add_library(dokodemo-core STATIC
     src/recovered/manager_queue_native.cpp
     src/recovered/string_native.cpp
     src/recovered/service48_native.cpp
-    src/recovered/context_owner_native.cpp)
+    src/recovered/context_owner_native.cpp
+    src/recovered/clock_native.cpp
+    src/recovered/service39_native.cpp
+    src/recovered/producer_native.cpp)
 target_compile_features(dokodemo-core PUBLIC cxx_std_17)
 target_include_directories(dokodemo-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(dokodemo-core PROPERTIES CXX_EXTENSIONS OFF)

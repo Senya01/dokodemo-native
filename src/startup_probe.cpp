@@ -113,10 +113,12 @@ const char* status_name(Status status) {
 
 StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
                           uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47,
-                          recovered::StringFixture strings,StringService20Projection string_getters,Service48Projection service48_projection)
+                          recovered::StringFixture strings,StringService20Projection string_getters,Service48Projection service48_projection,
+                          recovered::ClockDependency clock_dependency,Service39Projection service39_projection)
     : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection),
       service47_fixture_(std::move(service47)), string_fixture_(std::move(strings)),string_getters_(std::move(string_getters)),
-      service48_projection_(std::move(service48_projection)) {
+      service48_projection_(std::move(service48_projection)),clock_dependency_(std::move(clock_dependency)),
+      service39_projection_(std::move(service39_projection)) {
     context_.pc = program.header().entrypoint;
     context_.service47 = recovered::Service47InitialState(service47_fixture_);
     const auto* command = program.command(context_.pc);
@@ -363,7 +365,9 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         uint8_t width = static_cast<uint8_t>(op - 0x7F);
         uint32_t raw = operand(1, width);
         int32_t value;
-        if (width < 4 && raw & (1u << (width * 8 - 1)))
+        //70C8C..70D08 assembles opcode82 using three LBU and no signed
+        //extension. The signed byte/halfword forms remain distinct.
+        if (width < 3 && raw & (1u << (width * 8 - 1)))
             value = static_cast<int32_t>(raw) - static_cast<int32_t>(1u << (width * 8));
         else value = static_cast<int32_t>(raw & payload_mask);
         push(candidate, Value::integer(value));
@@ -434,6 +438,20 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             value.word = recovered::increment_value(value.word);
             write_reference(candidate, reference, value);
         } //76990 performs no store for other tags, including mapped references.
+    } else if (op == 0x65 || op == 0x67) {
+        require(candidate.sp>=2,"Bitwise assignment requires mapped destination and scalar operand");
+        const Value reference=slot(candidate,candidate.sp-2);
+        const auto scalar=[](const Value& v) {
+            require(v.kind!=Value::Kind::Word || v.word>>28!=4,"Bitwise assignment COP1 conversion remains outside new scalar domain");
+            recovered::BulkCell c;c.word=v.word;c.is_reference=v.kind!=Value::Kind::Word;
+            return recovered::BulkNumeric(c);
+        };
+        const int32_t rhs=scalar(slot(candidate,candidate.sp-1));
+        const int32_t lhs=scalar(read_reference(candidate,reference));
+        write_reference(candidate,reference,Value::integer(op==0x65?lhs&rhs:lhs|rhs));
+        //7627C stores target before6FF40 rereads the operand cell. Destination
+        //may alias that operand; cleanup must observe its CURRENT value.
+        release_supported(slot(candidate,candidate.sp-1));pop(candidate);pop(candidate);
     } else if (op == 0xD1 || op == 0xD2 || op == 0xE3 || op == 0xD4) {
         require(candidate.sp >= 2, "OpcodeD1 requires two operands");
         const auto scalar = [](const Value& v) {
@@ -452,18 +470,43 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
     } else if (op == 0x70) {
         require(candidate.sp>0,"Opcode70 needs one operand");release_supported(candidate.result);candidate.result={};
         candidate.result=pop(candidate); //708FC transfers ownership; no source copy/release.
+    } else if (op == 0xB2 || op == 0xB3) {
+        require(candidate.sp>0,"Type truth comparison requires one operand");
+        const Value input=pop(candidate);
+        const bool nonnil=input.kind!=Value::Kind::Word || input.word>>28!=0;
+        Value result;result.word=boolean_false|static_cast<uint32_t>(op==0xB2?nonnil:!nonnil);
+        push(candidate,result);release_supported(input);
     } else if (op == 0xB9) {
         require(candidate.sp>0,"OpcodeB9 needs one operand");const Value input=pop(candidate);
         const bool is_integer_zero=input.kind==Value::Kind::Word && input.word==0x20000000;
         Value result;result.word=boolean_false|static_cast<uint32_t>(!is_integer_zero);push(candidate,result);
         release_supported(input); // Original7515C temporary release follows output store.
-    } else if (op == 0xC5) {
-        require(candidate.sp>=2,"OpcodeC5 requires two operands");
+    } else if (op == 0xC0 || op == 0xC1) {
+        require(candidate.sp>=2,"Equality comparison requires two operands");
         const Value right=pop(candidate),left=pop(candidate);
+        const uint32_t lt=left.kind==Value::Kind::Word?left.word>>28:11;
+        const uint32_t rt=right.kind==Value::Kind::Word?right.word>>28:11;
+        bool equal=false;
+        //76858 dispatches on LEFT tag. Nil compares only right tag; boolean
+        //compares tag1 and bit0; scalar tags compare the complete raw word.
+        //tag9 and >=11 return false without dereferencing any reference.
+        if(lt==0)equal=rt==0;
+        else if(lt==1)equal=rt==1 && (left.word&1)==(right.word&1);
+        else if(lt==5 || lt==6) {
+            require(rt!=5 && rt!=6,"Equality two string getter/strcmp memory domain remains an original ABI cut");
+        } else if(lt<11 && lt!=9)equal=right.kind==Value::Kind::Word && left.word==right.word;
+        Value result;result.word=boolean_false|static_cast<uint32_t>(op==0xC1?!equal:equal);
+        push(candidate,result);release_supported(left);release_supported(right);
+    } else if (op == 0xC4 || op == 0xC5) {
+        require(candidate.sp>=2,"Ordered comparison requires two operands");
+        const Value right=pop(candidate),left=pop(candidate);
+        if(op==0xC4)require((left.kind!=Value::Kind::Word || left.word>>28!=4) &&
+                           (right.kind!=Value::Kind::Word || right.word>>28!=4),
+                           "OpcodeC4 COP1 conversion remains outside new scalar domain");
         const auto scalar=[](const Value& v) {
             recovered::BulkCell c;c.word=v.word;c.is_reference=v.kind!=Value::Kind::Word;return recovered::BulkNumeric(c);
         };
-        const bool greater_equal=scalar(left)>=scalar(right);
+        const bool greater_equal=op==0xC4?scalar(left)>scalar(right):scalar(left)>=scalar(right);
         Value result;result.word=boolean_false|static_cast<uint32_t>(greater_equal);push(candidate,result);
         release_supported(left);release_supported(right);
     } else if (op == 0xC2) {
@@ -570,6 +613,18 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         uint32_t id = operand(1, 1), argc = operand(2, 1);
         require(candidate.sp >= static_cast<int32_t>(argc), "Builtin argc exceeds stack");
         if (id == 0x09) {
+            if(argc==0 && clock_dependency_.available()) {
+                // Source684DC releases result before7C694 calls the installed
+                // cached-tick getter. Native refusal rolls back the candidate;
+                // source bad callback/read faults retain prior temporal effects.
+                release_supported(candidate.result);
+                const auto callback=clock_dependency_.provider();
+                require(callback.returned,"Builtin09 cached clock getter did not return; native readiness boundary");
+                candidate.result={};candidate.result.word=recovered::ClockWord689B8(callback.cached_psp_tick_us);
+                builtin.valid=true;builtin.pc=command.pc;builtin.id=9;builtin.argc=0;
+                builtin.handler_va=0x689B8;builtin.result=candidate.result;
+                candidate.pc=next;return;
+            }
             require(argc == 5,
                     "Builtin09 argc other than5 is outside tested native domain; argc0 needs external clock");
             //684DC..68550 releases ctx+30 before reading arguments. Production
@@ -669,6 +724,15 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                 require(string_fixture_.enabled,"Service20 source string availability/owned allocator readiness is not supplied");
                 if(second.word!=0x20000000u)require(string_getters_.enabled && string_getters_.memory_disjoint,
                         "Service20 extra selector source window/record availability is not supplied");
+            } else if(service==39) {
+                require(host_abi_projection_.allows_direct_registrations(),"Service39 linked host mapping premises unavailable");
+                require(service39_projection_.enabled && service39_projection_.router_context_mapped &&
+                        service39_projection_.reference_tables_mapped && service39_projection_.memory_disjoint,
+                        "Service39 explicit router/table/disjoint mapping premises unavailable");
+                require(second.kind==Value::Kind::StackReference || second.kind==Value::Kind::LocalReference ||
+                        second.kind==Value::Kind::GlobalReference,"Service39 requires explicit stack/local/global table reference");
+                (void)read_reference(candidate,second);
+                require(string_fixture_.enabled,"Service39 STRING allocator readiness not supplied");
             } else if(service==48) {
                 require(host_abi_projection_.allows_direct_registrations(),"Service48 legacy linked host mapping premises unavailable");
                 (void)service47_address(second);
@@ -680,7 +744,7 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             release_supported(candidate.result);
             builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
             builtin.handler_va = 0x6AD88; builtin.host_service = service;
-            builtin.host_handler_va = service == 48 ? 0x1C9E4 : service == 20 ? 0x1C408 : service == 47 ? 0x1C958 : registration == registrations.end() ? 0x1D2FC : registration->second.second;
+            builtin.host_handler_va = service == 39 ? 0x1C7B4 : service == 48 ? 0x1C9E4 : service == 20 ? 0x1C408 : service == 47 ? 0x1C958 : registration == registrations.end() ? 0x1D2FC : registration->second.second;
             builtin.arguments = {first, second}; builtin.result.word = boolean_false;
             //684DC releases prior result;6ADC4/6AE10 clear arguments before
             //the host handler. Destination/argument aliases see these clears.
@@ -726,6 +790,31 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                 //TEMP. Owned results therefore require two allocations and
                 //one release here, before later opcode89 performs its copy.
                 Value temporary;temporary.word=result_word;
+                builtin.result=copied_value(candidate.result,temporary);
+                release_supported(temporary);
+            } else if(service==39) {
+                if(!candidate.strings.ready())candidate.strings=recovered::StringArena(string_fixture_);
+                //6ADC4/6AE10 have cleared the two argument cells. Read CURRENT
+                //reference contents now, retaining table identity and aliases.
+                const Value current=read_reference(candidate,second);
+                require(current.kind==Value::Kind::Word,"Service39 nested symbolic reference getter outside tag5/6 domain");
+                recovered::Service39Input input;input.enabled=input.reference_readable=input.router_context_readable=true;
+                //Local uint32 TEMP has distinct abstract writable backing;
+                //service39_projection_.memory_disjoint is required above.
+                //No physical result address is admitted by the helper V2.
+                input.result_address=0;
+                using Space=recovered::Service39Space;
+                const uint32_t base=second.kind==Value::Kind::StackReference?candidate.strings.common_base():
+                    second.kind==Value::Kind::LocalReference?0x200000u:0x40000u;
+                require(second.index<=static_cast<uint32_t>(INT32_MAX)/4,"Service39 table byte offset overflows");
+                input.reference={second.kind==Value::Kind::StackReference?Space::Stack:
+                    second.kind==Value::Kind::LocalReference?Space::Locals:Space::Globals,base,static_cast<int32_t>(second.index*4)};
+                input.mappings=service39_projection_.borrowed_windows;
+                std::vector<uint8_t> cell(4);for(unsigned i=0;i<4;++i)cell[i]=static_cast<uint8_t>(current.word>>(8*i));
+                input.mappings.push_back({base+second.index*4,std::move(cell),true});
+                uint32_t word=boolean_false;
+                (void)recovered::Service39Apply(candidate.strings,input,word);
+                Value temporary;temporary.word=word;
                 builtin.result=copied_value(candidate.result,temporary);
                 release_supported(temporary);
             } else if(service==48) {
