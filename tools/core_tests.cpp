@@ -9,6 +9,8 @@
 #include "recovered/menu_primitives.h"
 #include "recovered/calendar_native.h"
 #include "recovered/service47_native.h"
+#include "recovered/bulk_array_native.h"
+#include "recovered/manager_queue_native.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -265,11 +267,101 @@ void service47_primitive_tests() {
         "Unproved owned source must raise a native barrier rather than fake copy/release");
     std::cout << "{\"test\":\"recovered_service47_smoke\",\"checks\":4,\"actual_buffer_available\":false,\"passed\":true}\n";
 }
+class BulkSmokeCells final : public dokodemo::recovered::BulkCells {
+public:
+    std::vector<dokodemo::recovered::BulkCell> stack = std::vector<dokodemo::recovered::BulkCell>(4);
+    std::vector<dokodemo::recovered::BulkCell> globals = std::vector<dokodemo::recovered::BulkCell>(12);
+    std::vector<dokodemo::recovered::BulkCell> constants = std::vector<dokodemo::recovered::BulkCell>(4);
+    dokodemo::recovered::BulkCell load(dokodemo::recovered::BulkAddress address) override {
+        using Table=dokodemo::recovered::BulkAddress::Table;
+        if(address.table==Table::Stack) return stack.at(address.index);
+        if(address.table==Table::Global) return globals.at(address.index);
+        if(address.table==Table::Ctx28) return constants.at(address.index);
+        throw std::runtime_error("Unmapped bulk smoke table");
+    }
+    void store(dokodemo::recovered::BulkAddress address,dokodemo::recovered::BulkCell value) override {
+        using Table=dokodemo::recovered::BulkAddress::Table;
+        if(address.table==Table::Stack) stack.at(address.index)=value;
+        else if(address.table==Table::Global) globals.at(address.index)=value;
+        else throw std::runtime_error("Readonly or unmapped bulk smoke table");
+    }
+};
+void bulk_primitive_tests() {
+    using namespace dokodemo::recovered;
+    using Table=BulkAddress::Table;
+    BulkSmokeCells cells;
+    cells.stack[2].word=0x2000000D;
+    BulkScalar7627C(cells,{Table::Stack,2},5,2);
+    require(cells.stack[2].word==0x20000005,"Source AND scalar writes exact integer tag/payload");
+    BulkCell norm; norm.word=0x40000000u|(7646u<<14)|5259u;
+    require(BulkNumeric(norm)==9280,"Source float-rounded packed norm differs from integer sqrt");
+    cells.globals[0].word=0x90000002;
+    cells.globals[1]={0xB0000000,true,{Table::Global,4}};
+    cells.globals[2]={0xB0000000,true,{Table::Global,8}};
+    cells.globals[4].word=cells.globals[8].word=0x90000002;
+    cells.globals[5].word=0x20000003;cells.globals[6].word=0x2000000D;
+    cells.globals[9].word=0x20000007;cells.globals[10].word=0x2000000F;
+    cells.constants[0].word=0x90000003;cells.constants[1].word=0x20000001;
+    cells.constants[2].word=0x20000002;cells.constants[3].word=0x20000005;
+    cells.stack[0]={0xB0000000,true,{Table::Global,0}};
+    cells.stack[1]={0xB0000000,true,{Table::Ctx28,0}};
+    require(BulkArray7773C(cells,{Table::Stack,0},{Table::Stack,1})==0
+        &&cells.globals[6].word==0x20000005&&cells.globals[10].word==0x20000005
+        &&cells.globals[5].word==0x20000003&&cells.globals[9].word==0x20000007
+        &&cells.constants[2].word==0x20000002,"Whole mapped target array uses readonly triple without unrelated writes");
+    cells.constants[2].word=0x20000000;cells.globals[6].word=0x60000001;
+    require(BulkArray7773C(cells,{Table::Stack,0},{Table::Stack,1})==0&&cells.globals[6].word==0x20000005,
+        "Copy replaces old owned-tag destination without invented release");
+    cells.constants[2].word=0x20000002;cells.globals[6].word=0x60000001;
+    bool cut=false;
+    try {BulkArray7773C(cells,{Table::Stack,0},{Table::Stack,1});}
+    catch(const std::runtime_error&){cut=true;}
+    require(cut&&cells.globals[6].word==0x60000001,"Unproved string conversion cuts before scalar store");
+    std::cout<<"{\"test\":\"recovered_bulk_smoke\",\"checks\":5,\"actual_host_available\":false,\"passed\":true}\n";
+}
+void manager_queue_tests() {
+    using namespace dokodemo::recovered;
+    auto made=OwnedManagerQueue::Create(15,32);
+    require(made.manager&&!made.boundary,"Source-layout manager owns real native allocations");
+    auto& manager=*made.manager;
+    const auto initial=manager.Snapshot();
+    uint32_t bytes=0;
+    for(const auto& allocation:initial.allocations) bytes+=allocation.bytes;
+    require(bytes==initial.allocated_bytes&&bytes==944&&initial.anchor_count==15
+        &&initial.command_capacity==32&&initial.queue_cursor_bytes==0,"Initialized manager storage sizes and empty linear queue");
+    auto registry=manager.CreateRegistry(3);
+    auto first=manager.RegisterCallback(registry.token,1,{0x23424,0},0x202);
+    auto second=manager.RegisterCallback(registry.token,1,{0x23424,0},0x202);
+    require(registry.accepted&&registry.enqueued&&first.accepted&&first.enqueued&&second.accepted&&second.enqueued,
+        "Registry and callback commands are enqueued in owned stable storage");
+    const auto drained=manager.Drain();
+    const auto linked=manager.Snapshot();
+    require(drained.cursor_reset&&drained.commands_processed==3
+        &&drained.boundary.kind==ManagerStopKind::DirectCallback&&drained.boundary.source_pc==0x930D0
+        &&linked.terminal&&linked.queue_cursor_bytes==0
+        &&linked.registries.at(0).occupied==2,"Closed command6 effects complete before explicit callback boundary");
+    const auto a=std::find(linked.event_list_order.begin(),linked.event_list_order.end(),first.token);
+    const auto b=std::find(linked.event_list_order.begin(),linked.event_list_order.end(),second.token);
+    require(a!=linked.event_list_order.end()&&b!=linked.event_list_order.end()&&a<b,
+        "Same-event command6 insertion is FIFO through reread successor prev");
+    require(!manager.Enqueue6(first.token,1).accepted,"Unknown callback boundary is terminal without invented return");
+    auto tiny=OwnedManagerQueue::Create(15,1);
+    require(bool(tiny.manager),"Small bounded command buffer allocated");
+    auto tiny_registry=tiny.manager->CreateRegistry(1);
+    auto dropped=tiny.manager->RegisterCallback(tiny_registry.token,1,{0x23424,0},0x202);
+    require(dropped.accepted&&dropped.overflow_dropped&&!dropped.enqueued
+        &&tiny.manager->Snapshot().registries.at(0).occupied==1,
+        "Silent queue overflow preserves already occupied registration slot");
+    auto failed=OwnedManagerQueue::Create(15,32,{0});
+    require(!failed.manager&&failed.boundary.kind==ManagerStopKind::NativeAllocationFailure,
+        "Native allocation failure is a structured boundary rather than PSP null-store equivalence");
+    std::cout<<"{\"test\":\"owned_manager_queue_smoke\",\"checks\":9,\"actual_psp_manager_available\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests(); bulk_primitive_tests(); manager_queue_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

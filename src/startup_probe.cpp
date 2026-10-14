@@ -3,6 +3,7 @@
 #include "recovered/ksc_dispatch_addresses.h"
 #include "recovered/game_primitives.h"
 #include "recovered/calendar_native.h"
+#include "recovered/bulk_array_native.h"
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -52,6 +53,27 @@ public:
     std::function<void(recovered::Service47Address, recovered::Service47Cell)> writer;
     recovered::Service47Cell load(recovered::Service47Address a) override { return reader(a); }
     void store(recovered::Service47Address a, recovered::Service47Cell v) override { writer(a, v); }
+};
+recovered::BulkAddress bulk_address(const Value& value) {
+    using Table = recovered::BulkAddress::Table;
+    require(value.kind != Value::Kind::Word, "Bulk argument needs an explicit mapped Arena identity");
+    return {value.kind == Value::Kind::StackReference ? Table::Stack :
+        value.kind == Value::Kind::GlobalReference ? Table::Global :
+        value.kind == Value::Kind::LocalReference ? Table::Local : Table::Ctx28, value.index};
+}
+Value bulk_value(recovered::BulkAddress a, const script::Program& program) {
+    using Table = recovered::BulkAddress::Table;
+    if (a.table == Table::Stack) return Value::stack_reference(a.index);
+    if (a.table == Table::Global) return Value::global_reference(a.index, program.header().global_start() + 4 * a.index);
+    if (a.table == Table::Local) return Value::local_reference(a.index, program.header().pool_end() + 4 * a.index);
+    return Value::ctx28_reference(a.index, program.header().ctx28_start() + 4 * a.index);
+}
+class MappedBulkCells final : public recovered::BulkCells {
+public:
+    std::function<recovered::BulkCell(recovered::BulkAddress)> reader;
+    std::function<void(recovered::BulkAddress, recovered::BulkCell)> writer;
+    recovered::BulkCell load(recovered::BulkAddress a) override { return reader(a); }
+    void store(recovered::BulkAddress a, recovered::BulkCell v) override { writer(a, v); }
 };
 }
 
@@ -140,6 +162,14 @@ void StartupProbe::require_target(uint32_t pc) const {
 }
 Value StartupProbe::read_reference(const Context& context, const Value& reference,
                                    uint32_t following_words) const {
+    if (reference.kind == Value::Kind::Ctx28Reference) {
+        require(reference.index <= UINT32_MAX - following_words, "Ctx28 reference index overflow");
+        const uint32_t index = reference.index + following_words;
+        require(index < program_.header().ctx28_count, "Referenced ctx28 word outside original read-only table");
+        Value value; value.word = program_.initial_word(script::Table::Ctx28, static_cast<uint16_t>(index));
+        require(value.word >> 28 != 5 && value.word >> 28 != 11, "Ctx28 initial pool/reference rebasing is outside proved domain");
+        return value;
+    }
     if (reference.kind == Value::Kind::StackReference) {
         require(reference.index <= UINT32_MAX - following_words, "Reference index overflow");
         const uint32_t index = reference.index + following_words;
@@ -388,6 +418,38 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             value.word = recovered::increment_value(value.word);
             write_reference(candidate, reference, value);
         } //76990 performs no store for other tags, including mapped references.
+    } else if (op == 0xD1 || op == 0xD2 || op == 0xE3 || op == 0xD4) {
+        require(candidate.sp >= 2, "OpcodeD1 requires two operands");
+        const auto scalar = [](const Value& v) {
+            recovered::BulkCell cell; cell.word=v.word; cell.is_reference=v.kind!=Value::Kind::Word;
+            return recovered::BulkNumeric(cell);
+        };
+        const Value right=slot(candidate,candidate.sp-1);
+        const int32_t denominator=scalar(right);release_supported(right);pop(candidate);
+        const Value left=slot(candidate,candidate.sp-1);
+        const int32_t numerator=scalar(left);release_supported(left);pop(candidate);
+        require((op!=0xD1 && op!=0xD2) || denominator!=0,"OpcodeD1/D2 division-zero6B3C0 original error service cut");
+        const int64_t quotient=op==0xD4 ? static_cast<int64_t>((static_cast<uint32_t>(numerator)&static_cast<uint32_t>(denominator))&payload_mask) :
+            op==0xE3 ? static_cast<int64_t>((static_cast<uint32_t>(numerator) << (static_cast<uint32_t>(denominator)&31))&payload_mask) :
+            op==0xD1 ? static_cast<int64_t>(numerator)/denominator : static_cast<int64_t>(numerator)%denominator;
+        push(candidate,Value::integer(static_cast<int32_t>(quotient)));
+    } else if (op == 0x70) {
+        require(candidate.sp>0,"Opcode70 needs one operand");release_supported(candidate.result);candidate.result={};
+        candidate.result=pop(candidate); //708FC transfers ownership; no source copy/release.
+    } else if (op == 0xB9) {
+        require(candidate.sp>0,"OpcodeB9 needs one operand");const Value input=pop(candidate);
+        const bool is_integer_zero=input.kind==Value::Kind::Word && input.word==0x20000000;
+        Value result;result.word=boolean_false|static_cast<uint32_t>(!is_integer_zero);push(candidate,result);
+        release_supported(input); // Original7515C temporary release follows output store.
+    } else if (op == 0xC5) {
+        require(candidate.sp>=2,"OpcodeC5 requires two operands");
+        const Value right=pop(candidate),left=pop(candidate);
+        const auto scalar=[](const Value& v) {
+            recovered::BulkCell c;c.word=v.word;c.is_reference=v.kind!=Value::Kind::Word;return recovered::BulkNumeric(c);
+        };
+        const bool greater_equal=scalar(left)>=scalar(right);
+        Value result;result.word=boolean_false|static_cast<uint32_t>(greater_equal);push(candidate,result);
+        release_supported(left);release_supported(right);
     } else if (op == 0xC2) {
         require(candidate.sp >= 2, "OpcodeC2 requires two scalar operands");
         const auto scalar = [](const Value& value) {
@@ -404,6 +466,20 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         //740FC pops/clears the reference slot BEFORE copy7581C reads target.
         const Value reference = pop(candidate);
         const Value value = read_reference(candidate, reference);
+        release_supported(value); push(candidate, value);
+    } else if (op == 0xF4) {
+        //74278 pops both raw operands before checking/dereferencing the array.
+        //743E0 copies the element through7581C, retaining symbolic identity.
+        require(candidate.sp >= 2, "OpcodeF4 requires reference and integer index");
+        const Value index_value = pop(candidate), reference = pop(candidate);
+        require(index_value.kind == Value::Kind::Word && index_value.word >> 28 == 2,
+                "OpcodeF4 index/type original error path remains a cut");
+        const int32_t index = signed28(index_value.word);
+        const Value header = read_reference(candidate, reference);
+        require(header.kind == Value::Kind::Word && header.word >> 28 == 9 &&
+                index >= 0 && static_cast<uint32_t>(index) < (header.word & 0xFFF),
+                "OpcodeF4 array/bounds original error path remains a cut");
+        const Value value = read_reference(candidate, reference, static_cast<uint32_t>(index) + 1);
         release_supported(value); push(candidate, value);
     } else if (op == 0xF5) {
         require(candidate.sp >= 2, "OpcodeF5 requires reference and integer index");
@@ -506,6 +582,40 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             builtin.valid = true; builtin.pc = command.pc; builtin.id = 9;
             builtin.argc = static_cast<uint8_t>(argc); builtin.handler_va = 0x689B8;
             builtin.arguments = std::move(arguments); builtin.result = result;
+        } else if (id == 4) {
+            require(argc==1,"Builtin04 argc outside reached scalar conversion contract");
+            release_supported(candidate.result);candidate.result={};
+            const Value argument=slot(candidate,candidate.sp-1);
+            recovered::BulkCell cell;cell.word=argument.word;cell.is_reference=argument.kind!=Value::Kind::Word;
+            const int32_t scalar=recovered::BulkNumeric(cell);
+            release_supported(argument);pop(candidate);candidate.result=Value::integer(scalar);
+            builtin.valid=true;builtin.pc=command.pc;builtin.id=4;builtin.argc=1;builtin.handler_va=0x6863C;
+            builtin.arguments={argument};builtin.result=candidate.result;
+        } else if (id == 97) {
+            require(argc == 2, "Builtin97 argc outside original two-argument contract");
+            const int32_t first_slot = candidate.sp - 2;
+            const std::vector<Value> arguments{slot(candidate, first_slot), slot(candidate, first_slot + 1)};
+            MappedBulkCells cells;
+            cells.reader = [&](recovered::BulkAddress a) {
+                const Value value = a.table == recovered::BulkAddress::Table::Result ? candidate.result :
+                    read_reference(candidate, bulk_value(a, program_));
+                recovered::BulkCell cell; cell.word = value.word;
+                cell.is_reference = value.kind != Value::Kind::Word;
+                if (cell.is_reference) cell.reference = bulk_address(value);
+                return cell;
+            };
+            cells.writer = [&](recovered::BulkAddress a, recovered::BulkCell cell) {
+                Value value; value.word = cell.word;
+                if (cell.is_reference) value = bulk_value(cell.reference, program_);
+                if (a.table == recovered::BulkAddress::Table::Result) candidate.result = value;
+                else write_reference(candidate, bulk_value(a, program_), value);
+            };
+            (void)recovered::BulkBuiltin97(cells,
+                {recovered::BulkAddress::Table::Stack, static_cast<uint32_t>(first_slot)},
+                {recovered::BulkAddress::Table::Result, 0});
+            candidate.sp = first_slot;
+            builtin.valid = true; builtin.pc = command.pc; builtin.id = 97; builtin.argc = 2;
+            builtin.handler_va = 0x6A6A8; builtin.arguments = arguments; builtin.result = candidate.result;
         } else {
             require(id == 0xF0 && argc == 2, "Unimplemented builtin/argc: id=" + hex(id));
             Value first = slot(candidate, candidate.sp - 2), second = slot(candidate, candidate.sp - 1);

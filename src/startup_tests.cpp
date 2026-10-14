@@ -1,5 +1,6 @@
 #include "startup_probe.h"
 #include "recovered/calendar_native.h"
+#include "recovered/bulk_array_native.h"
 #ifdef DOKODEMO_STARTUP_VERIFY_MAIN
 #include <algorithm>
 #include <filesystem>
@@ -44,6 +45,9 @@ struct StartupTestAccess {
         return probe.snapshot(probe.context_);
     }
     static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
+    static Snapshot set_service(StartupProbe& probe, recovered::Service47State state) {
+        probe.context_.service47=state;return probe.snapshot(probe.context_);
+    }
     static Snapshot repeat47(StartupProbe& probe, uint32_t pc) {
         probe.context_.pc = pc; probe.context_.sp = 38;
         probe.context_.slots[36] = Value::integer(47); probe.context_.slots[37] = Value::stack_reference(8);
@@ -328,7 +332,8 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
     std::ifstream stream(vectors, std::ios::binary); require(bool(stream), "Chain vectors missing");
     char magic[8]{}; uint32_t expected_count = 0;
     stream.read(magic, 8); stream.read(reinterpret_cast<char*>(&expected_count), 4);
-    const bool service47_vectors = std::string(magic, 6) == "DS47V1";
+    const bool bulk_vectors = std::string(magic, 6) == "DBK7V1";
+    const bool service47_vectors = std::string(magic, 6) == "DS47V1" || bulk_vectors;
     require((std::string(magic, 6) == "DCH4V1" || service47_vectors) && expected_count > 0, "Chain fixture schema");
     const char* names[] = {"INU", "KAERU", "NEKO", "ROBO", "USAGI"};
     std::array<script::Program, 5> programs; script::Diagnostic error;
@@ -374,25 +379,29 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
             const uint32_t length = next(); require(length <= 65536, "Service47 source fixture cap");
             for (uint32_t i = 0; i < length; ++i) service_fixture.format_bytes.push_back(static_cast<uint8_t>(next()));
         }
+        const auto read_service = [&]() {
+            recovered::Service47State s;
+            s.known=next()!=0;s.control_present=next()!=0;s.source_present=next()!=0;s.guard=static_cast<uint8_t>(next());
+            s.state=static_cast<uint16_t>(next());s.calls=next();s.cursor_bytes=next();s.decoded_words=next();s.format_called=next()!=0;
+            s.format_return=static_cast<int32_t>(next());s.null_free_calls=next();s.released_entities=next();return s;
+        };
+        recovered::Service47State input_service;
+        if(bulk_vectors)input_service=read_service();
         const uint32_t boundary = next(), expected_pc = next();
         const int32_t expected_sp = static_cast<int32_t>(next()), expected_fp = static_cast<int32_t>(next());
         const auto expected_result = value(); const auto expected_slots = slots();
         const auto expected_globals = writes(), expected_locals = writes(), expected_bindings = writes();
         recovered::Service47State expected_service;
         if (service47_vectors) {
-            expected_service.known = next() != 0; expected_service.control_present = next() != 0;
-            expected_service.source_present = next() != 0; expected_service.guard = static_cast<uint8_t>(next());
-            expected_service.state = static_cast<uint16_t>(next()); expected_service.calls = next(); expected_service.cursor_bytes = next();
-            expected_service.decoded_words = next(); expected_service.format_called = next() != 0;
-            expected_service.format_return = static_cast<int32_t>(next()); expected_service.null_free_calls = next();
-            expected_service.released_entities = next();
+            expected_service=read_service();
         }
         require(at == fields.size() && source < programs.size() && host <= 1 && cap <= 512, "Chain fields");
         // This verification path explicitly supplies the five ABI premises.
         // Default production callers do not get this conditional projection.
         auto projection = conditional_abi; projection.selected_record_index = count % 2;
         startup::StartupProbe probe(programs[source], static_cast<uint8_t>(host), static_cast<uint16_t>(cap), projection, service_fixture);
-        const auto before = startup::StartupTestAccess::chain_initial(probe, pc, sp, fp, input_slots, prior, globals, locals, bindings);
+        auto before = startup::StartupTestAccess::chain_initial(probe, pc, sp, fp, input_slots, prior, globals, locals, bindings);
+        if(bulk_vectors)before=startup::StartupTestAccess::set_service(probe,input_service);
         const auto all_before = startup::StartupTestAccess::all_slots(probe);
         const auto actual = probe.run(1); const auto& after = startup::StartupTestAccess::all_slots(probe);
         const std::string label = "Chain vector" + std::to_string(count);
@@ -495,7 +504,7 @@ recovered::Service47Fixture natural_service47_fixture() {
     for (uint32_t i = 0; i < 26; ++i) append(0x80000000);
     return f; //Synthetic mapped conditional stream, not an observed save/blob.
 }
-void service47_traces(const std::filesystem::path& base) {
+void service47_traces(const std::filesystem::path& base, bool full_slots = false) {
     stream_events = true;
     script::Program program; script::Diagnostic error;
     for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
@@ -509,6 +518,12 @@ void service47_traces(const std::filesystem::path& base) {
                     "Connected service47 did not naturally advance: " + trace.diagnostic.reason);
             require(same_context(trace.context, probe.run(1).context), "Service47 repeated halt changed state");
             output(name, program, trace);
+            if(full_slots) {
+                std::cout<<"{\"all512_final\":true,\"source\":\""<<name<<".KSC\",\"host\":"<<unsigned(host)<<",\"slots\":[";
+                const auto& slots=startup::StartupTestAccess::all_slots(probe);
+                for(size_t i=0;i<slots.size();++i){if(i)std::cout<<',';value_json(slots[i]);}
+                std::cout<<"]}\n";
+            }
             startup::StartupProbe resumed(program, host, 512, conditional_abi, natural_service47_fixture());
             startup::Trace other;
             do { other = resumed.run(127); } while (other.status == startup::Status::BudgetExhausted);
@@ -533,8 +548,83 @@ void service47_traces(const std::filesystem::path& base) {
     }
     std::cout << "{\"service47_connected_resume_checks\":\"pass\",\"traces\":10,\"repeat_ready_barriers\":10,\"repeat_null_successes\":10}\n";
 }
+// Independent research corpus backend: finite raw address maps are test data.
+// This backend is never used by StartupProbe or a production host allocator.
+class RawBulkCells final : public recovered::BulkCells {
+public:
+    std::map<uint32_t, uint8_t> memory;
+    std::vector<std::pair<uint32_t,uint32_t>> readonly;
+    uint32_t read(uint32_t address, unsigned width = 4) const {
+        require(address % width == 0, "Raw bulk unaligned read"); uint32_t value = 0;
+        for (unsigned i=0;i<width;++i) {
+            const auto it=memory.find(address+i);require(it!=memory.end(),"Raw bulk unmapped read");
+            value |= static_cast<uint32_t>(it->second) << (8*i);
+        }
+        return value;
+    }
+    void write(uint32_t address, uint32_t value, unsigned width=4) {
+        require(address % width == 0,"Raw bulk unaligned write");
+        for (unsigned i=0;i<width;++i) {
+            require(memory.count(address+i)!=0,"Raw bulk unmapped write");
+            for (const auto& r:readonly)require(address+i<r.first || address+i>=r.second,"Raw bulk read-only guard");
+        }
+        for (unsigned i=0;i<width;++i)memory[address+i]=static_cast<uint8_t>(value>>(8*i));
+    }
+    recovered::BulkCell load(recovered::BulkAddress a) override {
+        recovered::BulkCell v;v.word=read(a.index*4);return v;
+    }
+    void store(recovered::BulkAddress a,recovered::BulkCell v) override {
+        require(!v.is_reference,"Unexpected raw test symbolic value");write(a.index*4,v.word);
+    }
+    recovered::BulkAddress resolve_offset(int32_t offset) override {
+        const uint32_t address=read(0x1C93F8)+static_cast<uint32_t>(offset);
+        require(address%4==0,"Raw bulk offset alignment guard");
+        return {recovered::BulkAddress::Table::Stack,address/4};
+    }
+};
+void bulk_raw_checks(const std::filesystem::path& path) {
+    std::ifstream input(path,std::ios::binary);require(bool(input),"Bulk raw vectors missing");
+    const auto next=[&](){uint32_t n=0;input.read(reinterpret_cast<char*>(&n),4);require(bool(input),"Bulk raw truncated");return n;};
+    char magic[8]{};input.read(magic,8);require(std::string(magic,8)=="BUL7RAW1","Bulk raw schema");
+    const uint32_t count=next();uint32_t successes=0,cuts=0;
+    for(uint32_t row=0;row<count;++row) {
+        RawBulkCells cells;const uint32_t blocks=next();require(blocks<32,"Bulk block count");
+        for(uint32_t block=0;block<blocks;++block) {
+            const uint32_t start=next(),size=next();require(size<=2000000,"Bulk block size");
+            for(uint32_t i=0;i<size;++i){char c=0;input.get(c);require(bool(input),"Bulk bytes truncated");cells.memory[start+i]=static_cast<uint8_t>(c);}
+        }
+        const uint32_t ranges=next();
+        for(uint32_t i=0;i<ranges;++i){const uint32_t start=next(),end=next();cells.readonly.push_back({start,end});}
+        const bool expected_cut=next()!=0;auto expected=cells.memory;const uint32_t changes=next();
+        for(uint32_t i=0;i<changes;++i) {
+            const uint32_t address=next(),before=next(),after=next();require(cells.read(address)==before,"Bulk original corpus identity");
+            for(unsigned j=0;j<4;++j)expected[address+j]=static_cast<uint8_t>(after>>(8*j));
+        }
+        bool cut=false;
+        try {
+            const uint32_t ctx=0x1200000,vm=cells.read(ctx+16),pc=cells.read(vm+4),code=cells.read(vm);
+            require(cells.read(code+pc,1)==97 && cells.read(code+pc+1,1)==2,"Bulk raw invocation");
+            const uint32_t raw_sp=cells.read(ctx+92,2);
+            const int32_t sp=raw_sp&0x8000 ? static_cast<int32_t>(raw_sp)-65536 : static_cast<int32_t>(raw_sp);
+            const uint32_t first=cells.read(ctx+32)+4*static_cast<uint32_t>(sp-2);
+            cells.write(vm+4,pc+2);
+            (void)recovered::BulkBuiltin97(cells,{recovered::BulkAddress::Table::Stack,first/4},
+                {recovered::BulkAddress::Table::Stack,(ctx+48)/4});
+            cells.write(ctx+92,static_cast<uint32_t>(sp-2),2);
+        } catch(const std::exception&) { cut=true; }
+        require(cut==expected_cut,"Bulk raw success/cut differs at case"+std::to_string(row));
+        if(!cut){++successes;require(cells.memory==expected,"Bulk full final-memory differs at case"+std::to_string(row));}
+        else ++cuts; //Earlier protective/owned cuts do not assert raw partial faults.
+    }
+    char extra=0;require(!input.get(extra) && input.eof(),"Bulk raw extra data");
+    std::cout<<"{\"bulk_independent_native_checks\":\"pass\",\"cases\":"<<count
+        <<",\"success_full_memory\":"<<successes<<",\"explicit_cut_cases\":"<<cuts<<"}\n";
+}
 int main(int argc, char** argv) {
     try {
+        if(argc==3 && std::string(argv[1])=="--bulk-raw-vectors"){bulk_raw_checks(argv[2]);return 0;}
+        if(argc==3 && std::string(argv[1])=="--bulk-traces"){service47_traces(argv[2],true);return 0;}
+        if(argc==4 && std::string(argv[1])=="--bulk-vectors"){chain_oracle_checks(argv[3],argv[2],"bulk_original_word_checks");return 0;}
         if (argc==3 && std::string(argv[1])=="--service47-traces") { service47_traces(argv[2]);return 0; }
         if (argc==4 && std::string(argv[1])=="--service47-vectors") { chain_oracle_checks(argv[3],argv[2],"service47_original_word_checks");return 0; }
         if (argc==3 && std::string(argv[1])=="--calendar-scalar-vectors") { calendar_scalar_checks(argv[2]);return 0; }
