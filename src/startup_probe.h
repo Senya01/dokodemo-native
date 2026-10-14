@@ -8,8 +8,10 @@
 
 // BOOT-proved startup prefix only. No PSP CPU/OS/GPU emulation, no dialogue
 // fixture. Opcodes14/15 support mapped references and non-owned copies only.
-// See research/stage4/startup-chain/REPORT.md for the conditional ABI projection,
-// original-word tests and explicit barriers; this is not a complete game VM.
+// See research/stage5/startup-calendar/REPORT.md for connected calendar/89,
+// original-word tests and atomic barriers; this is not a complete game VM.
+// Legacy host78 still assumes a valid linked host, selected SLOT preread and
+// live singleton. Compatibility acceptance does not prove their construction.
 namespace dokodemo::startup {
 
 struct Value {
@@ -53,7 +55,7 @@ bool branch_condition(uint8_t opcode, uint32_t word);
 // The direct-registration paths require all premises; default callers stop.
 struct HostAbiProjection {
     bool linked_context_mapped = false;
-    bool selected_record_mapped = false; // Unconditional1C1F0 load is valid.
+    bool selected_record_mapped = false; // Selected SLOT for1C1F0 load is valid; its value may be NULL.
     bool singleton_mapped = false;
     // Includes context/host/singleton/stack/local/global objects, with only
     // the declared ctx+30 result subobject; no cross-object aliases allowed.

@@ -1,4 +1,5 @@
 #include "startup_probe.h"
+#include "recovered/calendar_native.h"
 #ifdef DOKODEMO_STARTUP_VERIFY_MAIN
 #include <algorithm>
 #include <filesystem>
@@ -305,7 +306,7 @@ void iterator_oracle_checks(const std::filesystem::path& vectors, const std::fil
     std::cout << "{\"iterator_original_word_checks\":\"pass\",\"vectors\":" << count
               << ",\"successes\":" << success << ",\"barriers\":" << barriers << "}\n";
 }
-void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesystem::path& base) {
+void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesystem::path& base, const char* check_name = "chain_original_word_checks") {
     std::ifstream stream(vectors, std::ios::binary); require(bool(stream), "Chain vectors missing");
     char magic[8]{}; uint32_t expected_count = 0;
     stream.read(magic, 8); stream.read(reinterpret_cast<char*>(&expected_count), 4);
@@ -370,7 +371,7 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
         }
     }
     char extra = 0; require(!stream.read(&extra, 1) && stream.eof(), "Chain extra fixture data");
-    std::cout << "{\"chain_original_word_checks\":\"pass\",\"vectors\":" << expected_count
+    std::cout << "{\"" << check_name << "\":\"pass\",\"vectors\":" << expected_count
               << ",\"successes\":" << success << ",\"barriers\":" << barriers << "}\n";
 }
 void opcode_boundary_checks(const script::Program& program) {
@@ -415,21 +416,50 @@ void opcode_boundary_checks(const script::Program& program) {
 }
 }
 
+void calendar_scalar_checks(const std::filesystem::path& path) {
+    std::ifstream stream(path, std::ios::binary); require(bool(stream), "Calendar scalar fixture missing");
+    char magic[8]{}; uint32_t count=0;
+    stream.read(magic,8);stream.read(reinterpret_cast<char*>(&count),4);
+    require(std::string(magic,6)=="CAL5V1" && count>0,"Calendar scalar schema");
+    for (uint32_t i=0;i<count;++i) {
+        std::array<uint32_t,10> row{};
+        stream.read(reinterpret_cast<char*>(row.data()),sizeof(row));require(bool(stream),"Calendar scalar truncated");
+        recovered::CalendarRecord record{};
+        for (size_t j=0;j<record.size();++j)record[j]=static_cast<uint8_t>(row[5+j/4]>>(8*(j%4)));
+        if (row[9]) {
+            std::array<int32_t,5> fields{};
+            for (size_t j=0;j<fields.size();++j)fields[j]=row[j]&0x80000000u ?
+                static_cast<int32_t>(static_cast<int64_t>(row[j])-0x100000000LL) : static_cast<int32_t>(row[j]);
+            require(recovered::CalendarRecord689B8(fields)==record,"Calendar caller truncation differs");
+        }
+        require(recovered::CalendarScalar7C580(record)==row[7] && recovered::CalendarScalar7C660(record)==row[8],
+                "Calendar scalar differs from original words vector"+std::to_string(i));
+    }
+    char extra=0;require(!stream.read(&extra,1) && stream.eof(),"Calendar scalar extra data");
+    std::cout<<"{\"calendar_scalar_checks\":\"pass\",\"vectors\":"<<count<<"}\n";
+}
+
 int main(int argc, char** argv) {
     try {
-        require(argc == 4 || argc == 6, "Supply original KSC directory, stage2 vectors, iterator vectors [chain vectors --stream]");
-        stream_events = argc == 6 && std::string(argv[5]) == "--stream";
+        if (argc==3 && std::string(argv[1])=="--calendar-scalar-vectors") { calendar_scalar_checks(argv[2]);return 0; }
+        require(argc == 4 || argc == 6 || argc == 7, "Supply original KSC directory, stage2 vectors, iterator vectors [chain vectors --stream]");
+        stream_events = argc >= 6 && std::string(argv[5]) == "--stream";
         std::filesystem::path base = argv[1];
         script::Program program; script::Diagnostic error;
         for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
             require(program.load_original(base / (std::string(name) + ".KSC"), error), error.text());
             for (uint8_t host_byte : {uint8_t(0), uint8_t(1)}) {
                 startup::StartupProbe probe(program, host_byte, 512, conditional_abi);
-                const auto trace = probe.run(10000);
-                const std::map<std::string, uint32_t> stops = {{"INU",0x6B19A},{"KAERU",0x6AFAB},
-                    {"NEKO",0x8D21D},{"ROBO",0x6B0E2},{"USAGI",0x66FC3}};
-                require(trace.status == startup::Status::Halted && trace.executed == 6027 && trace.pc == stops.at(name) &&
-                        trace.sp == 46 && trace.fp == 38 && trace.diagnostic.opcode == 0x8B,
+                const auto prefix = probe.run(6027);
+                require(prefix.status == startup::Status::BudgetExhausted && prefix.sp == 46 && prefix.fp == 38 &&
+                        prefix.result == startup::Value::stack_reference(39) && prefix.context.global_writes.size() == 700,
+                        "Accepted stage4 input prefix differs");
+                startup::Trace trace;
+                do { trace = probe.run(10000); } while (trace.status == startup::Status::BudgetExhausted);
+                const std::map<std::string, uint32_t> stops = {{"INU",0x6B317},{"KAERU",0x6B128},
+                    {"NEKO",0x8D39A},{"ROBO",0x6B25F},{"USAGI",0x67140}};
+                require(trace.status == startup::Status::Halted && trace.executed == 6189 && trace.pc == stops.at(name) &&
+                        trace.sp == 38 && trace.fp == 8 && trace.diagnostic.opcode == 0x8B,
                         "Original exact halt context differs");
                 require(trace.first_builtin.valid && trace.first_builtin.id == 0xF0 &&
                         trace.first_builtin.host_service == 78 && trace.first_builtin.result.word == 0x10000000 &&
@@ -524,7 +554,8 @@ int main(int argc, char** argv) {
         std::cout << "{\"host_projection_guard_checks\":\"pass\",\"cases\":10,\"default_executed\":5633,\"default_next_service\":10}\n";
         original_oracle_checks(argv[2], program);
         iterator_oracle_checks(argv[3], base);
-        if (argc == 6) chain_oracle_checks(argv[4], base);
+        if (argc >= 6) chain_oracle_checks(argv[4], base);
+        if (argc == 7) chain_oracle_checks(argv[6], base, "calendar_original_word_checks");
         opcode_boundary_checks(program);
         std::cout << "{\"negative_checks\":\"pass\",\"cases\":[\"host2/255\",\"budget0/10001\","
                      "\"caps0/2/513\",\"read/push cap3 atomic halt\",\"call cap5 atomic halt\","

@@ -7,6 +7,7 @@
 #include "model_formats.hpp"
 #include "recovered/game_primitives.h"
 #include "recovered/menu_primitives.h"
+#include "recovered/calendar_native.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -202,11 +203,23 @@ void menu_primitive_tests() {
         "Event/host alias final store order");
     std::cout << "{\"test\":\"recovered_menu_smoke\",\"checks\":6,\"original_menu_route\":false,\"passed\":true}\n";
 }
+void calendar_primitive_tests() {
+    using namespace dokodemo::recovered;
+    auto record=CalendarRecord689B8({2004,11,16,0,0});
+    require(record==CalendarRecord{{0xd4,0x07,11,16,0,0,0}}, "Original narrow calendar record layout");
+    require(CalendarScalar7C660(record)==0x00272220u, "Original startup tuple scalar");
+    const auto value=CalendarScalar7C580(record);
+    record[6]=0xff;
+    require(CalendarScalar7C580(record)==value, "Calendar arithmetic must not consume caller byte6");
+    const auto narrowed=CalendarRecord689B8({-1,256,-1,255,256});
+    require(narrowed==CalendarRecord{{0xff,0xff,0,0xff,0xff,0,0}}, "Calendar field widths are not civil-date normalization");
+    std::cout << "{\"test\":\"recovered_calendar_smoke\",\"checks\":4,\"host_clock_substituted\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

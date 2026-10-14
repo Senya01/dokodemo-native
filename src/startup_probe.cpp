@@ -2,6 +2,7 @@
 #include "core_hash.h"
 #include "recovered/ksc_dispatch_addresses.h"
 #include "recovered/game_primitives.h"
+#include "recovered/calendar_native.h"
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -296,6 +297,12 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             value = static_cast<int32_t>(raw) - static_cast<int32_t>(1u << (width * 8));
         else value = static_cast<int32_t>(raw & payload_mask);
         push(candidate, Value::integer(value));
+    } else if (op == 0x89) {
+        //70EEC..70F20 copies ctx+30 into the old top (7581C performs no
+        //destination release), then clears ctx+30 with7515C. Owned clone is
+        //unproved. Arena slots/result are disjoint in the symbolic model.
+        release_supported(candidate.result);
+        push(candidate, candidate.result); candidate.result = {};
     } else if (op == 0x84) {
         //70D90 copy of constant cellE5948, zeroed by initializer76B38.
         push(candidate, {});
@@ -434,37 +441,68 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
     } else if (op == 0x8B) {
         uint32_t id = operand(1, 1), argc = operand(2, 1);
         require(candidate.sp >= static_cast<int32_t>(argc), "Builtin argc exceeds stack");
-        require(id == 0xF0 && argc == 2, "Unimplemented builtin/argc: id=" + hex(id));
-        Value first = slot(candidate, candidate.sp - 2), second = slot(candidate, candidate.sp - 1);
-        const std::map<uint32_t, std::pair<uint32_t, uint32_t>> registrations = {
-            {10,{0x0C,0x1C29C}}, {11,{0x10,0x1C2B8}}, {16,{0x20,0x1C36C}},
-            {29,{0x44,0x1C5AC}}, {35,{0x48,0x1C698}}};
-        require(first.kind == Value::Kind::Word && first.word >> 28 == 2,
-                "Unimplemented F0 service conversion/type");
-        const uint32_t service = static_cast<uint32_t>(signed28(first.word));
-        const auto registration = registrations.find(service);
-        if (registration != registrations.end()) {
-            require(host_abi_projection_.allows_direct_registrations(),
-                    "F0 direct registration needs explicit mapped/disjoint/initialized host ABI projection; constructor provenance is unproved");
-            // Each original branch stores ArenaBase+signed28(arg) into the
-            // singleton pointed to by relocated cell29248. Preserve pointer
-            // identity; no callback object/array or default callback is fabricated.
-            if (second.kind == Value::Kind::StackReference) slot(candidate, static_cast<int32_t>(second.index));
-            else if (second.kind == Value::Kind::LocalReference)
-                require(second.index < program_.header().local_count, "F0 local binding outside mapped table");
-            else require(second.kind == Value::Kind::GlobalReference && second.index < program_.header().global_count,
-                         "F0 registration requires a mapped Arena reference");
-        } else require(service == 78 && second.kind == Value::Kind::Word && second.word == boolean_false,
-                       "Unimplemented F0 host service/arguments: service=" + std::to_string(service));
-        release_supported(candidate.result);
-        builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
-        builtin.handler_va = 0x6AD88; builtin.host_service = service;
-        builtin.host_handler_va = registration == registrations.end() ? 0x1D2FC : registration->second.second;
-        builtin.arguments = {first, second}; builtin.result.word = boolean_false;
-        candidate.result = builtin.result;
-        if (registration == registrations.end()) { candidate.host_flag_104_known = true; candidate.host_flag_104 = 0; }
-        else candidate.host_reference_bindings[registration->second.first] = second;
-        pop(candidate); pop(candidate);
+        if (id == 0x09) {
+            require(argc == 5,
+                    "Builtin09 argc other than5 is outside tested native domain; argc0 needs external clock");
+            //684DC..68550 releases ctx+30 before reading arguments. Production
+            //symbolic references never alias the result subobject; raw address,
+            //float/string conversion and owned release remain atomic barriers.
+            release_supported(candidate.result);
+            std::vector<Value> arguments;
+            std::array<int32_t, 5> fields{};
+            for (uint32_t i = 0; i < argc; ++i) {
+                const Value value = slot(candidate, candidate.sp - static_cast<int32_t>(argc) + static_cast<int32_t>(i));
+                require(value.kind == Value::Kind::Word,
+                        "Builtin09 numeric reference payload is outside mapped scalar domain");
+                const uint32_t tag = value.word >> 28;
+                require(tag != 4 && tag != 5 && tag != 6 && tag != 11,
+                        "Builtin09 float/string conversion or owned release is unproved");
+                fields[i] = tag == 9 ? static_cast<int32_t>(value.word & 0xFFF) : signed28(value.word);
+                arguments.push_back(value);
+            }
+            const uint32_t scalar = recovered::CalendarScalar7C660(recovered::CalendarRecord689B8(fields));
+            Value result; result.word = 0x30000000u | (scalar & payload_mask);
+            //Original7515C clears each argument immediately after its record
+            //store, and68BAC writes result before685C4 commits signed SP.
+            for (uint32_t i = 0; i < argc; ++i)
+                slot(candidate, candidate.sp - static_cast<int32_t>(argc) + static_cast<int32_t>(i)) = {};
+            candidate.sp -= static_cast<int32_t>(argc); candidate.result = result;
+            builtin.valid = true; builtin.pc = command.pc; builtin.id = 9;
+            builtin.argc = static_cast<uint8_t>(argc); builtin.handler_va = 0x689B8;
+            builtin.arguments = std::move(arguments); builtin.result = result;
+        } else {
+            require(id == 0xF0 && argc == 2, "Unimplemented builtin/argc: id=" + hex(id));
+            Value first = slot(candidate, candidate.sp - 2), second = slot(candidate, candidate.sp - 1);
+            const std::map<uint32_t, std::pair<uint32_t, uint32_t>> registrations = {
+                {10,{0x0C,0x1C29C}}, {11,{0x10,0x1C2B8}}, {16,{0x20,0x1C36C}},
+                {29,{0x44,0x1C5AC}}, {35,{0x48,0x1C698}}};
+            require(first.kind == Value::Kind::Word && first.word >> 28 == 2,
+                    "Unimplemented F0 service conversion/type");
+            const uint32_t service = static_cast<uint32_t>(signed28(first.word));
+            const auto registration = registrations.find(service);
+            if (registration != registrations.end()) {
+                require(host_abi_projection_.allows_direct_registrations(),
+                        "F0 direct registration needs explicit mapped/disjoint/initialized host ABI projection; constructor provenance is unproved");
+                // Each original branch stores ArenaBase+signed28(arg) into the
+                // singleton pointed to by relocated cell29248. Preserve pointer
+                // identity; no callback object/array or default callback is fabricated.
+                if (second.kind == Value::Kind::StackReference) slot(candidate, static_cast<int32_t>(second.index));
+                else if (second.kind == Value::Kind::LocalReference)
+                    require(second.index < program_.header().local_count, "F0 local binding outside mapped table");
+                else require(second.kind == Value::Kind::GlobalReference && second.index < program_.header().global_count,
+                             "F0 registration requires a mapped Arena reference");
+            } else require(service == 78 && second.kind == Value::Kind::Word && second.word == boolean_false,
+                           "Unimplemented F0 host service/arguments: service=" + std::to_string(service));
+            release_supported(candidate.result);
+            builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
+            builtin.handler_va = 0x6AD88; builtin.host_service = service;
+            builtin.host_handler_va = registration == registrations.end() ? 0x1D2FC : registration->second.second;
+            builtin.arguments = {first, second}; builtin.result.word = boolean_false;
+            candidate.result = builtin.result;
+            if (registration == registrations.end()) { candidate.host_flag_104_known = true; candidate.host_flag_104 = 0; }
+            else candidate.host_reference_bindings[registration->second.first] = second;
+            pop(candidate); pop(candidate);
+        }
     } else {
         throw std::runtime_error("Unknown semantics: opcode=" + hex(static_cast<uint32_t>(op)) +
                                  ", BOOT handler=" + hex(handler_for(op)));

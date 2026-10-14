@@ -13,6 +13,7 @@
 #include "model_formats.hpp"
 #include "startup_probe.h"
 #include "recovered/menu_primitives.h"
+#include "recovered/calendar_native.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -66,10 +67,10 @@ bool VerifiedStartupPrefix(const dokodemo::startup::Trace& trace, const std::str
         && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.empty();
 }
 bool VerifiedProjectedStartup(const dokodemo::startup::Trace& trace, const std::string& source) {
-    const std::map<std::string,uint32_t> stops = {{"INU",0x6B19A},{"KAERU",0x6AFAB},
-        {"NEKO",0x8D21D},{"ROBO",0x6B0E2},{"USAGI",0x66FC3}};
-    return trace.status==dokodemo::startup::Status::Halted && trace.executed==6027
-        && trace.pc==stops.at(source) && trace.sp==46 && trace.fp==38 && trace.diagnostic.opcode==0x8B
+    const std::map<std::string,uint32_t> stops = {{"INU",0x6B317},{"KAERU",0x6B128},
+        {"NEKO",0x8D39A},{"ROBO",0x6B25F},{"USAGI",0x67140}};
+    return trace.status==dokodemo::startup::Status::Halted && trace.executed==6189
+        && trace.pc==stops.at(source) && trace.sp==38 && trace.fp==8 && trace.diagnostic.opcode==0x8B
         && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==39
         && trace.context.global_writes_complete && trace.context.global_writes.size()==700
         && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.size()==5;
@@ -81,6 +82,12 @@ int SelfTest(const Options& options) {
     auto check = [&](bool ok, const char* name) { report << (ok ? "PASS " : "FAIL ") << name << '\n'; if (ok) ++passed; else ++failures; };
     check(Utf8(Utf8(std::string(u8"トロ / Игрок"))) == std::string(u8"トロ / Игрок"), "Japanese/Russian UTF-8 round trip");
     check(std::filesystem::is_directory(options.assets), "native asset directory exists");
+    const auto calendar = dokodemo::recovered::CalendarRecord689B8({2004,11,16,0,0});
+    check(calendar==dokodemo::recovered::CalendarRecord{0xD4,0x07,11,16,0,0,0}
+        && dokodemo::recovered::CalendarScalar7C660(calendar)==0x00272220u,
+        "original startup calendar record widths and minute scalar");
+    check(dokodemo::recovered::CalendarScalar7C660(dokodemo::recovered::CalendarRecord689B8({2000,1,1,0,0}))==0u,
+        "source calendar anchor 2000-01-01 yields zero without host clock");
     auto files = FindImages(options.assets);
     check(!files.empty(), "original decoded BMP resource exists");
     size_t decoded = 0;
