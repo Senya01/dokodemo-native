@@ -43,6 +43,15 @@ struct StartupTestAccess {
         return probe.snapshot(probe.context_);
     }
     static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
+    static Snapshot chain_initial(StartupProbe& probe, uint32_t pc, int32_t sp, int32_t fp,
+                                  const std::vector<Value>& slots, Value result,
+                                  const std::map<uint32_t, Value>& globals,
+                                  const std::map<uint32_t, Value>& locals,
+                                  const std::map<uint32_t, Value>& bindings) {
+        iterator_initial(probe, pc, sp, fp, slots, result, globals);
+        probe.context_.local_writes = locals; probe.context_.host_reference_bindings = bindings;
+        return probe.snapshot(probe.context_);
+    }
     static bool malformed_branch_halts(StartupProbe& probe, uint32_t pc, uint32_t size) {
         auto candidate = probe.context_;
         candidate.pc = pc; candidate.sp = 1; candidate.slots[0] = {};
@@ -73,7 +82,8 @@ void value_json(const startup::Value& value) {
                   << ",\"signed_payload\":" << signed_payload(value.word) << "}";
     } else {
         std::cout << "{\"tag\":11,\"symbolic_native_reference\":true,\"table\":\""
-                  << (value.kind == startup::Value::Kind::StackReference ? "stack" : "global")
+                  << (value.kind == startup::Value::Kind::StackReference ? "stack" :
+                      value.kind == startup::Value::Kind::LocalReference ? "local" : "global")
                   << "\",\"index\":" << value.index << ",\"source_file_offset\":";
         if (value.source_file_offset == UINT32_MAX) std::cout << "null";
         else std::cout << value.source_file_offset;
@@ -95,11 +105,23 @@ void snapshot_json(const startup::Snapshot& snapshot) {
     std::cout << ",\"host_state\":{\"callback_F0_service_78_flag_offset_104\":";
     if (snapshot.host_flag_104_known) std::cout << unsigned(snapshot.host_flag_104);
     else std::cout << "null";
-    std::cout << "},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
+    std::cout << ",\"reference_bindings\":{";
+    bool binding_first = true;
+    for (const auto& entry : snapshot.host_reference_bindings) {
+        if (!binding_first) std::cout << ','; binding_first = false;
+        std::cout << '"' << entry.first << "\":"; value_json(entry.second);
+    }
+    std::cout << "}},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
               << ",\"global_writes_count\":" << snapshot.global_writes_count
               << ",\"global_writes_sha256\":\"" << snapshot.global_writes_sha256 << "\",\"global_writes\":{";
     bool first = true;
     for (const auto& entry : snapshot.global_writes) {
+        if (!first) std::cout << ','; first = false;
+        std::cout << '"' << entry.first << "\":"; value_json(entry.second);
+    }
+    std::cout << "},\"local_writes\":{";
+    first = true;
+    for (const auto& entry : snapshot.local_writes) {
         if (!first) std::cout << ','; first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
@@ -117,6 +139,8 @@ void builtin_json(const startup::BuiltinCall& builtin) {
               << hexadecimal(builtin.host_handler_va) << "\",\"result\":";
     value_json(builtin.result); std::cout << "}";
 }
+bool stream_events = false;
+const startup::HostAbiProjection conditional_abi{true, true, true, true, true, 0};
 void output(const char* name, const script::Program& program, const startup::Trace& trace) {
     std::cout << "{\"source_name\":\"" << name << ".KSC\",\"source_sha256\":\"" << program.source().sha256
               << "\",\"host_byte\":" << unsigned(trace.host_byte) << ",\"status\":\"" << startup::status_name(trace.status)
@@ -124,9 +148,9 @@ void output(const char* name, const script::Program& program, const startup::Tra
     snapshot_json(trace.context);
     std::cout << ",\"halt_opcode\":" << trace.diagnostic.opcode << ",\"first_builtin\":";
     builtin_json(trace.first_builtin);
-    std::cout << ",\"events\":[";
+    std::cout << (stream_events ? "}\n" : ",\"events\":[");
     for (size_t i = 0; i < trace.events.size(); ++i) {
-        if (i) std::cout << ',';
+        if (i && !stream_events) std::cout << ',';
         const auto& event = trace.events[i];
         std::cout << "{\"step\":" << i << ",\"code_offset\":\"" << hexadecimal(event.pc)
                   << "\",\"file_offset\":\"" << hexadecimal(event.file_offset)
@@ -146,15 +170,17 @@ void output(const char* name, const script::Program& program, const startup::Tra
             std::cout << '"' << entry.first << "\":"; value_json(entry.second);
         }
         std::cout << "}}";
+        if (stream_events) std::cout << '\n';
     }
-    std::cout << "]}\n";
+    if (!stream_events) std::cout << "]}\n";
 }
 bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
     return a.pc == b.pc && a.sp == b.sp && a.fp == b.fp && a.saved_fp == b.saved_fp && a.saved_sp == b.saved_sp &&
         a.state == b.state && a.result == b.result && a.stack_window == b.stack_window &&
         a.timer_base_set == b.timer_base_set && a.timer_base_pc == b.timer_base_pc &&
         a.host_flag_104_known == b.host_flag_104_known && a.host_flag_104 == b.host_flag_104 &&
-        a.global_writes == b.global_writes && a.global_writes_complete == b.global_writes_complete &&
+        a.host_reference_bindings == b.host_reference_bindings &&
+        a.global_writes == b.global_writes && a.local_writes == b.local_writes && a.global_writes_complete == b.global_writes_complete &&
         a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256;
 }
 startup::Value raw_value(uint32_t word) { startup::Value value; value.word = word; return value; }
@@ -279,6 +305,74 @@ void iterator_oracle_checks(const std::filesystem::path& vectors, const std::fil
     std::cout << "{\"iterator_original_word_checks\":\"pass\",\"vectors\":" << count
               << ",\"successes\":" << success << ",\"barriers\":" << barriers << "}\n";
 }
+void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesystem::path& base) {
+    std::ifstream stream(vectors, std::ios::binary); require(bool(stream), "Chain vectors missing");
+    char magic[8]{}; uint32_t expected_count = 0;
+    stream.read(magic, 8); stream.read(reinterpret_cast<char*>(&expected_count), 4);
+    require(std::string(magic, 6) == "DCH4V1" && expected_count > 0, "Chain fixture schema");
+    const char* names[] = {"INU", "KAERU", "NEKO", "ROBO", "USAGI"};
+    std::array<script::Program, 5> programs; script::Diagnostic error;
+    for (size_t i = 0; i < programs.size(); ++i)
+        require(programs[i].load_original(base / (std::string(names[i]) + ".KSC"), error), error.text());
+    uint32_t success = 0, barriers = 0;
+    for (uint32_t count = 0; count < expected_count; ++count) {
+        uint32_t bytes = 0; stream.read(reinterpret_cast<char*>(&bytes), 4);
+        require(bool(stream) && bytes % 4 == 0 && bytes <= 131072, "Chain record length");
+        std::vector<uint32_t> fields(bytes / 4); stream.read(reinterpret_cast<char*>(fields.data()), bytes);
+        require(bool(stream), "Chain truncated record"); size_t at = 0;
+        const auto next = [&]() { require(at < fields.size(), "Chain truncated field"); return fields[at++]; };
+        const auto value = [&]() {
+            startup::Value result; const uint32_t kind = next(); require(kind <= 3, "Chain invalid kind");
+            result.kind = static_cast<startup::Value::Kind>(kind); result.word = next();
+            result.index = next(); result.source_file_offset = next(); return result;
+        };
+        const auto slots = [&]() {
+            const uint32_t size = next(); require(size <= 512, "Chain slots cap");
+            std::vector<startup::Value> result; for (uint32_t i = 0; i < size; ++i) result.push_back(value()); return result;
+        };
+        const auto writes = [&]() {
+            const uint32_t size = next(); require(size <= 2048, "Chain writes cap");
+            std::map<uint32_t, startup::Value> result;
+            for (uint32_t i = 0; i < size; ++i) { const uint32_t key = next(); result[key] = value(); }
+            require(result.size() == size, "Chain duplicate map key"); return result;
+        };
+        const uint32_t source = next(), host = next(), pc = next();
+        const int32_t sp = static_cast<int32_t>(next()), fp = static_cast<int32_t>(next());
+        const uint32_t cap = next(); const auto prior = value(); const auto input_slots = slots();
+        const auto globals = writes(), locals = writes(), bindings = writes();
+        const uint32_t boundary = next(), expected_pc = next();
+        const int32_t expected_sp = static_cast<int32_t>(next()), expected_fp = static_cast<int32_t>(next());
+        const auto expected_result = value(); const auto expected_slots = slots();
+        const auto expected_globals = writes(), expected_locals = writes(), expected_bindings = writes();
+        require(at == fields.size() && source < programs.size() && host <= 1 && cap <= 512, "Chain fields");
+        // This verification path explicitly supplies the five ABI premises.
+        // Default production callers do not get this conditional projection.
+        auto projection = conditional_abi; projection.selected_record_index = count % 2;
+        startup::StartupProbe probe(programs[source], static_cast<uint8_t>(host), static_cast<uint16_t>(cap), projection);
+        const auto before = startup::StartupTestAccess::chain_initial(probe, pc, sp, fp, input_slots, prior, globals, locals, bindings);
+        const auto all_before = startup::StartupTestAccess::all_slots(probe);
+        const auto actual = probe.run(1); const auto& after = startup::StartupTestAccess::all_slots(probe);
+        const std::string label = "Chain vector" + std::to_string(count);
+        if (boundary) {
+            ++barriers;
+            require(actual.status == startup::Status::Halted && actual.executed == 0 && same_context(before, actual.context) && all_before == after,
+                    label + " barrier committed partial state: " + actual.diagnostic.reason);
+        } else {
+            ++success;
+            require(actual.status == startup::Status::BudgetExhausted && actual.executed == 1,
+                    label + " halted on original success: " + actual.diagnostic.reason);
+            require(actual.pc == expected_pc && actual.sp == expected_sp && actual.fp == expected_fp && actual.result == expected_result &&
+                    actual.context.global_writes == expected_globals && actual.context.local_writes == expected_locals &&
+                    actual.context.host_reference_bindings == expected_bindings && std::equal(expected_slots.begin(), expected_slots.end(), after.begin()),
+                    label + " context differs from original words");
+            require(std::all_of(after.begin() + expected_slots.size(), after.end(), [](const startup::Value& v) { return v == startup::Value{}; }),
+                    label + " wrote outside recorded stack");
+        }
+    }
+    char extra = 0; require(!stream.read(&extra, 1) && stream.eof(), "Chain extra fixture data");
+    std::cout << "{\"chain_original_word_checks\":\"pass\",\"vectors\":" << expected_count
+              << ",\"successes\":" << success << ",\"barriers\":" << barriers << "}\n";
+}
 void opcode_boundary_checks(const script::Program& program) {
     std::array<startup::Value, 12> slots{};
     slots[3] = raw_value(0x90000001); slots[4] = startup::Value::integer(4);
@@ -323,29 +417,44 @@ void opcode_boundary_checks(const script::Program& program) {
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 4, "Supply original KSC directory, stage2 oracle vectors and iterator vectors");
+        require(argc == 4 || argc == 6, "Supply original KSC directory, stage2 vectors, iterator vectors [chain vectors --stream]");
+        stream_events = argc == 6 && std::string(argv[5]) == "--stream";
         std::filesystem::path base = argv[1];
         script::Program program; script::Diagnostic error;
         for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
             require(program.load_original(base / (std::string(name) + ".KSC"), error), error.text());
             for (uint8_t host_byte : {uint8_t(0), uint8_t(1)}) {
-                startup::StartupProbe probe(program, host_byte);
+                startup::StartupProbe probe(program, host_byte, 512, conditional_abi);
                 const auto trace = probe.run(10000);
-                const std::map<std::string, uint32_t> stops = {{"INU",0x6C042},{"KAERU",0x6BE55},
-                    {"NEKO",0x8E0C9},{"ROBO",0x6BF8A},{"USAGI",0x67E6D}};
-                require(trace.status == startup::Status::Halted && trace.executed == 5625 && trace.pc == stops.at(name) &&
-                        trace.sp == 6 && trace.fp == 5 && trace.diagnostic.opcode == 0x93,
+                const std::map<std::string, uint32_t> stops = {{"INU",0x6B19A},{"KAERU",0x6AFAB},
+                    {"NEKO",0x8D21D},{"ROBO",0x6B0E2},{"USAGI",0x66FC3}};
+                require(trace.status == startup::Status::Halted && trace.executed == 6027 && trace.pc == stops.at(name) &&
+                        trace.sp == 46 && trace.fp == 38 && trace.diagnostic.opcode == 0x8B,
                         "Original exact halt context differs");
                 require(trace.first_builtin.valid && trace.first_builtin.id == 0xF0 &&
                         trace.first_builtin.host_service == 78 && trace.first_builtin.result.word == 0x10000000 &&
-                        trace.result == startup::Value::stack_reference(12) &&
+                        trace.result == startup::Value::stack_reference(39) &&
                         trace.context.global_writes.size() == 700 &&
+                        trace.context.local_writes.size() == 2 && trace.context.host_reference_bindings.size() == 5 &&
                         trace.context.host_flag_104_known && trace.context.host_flag_104 == 0,
                         "First original builtin differs");
                 require(same_context(trace.context, probe.run(256).context), "Unknown halt mutated context");
                 output(name, program, trace);
 
-                startup::StartupProbe resumed(program, host_byte);
+                startup::StartupProbe default_probe(program, host_byte);
+                const auto default_halt = default_probe.run(10000);
+                const std::map<std::string, uint32_t> default_stops = {{"INU",0x6C057},{"KAERU",0x6BE6A},
+                    {"NEKO",0x8E0DE},{"ROBO",0x6BF9F},{"USAGI",0x67E82}};
+                require(default_halt.status == startup::Status::Halted && default_halt.executed == 5633 &&
+                        default_halt.pc == default_stops.at(name) && default_halt.sp == 8 && default_halt.fp == 5 &&
+                        default_halt.diagnostic.opcode == 0x8B && default_halt.result == startup::Value::stack_reference(12) &&
+                        default_halt.context.local_writes.size() == 2 && default_halt.context.host_reference_bindings.empty() &&
+                        same_context(default_halt.context, default_probe.run(1).context), "Default startup domain differs");
+                std::cout << "{\"default_startup_snapshot\":true,\"source\":\"" << name << ".KSC\",\"host_byte\":" << unsigned(host_byte)
+                          << ",\"executed\":5633,\"diagnostic_opcode\":139,\"builtin_id\":240,\"argc\":2,\"service\":10,\"context\":";
+                snapshot_json(default_halt.context); std::cout << "}\n";
+
+                startup::StartupProbe resumed(program, host_byte, 512, conditional_abi);
                 require(resumed.run(1).executed == 1, "One-instruction budget pause");
                 startup::Trace resumed_halt;
                 do { resumed_halt = resumed.run(1024); } while (resumed_halt.status == startup::Status::BudgetExhausted);
@@ -390,8 +499,32 @@ int main(int argc, char** argv) {
         changed.resize(12);
         require(!unloaded.load_original_bytes(changed, base / "truncated.KSC", error), "Truncated original accepted");
         require(program.load_original(base / "NEKO.KSC", error), error.text());
+        // Missing any new ABI premise must stop on service10 atomically.
+        // The ordinary API default has exactly this narrower startup domain.
+        for (int missing = -1; missing < 9; ++missing) {
+            auto projection = conditional_abi;
+            if (missing < 0) projection = {};
+            else if (missing == 0) projection.linked_context_mapped = false;
+            else if (missing == 1) projection.selected_record_mapped = false;
+            else if (missing == 2) projection.singleton_mapped = false;
+            else if (missing == 3) projection.arena_mapping_disjoint = false;
+            else if (missing == 4) projection.constants_initialized = false;
+            else if (missing == 5) projection.selected_record_index = 2;
+            else if (missing == 6) projection.selected_record_index = UINT32_MAX;
+            else if (missing == 7) projection.selected_record_index = 0x40000000;
+            else projection.selected_record_index = 3;
+            startup::StartupProbe guarded(program, 0, 512, projection);
+            const auto before = guarded.run(5633); const auto halt = guarded.run(1);
+            require(before.status == startup::Status::BudgetExhausted && halt.status == startup::Status::Halted &&
+                    halt.executed == 5633 && halt.pc == 0x8E0DE && halt.sp == 8 && halt.fp == 5 &&
+                    halt.context.local_writes.size() == 2 && halt.context.host_reference_bindings.empty() &&
+                    same_context(before.context, halt.context) && same_context(halt.context, guarded.run(1).context),
+                    "Missing ABI premise accepted host registration or mutated context");
+        }
+        std::cout << "{\"host_projection_guard_checks\":\"pass\",\"cases\":10,\"default_executed\":5633,\"default_next_service\":10}\n";
         original_oracle_checks(argv[2], program);
         iterator_oracle_checks(argv[3], base);
+        if (argc == 6) chain_oracle_checks(argv[4], base);
         opcode_boundary_checks(program);
         std::cout << "{\"negative_checks\":\"pass\",\"cases\":[\"host2/255\",\"budget0/10001\","
                      "\"caps0/2/513\",\"read/push cap3 atomic halt\",\"call cap5 atomic halt\","

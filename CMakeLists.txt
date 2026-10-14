@@ -15,7 +15,8 @@ add_library(dokodemo-core STATIC
     src/script_vm.cpp
     src/startup_probe.cpp
     src/model_formats.cpp
-    src/recovered/game_primitives.cpp)
+    src/recovered/game_primitives.cpp
+    src/recovered/menu_primitives.cpp)
 target_compile_features(dokodemo-core PUBLIC cxx_std_17)
 target_include_directories(dokodemo-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(dokodemo-core PROPERTIES CXX_EXTENSIONS OFF)

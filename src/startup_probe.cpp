@@ -42,6 +42,10 @@ Value Value::global_reference(uint32_t index, uint32_t file_offset) {
     Value result; result.kind = Kind::GlobalReference; result.index = index;
     result.source_file_offset = file_offset; return result;
 }
+Value Value::local_reference(uint32_t index, uint32_t file_offset) {
+    Value result; result.kind = Kind::LocalReference; result.index = index;
+    result.source_file_offset = file_offset; return result;
+}
 bool Value::operator==(const Value& other) const {
     return kind == other.kind && word == other.word && index == other.index &&
         source_file_offset == other.source_file_offset;
@@ -63,8 +67,8 @@ const char* status_name(Status status) {
 }
 
 StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
-                          uint16_t stack_slot_limit)
-    : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit) {
+                          uint16_t stack_slot_limit, HostAbiProjection projection)
+    : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection) {
     context_.pc = program.header().entrypoint;
     const auto* command = program.command(context_.pc);
     if (host_byte > 1 || !program.loaded() || stack_slot_limit < 3 || stack_slot_limit > 512 ||
@@ -113,6 +117,17 @@ Value StartupProbe::read_reference(const Context& context, const Value& referenc
         require(index < stack_slot_limit_, "Referenced stack word outside allocation/native cap");
         return slot(context, static_cast<int32_t>(index));
     }
+    if (reference.kind == Value::Kind::LocalReference) {
+        require(reference.index <= UINT32_MAX - following_words, "Local reference index overflow");
+        const uint32_t index = reference.index + following_words;
+        require(index < program_.header().local_count, "Referenced local word outside original ctx24 table");
+        const auto written = context.local_writes.find(index);
+        if (written != context.local_writes.end()) return written->second;
+        const uint32_t word = program_.initial_word(script::Table::Local, static_cast<uint16_t>(index));
+        require(word >> 28 != 5 && word >> 28 != 0xB,
+                "Initial local pool/reference rebasing is outside the tested startup domain");
+        Value value; value.word = word; return value;
+    }
     require(reference.kind == Value::Kind::GlobalReference,
             "Unresolved raw value/reference arena address");
     require(reference.index <= UINT32_MAX - following_words, "Reference index overflow");
@@ -137,6 +152,9 @@ void StartupProbe::write_reference(Context& context, const Value& reference, Val
     if (reference.kind == Value::Kind::StackReference) {
         require(reference.index < stack_slot_limit_, "Referenced stack destination outside allocation/native cap");
         slot(context, static_cast<int32_t>(reference.index)) = value;
+    } else if (reference.kind == Value::Kind::LocalReference) {
+        require(reference.index < program_.header().local_count, "Referenced local destination outside original ctx24 table");
+        context.local_writes[reference.index] = value;
     } else {
         require(reference.kind == Value::Kind::GlobalReference,
                 "Unresolved raw destination/reference arena address");
@@ -151,6 +169,8 @@ Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) co
     result.state = context.state; result.result = context.result;
     result.timer_base_set = context.timer_base_set; result.timer_base_pc = context.timer_base_pc;
     result.host_flag_104_known = context.host_flag_104_known; result.host_flag_104 = context.host_flag_104;
+    result.local_writes = context.local_writes;
+    result.host_reference_bindings = context.host_reference_bindings;
     result.global_writes_complete = include_globals;
     result.global_writes_count = static_cast<uint32_t>(context.global_writes.size());
     core::Sha256 digest;
@@ -243,6 +263,8 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             element.index = static_cast<uint32_t>(element_index);
             if (element.kind == Value::Kind::GlobalReference)
                 element.source_file_offset = program_.header().global_start() + element.index * 4;
+            else if (element.kind == Value::Kind::LocalReference)
+                element.source_file_offset = program_.header().pool_end() + element.index * 4;
             const Value copied = read_reference(candidate, element);
             release_supported(copied); // copy7581C: owned clone75778 is a barrier.
             // No release of old destination, even when its tag is6. The source
@@ -260,6 +282,12 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         slot(candidate, candidate.sp + count);
         push(candidate, Value::integer(candidate.fp));
         candidate.fp = candidate.sp; candidate.sp += count;
+    } else if (op == 0x4E) {
+        // 6E84C +7534C: only retag/write the FP-relative header; no element
+        // allocation, zeroing, release or SP/result change occurs.
+        const int32_t index = candidate.fp + static_cast<int32_t>(operand(1, 2));
+        Value header; header.word = 0x90000000 | operand(3, 2);
+        slot(candidate, index) = header;
     } else if (op >= 0x80 && op <= 0x83) {
         uint8_t width = static_cast<uint8_t>(op - 0x7F);
         uint32_t raw = operand(1, width);
@@ -268,6 +296,9 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             value = static_cast<int32_t>(raw) - static_cast<int32_t>(1u << (width * 8));
         else value = static_cast<int32_t>(raw & payload_mask);
         push(candidate, Value::integer(value));
+    } else if (op == 0x84) {
+        //70D90 copy of constant cellE5948, zeroed by initializer76B38.
+        push(candidate, {});
     } else if (op == 0x85) {
         push(candidate, Value::integer(0));
     } else if (op == 0x86) {
@@ -282,6 +313,17 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         uint32_t index = operand(1, 2);
         require(index < program_.header().global_count, "Global reference outside original table");
         push(candidate, Value::global_reference(index, program_.header().global_start() + index * 4));
+    } else if (op == 0x93) {
+        // 71214..712A0: ctx+24 is the loader's copied local table, not ctx+2C globals.
+        // No read/release of its target or of the overwritten stack word occurs.
+        const uint32_t index = operand(1, 2);
+        require(index < program_.header().local_count, "Opcode93 index outside original ctx24 table");
+        push(candidate, Value::local_reference(index, program_.header().pool_end() + index * 4));
+    } else if (op == 0x8A) {
+        // 70F24..70F9C constructs tag7 from u24, including the final store delay slot.
+        const uint32_t target = operand(1, 3);
+        require_target(target); // Protective native boundary; original does not validate here.
+        Value value; value.word = 0x70000000 | target; push(candidate, value);
     } else if (op == 0x51) {
         require(candidate.sp >= 2, "Assignment requires two operands");
         const Value reference = slot(candidate, candidate.sp - 2);
@@ -292,14 +334,34 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         write_reference(candidate, reference, {});
         const Value value = slot(candidate, candidate.sp - 1);
         write_reference(candidate, reference, value); pop(candidate); pop(candidate);
-    } else if (op == 0x53) {
+    } else if (op == 0x52 || op == 0x53) {
         require(candidate.sp > 0, "Opcode53 requires a reference");
         release_supported(candidate.result);
         const Value reference = pop(candidate);
         candidate.result = reference; // Original result retains consumed tagB.
         Value value = read_reference(candidate, reference);
-        if (value.kind == Value::Kind::Word) value.word = recovered::increment_value(value.word);
-        write_reference(candidate, reference, value);
+        if (op == 0x52) { release_supported(value); push(candidate, value); value = read_reference(candidate, reference); }
+        if (value.kind == Value::Kind::Word && (value.word >> 28 == 1 || value.word >> 28 == 2 || value.word >> 28 == 3)) {
+            value.word = recovered::increment_value(value.word);
+            write_reference(candidate, reference, value);
+        } //76990 performs no store for other tags, including mapped references.
+    } else if (op == 0xC2) {
+        require(candidate.sp >= 2, "OpcodeC2 requires two scalar operands");
+        const auto scalar = [](const Value& value) {
+            require(value.kind == Value::Kind::Word, "OpcodeC2 symbolic reference conversion is unproved");
+            const uint32_t tag = value.word >> 28;
+            require(tag != 4 && tag != 5 && tag != 6, "OpcodeC2 float/string conversion is unimplemented");
+            return tag == 9 ? static_cast<int32_t>(value.word & 0xFFF) : signed28(value.word);
+        };
+        const Value right = pop(candidate), left = pop(candidate);
+        const bool less = scalar(left) < scalar(right);
+        Value value; value.word = boolean_false | static_cast<uint32_t>(less); push(candidate, value);
+    } else if (op == 0xF0) {
+        require(candidate.sp > 0, "OpcodeF0 requires a reference");
+        //740FC pops/clears the reference slot BEFORE copy7581C reads target.
+        const Value reference = pop(candidate);
+        const Value value = read_reference(candidate, reference);
+        release_supported(value); push(candidate, value);
     } else if (op == 0xF5) {
         require(candidate.sp >= 2, "OpcodeF5 requires reference and integer index");
         const Value reference = slot(candidate, candidate.sp - 2), index_value = slot(candidate, candidate.sp - 1);
@@ -318,6 +380,9 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         if (reference.kind == Value::Kind::StackReference) {
             require(target < stack_slot_limit_, "OpcodeF5 element outside stack allocation/native cap");
             element = Value::stack_reference(target);
+        } else if (reference.kind == Value::Kind::LocalReference) {
+            require(target < program_.header().local_count, "OpcodeF5 element outside mapped local table");
+            element = Value::local_reference(target, program_.header().pool_end() + target * 4);
         } else {
             require(reference.kind == Value::Kind::GlobalReference && target < program_.header().global_count,
                     "OpcodeF5 element outside mapped global table");
@@ -371,13 +436,34 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         require(candidate.sp >= static_cast<int32_t>(argc), "Builtin argc exceeds stack");
         require(id == 0xF0 && argc == 2, "Unimplemented builtin/argc: id=" + hex(id));
         Value first = slot(candidate, candidate.sp - 2), second = slot(candidate, candidate.sp - 1);
-        require(first == Value::integer(78) && second.kind == Value::Kind::Word && second.word == boolean_false,
-                "Unimplemented F0 host service/arguments; only proved (78,false) is supported");
+        const std::map<uint32_t, std::pair<uint32_t, uint32_t>> registrations = {
+            {10,{0x0C,0x1C29C}}, {11,{0x10,0x1C2B8}}, {16,{0x20,0x1C36C}},
+            {29,{0x44,0x1C5AC}}, {35,{0x48,0x1C698}}};
+        require(first.kind == Value::Kind::Word && first.word >> 28 == 2,
+                "Unimplemented F0 service conversion/type");
+        const uint32_t service = static_cast<uint32_t>(signed28(first.word));
+        const auto registration = registrations.find(service);
+        if (registration != registrations.end()) {
+            require(host_abi_projection_.allows_direct_registrations(),
+                    "F0 direct registration needs explicit mapped/disjoint/initialized host ABI projection; constructor provenance is unproved");
+            // Each original branch stores ArenaBase+signed28(arg) into the
+            // singleton pointed to by relocated cell29248. Preserve pointer
+            // identity; no callback object/array or default callback is fabricated.
+            if (second.kind == Value::Kind::StackReference) slot(candidate, static_cast<int32_t>(second.index));
+            else if (second.kind == Value::Kind::LocalReference)
+                require(second.index < program_.header().local_count, "F0 local binding outside mapped table");
+            else require(second.kind == Value::Kind::GlobalReference && second.index < program_.header().global_count,
+                         "F0 registration requires a mapped Arena reference");
+        } else require(service == 78 && second.kind == Value::Kind::Word && second.word == boolean_false,
+                       "Unimplemented F0 host service/arguments: service=" + std::to_string(service));
         release_supported(candidate.result);
         builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
-        builtin.handler_va = 0x6AD88; builtin.host_service = 78; builtin.host_handler_va = 0x1D2FC;
+        builtin.handler_va = 0x6AD88; builtin.host_service = service;
+        builtin.host_handler_va = registration == registrations.end() ? 0x1D2FC : registration->second.second;
         builtin.arguments = {first, second}; builtin.result.word = boolean_false;
-        candidate.result = builtin.result; candidate.host_flag_104_known = true; candidate.host_flag_104 = 0;
+        candidate.result = builtin.result;
+        if (registration == registrations.end()) { candidate.host_flag_104_known = true; candidate.host_flag_104 = 0; }
+        else candidate.host_reference_bindings[registration->second.first] = second;
         pop(candidate); pop(candidate);
     } else {
         throw std::runtime_error("Unknown semantics: opcode=" + hex(static_cast<uint32_t>(op)) +

@@ -6,6 +6,7 @@
 #include "startup_probe.h"
 #include "model_formats.hpp"
 #include "recovered/game_primitives.h"
+#include "recovered/menu_primitives.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -179,11 +180,33 @@ void primitive_tests() {
     require(!read_glyph(&lead, 1, unchanged) && unchanged.index == 17 && unchanged.consumed == 9, "Bounded glyph adapter");
     std::cout << "{\"test\":\"recovered_primitives_smoke\",\"checks\":4,\"passed\":true}\n";
 }
+void menu_primitive_tests() {
+    using namespace dokodemo::recovered;
+    uint32_t value=7;
+    require(menu_repeat_94f90(0,10,0,value)==MenuStatus::ok && value==1,
+        "Counter zero must return before DIV/BREAK");
+    value=7;
+    require(menu_repeat_94f90(10,10,0,value)==MenuStatus::division_zero_barrier && value==7,
+        "Reached division-zero guard must retain output");
+    std::array<uint8_t,2> bits{{0x54,0x80}};
+    require(menu_bitset_4184({bits.data(),bits.size()},1,0xfffffff8u,1)==MenuStatus::ok && bits[0]==0x55,
+        "Mapped negative profile index");
+    const auto before=bits;
+    require(menu_bitset_4184({bits.data(),bits.size()},0,0xfffffff8u,1)!=MenuStatus::ok && bits==before,
+        "Unmapped profile write must be atomic");
+    std::array<uint8_t,0x2c> host{};
+    host[0x20]=2;host[0x24]=4;
+    require(menu_commit_17b84_requests3_4({host.data(),host.size()})==MenuStatus::ok && host[0x1c]==2 && host[0x20]==4 && host[0x28]==6,
+        "Call-free requested4 fixture commit");
+    require(menu_request_19aa8({host.data(),host.size()},0x12345678,0xab,host.data()+0x24)==MenuStatus::ok && host[0x24]==0x78 && host[0x28]==2,
+        "Event/host alias final store order");
+    std::cout << "{\"test\":\"recovered_menu_smoke\",\"checks\":6,\"original_menu_route\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

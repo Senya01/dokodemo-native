@@ -8,16 +8,18 @@
 
 // BOOT-proved startup prefix only. No PSP CPU/OS/GPU emulation, no dialogue
 // fixture. Opcodes14/15 support mapped references and non-owned copies only.
-// See research/startup/README.md for tested domains and explicit barriers.
+// See research/stage4/startup-chain/REPORT.md for the conditional ABI projection,
+// original-word tests and explicit barriers; this is not a complete game VM.
 namespace dokodemo::startup {
 
 struct Value {
-    enum class Kind : uint8_t { Word, StackReference, GlobalReference };
+    enum class Kind : uint8_t { Word, StackReference, GlobalReference, LocalReference };
     Kind kind = Kind::Word;
     uint32_t word = 0, index = 0, source_file_offset = UINT32_MAX;
     static Value integer(int32_t value);
     static Value stack_reference(uint32_t index);
     static Value global_reference(uint32_t index, uint32_t file_offset);
+    static Value local_reference(uint32_t index, uint32_t file_offset);
     bool operator==(const Value& other) const;
 };
 
@@ -32,6 +34,8 @@ struct Snapshot {
     bool host_flag_104_known = false;
     uint8_t host_flag_104 = 0;
     std::map<uint32_t, Value> global_writes;
+    std::map<uint32_t, Value> local_writes; // Small original ctx+24 table, complete in every snapshot.
+    std::map<uint32_t, Value> host_reference_bindings; // Singleton fields by byte offset; symbolic Arena pointer identity.
     // Final contexts keep the full map. Event snapshots carry a canonical
     // digest/count instead; replay Event.global_write_delta to reconstruct it.
     bool global_writes_complete = true;
@@ -43,6 +47,24 @@ struct Snapshot {
 // This decision alone does not implement owned-string release or resolve an
 // unknown reference address. The probe rejects those lifecycle/address paths.
 bool branch_condition(uint8_t opcode, uint32_t word);
+
+// Conditional ABI projection supplied explicitly by the caller. These are
+// proof-domain premises, not observed constructor/PSP addresses or host values.
+// The direct-registration paths require all premises; default callers stop.
+struct HostAbiProjection {
+    bool linked_context_mapped = false;
+    bool selected_record_mapped = false; // Unconditional1C1F0 load is valid.
+    bool singleton_mapped = false;
+    // Includes context/host/singleton/stack/local/global objects, with only
+    // the declared ctx+30 result subobject; no cross-object aliases allowed.
+    bool arena_mapping_disjoint = false;
+    bool constants_initialized = false;
+    uint32_t selected_record_index = UINT32_MAX; // Explicit supported0/1 domain, not a default host value.
+    bool allows_direct_registrations() const {
+        return linked_context_mapped && selected_record_mapped && singleton_mapped &&
+               arena_mapping_disjoint && constants_initialized && selected_record_index <= 1;
+    }
+};
 
 struct BuiltinCall {
     bool valid = false;
@@ -82,7 +104,7 @@ public:
     // stack_slot_limit is a native resource cap <= original 512-slot allocation,
     // exposed for bounded failure checks; ordinary callers use the default.
     StartupProbe(const script::Program& program, uint8_t host_byte,
-                 uint16_t stack_slot_limit = 512);
+                 uint16_t stack_slot_limit = 512, HostAbiProjection projection = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -98,10 +120,13 @@ private:
         uint32_t timer_base_pc = 0;
         uint8_t host_flag_104 = 0;
         std::map<uint32_t, Value> global_writes;
+        std::map<uint32_t, Value> local_writes;
+        std::map<uint32_t, Value> host_reference_bindings;
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
     uint16_t stack_slot_limit_ = 512;
+    HostAbiProjection host_abi_projection_;
     Context context_;
     Status status_ = Status::Running;
     script::Diagnostic diagnostic_;

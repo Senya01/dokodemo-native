@@ -12,6 +12,7 @@
 #include "game_font.h"
 #include "model_formats.hpp"
 #include "startup_probe.h"
+#include "recovered/menu_primitives.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -54,14 +55,24 @@ void Output(const std::string& text) {
 bool VerifiedStartupPrefix(const dokodemo::startup::Trace& trace, const std::string& source) {
     // Expected endpoints come from the bounded original-word/KSC traces. The
     // execution budget is independent of the observed command count.
-    const std::map<std::string,uint32_t> stops = {{"INU",0x6C042},{"KAERU",0x6BE55},
-        {"NEKO",0x8E0C9},{"ROBO",0x6BF8A},{"USAGI",0x67E6D}};
-    return trace.status==dokodemo::startup::Status::Halted && trace.executed==5625
-        && trace.pc==stops.at(source) && trace.sp==6 && trace.fp==5 && trace.diagnostic.opcode==0x93
+    const std::map<std::string,uint32_t> stops = {{"INU",0x6C057},{"KAERU",0x6BE6A},
+        {"NEKO",0x8E0DE},{"ROBO",0x6BF9F},{"USAGI",0x67E82}};
+    return trace.status==dokodemo::startup::Status::Halted && trace.executed==5633
+        && trace.pc==stops.at(source) && trace.sp==8 && trace.fp==5 && trace.diagnostic.opcode==0x8B
         && trace.first_builtin.valid && trace.first_builtin.id==0xF0 && trace.first_builtin.host_service==78
         && trace.context.host_flag_104_known && trace.context.host_flag_104==0
         && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==12
-        && trace.context.global_writes_complete && trace.context.global_writes.size()==700;
+        && trace.context.global_writes_complete && trace.context.global_writes.size()==700
+        && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.empty();
+}
+bool VerifiedProjectedStartup(const dokodemo::startup::Trace& trace, const std::string& source) {
+    const std::map<std::string,uint32_t> stops = {{"INU",0x6B19A},{"KAERU",0x6AFAB},
+        {"NEKO",0x8D21D},{"ROBO",0x6B0E2},{"USAGI",0x66FC3}};
+    return trace.status==dokodemo::startup::Status::Halted && trace.executed==6027
+        && trace.pc==stops.at(source) && trace.sp==46 && trace.fp==38 && trace.diagnostic.opcode==0x8B
+        && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==39
+        && trace.context.global_writes_complete && trace.context.global_writes.size()==700
+        && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.size()==5;
 }
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
@@ -103,6 +114,31 @@ int SelfTest(const Options& options) {
     check(bool(saveResult) && bool(loadResult) && restored.player_name_utf8 == state.player_name_utf8
           && restored.last_observed_utc_ms == state.last_observed_utc_ms, "integrated atomic native save/load with Unicode");
     std::filesystem::remove(saved);
+    {
+        // Explicit synthetic byte fixtures exercise linked recovered helpers;
+        // they do not supply values to the actual title/menu or host objects.
+        using namespace dokodemo::recovered;
+        uint32_t result=123;
+        bool repeat=menu_repeat_94f90(0,10,0,result)==MenuStatus::ok && result==1;
+        repeat=repeat && menu_repeat_94f90(8,10,0,result)==MenuStatus::ok && result==0;
+        result=123;
+        repeat=repeat && menu_repeat_94f90(10,10,0,result)==MenuStatus::division_zero_barrier && result==123;
+        repeat=repeat && menu_repeat_94f90(12,10,2,result)==MenuStatus::ok && result==2;
+        check(repeat,"recovered repeat predicate: early returns and reached division barrier");
+        std::array<uint8_t,2> profile{{0x54,0x80}};
+        bool bits=menu_bitset_4184({profile.data(),profile.size()},1,0xfffffff8u,1)==MenuStatus::ok && profile[0]==0x55;
+        const auto unchanged=profile;
+        bits=bits && menu_bitset_4184({profile.data(),profile.size()},0,0xfffffff8u,1)!=MenuStatus::ok && profile==unchanged;
+        check(bits,"recovered bit setter: mapped negative index and atomic unmapped barrier");
+        std::array<uint8_t,0x2c> host{};
+        host[0x20]=2; host[0x24]=4;
+        bool commit=menu_commit_17b84_requests3_4({host.data(),host.size()})==MenuStatus::ok
+            && host[0x1c]==2 && host[0x20]==4 && host[0x28]==6;
+        check(commit,"recovered bounded phase commit writes explicit fixture fields");
+        bool alias=menu_request_19aa8({host.data(),host.size()},0x12345678,0xab,host.data()+0x24)==MenuStatus::ok
+            && host[0x24]==0x78 && host[0x25]==0x56 && host[0x28]==2;
+        check(alias,"recovered request/event alias obeys final original write order");
+    }
     size_t scripts = 0, commands = 0, dictionaryRecords = 0;
     for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
         dokodemo::script::Program program; dokodemo::script::Dictionary dictionary; dokodemo::script::Diagnostic diagnostic;
@@ -115,6 +151,10 @@ int SelfTest(const Options& options) {
                 auto trace=dokodemo::startup::run(program,hostByte,10000);
                 check(VerifiedStartupPrefix(trace,name),
                     (std::string("original startup prefix / host context ") + name + " / " + std::to_string(hostByte)).c_str());
+                // An explicit mapped/disjoint test domain, not observed host availability.
+                dokodemo::startup::StartupProbe projected(program,hostByte,512,{true,true,true,true,true,0});
+                check(VerifiedProjectedStartup(projected.run(10000),name),
+                    (std::string("conditional host ABI projection / ") + name + " / " + std::to_string(hostByte)).c_str());
             }
         }
         bool dicLoaded = dictionary.load_original(base / (std::string(name) + ".DIC"), diagnostic);
@@ -309,6 +349,8 @@ struct Application {
         report << "{\"probe\":true,\"host_byte\":0,\"executed\":" << trace.executed << ",\"pc\":" << trace.pc << ",\"sp\":" << trace.sp << ",\"fp\":" << trace.fp
                << ",\"opcode\":" << trace.diagnostic.opcode << ",\"first_host_service\":" << trace.first_builtin.host_service
                << ",\"global_writes\":" << trace.context.global_writes.size() << ",\"result_stack_reference\":" << trace.result.index
+               << ",\"local_writes\":" << trace.context.local_writes.size() << ",\"host_reference_bindings\":" << trace.context.host_reference_bindings.size()
+               << ",\"host_abi_projection\":false"
                << ",\"host_initialization_observed\":false,\"full_game\":false}\n";
     }
     void RunScript() {
