@@ -51,6 +51,18 @@ void Output(const std::string& text) {
     if (handle && handle != INVALID_HANDLE_VALUE) WriteFile(handle, text.data(), (DWORD)text.size(), &written, nullptr);
     OutputDebugStringW(Utf8(text).c_str());
 }
+bool VerifiedStartupPrefix(const dokodemo::startup::Trace& trace, const std::string& source) {
+    // Expected endpoints come from the bounded original-word/KSC traces. The
+    // execution budget is independent of the observed command count.
+    const std::map<std::string,uint32_t> stops = {{"INU",0x6C042},{"KAERU",0x6BE55},
+        {"NEKO",0x8E0C9},{"ROBO",0x6BF8A},{"USAGI",0x67E6D}};
+    return trace.status==dokodemo::startup::Status::Halted && trace.executed==5625
+        && trace.pc==stops.at(source) && trace.sp==6 && trace.fp==5 && trace.diagnostic.opcode==0x93
+        && trace.first_builtin.valid && trace.first_builtin.id==0xF0 && trace.first_builtin.host_service==78
+        && trace.context.host_flag_104_known && trace.context.host_flag_104==0
+        && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==12
+        && trace.context.global_writes_complete && trace.context.global_writes.size()==700;
+}
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     std::ostringstream report;
@@ -100,13 +112,8 @@ int SelfTest(const Options& options) {
         if (loaded) {
             ++scripts; commands += program.commands().size();
             for(uint8_t hostByte : {uint8_t(0),uint8_t(1)}) {
-                auto trace=dokodemo::startup::run(program,hostByte,256);
-                check(trace.status==dokodemo::startup::Status::Halted && trace.executed==28 && trace.pc==0x1711 && trace.sp==16 && trace.fp==8
-                    && trace.diagnostic.opcode==0x15 && trace.first_builtin.valid && trace.first_builtin.id==0xF0
-                    && trace.first_builtin.host_service==78 && trace.context.host_flag_104_known && trace.context.host_flag_104==0
-                    && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==12
-                    && trace.context.stack_window.size()>12 && trace.context.stack_window[12]==dokodemo::startup::Value::integer(1)
-                    && trace.context.global_writes.size()==1,
+                auto trace=dokodemo::startup::run(program,hostByte,10000);
+                check(VerifiedStartupPrefix(trace,name),
                     (std::string("original startup prefix / host context ") + name + " / " + std::to_string(hostByte)).c_str());
             }
         }
@@ -294,11 +301,8 @@ struct Application {
         messageVisible=false;
         if(!program.loaded()) {status=L"NEKO.KSC не загружен.";return;}
         // Explicit probe context, not a guessed value for a complete game start.
-        auto trace=dokodemo::startup::run(program,0,256);
-        startupPrefixVerified=trace.status==dokodemo::startup::Status::Halted && trace.executed==28 && trace.pc==0x1711
-            && trace.sp==16 && trace.fp==8 && trace.diagnostic.opcode==0x15 && trace.first_builtin.host_service==78
-            && trace.result.kind==dokodemo::startup::Value::Kind::StackReference && trace.result.index==12
-            && trace.context.global_writes.size()==1;
+        auto trace=dokodemo::startup::run(program,0,10000);
+        startupPrefixVerified=VerifiedStartupPrefix(trace,"NEKO");
         status=L"Проба исходного старта (host byte = 0): " + std::to_wstring(trace.executed) + L" команд; " + Utf8(trace.diagnostic.text()) + L". Реальное начальное значение host-поля ещё не доказано.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence / L"startup-prefix.json",std::ios::binary);

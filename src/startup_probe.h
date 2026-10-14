@@ -7,7 +7,7 @@
 #include <vector>
 
 // BOOT-proved startup prefix only. No PSP CPU/OS/GPU emulation, no dialogue
-// fixture. Opcode14 supports mapped references and non-owned copies only.
+// fixture. Opcodes14/15 support mapped references and non-owned copies only.
 // See research/startup/README.md for tested domains and explicit barriers.
 namespace dokodemo::startup {
 
@@ -32,6 +32,11 @@ struct Snapshot {
     bool host_flag_104_known = false;
     uint8_t host_flag_104 = 0;
     std::map<uint32_t, Value> global_writes;
+    // Final contexts keep the full map. Event snapshots carry a canonical
+    // digest/count instead; replay Event.global_write_delta to reconstruct it.
+    bool global_writes_complete = true;
+    uint32_t global_writes_count = 0;
+    std::string global_writes_sha256;
 };
 
 // BOOT 6BC20/6BCB8 tests the raw low 28 bits, without numeric conversion.
@@ -53,6 +58,7 @@ struct Event {
     int opcode = -1;
     Snapshot before, after;
     BuiltinCall builtin;
+    std::map<uint32_t, Value> global_write_delta;
 };
 
 enum class Status { Running, Halted, BudgetExhausted, InvalidInput, Terminated };
@@ -101,7 +107,7 @@ private:
     script::Diagnostic diagnostic_;
     std::vector<Event> events_;
     BuiltinCall first_builtin_;
-    Snapshot snapshot(const Context& context) const;
+    Snapshot snapshot(const Context& context, bool include_globals = true) const;
     Trace trace() const;
     Value& slot(Context& context, int32_t index) const;
     const Value& slot(const Context& context, int32_t index) const;

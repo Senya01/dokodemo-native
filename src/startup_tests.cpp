@@ -33,6 +33,16 @@ struct StartupTestAccess {
         std::copy_n(probe.context_.slots.begin(), result.size(), result.begin());
         return result;
     }
+    static Snapshot iterator_initial(StartupProbe& probe, uint32_t pc, int32_t sp, int32_t fp,
+                                     const std::vector<Value>& slots, Value result,
+                                     const std::map<uint32_t, Value>& writes) {
+        probe.context_ = {}; probe.context_.pc = pc; probe.context_.sp = sp; probe.context_.fp = fp;
+        probe.context_.result = result; probe.context_.global_writes = writes;
+        std::copy(slots.begin(), slots.end(), probe.context_.slots.begin());
+        probe.status_ = Status::Running; probe.events_.clear(); probe.first_builtin_ = {};
+        return probe.snapshot(probe.context_);
+    }
+    static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
     static bool malformed_branch_halts(StartupProbe& probe, uint32_t pc, uint32_t size) {
         auto candidate = probe.context_;
         candidate.pc = pc; candidate.sp = 1; candidate.slots[0] = {};
@@ -85,7 +95,9 @@ void snapshot_json(const startup::Snapshot& snapshot) {
     std::cout << ",\"host_state\":{\"callback_F0_service_78_flag_offset_104\":";
     if (snapshot.host_flag_104_known) std::cout << unsigned(snapshot.host_flag_104);
     else std::cout << "null";
-    std::cout << "},\"global_writes\":{";
+    std::cout << "},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
+              << ",\"global_writes_count\":" << snapshot.global_writes_count
+              << ",\"global_writes_sha256\":\"" << snapshot.global_writes_sha256 << "\",\"global_writes\":{";
     bool first = true;
     for (const auto& entry : snapshot.global_writes) {
         if (!first) std::cout << ','; first = false;
@@ -126,7 +138,14 @@ void output(const char* name, const script::Program& program, const startup::Tra
             bytes << std::setw(2) << unsigned(program.bytes()[at]);
         std::cout << bytes.str() << "\",\"before\":"; snapshot_json(event.before);
         std::cout << ",\"after\":"; snapshot_json(event.after);
-        std::cout << ",\"builtin\":"; builtin_json(event.builtin); std::cout << "}";
+        std::cout << ",\"builtin\":"; builtin_json(event.builtin);
+        std::cout << ",\"global_write_delta\":{";
+        bool first = true;
+        for (const auto& entry : event.global_write_delta) {
+            if (!first) std::cout << ','; first = false;
+            std::cout << '"' << entry.first << "\":"; value_json(entry.second);
+        }
+        std::cout << "}}";
     }
     std::cout << "]}\n";
 }
@@ -135,7 +154,8 @@ bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
         a.state == b.state && a.result == b.result && a.stack_window == b.stack_window &&
         a.timer_base_set == b.timer_base_set && a.timer_base_pc == b.timer_base_pc &&
         a.host_flag_104_known == b.host_flag_104_known && a.host_flag_104 == b.host_flag_104 &&
-        a.global_writes == b.global_writes;
+        a.global_writes == b.global_writes && a.global_writes_complete == b.global_writes_complete &&
+        a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256;
 }
 startup::Value raw_value(uint32_t word) { startup::Value value; value.word = word; return value; }
 uint32_t fixture_word(const startup::Value& value) {
@@ -191,6 +211,74 @@ void original_oracle_checks(const std::filesystem::path& vectors, const script::
     std::cout << "{\"original_oracle_checks\":\"pass\",\"vectors\":" << count << ",\"successes\":"
               << success << ",\"barriers\":" << barriers << "}\n";
 }
+void iterator_oracle_checks(const std::filesystem::path& vectors, const std::filesystem::path& base) {
+    std::ifstream stream(vectors, std::ios::binary);
+    require(bool(stream), "Iterator original-word vectors missing");
+    char magic[8]{}; uint32_t expected_count = 0;
+    stream.read(magic, 8); stream.read(reinterpret_cast<char*>(&expected_count), 4);
+    require(std::string(magic, 7) == "DIT15V1" && expected_count > 0, "Iterator fixture schema");
+    const char* names[] = {"INU", "KAERU", "NEKO", "ROBO", "USAGI"};
+    std::array<script::Program, 5> programs;
+    script::Diagnostic error;
+    for (size_t i = 0; i < programs.size(); ++i)
+        require(programs[i].load_original(base / (std::string(names[i]) + ".KSC"), error), error.text());
+    uint32_t count = 0, success = 0, barriers = 0;
+    for (; count < expected_count; ++count) {
+        uint32_t bytes = 0; stream.read(reinterpret_cast<char*>(&bytes), 4);
+        require(bool(stream) && bytes % 4 == 0 && bytes <= 65536, "Iterator record length");
+        std::vector<uint32_t> fields(bytes / 4);
+        stream.read(reinterpret_cast<char*>(fields.data()), bytes);
+        require(bool(stream), "Iterator truncated record");
+        size_t at = 0;
+        const auto next = [&]() { require(at < fields.size(), "Iterator truncated field"); return fields[at++]; };
+        const auto value = [&]() {
+            startup::Value result; const uint32_t kind = next();
+            require(kind <= 2, "Iterator invalid value kind"); result.kind = static_cast<startup::Value::Kind>(kind);
+            result.word = next(); result.index = next(); result.source_file_offset = next(); return result;
+        };
+        const auto slots = [&]() {
+            const uint32_t size = next(); require(size == 32, "Iterator slot fixture length");
+            std::vector<startup::Value> result; for (uint32_t i = 0; i < size; ++i) result.push_back(value()); return result;
+        };
+        const auto writes = [&]() {
+            const uint32_t size = next(); require(size <= 2048, "Iterator write fixture cap");
+            std::map<uint32_t, startup::Value> result;
+            for (uint32_t i = 0; i < size; ++i) { const uint32_t key = next(); result[key] = value(); }
+            require(result.size() == size, "Iterator duplicate write keys"); return result;
+        };
+        const uint32_t source = next(), host = next(), pc = next();
+        const int32_t sp = static_cast<int32_t>(next()), fp = static_cast<int32_t>(next());
+        const uint32_t cap = next(); const auto prior = value(); const auto input_slots = slots(); const auto input_writes = writes();
+        const uint32_t boundary = next(), expected_pc = next(); const int32_t expected_sp = static_cast<int32_t>(next());
+        const auto expected_result = value(); const auto expected_slots = slots(); const auto expected_writes = writes();
+        require(at == fields.size() && source < programs.size() && host <= 1 && cap <= 512, "Iterator record fields");
+        startup::StartupProbe probe(programs[source], static_cast<uint8_t>(host), static_cast<uint16_t>(cap));
+        const auto before = startup::StartupTestAccess::iterator_initial(probe, pc, sp, fp, input_slots, prior, input_writes);
+        const auto before_all_slots = startup::StartupTestAccess::all_slots(probe);
+        const auto actual = probe.run(1);
+        const std::string label = "Iterator vector" + std::to_string(count);
+        if (boundary) {
+            ++barriers;
+            require(actual.status == startup::Status::Halted && actual.executed == 0 &&
+                    same_context(before, actual.context) && before_all_slots == startup::StartupTestAccess::all_slots(probe),
+                    label + " barrier committed partial state");
+        } else {
+            ++success;
+            require(actual.status == startup::Status::BudgetExhausted && actual.executed == 1,
+                    label + " halted on original success: " + actual.diagnostic.reason);
+            require(actual.pc == expected_pc && actual.sp == expected_sp && actual.fp == fp &&
+                    actual.result == expected_result && actual.context.global_writes == expected_writes,
+                    label + " PC/SP/FP/result/globals differ from original words");
+            const auto& after = startup::StartupTestAccess::all_slots(probe);
+            require(std::equal(expected_slots.begin(), expected_slots.end(), after.begin()), label + " stack differs");
+            require(std::all_of(after.begin() + 32, after.end(), [](const startup::Value& v) { return v == startup::Value{}; }),
+                    label + " wrote outside fixture slots");
+        }
+    }
+    char extra = 0; require(!stream.read(&extra, 1) && stream.eof(), "Iterator extra fixture records");
+    std::cout << "{\"iterator_original_word_checks\":\"pass\",\"vectors\":" << count
+              << ",\"successes\":" << success << ",\"barriers\":" << barriers << "}\n";
+}
 void opcode_boundary_checks(const script::Program& program) {
     std::array<startup::Value, 12> slots{};
     slots[3] = raw_value(0x90000001); slots[4] = startup::Value::integer(4);
@@ -235,33 +323,32 @@ void opcode_boundary_checks(const script::Program& program) {
 
 int main(int argc, char** argv) {
     try {
-        require(argc == 3, "Supply workspace original KSC directory and original oracle vectors");
+        require(argc == 4, "Supply original KSC directory, stage2 oracle vectors and iterator vectors");
         std::filesystem::path base = argv[1];
         script::Program program; script::Diagnostic error;
         for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
             require(program.load_original(base / (std::string(name) + ".KSC"), error), error.text());
             for (uint8_t host_byte : {uint8_t(0), uint8_t(1)}) {
                 startup::StartupProbe probe(program, host_byte);
-                const auto trace = probe.run(256);
-                require(trace.status == startup::Status::Halted && trace.executed == 28 && trace.pc == 0x1711 &&
-                        trace.sp == 16 && trace.fp == 8 && trace.diagnostic.opcode == 0x15,
+                const auto trace = probe.run(10000);
+                const std::map<std::string, uint32_t> stops = {{"INU",0x6C042},{"KAERU",0x6BE55},
+                    {"NEKO",0x8E0C9},{"ROBO",0x6BF8A},{"USAGI",0x67E6D}};
+                require(trace.status == startup::Status::Halted && trace.executed == 5625 && trace.pc == stops.at(name) &&
+                        trace.sp == 6 && trace.fp == 5 && trace.diagnostic.opcode == 0x93,
                         "Original exact halt context differs");
                 require(trace.first_builtin.valid && trace.first_builtin.id == 0xF0 &&
                         trace.first_builtin.host_service == 78 && trace.first_builtin.result.word == 0x10000000 &&
                         trace.result == startup::Value::stack_reference(12) &&
-                        trace.context.global_writes.size() == 1 &&
+                        trace.context.global_writes.size() == 700 &&
                         trace.context.host_flag_104_known && trace.context.host_flag_104 == 0,
                         "First original builtin differs");
                 require(same_context(trace.context, probe.run(256).context), "Unknown halt mutated context");
                 output(name, program, trace);
 
                 startup::StartupProbe resumed(program, host_byte);
-                for (unsigned step = 1; step <= 28; ++step) {
-                    auto paused = resumed.run(1);
-                    require(paused.status == startup::Status::BudgetExhausted && paused.executed == step,
-                            "One-instruction budget did not pause exactly");
-                }
-                const auto resumed_halt = resumed.run(1);
+                require(resumed.run(1).executed == 1, "One-instruction budget pause");
+                startup::Trace resumed_halt;
+                do { resumed_halt = resumed.run(1024); } while (resumed_halt.status == startup::Status::BudgetExhausted);
                 require(resumed_halt.status == startup::Status::Halted && same_context(trace.context, resumed_halt.context),
                         "Budget continuation differs from whole-prefix trace");
             }
@@ -304,6 +391,7 @@ int main(int argc, char** argv) {
         require(!unloaded.load_original_bytes(changed, base / "truncated.KSC", error), "Truncated original accepted");
         require(program.load_original(base / "NEKO.KSC", error), error.text());
         original_oracle_checks(argv[2], program);
+        iterator_oracle_checks(argv[3], base);
         opcode_boundary_checks(program);
         std::cout << "{\"negative_checks\":\"pass\",\"cases\":[\"host2/255\",\"budget0/10001\","
                      "\"caps0/2/513\",\"read/push cap3 atomic halt\",\"call cap5 atomic halt\","

@@ -1,4 +1,5 @@
 #include "startup_probe.h"
+#include "core_hash.h"
 #include "recovered/ksc_dispatch_addresses.h"
 #include "recovered/game_primitives.h"
 #include <algorithm>
@@ -143,14 +144,28 @@ void StartupProbe::write_reference(Context& context, const Value& reference, Val
         context.global_writes[reference.index] = value;
     }
 }
-Snapshot StartupProbe::snapshot(const Context& context) const {
+Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) const {
     Snapshot result;
     result.pc = context.pc; result.sp = context.sp; result.fp = context.fp;
     result.saved_fp = context.saved_fp; result.saved_sp = context.saved_sp;
     result.state = context.state; result.result = context.result;
     result.timer_base_set = context.timer_base_set; result.timer_base_pc = context.timer_base_pc;
     result.host_flag_104_known = context.host_flag_104_known; result.host_flag_104 = context.host_flag_104;
-    result.global_writes = context.global_writes;
+    result.global_writes_complete = include_globals;
+    result.global_writes_count = static_cast<uint32_t>(context.global_writes.size());
+    core::Sha256 digest;
+    for (const auto& entry : context.global_writes) {
+        // Canonical little-endian (key,kind,word,index,source_file_offset).
+        const uint32_t fields[] = {entry.first, static_cast<uint32_t>(entry.second.kind),
+            entry.second.word, entry.second.index, entry.second.source_file_offset};
+        for (const uint32_t field : fields) {
+            const uint8_t bytes[] = {static_cast<uint8_t>(field), static_cast<uint8_t>(field >> 8),
+                static_cast<uint8_t>(field >> 16), static_cast<uint8_t>(field >> 24)};
+            digest.update(bytes, sizeof(bytes));
+        }
+    }
+    result.global_writes_sha256 = core::hex_digest(digest.digest());
+    if (include_globals) result.global_writes = context.global_writes;
     // The diagnostic window displays initialized argument words above SP too.
     const auto count = static_cast<size_t>(std::min<int32_t>(512, std::max<int32_t>(context.sp + 4, 8)));
     result.stack_window.assign(context.slots.begin(), context.slots.begin() + count);
@@ -202,6 +217,44 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         // remain; 6BF50..6BF90 pushes exactly I(1), irrespective of array count.
         write_reference(candidate, left, first);
         push(candidate, Value::integer(1));
+    } else if (op == 0x15) {
+        require(candidate.sp >= 3, "Opcode15 requires destination/source/index");
+        const Value source = slot(candidate, candidate.sp - 2);
+        // A symbolic reference is an established arena slot identity. A raw
+        // numeric/tagB address cannot be mapped by inventing a PSP arena base.
+        require(source.kind != Value::Kind::Word, "Opcode15 source address is unmapped");
+        const auto scalar = [](const Value& value) {
+            require(value.kind == Value::Kind::Word, "Opcode15 numeric reference payload is unproved");
+            const uint32_t tag = value.word >> 28;
+            require(tag != 4, "Opcode15 tag4 float conversion is unimplemented");
+            require(tag != 5 && tag != 6, "Opcode15 string conversion callee C1E0C is unimplemented");
+            return tag == 9 ? static_cast<int32_t>(value.word & 0xFFF) : signed28(value.word);
+        };
+        const int32_t count = scalar(read_reference(candidate, source));
+        // BOOT 6C1EC..1F4 saves this value before an aliased destination copy.
+        const int32_t index = scalar(slot(candidate, candidate.sp - 1));
+        if (index < count) {
+            const Value destination = slot(candidate, candidate.sp - 3);
+            require(destination.kind != Value::Kind::Word, "Opcode15 destination address is unmapped");
+            const int64_t element_index = static_cast<int64_t>(source.index) + index + 1;
+            require(element_index >= 0 && element_index <= UINT32_MAX,
+                    "Opcode15 element address outside mapped arena");
+            Value element = source;
+            element.index = static_cast<uint32_t>(element_index);
+            if (element.kind == Value::Kind::GlobalReference)
+                element.source_file_offset = program_.header().global_start() + element.index * 4;
+            const Value copied = read_reference(candidate, element);
+            release_supported(copied); // copy7581C: owned clone75778 is a barrier.
+            // No release of old destination, even when its tag is6. The source
+            // is read before store; saved index controls update under aliasing.
+            write_reference(candidate, destination, copied);
+            slot(candidate, candidate.sp - 1) = Value::integer(index + 1);
+            const uint32_t destination_pc = operand(1, 3);
+            require_target(destination_pc); next = destination_pc;
+        } else {
+            // 6C34C..3A0 directly zeros/pops three slots; no result/release call.
+            pop(candidate); pop(candidate); pop(candidate);
+        }
     } else if (op == 0x30) {
         int32_t count = static_cast<int32_t>(operand(1, 1));
         slot(candidate, candidate.sp + count);
@@ -357,7 +410,12 @@ Trace StartupProbe::run(uint32_t instruction_budget) {
         }
         Event event; event.pc = command->pc; event.file_offset = command->pc + 28;
         event.opcode = command->opcode; event.handler_va = handler_for(command->opcode);
-        event.next_pc = candidate.pc; event.before = snapshot(context_); event.after = snapshot(candidate);
+        event.next_pc = candidate.pc; event.before = snapshot(context_, false); event.after = snapshot(candidate, false);
+        for (const auto& entry : candidate.global_writes) {
+            const auto old = context_.global_writes.find(entry.first);
+            if (old == context_.global_writes.end() || !(old->second == entry.second))
+                event.global_write_delta.insert(entry);
+        }
         event.builtin = builtin;
         events_.push_back(std::move(event)); context_ = std::move(candidate);
         if (builtin.valid && !first_builtin_.valid) first_builtin_ = std::move(builtin);
