@@ -1,0 +1,107 @@
+#pragma once
+#include "script_vm.h"
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// BOOT-proved startup prefix only. No PSP CPU/OS/GPU emulation, no dialogue
+// fixture, no semantics for opcode14. See research/startup/README.md.
+namespace dokodemo::startup {
+
+struct Value {
+    enum class Kind : uint8_t { Word, StackReference, GlobalReference };
+    Kind kind = Kind::Word;
+    uint32_t word = 0, index = 0, source_file_offset = UINT32_MAX;
+    static Value integer(int32_t value);
+    static Value stack_reference(uint32_t index);
+    static Value global_reference(uint32_t index, uint32_t file_offset);
+    bool operator==(const Value& other) const;
+};
+
+struct Snapshot {
+    uint32_t pc = 0;
+    int32_t sp = 0, fp = -1, saved_fp = 0, saved_sp = 0;
+    uint32_t state = 2;
+    Value result;
+    std::vector<Value> stack_window; // Includes preloaded slots above SP.
+    bool timer_base_set = false;
+    uint32_t timer_base_pc = 0;      // Absolute scheduler time is external.
+    bool host_flag_104_known = false;
+    uint8_t host_flag_104 = 0;
+};
+
+struct BuiltinCall {
+    bool valid = false;
+    uint32_t pc = 0, handler_va = 0, host_handler_va = 0;
+    uint8_t id = 0, argc = 0;
+    uint32_t host_service = 0;
+    std::vector<Value> arguments;
+    Value result;
+};
+
+struct Event {
+    uint32_t pc = 0, file_offset = 0, next_pc = 0, handler_va = 0;
+    int opcode = -1;
+    Snapshot before, after;
+    BuiltinCall builtin;
+};
+
+enum class Status { Running, Halted, BudgetExhausted, InvalidInput, Terminated };
+const char* status_name(Status status);
+struct Trace {
+    Status status = Status::InvalidInput;
+    uint8_t host_byte = 0;
+    uint32_t executed = 0, pc = 0;
+    int32_t sp = 0, fp = -1;
+    Value result;
+    BuiltinCall first_builtin;
+    Snapshot context;
+    script::Diagnostic diagnostic;
+    std::vector<Event> events;
+};
+
+class StartupProbe {
+public:
+    // Program must outlive the probe and remain unchanged. host_byte must be
+    // explicitly supplied as 0 or 1; its actual game initial value is unproved.
+    // stack_slot_limit is a native resource cap <= original 512-slot allocation,
+    // exposed for bounded failure checks; ordinary callers use the default.
+    StartupProbe(const script::Program& program, uint8_t host_byte,
+                 uint16_t stack_slot_limit = 512);
+    // Per-call budget must be 1..10000. Returns cumulative executed/events.
+    // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
+    // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
+    Trace run(uint32_t instruction_budget);
+private:
+    struct Context {
+        std::array<Value, 512> slots{};
+        uint32_t pc = 0, state = 2;
+        int32_t sp = 0, fp = -1, saved_fp = 0, saved_sp = 0;
+        Value result;
+        bool timer_base_set = false, host_flag_104_known = false;
+        uint32_t timer_base_pc = 0;
+        uint8_t host_flag_104 = 0;
+    };
+    const script::Program& program_;
+    uint8_t host_byte_ = 0;
+    uint16_t stack_slot_limit_ = 512;
+    Context context_;
+    Status status_ = Status::Running;
+    script::Diagnostic diagnostic_;
+    std::vector<Event> events_;
+    BuiltinCall first_builtin_;
+    Snapshot snapshot(const Context& context) const;
+    Trace trace() const;
+    Value& slot(Context& context, int32_t index) const;
+    const Value& slot(const Context& context, int32_t index) const;
+    void push(Context& context, Value value) const;
+    Value pop(Context& context) const;
+    void require_target(uint32_t pc) const;
+    void execute(Context& candidate, const script::Command& command,
+                 BuiltinCall& builtin) const;
+};
+
+Trace run(const script::Program& program, uint8_t host_byte,
+          uint32_t instruction_budget = 256);
+} // namespace dokodemo::startup
