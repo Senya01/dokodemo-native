@@ -1,4 +1,5 @@
 #include "context_owner_native.h"
+#include "producer_native.h"
 #include <algorithm>
 #include <atomic>
 #include <new>
@@ -32,12 +33,16 @@ struct OwnedContextOwner::Impl {
     bool closed = false, tail = false, bound = false, records_match = false, kernel = false;
     ManagerToken projection, first_projected_entry;
     std::vector<ManagerAllocation> allocations;
+    ContextOwnerSuffixSnapshot suffix;
+    uint64_t suffix_serial = 0;
+    uint64_t generation = 0;
     ManagerToken Token(uint32_t relative) const { return {arena, relative}; }
     void Store(uint32_t off, uint32_t v, bool entry = false) {
+        ++generation;
         auto* p = entry ? entry_storage.get() : owner_storage.get();
         for (uint32_t i = 0; i < 4; ++i) { p[off + i] = uint8_t(v >> (i * 8)); if (entry) entry_mask[off + i] = 1; else owner_mask[off + i] = 1; }
     }
-    void Byte(uint32_t off, uint8_t v) { owner_storage[off] = v; owner_mask[off] = 1; }
+    void Byte(uint32_t off, uint8_t v) { ++generation; owner_storage[off] = v; owner_mask[off] = 1; }
     bool Known(uint32_t off) const { for (uint32_t i = 0; i < 4; ++i) if (!owner_mask[off + i]) return false; return true; }
     uint32_t Load(uint32_t off) const {
         return uint32_t(owner_storage[off]) | (uint32_t(owner_storage[off+1]) << 8) |
@@ -114,6 +119,230 @@ ContextOwnerBoundary OwnedContextOwner::ApplyInitializationTailFromCheckpoint() 
     s.Store(0x54, 0xFFFFFFFF); s.Store(0x58, 0); s.Store(0x1C, 0); s.Store(0x20, 0);
     s.tail = true; return {};
 }
+namespace {
+bool SuffixOverlap(uint32_t a, size_t n, uint32_t b, size_t m) {
+    return uint64_t(a) < uint64_t(b) + m && uint64_t(b) < uint64_t(a) + n;
+}
+bool SuffixDynamicAddress(uint32_t a, size_t n) {
+    if (!a || (a & 3) || uint64_t(a) + n > 0x100000000ULL) return false;
+    // Original BOOT program ranges, including BSS. Explicit globals are separate.
+    return !SuffixOverlap(a,n,0,932728) && !SuffixOverlap(a,n,932736,1096652);
+}
+uint32_t SuffixWord(const uint8_t* p) {
+    return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
+           (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+bool SuffixKnown(const uint8_t* p, uint32_t n) {
+    for (uint32_t i = 0; i < n; ++i) if (p[i] != 1) return false;
+    return true;
+}
+ContextOwnerPreparedBlock* SuffixBlock(std::vector<ContextOwnerPreparedBlock>& blocks,
+                                     uint32_t address, uint32_t width) {
+    for (auto& b : blocks)
+        if (address >= b.address && uint64_t(address) + width <= uint64_t(b.address) + b.bytes.size()) return &b;
+    return nullptr;
+}
+bool SuffixRead(std::vector<ContextOwnerPreparedBlock>& blocks, uint32_t address,
+                uint32_t width, uint32_t& value) {
+    auto* b = SuffixBlock(blocks,address,width);
+    if (!b || !SuffixKnown(b->initialized.data() + (address-b->address),width)) return false;
+    value = 0;
+    for (uint32_t i = 0; i < width; ++i) value |= uint32_t(b->bytes[address-b->address+i]) << (8*i);
+    return true;
+}
+}
+ContextOwnerPrefixResult OwnedContextOwner::ContinueInitialization23194AfterProducer(
+        const OwnedProducer& producer, const ContextOwnerLoadCheckpoint& load) const {
+    ContextOwnerPrefixResult out;
+    const auto& s = *impl_;
+    if (auto b = s.Live(); b.kind != ContextOwnerStop::None) { out.boundary = b; return out; }
+    const auto p = producer.Snapshot();
+    const auto& g = p.globals;
+    const auto found = std::find_if(p.live_blocks.begin(),p.live_blocks.end(),[&](const auto& b) {
+        return g[5].initialized && b.address == g[5].value;
+    });
+    // Check actual component storage/history rather than a caller-forged bool
+    // claiming1B188 returned. This does not prove the allocator implementation.
+    bool live = !p.closed && found != p.live_blocks.end() &&
+        g[0].initialized && g[1].initialized && g[1].value == g[0].value &&
+        g[2].initialized && g[2].value == 0x1C0FC &&
+        g[3].initialized && g[3].value == 0x1C184 &&
+        g[4].initialized && g[4].value == 0x1DF00 &&
+        !p.checkpoints.empty() && p.checkpoints.back().source_pc == 0x1B208 &&
+        p.checkpoints.back().address == g[5].value+0x5C;
+    if (live) {
+        live = SuffixKnown(found->initialized.data(),0x6C);
+        for (uint32_t i = 0; live && i < 0x6C; ++i) {
+            const bool sentinel = (i >= 0x64 && i < 0x68) || (i >= 0x4C && i < 0x50) || (i >= 0x5C && i < 0x60);
+            live = found->bytes[i] == (sentinel ? 0xFF : 0);
+        }
+    }
+    if (!live) {
+        out.boundary = Boundary(ContextOwnerStop::NativeDomain,0x2318C,
+            "requires actual live producer immediately after successful1B188; no synthetic return accepted");
+        out.boundary.callee = 0x1B188; return out;
+    }
+    if (!SuffixDynamicAddress(load.source_address,0x4F4) ||
+        !SuffixDynamicAddress(load.source_stack_address,0x140) ||
+        SuffixOverlap(load.source_address,0x4F4,load.source_stack_address,0x140) ||
+        SuffixOverlap(load.source_address,0x4F4,found->address,0x6C) ||
+        SuffixOverlap(load.source_stack_address,0x140,found->address,0x6C) ||
+        !SuffixKnown(load.initialized.data()+0x58,4)) {
+        out.boundary = Boundary(ContextOwnerStop::NativeDomain,0x23194,
+            "explicit disjoint readable CLoadMan4F4 and writable source stack checkpoint required"); return out;
+    }
+    const uint32_t index = SuffixWord(load.bytes.data()+0x58);
+    if (index >= 5) {
+        out.boundary = Boundary(ContextOwnerStop::NativeDomain,0x18D74,
+            "bounded original five-name table domain; source out-of-range effects unmodeled"); return out;
+    }
+    constexpr const char* directories[] = {"KSNEKO","KSROBO","KSUSAGI","KSINU","KSKAERU"};
+    constexpr const char* filenames[] = {"neko.ksc","robo.ksc","usagi.ksc","inu.ksc","kaeru.ksc"};
+    constexpr uint32_t names[] = {0xD8E4C,0xD8E58,0xD8E64,0xD8E70,0xD8E78};
+    out.entry_pc = 0x23194; out.producer_return_pc = 0x23194;
+    out.directory_address = 0xE7F44 + 20*(index+3); out.filename_address = names[index];
+    out.directory = directories[index]; out.filename = filenames[index];
+    out.transcript.reserve(20);
+    out.transcript.push_back({0x23194,0x10CDC4,4,load.source_address,"read-global"});
+    out.transcript.push_back({0x23198,load.source_address+0x58,4,index,"read-loadman"});
+    out.transcript.push_back({0x2319C,0x25438,0,index+3,"call"});
+    out.transcript.push_back({0x2544C,0x231A4,0,out.directory_address,"return"});
+    out.transcript.push_back({0x231A4,0x10CDC4,4,load.source_address,"read-global"});
+    out.transcript.push_back({0x231AC,0x18D48,0,load.source_stack_address+0x100,"call"});
+    out.transcript.push_back({0x18D60,load.source_address+0x58,4,index,"read-loadman"});
+    out.transcript.push_back({0x18D74,0xD8E84+4*index,4,names[index],"read-name-table"});
+    for (uint32_t i = 0; i <= out.filename.size(); ++i) {
+        const uint8_t c = i == out.filename.size() ? 0 : uint8_t(out.filename[i]);
+        out.filename_scratch[i] = c; out.filename_scratch_mask[i] = 1;
+    }
+    out.transcript.push_back({0x18D84,0x231B4,0,load.source_stack_address+0x100,"return"});
+    out.boundary = Boundary(ContextOwnerStop::InitializationCall,0x231C4,
+        "actual23194 prefix reached C36C0 formatter; load2E7C, VM constructor6656C and callback remain unexecuted");
+    out.boundary.callee = 0xC36C0;
+    out.boundary.arguments = {load.source_stack_address,0xD97CC,out.directory_address,load.source_stack_address+0x100};
+    return out;
+}
+ContextOwnerActivationResult OwnedContextOwner::PrepareNonzero2327CActivationAfterUnverifiedLoadAndConstructor(
+        ContextOwnerPreparedNonzero2327C p) {
+    auto& s = *impl_; ContextOwnerActivationResult out;
+    if (auto b = s.Live(); b.kind != ContextOwnerStop::None) { out.boundary = b; return out; }
+    auto refuse = [&](const char* reason) {
+        out.boundary = Boundary(ContextOwnerStop::NativeDomain,0x2327C,reason); return out;
+    };
+    if (s.tail || s.suffix.prepared || !p.acknowledges_unverified_prior_load_constructor_and_callback ||
+        p.entry_pc != 0x2327C || !p.loadman_pointer_10cdc4.available ||
+        !p.cached_activation_word_1c93fc.available || !p.prior_vm_publication_10e448.available ||
+        p.blocks.size() != 5 || !SuffixDynamicAddress(p.source_owner_address,96) ||
+        !p.source_vm_address)
+        return refuse("explicit fresh nonzero2327C prepared entry and all prior conditions/global availability required");
+    for (size_t i = 0; i < p.blocks.size(); ++i) {
+        const auto& b = p.blocks[i];
+        if (b.bytes.empty() || b.bytes.size() > 4096 || b.bytes.size() != b.initialized.size() ||
+            !SuffixDynamicAddress(b.address,b.bytes.size()) ||
+            SuffixOverlap(b.address,b.bytes.size(),p.source_owner_address,96) ||
+            std::any_of(b.initialized.begin(),b.initialized.end(),[](uint8_t m) { return m > 1; }))
+            return refuse("exact bounded source-shaped backing/masks disjoint from owner and BOOT required");
+        for (size_t j = 0; j < i; ++j)
+            if (SuffixOverlap(b.address,b.bytes.size(),p.blocks[j].address,p.blocks[j].bytes.size()))
+                return refuse("source live aliases/partial effects excluded; native preflight refuses overlap");
+    }
+    auto* vm = SuffixBlock(p.blocks,p.source_vm_address,0x47C);
+    auto* load = SuffixBlock(p.blocks,p.loadman_pointer_10cdc4.value,0x4F4);
+    uint32_t cells = 0, ksc = 0, frame = 0, ignored = 0;
+    if (!vm || vm->address != p.source_vm_address || vm->bytes.size() != 0x47C || !vm->writable ||
+        !load || load->address != p.loadman_pointer_10cdc4.value || load->bytes.size() != 0x4F4 ||
+        !SuffixRead(p.blocks,p.source_vm_address+0x20,4,cells) ||
+        !SuffixRead(p.blocks,p.source_vm_address+0x0C,4,ksc) ||
+        !SuffixRead(p.blocks,p.source_vm_address+0x10,4,frame) ||
+        !SuffixRead(p.blocks,load->address+0x4C8,1,ignored))
+        return refuse("VM47C and distinct CLoadMan4F4 fields/pointer availability required");
+    auto* args = SuffixBlock(p.blocks,cells,12);
+    auto* script = SuffixBlock(p.blocks,ksc,28);
+    auto* context = SuffixBlock(p.blocks,frame,8);
+    if (!args || args->address != cells || !args->writable || !script || script->address != ksc ||
+        !context || context->address != frame || !context->writable ||
+        args == vm || args == load || script == vm || script == load || context == vm || context == load ||
+        args == script || args == context || script == context ||
+        !SuffixRead(p.blocks,cells+4,4,ignored) || !SuffixRead(p.blocks,cells+8,4,ignored) ||
+        !SuffixRead(p.blocks,ksc+8,4,ignored))
+        return refuse("distinct writable argument/frame and readable KSC entry backing required; aliases are cuts");
+    try { s.suffix.transcript.reserve(48); s.suffix.native_released_backing.reserve(5); }
+    catch (const std::bad_alloc&) {
+        out.boundary = Boundary(ContextOwnerStop::NativeAllocationFailure,0x2327C,"native metadata refusal before source effects"); return out;
+    }
+    s.suffix.prepared = true; s.suffix.source_entry_pc = 0x2327C;
+    s.suffix.reached_call_pc = 0x23208; s.suffix.callee = 0x67FD4; s.suffix.return_pc = 0x23210;
+    s.suffix.source_owner_address = p.source_owner_address; s.suffix.source_vm_address = p.source_vm_address;
+    s.suffix.vm_publication_10e448 = p.prior_vm_publication_10e448;
+    s.suffix.blocks = std::move(p.blocks);
+    auto& t = s.suffix.transcript;
+    t.push_back({0x23280,0x10CDC4,4,p.loadman_pointer_10cdc4.value,"read-global"});
+    t.push_back({0x23200,p.loadman_pointer_10cdc4.value+0x4C8,1,load->bytes[0x4C8],"read-loadman"});
+    // Keep explicit call inputs in the transcript; no earlier constructor or
+    // ignored formatter/load return is invented.
+    t.push_back({0x23208,0x67FD4,0,0x23210,"call"});
+    t.push_back({0x67F24,0x1C93FC,0,p.cached_activation_word_1c93fc.value,"prepared-global-availability"});
+    ++s.suffix_serial;
+    out.continuation.owner_ = OwnerIdentity(); out.continuation.serial_ = s.suffix_serial;
+    out.continuation.owner_generation_ = s.generation;
+    out.boundary = Boundary(ContextOwnerStop::InitializationCall,0x23208,
+        "prepared conditional nonzero branch reached67FD4; private token executes actual activation then tail");
+    out.boundary.callee = 0x67FD4;
+    out.boundary.arguments = {p.source_vm_address,2,uint32_t(load->bytes[0x4C8]==0),0};
+    return out;
+}
+ContextOwnerActivationResult OwnedContextOwner::ContinuePreparedNonzero2327CActivation(
+        const ContextOwnerActivationToken& token) {
+    auto& s = *impl_; ContextOwnerActivationResult out;
+    if (auto b = s.Live(); b.kind != ContextOwnerStop::None) { out.boundary = b; return out; }
+    if (!token || !(token.owner_ == OwnerIdentity()) || token.serial_ != s.suffix_serial ||
+        token.owner_generation_ != s.generation || !s.suffix.prepared || s.suffix.completed || s.tail) {
+        out.boundary = Boundary(ContextOwnerStop::NativeDomain,0x23208,
+            "exact live owner-bound unused activation token required; stale/foreign/checkpoint tokens refused"); return out;
+    }
+    auto& q = s.suffix; auto& bs = q.blocks; auto& t = q.transcript;
+    auto read = [&](uint32_t pc,uint32_t address,uint32_t width) {
+        uint32_t v = 0; SuffixRead(bs,address,width,v);
+        t.push_back({pc,address,width,v,"read-backing"}); return v;
+    };
+    auto write = [&](uint32_t pc,uint32_t address,uint32_t width,uint32_t value) {
+        auto* b = SuffixBlock(bs,address,width);
+        for (uint32_t i = 0; i < width; ++i) { b->bytes[address-b->address+i] = uint8_t(value>>(8*i)); b->initialized[address-b->address+i] = 1; }
+        t.push_back({pc,address,width,value,"store-backing"});
+    };
+    // Preflight and private owned storage guarantee these exact accesses. The
+    // LIVE +20 load is retained on BOTH iterations, even in this disjoint domain.
+    const uint32_t vm = q.source_vm_address;
+    const uint32_t boolean = t[1].value == 0 ? 1u : 0u;
+    const uint32_t cache = t[3].value;
+    for (uint32_t i = 0; i < 2; ++i) {
+        const uint32_t cells = read(0x68018,vm+0x20,4);
+        (void)read(0x68028,cells+4+4*i,4);
+        write(0x68048,cells+4+4*i,4,0x20000000u | (i==0 ? boolean : 0u));
+    }
+    t.push_back({0x68054,0x67F1C,0,0x6805C,"call"});
+    const uint32_t ksc = read(0x67F1C,vm+0x0C,4);
+    t.push_back({0x67F24,0x1C93FC,4,cache,"read-global"});
+    const uint32_t entry = read(0x67F28,ksc+8,4);
+    const uint32_t frame = read(0x67F2C,vm+0x10,4);
+    write(0x67F34,vm+0x38,1,1); write(0x67F38,frame+4,4,entry);
+    write(0x67F44,vm+0x34,4,2); write(0x67F48,vm+0x18,4,cache);
+    write(0x67F4C,vm+0x1C,4,0); write(0x67F50,vm+0x5C,2,0); write(0x67F58,vm+0x3A,1,0);
+    t.push_back({0x67F54,0x6805C,0,0,"return"});
+    t.push_back({0x68060,0x23210,0,0,"return"});
+    q.vm_publication_10e448 = {true,vm};
+    t.push_back({0x2321C,0x10E448,4,vm,"store-global"});
+    auto owner_word = [&](uint32_t pc,uint32_t off,uint32_t value) { s.Store(off,value); t.push_back({pc,q.source_owner_address+off,4,value,"store-owner"}); };
+    auto owner_byte = [&](uint32_t pc,uint32_t off) { s.Byte(off,0); t.push_back({pc,q.source_owner_address+off,1,0,"store-owner"}); };
+    owner_word(0x23224,0x50,0xFFFFFFFF); owner_word(0x23228,0x2C,2000); owner_word(0x2322C,0x5C,0);
+    owner_byte(0x23230,0x40); owner_byte(0x23234,0x48); owner_word(0x23238,0x24,0); owner_word(0x2323C,0x28,0);
+    owner_word(0x23240,0x54,0xFFFFFFFF); owner_word(0x23244,0x58,0); owner_word(0x23248,0x1C,0); owner_word(0x2324C,0x20,0);
+    t.push_back({0x23268,0,0,1,"caller-return"});
+    s.tail = true; q.completed = true;
+    out.completed = true; out.source_return_known = true; out.source_return_value = 1;
+    return out;
+}
+ContextOwnerSuffixSnapshot OwnedContextOwner::SuffixSnapshot() const { return impl_->suffix; }
 ContextOwnerBoundary OwnedContextOwner::SetDelayFromCheckpoint(int32_t source_word) {
     auto& s = *impl_; if (auto b = s.Live(); b.kind != ContextOwnerStop::None) return b;
     s.Store(0x2C, static_cast<uint32_t>(source_word)); return {};
@@ -198,6 +427,11 @@ ContextOwnerSnapshot OwnedContextOwner::Snapshot() const {
 ManagerToken OwnedContextOwner::OwnerIdentity() const { return impl_->Token(owner_relative); }
 void OwnedContextOwner::Close() {
     auto& s = *impl_; s.closed = true; s.owner_storage.reset(); s.entry_storage.reset();
+    if (!s.suffix.closed) {
+        for (const auto& b : s.suffix.blocks)
+            s.suffix.native_released_backing.push_back({b.address,static_cast<uint32_t>(b.bytes.size()),"native prepared backing RAII; not source destructor"});
+        s.suffix.blocks.clear(); s.suffix.closed = true; ++s.suffix_serial;
+    }
     s.bound = false; s.records_match = false; s.projection = {}; s.first_projected_entry = {};
 }
 const char* ContextOwnerStopName(ContextOwnerStop k) {

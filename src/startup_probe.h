@@ -5,6 +5,7 @@
 #include "recovered/service48_native.h"
 #include "recovered/clock_native.h"
 #include "recovered/service39_native.h"
+#include "recovered/rng_native.h"
 #include <array>
 #include <cstdint>
 #include <map>
@@ -53,6 +54,8 @@ struct Snapshot {
     bool global_writes_complete = true;
     uint32_t global_writes_count = 0;
     std::string global_writes_sha256;
+    // Allocated only after the first RNG command, preserving old projections.
+    std::shared_ptr<const recovered::RngSnapshot> rng;
 };
 
 // BOOT 6BC20/6BCB8 tests the raw low 28 bits, without numeric conversion.
@@ -107,6 +110,13 @@ struct Service39Projection {
     // Reached H1 tag6 inputs use CURRENT StringArena live storage instead.
     std::vector<recovered::Service39Mapping> borrowed_windows;
 };
+// Only the exact CURRENT table identities supplied to this probe. Enabling
+// this helper proves no host constructor, allocator or producer readiness.
+struct Array98Projection { bool enabled = false; };
+struct RngProjection {
+    bool enabled = false;
+    recovered::RngNativeOwner current; // Explicit scenario/lifetime, no seed default.
+};
 
 struct BuiltinCall {
     bool valid = false;
@@ -149,7 +159,8 @@ public:
                  uint16_t stack_slot_limit = 512, HostAbiProjection projection = {},
                  recovered::Service47Fixture service47 = {}, recovered::StringFixture strings = {},
                  StringService20Projection string_getters = {}, Service48Projection service48 = {},
-                 recovered::ClockDependency clock = {}, Service39Projection service39 = {});
+                 recovered::ClockDependency clock = {}, Service39Projection service39 = {},
+                 Array98Projection array98 = {}, RngProjection rng = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -171,6 +182,7 @@ private:
         recovered::StringArena strings;
         recovered::StringArena general_heap;
         recovered::Service48State service48;
+        recovered::RngNativeOwner rng;
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
@@ -182,6 +194,8 @@ private:
     Service48Projection service48_projection_;
     recovered::ClockDependency clock_dependency_;
     Service39Projection service39_projection_;
+    Array98Projection array98_projection_;
+    RngProjection rng_projection_;
     Context context_;
     Status status_ = Status::Running;
     script::Diagnostic diagnostic_;

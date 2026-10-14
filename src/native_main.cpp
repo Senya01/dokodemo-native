@@ -8,6 +8,7 @@
 #include "save_native.h"
 #include "save_time.h"
 #include "clock_backend_win32.h"
+#include "rng_backend_win32.h"
 #include "script_vm.h"
 #include "audio_native.h"
 #include "game_font.h"
@@ -36,7 +37,7 @@
 
 using namespace native_port;
 namespace {
-struct Options { bool selfTest = false, smoke = false; std::filesystem::path assets, evidence, clockSample; };
+struct Options { bool selfTest = false, smoke = false; std::filesystem::path assets, evidence, clockSample, rngSample; };
 Options ParseOptions() {
     Options options;
     int count = 0; auto args = CommandLineToArgvW(GetCommandLineW(), &count);
@@ -47,6 +48,7 @@ Options ParseOptions() {
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
         else if (arg == L"--evidence" && i + 1 < count) options.evidence = args[++i];
         else if (arg == L"--clock-sample" && i + 1 < count) options.clockSample = args[++i];
+        else if (arg == L"--rng-sample" && i + 1 < count) options.rngSample = args[++i];
         else { LocalFree(args); throw std::runtime_error("Unknown or incomplete command line argument"); }
     }
     LocalFree(args);
@@ -61,6 +63,15 @@ Options ParseOptions() {
             if(std::filesystem::is_regular_file(candidate)) {options.clockSample=candidate;break;}
         }
         if(options.clockSample.empty()) throw std::runtime_error("Self-test requires the captured Windows input via --clock-sample");
+    }
+    if(options.rngSample.empty()&&(options.selfTest||options.smoke)) {
+        const auto cwd=std::filesystem::current_path();
+        const auto relative=L"research/verification/stage10/rng-sample/actual-sample.json";
+        for(const auto& base:{options.assets.parent_path().parent_path(),cwd,cwd.parent_path(),cwd.parent_path().parent_path()}) {
+            const auto candidate=base/relative;
+            if(std::filesystem::is_regular_file(candidate)) {options.rngSample=candidate;break;}
+        }
+        if(options.rngSample.empty()) throw std::runtime_error("Self-test requires captured initialization input via --rng-sample");
     }
     return options;
 }
@@ -96,6 +107,37 @@ dokodemo::recovered::ClockCallbackReturn ReadCapturedClockSample(const std::file
         ||dokodemo::recovered::ClockWord689B8(cached)!=ClockSampleInteger(json,"source_word"))
         throw std::runtime_error("Captured sample does not match the explicit Windows/RTC ABI conversion");
     return {true,cached};
+}
+struct CapturedRngSeed {
+    uint64_t filetime_100ns=0;
+    int32_t offset_minutes=0;
+    dokodemo::platform::RngSeedConversion conversion;
+};
+CapturedRngSeed ReadCapturedRngSeed(const std::filesystem::path& path) {
+    if(path.extension()!=L".json") throw std::runtime_error("RNG input must be a JSON sample");
+    std::ifstream input(path,std::ios::binary);
+    if(!input) throw std::runtime_error("Cannot read captured RNG initialization input");
+    std::array<char,16385> buffer{};input.read(buffer.data(),static_cast<std::streamsize>(buffer.size()));
+    const auto count=input.gcount();
+    if(count==static_cast<std::streamsize>(buffer.size())) throw std::runtime_error("RNG sample exceeds size limit");
+    const std::string json(buffer.data(),static_cast<size_t>(count));
+    const std::string key="\"effective_offset_minutes\"";
+    const auto at=json.find(key),colon=at==std::string::npos?at:json.find(':',at+key.size());
+    if(colon==std::string::npos) throw std::runtime_error("Missing RNG timezone offset");
+    const auto begin=json.find_first_not_of(" \t\r\n",colon+1);
+    if(begin==std::string::npos) throw std::runtime_error("Missing RNG offset integer");
+    const auto end=json.find_first_not_of("-0123456789",begin);
+    size_t used=0;const auto offset=std::stoll(json.substr(begin,end-begin),&used,10);
+    if(used!=end-begin||offset < -1440||offset>1440) throw std::runtime_error("Invalid RNG timezone offset");
+    CapturedRngSeed seed;seed.filetime_100ns=ClockSampleInteger(json,"utc_filetime_100ns");
+    seed.offset_minutes=static_cast<int32_t>(offset);
+    if(!dokodemo::platform::RngSeedFromUtcFileTimeAndOffset(seed.filetime_100ns,seed.offset_minutes,seed.conversion)
+       ||seed.conversion.local_civil_epoch_seconds!=ClockSampleInteger(json,"seed_u32")
+       ||ClockSampleInteger(json,"seed_high_u32")!=0
+       ||seed.conversion.utc_tick_us!=ClockSampleInteger(json,"utc_rtc_tick_us")
+       ||seed.conversion.local_tick_us!=ClockSampleInteger(json,"local_rtc_tick_us"))
+        throw std::runtime_error("RNG sample contradicts the explicit successful RTC initialization ABI");
+    return seed;
 }
 void Output(const std::string& text) {
     DWORD written = 0; auto handle = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -291,6 +333,30 @@ std::unique_ptr<dokodemo::startup::StartupProbe> ClockStorageProbe(
         ConditionalService47Fixture(),ConditionalStringFixture(),ConditionalStringGetters(),record,
         std::move(clock),ConditionalService39Projection());
 }
+std::unique_ptr<dokodemo::startup::StartupProbe> CurrentRngProbe(
+    const dokodemo::script::Program& program,uint8_t host,dokodemo::recovered::ClockDependency clock,
+    uint32_t initializer_output_word) {
+    dokodemo::startup::RngProjection rng;
+    rng.enabled=true;
+    rng.current.ApplyInitializerTimeT32(initializer_output_word,uint64_t(host)+1,
+        "Captured GetTime_t output; separate scenario, untraced pre-KSC callback history unknown");
+    const auto record=host?dokodemo::startup::Service48Projection{}:ConditionalService48Projection();
+    return std::make_unique<dokodemo::startup::StartupProbe>(program,host,uint16_t{512},
+        dokodemo::startup::HostAbiProjection{true,true,true,true,true,0},
+        ConditionalService47Fixture(),ConditionalStringFixture(),ConditionalStringGetters(),record,
+        std::move(clock),ConditionalService39Projection(),dokodemo::startup::Array98Projection{true},std::move(rng));
+}
+bool ReachedCurrentRngOwnershipBoundary(const dokodemo::startup::Trace& trace,uint8_t host) {
+    // Endpoint-only application assertion. Exact commands/full-state proof is
+    // separate; readonly CURRENT ctx28 is a fixture policy, not a PSP fact.
+    return host<2&&trace.status==dokodemo::startup::Status::Halted
+        &&trace.pc==0xEB0&&trace.diagnostic.opcode==0x51
+        &&trace.context.rng&&trace.context.rng->seed_available
+        &&trace.context.rng->origin==dokodemo::recovered::RngSeedOrigin::InitializerTimeT32
+        &&!trace.context.rng->scratch_available&&trace.context.global_writes_complete
+        &&trace.context.local_writes.size()==2
+        &&trace.context.host_reference_bindings.size()==(host?7u:8u);
+}
 bool VerifiedClockStorageStartup(const dokodemo::startup::Trace& trace,const std::string& source,
                                 uint8_t host,const dokodemo::script::Program& program) {
     // These are source-linked captured-sample validation constants, never
@@ -435,6 +501,61 @@ OwnedProducerPrefix ConstructProducerPrefix(dokodemo::recovered::ProducerInput i
         &&result.prefix.ownerSnapshot.blocks[0].initialized.at(0x2C)==0;
     return result;
 }
+struct OwnedSuffixPrefix {
+    OwnedProducerPrefix initialized;
+    dokodemo::recovered::ContextOwnerPrefixResult suffix;
+    bool verified=false;
+};
+dokodemo::recovered::ContextOwnerLoadCheckpoint ConditionalLoadCheckpoint(uint32_t character_index) {
+    // Explicit source checkpoint, not a constructed/installed PSP CLoadMan.
+    dokodemo::recovered::ContextOwnerLoadCheckpoint load;
+    load.source_address=0x500000;load.source_stack_address=0x700000;
+    for(unsigned i=0;i<4;++i) {
+        load.bytes[0x58+i]=static_cast<uint8_t>(character_index>>(8*i));
+        load.initialized[0x58+i]=1;
+    }
+    return load;
+}
+OwnedSuffixPrefix ConstructOwnerSuffixPrefix(dokodemo::recovered::ProducerInput input,
+        const dokodemo::recovered::ContextOwnerLoadCheckpoint& load) {
+    using namespace dokodemo::recovered;
+    OwnedSuffixPrefix result;result.initialized=ConstructProducerPrefix(input);
+    auto& initialized=result.initialized;
+    if(!initialized.verified||!initialized.producer||!initialized.prefix.callbackOwner) return result;
+    result.suffix=initialized.prefix.callbackOwner->ContinueInitialization23194AfterProducer(*initialized.producer,load);
+    const auto owner=initialized.prefix.callbackOwner->Snapshot();
+    result.verified=result.suffix.entry_pc==0x23194
+        &&result.suffix.boundary.kind==ContextOwnerStop::InitializationCall
+        &&result.suffix.boundary.source_pc==0x231C4&&result.suffix.boundary.callee==0xC36C0
+        &&!owner.initialization_tail_applied&&owner.blocks.at(0).initialized.at(0x2C)==0;
+    return result;
+}
+dokodemo::recovered::ContextOwnerPreparedNonzero2327C ConditionalPreparedActivation(
+        const dokodemo::script::Program& program,uint32_t cache_word) {
+    using namespace dokodemo::recovered;
+    if(!program.loaded()||program.bytes().size()<28) return {};
+    ContextOwnerPreparedNonzero2327C p;
+    p.acknowledges_unverified_prior_load_constructor_and_callback=true;
+    p.source_owner_address=0x600000;p.source_vm_address=0x610000;
+    p.loadman_pointer_10cdc4={true,0x620000};
+    p.cached_activation_word_1c93fc={true,cache_word};
+    p.prior_vm_publication_10e448={true,0};
+    const auto add=[&](uint32_t address,size_t bytes,bool writable) {
+        ContextOwnerPreparedBlock b;b.address=address;b.bytes.assign(bytes,0xA5);
+        b.initialized.assign(bytes,0);b.writable=writable;p.blocks.push_back(std::move(b));
+    };
+    add(0x610000,0x47C,true);add(0x620000,0x4F4,false);
+    add(0x630000,28,false);add(0x640000,12,true);add(0x650000,8,true);
+    const auto word=[&](size_t block,size_t off,uint32_t value) {
+        for(unsigned i=0;i<4;++i){p.blocks.at(block).bytes.at(off+i)=static_cast<uint8_t>(value>>(8*i));p.blocks.at(block).initialized.at(off+i)=1;}
+    };
+    word(0,0x0C,0x630000);word(0,0x10,0x650000);word(0,0x20,0x640000);
+    p.blocks[1].bytes[0x4C8]=0;p.blocks[1].initialized[0x4C8]=1;
+    std::copy_n(program.bytes().begin(),28,p.blocks[2].bytes.begin());
+    std::fill(p.blocks[2].initialized.begin(),p.blocks[2].initialized.end(),uint8_t{1});
+    word(3,4,0);word(3,8,0);
+    return p;
+}
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     std::ostringstream report;
@@ -442,6 +563,12 @@ int SelfTest(const Options& options) {
     auto check = [&](bool ok, const char* name) { report << (ok ? "PASS " : "FAIL ") << name << '\n'; if (ok) ++passed; else ++failures; };
     const auto capturedClock=ReadCapturedClockSample(options.clockSample);
     check(capturedClock.returned,"captured real Windows sample validates FILETIME/cached RTC ABI conversion");
+    const auto capturedRng=ReadCapturedRngSeed(options.rngSample);
+    check(capturedRng.conversion.local_civil_epoch_seconds!=0,
+        "captured UTC and actual timezone bind explicit source initializer output without fixed9h reuse");
+    dokodemo::platform::WindowsRngInitializationSample liveInitialization;
+    check(dokodemo::platform::CaptureWindowsRngInitialization(liveInitialization)&&liveInitialization.available,
+        "real Windows local civil initialization backend is linked without seeding game globals");
     dokodemo::platform::WindowsClockCache liveClock;
     check(!liveClock.ReadCached().returned,"Windows clock cache stays unavailable before actual sampling");
     const bool refreshed=liveClock.RefreshFromWindows();
@@ -496,6 +623,12 @@ int SelfTest(const Options& options) {
         check(!unavailable.verified&&unavailable.initialization.boundary.kind==ProducerStop::MissingInput
             &&unavailable.producer&&unavailable.snapshot.live_blocks.empty(),
             "linked producer remains unavailable without explicit mapped source input");
+        auto suffix=ConstructOwnerSuffixPrefix({true,0},ConditionalLoadCheckpoint(0));
+        check(suffix.verified&&suffix.suffix.directory=="KSNEKO"&&suffix.suffix.filename=="neko.ksc",
+            "actual owned producer joins23194 source directory and filename prefix before formatter cut");
+        auto missingLoad=ConstructOwnerSuffixPrefix({true,0},{});
+        check(!missingLoad.verified&&missingLoad.suffix.boundary.source_pc==0x23194,
+            "missing CLoadMan checkpoint leaves real initialization suffix unavailable");
     }
     {
         using namespace dokodemo::recovered;
@@ -611,9 +744,12 @@ int SelfTest(const Options& options) {
                 dokodemo::recovered::ClockDependency dependency;
                 dependency.callback_slot_mapped=dependency.installed_getter_returns_cache=true;
                 dependency.provider=[capturedClock]() {return capturedClock;};
-                auto advanced=ClockStorageProbe(program,hostByte,std::move(dependency));
+                auto advanced=ClockStorageProbe(program,hostByte,dependency);
                 check(VerifiedClockStorageStartup(RunToBoundary(*advanced),name,hostByte,program),
                     (std::string("captured source clock and service39 ownership continuation / ")+name+" / "+std::to_string(hostByte)).c_str());
+                auto current=CurrentRngProbe(program,hostByte,std::move(dependency),capturedRng.conversion.local_civil_epoch_seconds);
+                check(ReachedCurrentRngOwnershipBoundary(RunToBoundary(*current),hostByte),
+                    (std::string("conditional array98 and persistent RNG reach readonly table ownership boundary / ")+name+" / "+std::to_string(hostByte)).c_str());
             }
         }
         bool dicLoaded = dictionary.load_original(base / (std::string(name) + ".DIC"), diagnostic);
@@ -625,6 +761,21 @@ int SelfTest(const Options& options) {
         dokodemo::script::Program program; dokodemo::script::Diagnostic diagnostic;
         bool loaded=program.load_original(options.assets / L"scripts/original/NEKO.KSC",diagnostic);
         if (loaded) {
+            using namespace dokodemo::recovered;
+            auto suffix=ConstructOwnerSuffixPrefix({true,0},ConditionalLoadCheckpoint(0));
+            auto& owner=*suffix.initialized.prefix.callbackOwner;
+            auto prepared=owner.PrepareNonzero2327CActivationAfterUnverifiedLoadAndConstructor(
+                ConditionalPreparedActivation(program,0));
+            const auto activated=owner.ContinuePreparedNonzero2327CActivation(prepared.continuation);
+            const auto activationOwnerState=owner.Snapshot();
+            const auto backing=owner.SuffixSnapshot();
+            check(activated.completed&&activated.source_return_known&&activated.source_return_value==1
+                &&backing.completed&&backing.blocks.size()==5&&backing.vm_publication_10e448.value==0x610000
+                &&activationOwnerState.initialization_tail_applied&&activationOwnerState.blocks.at(0).bytes.at(0x2C)==0xD0
+                &&activationOwnerState.blocks.at(0).bytes.at(0x2D)==7,
+                "explicit prepared nonzero VM activation performs actual source tail and owner budget stores");
+            check(!owner.ContinuePreparedNonzero2327CActivation(prepared.continuation).completed,
+                "source activation token is owner-bound and one-shot without promoting prior load or constructor");
             dokodemo::script::Vm vm(program);
             auto event=vm.start_at(0xC373-28,{dokodemo::script::Value::integer(10),dokodemo::script::Value::integer(14)});
             if(event.status==dokodemo::script::Status::Running) event=vm.run(1000);
@@ -868,13 +1019,14 @@ struct Application {
     }
     void ManagerProbe() {
         messageVisible=false;
-        auto initialized=ConstructProducerPrefix({true,0});
+        auto extended=ConstructOwnerSuffixPrefix({true,0},ConditionalLoadCheckpoint(0));
+        auto& initialized=extended.initialized;
         auto& built=initialized.prefix;
-        managerVerified=initialized.verified;
+        managerVerified=extended.verified;
         managerQueue=std::move(built.manager); // Keep real owned storage alive in the application.
         callbackOwner=std::move(built.callbackOwner);
         producer=std::move(initialized.producer);
-        status=L"Очередь, owner и producer созданы с явными входными условиями. Остальная инициализация owner и kernel остаются барьерами.";
+        status=L"Условная инициализация продолжена до форматирования пути. Загрузка сценария и kernel остаются барьерами.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence/L"manager-queue-probe.json",std::ios::binary);
         report<<"{\"native_owned_storage\":true,\"allocated_bytes\":"<<built.snapshot.allocated_bytes
@@ -893,6 +1045,10 @@ struct Application {
             <<",\"producer_source_input_explicit\":true,\"allocator_return_explicit\":true"
             <<",\"conditional_owner_checkpoint\":false,\"owner_remaining_initialization_unknown\":true"
             <<",\"owner_budget_initialized\":false"
+            <<",\"suffix_entry_pc\":"<<extended.suffix.entry_pc
+            <<",\"suffix_boundary_pc\":"<<extended.suffix.boundary.source_pc
+            <<",\"suffix_callee\":"<<extended.suffix.boundary.callee
+            <<",\"CLoadMan_checkpoint_explicit\":true,\"actual_CLoadMan_created\":false"
             <<",\"kernel_return_observed\":false"
             <<",\"verified\":"<<(managerVerified?"true":"false")
             <<",\"actual_psp_manager_available\":false,\"host_flags_enabled\":false,\"full_game\":false}\n";

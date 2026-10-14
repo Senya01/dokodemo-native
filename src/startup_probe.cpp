@@ -4,6 +4,7 @@
 #include "recovered/game_primitives.h"
 #include "recovered/calendar_native.h"
 #include "recovered/bulk_array_native.h"
+#include "recovered/array98_native.h"
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -114,11 +115,13 @@ const char* status_name(Status status) {
 StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
                           uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47,
                           recovered::StringFixture strings,StringService20Projection string_getters,Service48Projection service48_projection,
-                          recovered::ClockDependency clock_dependency,Service39Projection service39_projection)
+                          recovered::ClockDependency clock_dependency,Service39Projection service39_projection,
+                          Array98Projection array98_projection,RngProjection rng_projection)
     : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection),
       service47_fixture_(std::move(service47)), string_fixture_(std::move(strings)),string_getters_(std::move(string_getters)),
       service48_projection_(std::move(service48_projection)),clock_dependency_(std::move(clock_dependency)),
-      service39_projection_(std::move(service39_projection)) {
+      service39_projection_(std::move(service39_projection)),array98_projection_(array98_projection),
+      rng_projection_(std::move(rng_projection)) {
     context_.pc = program.header().entrypoint;
     context_.service47 = recovered::Service47InitialState(service47_fixture_);
     const auto* command = program.command(context_.pc);
@@ -247,6 +250,7 @@ Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) co
         }
     }
     result.global_writes_sha256 = core::hex_digest(digest.digest());
+    if(context.rng.Available()) result.rng=std::make_shared<const recovered::RngSnapshot>(context.rng.Snapshot());
     if (include_globals) result.global_writes = context.global_writes;
     // The diagnostic window displays initialized argument words above SP too.
     const auto count = static_cast<size_t>(std::min<int32_t>(512, std::max<int32_t>(context.sp + 4, 8)));
@@ -390,6 +394,10 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         push(candidate, Value::integer(0));
     } else if (op == 0x86) {
         Value value; value.word = boolean_false; push(candidate, value);
+    } else if (op == 0x87) {
+        require(host_abi_projection_.constants_initialized,"Opcode87 needs explicit initialized shared TRUE constant");
+        //70E30..70E5C copies the distinct1C94CC cell;76B24 sets low bit1.
+        Value value;value.word=0x10000001;push(candidate,value);
     } else if (op == 0x90) {
         int32_t index = candidate.fp + static_cast<int32_t>(operand(1, 2));
         Value value = slot(candidate, index);copy_push(value);
@@ -561,6 +569,10 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         } else if (reference.kind == Value::Kind::LocalReference) {
             require(target < program_.header().local_count, "OpcodeF5 element outside mapped local table");
             element = Value::local_reference(target, program_.header().pool_end() + target * 4);
+        } else if(reference.kind==Value::Kind::Ctx28Reference) {
+            require(array98_projection_.enabled,"OpcodeF5 ctx28 element needs explicit current array-table domain");
+            require(target<program_.header().ctx28_count,"OpcodeF5 element outside original ctx28 table");
+            element=Value::ctx28_reference(target,program_.header().ctx28_start()+target*4);
         } else {
             require(reference.kind == Value::Kind::GlobalReference && target < program_.header().global_count,
                     "OpcodeF5 element outside mapped global table");
@@ -609,6 +621,36 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         if (!return_value) candidate.state = 0;
     } else if (op == 0x38) {
         candidate.state = 0;
+    } else if (op == 0xF6) {
+        require(rng_projection_.enabled,"F6 needs explicit CURRENT RNG owner/lifetime domain");
+        require(operand(1,1)==0,"F6 exclusion table mapping is outside current null-exclusion domain");
+        require(candidate.sp>0,"F6 stack underflow");
+        const Value input=slot(candidate,candidate.sp-1);
+        require(input.kind!=Value::Kind::Word,"F6 list needs a CURRENT mapped reference");
+        Value header;
+        if(input.kind==Value::Kind::Ctx28Reference) {
+            require(input.index<program_.header().ctx28_count,"F6 ctx28 header outside table");
+            header.word=program_.initial_word(script::Table::Ctx28,static_cast<uint16_t>(input.index));
+        } else header=read_reference(candidate,input);
+        require(header.kind==Value::Kind::Word && header.word>>28==9,"F6 current list header must be tag9");
+        const uint32_t count=header.word&0xFFF;
+        std::vector<Value> values;std::vector<uint32_t> words{header.word};
+        for(uint32_t i=1;i<=count;++i) {
+            Value v;
+            if(input.kind==Value::Kind::Ctx28Reference) {
+                require(input.index<=UINT32_MAX-i && input.index+i<program_.header().ctx28_count,"F6 ctx28 element outside table");
+                v.word=program_.initial_word(script::Table::Ctx28,static_cast<uint16_t>(input.index+i));
+            } else v=read_reference(candidate,input,i);
+            require(v.kind==Value::Kind::Word,"F6 symbolic list element needs unproved physical hashing identity");
+            values.push_back(v);words.push_back(v.word);
+        }
+        if(!candidate.rng.Available()) candidate.rng=rng_projection_.current;
+        const auto index=recovered::RngSelect77404(candidate.rng,{words.data(),words.size()});
+        require(index>0 && index<=values.size(),"F6 selected index outside mapped list");
+        //74624 pops/clears the temporary input;74788 restores SP and7581C
+        //writes the same destination. Native candidate retains atomic cuts.
+        slot(candidate,candidate.sp-1)=copied_value(Value{},values[index-1]);
+        release_supported(input);
     } else if (op == 0x8B) {
         uint32_t id = operand(1, 1), argc = operand(2, 1);
         require(candidate.sp >= static_cast<int32_t>(argc), "Builtin argc exceeds stack");
@@ -662,10 +704,29 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             release_supported(argument);pop(candidate);candidate.result=Value::integer(scalar);
             builtin.valid=true;builtin.pc=command.pc;builtin.id=4;builtin.argc=1;builtin.handler_va=0x6863C;
             builtin.arguments={argument};builtin.result=candidate.result;
-        } else if (id == 97) {
-            require(argc == 2, "Builtin97 argc outside original two-argument contract");
-            const int32_t first_slot = candidate.sp - 2;
-            const std::vector<Value> arguments{slot(candidate, first_slot), slot(candidate, first_slot + 1)};
+        } else if (id == 17) {
+            require(rng_projection_.enabled,"Builtin17 needs explicit CURRENT RNG owner/lifetime domain");
+            require(argc==1,"Builtin17 argc outside current scalar domain");
+            release_supported(candidate.result);candidate.result={};
+            const Value argument=slot(candidate,candidate.sp-1);
+            require(argument.kind==Value::Kind::Word,"Builtin17 reference conversion needs physical source identity");
+            const uint32_t tag=argument.word>>28;
+            require(tag!=4 && tag!=5 && tag!=6,"Builtin17 float/string conversion outside current scalar domain");
+            const int32_t divisor=tag==9?static_cast<int32_t>(argument.word&0xFFF):signed28(argument.word);
+            require(divisor!=0,"Builtin17 zero reaches6B3C0 scheduler/callback boundary");
+            release_supported(argument);pop(candidate);
+            if(!candidate.rng.Available())candidate.rng=rng_projection_.current;
+            const int32_t draw=static_cast<int32_t>(candidate.rng.NextC3234());
+            candidate.result=Value::integer(draw%divisor);
+            builtin.valid=true;builtin.pc=command.pc;builtin.id=17;builtin.argc=1;
+            builtin.handler_va=0x69658;builtin.arguments={argument};builtin.result=candidate.result;
+        } else if (id == 97 || id == 98) {
+            require(id != 98 || array98_projection_.enabled,
+                    "Builtin98 needs explicit CURRENT table helper domain");
+            require(argc == (id == 97 ? 2u : 3u), "Array builtin argc outside original contract");
+            const int32_t first_slot = candidate.sp - static_cast<int32_t>(argc);
+            std::vector<Value> arguments;
+            for (uint32_t i=0;i<argc;++i) arguments.push_back(slot(candidate,first_slot+static_cast<int32_t>(i)));
             MappedBulkCells cells;
             cells.reader = [&](recovered::BulkAddress a) {
                 const Value value = a.table == recovered::BulkAddress::Table::Result ? candidate.result :
@@ -681,12 +742,13 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                 if (a.table == recovered::BulkAddress::Table::Result) candidate.result = value;
                 else write_reference(candidate, bulk_value(a, program_), value);
             };
-            (void)recovered::BulkBuiltin97(cells,
-                {recovered::BulkAddress::Table::Stack, static_cast<uint32_t>(first_slot)},
-                {recovered::BulkAddress::Table::Result, 0});
+            const recovered::BulkAddress first{recovered::BulkAddress::Table::Stack,static_cast<uint32_t>(first_slot)};
+            const recovered::BulkAddress result{recovered::BulkAddress::Table::Result,0};
+            if(id==97) (void)recovered::BulkBuiltin97(cells,first,result);
+            else (void)recovered::Array98Builtin(cells,first,result,&candidate.strings);
             candidate.sp = first_slot;
-            builtin.valid = true; builtin.pc = command.pc; builtin.id = 97; builtin.argc = 2;
-            builtin.handler_va = 0x6A6A8; builtin.arguments = arguments; builtin.result = candidate.result;
+            builtin.valid = true; builtin.pc = command.pc; builtin.id = static_cast<uint8_t>(id); builtin.argc = static_cast<uint8_t>(argc);
+            builtin.handler_va = id==97 ? 0x6A6A8 : 0x6A704; builtin.arguments = arguments; builtin.result = candidate.result;
         } else {
             require(id == 0xF0 && argc == 2, "Unimplemented builtin/argc: id=" + hex(id));
             Value first = slot(candidate, candidate.sp - 2), second = slot(candidate, candidate.sp - 1);

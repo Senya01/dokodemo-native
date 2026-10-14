@@ -384,7 +384,8 @@ Event Vm::step() {
         } else if (op >= 0x80 && op <= 0x83) {
             uint8_t width = static_cast<uint8_t>(op - 0x7F);
             uint32_t raw = program_.operand(*cmd, 1, width);
-            if (width < 4 && (raw & (1u << (width * 8 - 1)))) raw |= UINT32_MAX << (width * 8);
+            // BOOT 70BB0/70C18 sign-extend 80/81; 70C8C uses three LBU for unsigned 82.
+            if (width < 3 && (raw & (1u << (width * 8 - 1)))) raw |= UINT32_MAX << (width * 8);
             stack_.push_back(Value::integer(static_cast<int32_t>(raw)));
         } else if (op == 0x85) stack_.push_back(Value::integer(0));
         else if (op == 0x88) stack_.push_back(Value::string(program_.pool_bytes(program_.operand(*cmd, 1, 3))));

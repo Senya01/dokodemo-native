@@ -173,7 +173,20 @@ void snapshot_json(const startup::Snapshot& snapshot) {
         first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
-    std::cout << "}}";
+    std::cout << '}';
+    if(snapshot.rng) {
+        const auto& r=*snapshot.rng;std::ostringstream seed;
+        seed<<"0x"<<std::uppercase<<std::hex<<std::setfill('0')<<std::setw(16)<<r.seed;
+        std::cout<<",\"rng\":{\"seed_available\":"<<(r.seed_available?"true":"false")
+            <<",\"scratch_available\":"<<(r.scratch_available?"true":"false")
+            <<",\"origin\":"<<static_cast<unsigned>(r.origin)<<",\"seed\":\""<<seed.str()
+            <<"\",\"scenario_identity\":"<<r.scenario_identity<<",\"provenance\":"<<std::quoted(r.provenance)
+            <<",\"scratch_sha256\":";
+        if(r.scratch_available)std::cout<<'"'<<core::sha256_hex(r.scratch.data(),r.scratch.size())<<'"';
+        else std::cout<<"null";
+        std::cout<<'}';
+    }
+    std::cout << '}';
 }
 void builtin_json(const startup::BuiltinCall& builtin) {
     if (!builtin.valid) { std::cout << "null"; return; }
@@ -225,6 +238,10 @@ void output(const char* name, const script::Program& program, const startup::Tra
     if (!stream_events) std::cout << "]}\n";
 }
 bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
+    const bool rng_same=(!a.rng && !b.rng) || (a.rng && b.rng &&
+        a.rng->seed_available==b.rng->seed_available && a.rng->scratch_available==b.rng->scratch_available &&
+        a.rng->origin==b.rng->origin && a.rng->seed==b.rng->seed && a.rng->scenario_identity==b.rng->scenario_identity &&
+        a.rng->provenance==b.rng->provenance && a.rng->scratch==b.rng->scratch);
     return a.pc == b.pc && a.sp == b.sp && a.fp == b.fp && a.saved_fp == b.saved_fp && a.saved_sp == b.saved_sp &&
         a.state == b.state && a.result == b.result && a.stack_window == b.stack_window &&
         a.timer_base_set == b.timer_base_set && a.timer_base_pc == b.timer_base_pc &&
@@ -233,7 +250,7 @@ bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
         a.string_arena==b.string_arena && a.general_arena==b.general_arena &&
         a.service48.manager_record==b.service48.manager_record && a.service48.completed_calls==b.service48.completed_calls &&
         a.global_writes == b.global_writes && a.local_writes == b.local_writes && a.global_writes_complete == b.global_writes_complete &&
-        a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256;
+        a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256 && rng_same;
 }
 startup::Value raw_value(uint32_t word) { startup::Value value; value.word = word; return value; }
 uint32_t fixture_word(const startup::Value& value) {
@@ -626,7 +643,8 @@ void clock_component_vectors(const std::filesystem::path& path) {
     d=natural_clock_dependency();d.provider={};require(!d.available(),"Empty provider fabricated returned clock");
     std::cout<<"{\"clock_original_word_checks\":\"pass\",\"cases\":"<<count<<",\"dependency_checks\":6}\n";
 }
-void string_traces(const std::filesystem::path& base,bool all_hosts=false,bool stage9=false,uint64_t tick=stage9_literal_cached_tick) {
+void string_traces(const std::filesystem::path& base,bool all_hosts=false,bool stage9=false,uint64_t tick=stage9_literal_cached_tick,
+                   bool stage10=false,uint32_t seed=0) {
     stream_events=true;script::Program program;script::Diagnostic error;
     for(const char* name:{"INU","KAERU","NEKO","ROBO","USAGI"}) {
         require(program.load_original(base/(std::string(name)+".KSC"),error),error.text());
@@ -635,7 +653,10 @@ void string_traces(const std::filesystem::path& base,bool all_hosts=false,bool s
         const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
         const auto clock=stage9?natural_clock_dependency(tick):recovered::ClockDependency{};
         const auto projection39=stage9?natural_service39_projection():startup::Service39Projection{};
-        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39);
+        startup::RngProjection rng;startup::Array98Projection array98;
+        if(stage10){rng.enabled=true;rng.current.ApplyInitializerTimeT32(seed,host+1,
+            "Stage10 literal actual-sample C321C scenario; external pre-KSC call timeline unresolved");array98.enabled=true;}
+        startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39,array98,rng);
         startup::Trace trace;do {trace=probe.run(10000);} while(trace.status==startup::Status::BudgetExhausted);
         require(trace.status==startup::Status::Halted && (host==1 ? trace.context.string_arena.known && trace.context.string_arena.copies>0 : trace.context.service48.completed_calls==1),
                 "Stage8 continuation failed: "+trace.diagnostic.reason);
@@ -644,12 +665,12 @@ void string_traces(const std::filesystem::path& base,bool all_hosts=false,bool s
         std::cout<<"{\"all512_final\":true,\"source\":\""<<name<<".KSC\",\"host\":"<<unsigned(host)<<",\"slots\":[";
         const auto& slots=startup::StartupTestAccess::all_slots(probe);
         for(size_t i=0;i<slots.size();++i){if(i)std::cout<<',';value_json(slots[i]);}std::cout<<"]}\n";
-        startup::StartupProbe resumed(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39);
+        startup::StartupProbe resumed(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,clock,projection39,array98,rng);
         startup::Trace other;do {other=resumed.run(127);} while(other.status==startup::Status::BudgetExhausted);
         require(same_context(trace.context,other.context) && slots==startup::StartupTestAccess::all_slots(resumed),"String resumed full512/context differs");
         }
     }
-    std::cout<<"{\""<<(stage9?"stage9_connected_resume_checks":"string_connected_resume_checks")<<"\":\"pass\",\"traces\":"<<(all_hosts?10:5)<<",\"full512\":true}\n";
+    std::cout<<"{\""<<(stage10?"stage10_connected_resume_checks":stage9?"stage9_connected_resume_checks":"string_connected_resume_checks")<<"\":\"pass\",\"traces\":"<<(all_hosts?10:5)<<",\"full512\":true}\n";
 }
 void string_component_vectors(const std::filesystem::path& path) {
     std::ifstream in(path,std::ios::binary);require(bool(in),"String vectors missing");
@@ -694,7 +715,8 @@ void string_connected_vectors(const std::filesystem::path& path,const std::files
     const auto digest=[&]() {core::Sha256Digest v{};in.read(reinterpret_cast<char*>(v.data()),32);require(bool(in),"String digest truncated");return core::hex_digest(v);};
     const auto value=[&]() {startup::Value v;v.kind=static_cast<startup::Value::Kind>(u32());v.word=u32();v.index=u32();v.source_file_offset=u32();return v;};
     const auto mapping=[&]() {std::map<uint32_t,startup::Value> map;const auto n=u32();for(uint32_t i=0;i<n;++i){const uint32_t k=u32();map[k]=value();}return map;};
-    const uint32_t magic=u32();const bool stage9=magic==0x39585653u;
+    const uint32_t magic=u32();const bool stage10=magic==0x30585653u;
+    const bool stage9=magic==0x39585653u || stage10;
     const bool all_hosts=magic==0x38585653u || stage9;
     require(all_hosts || magic==0x384D5653u,"String connected schema");const uint32_t runs=u32();uint32_t total=0;
     const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
@@ -703,10 +725,14 @@ void string_connected_vectors(const std::filesystem::path& path,const std::files
         const uint32_t accepted=u32(),count=u32();require(index<names.size() && host<=1,"String run name index");
         uint64_t tick=stage9_literal_cached_tick;
         if(stage9){const uint64_t low=u32(),high=u32();tick=low|(high<<32);}
+        startup::RngProjection rng;startup::Array98Projection array98;
+        if(stage10){const uint64_t low=u32(),high=u32();rng.enabled=true;
+            require(high==0,"Stage10 C321C initializer high word must be zero");
+            rng.current.ApplyInitializerTimeT32(static_cast<uint32_t>(low),index*2+host+1,"Stage10 literal actual-sample C321C scenario; external pre-KSC call timeline unresolved");array98.enabled=true;}
         script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
         const auto loaded48=host==0?natural_service48_projection():startup::Service48Projection{};
         startup::StartupProbe probe(program,host,512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),loaded48,
-            stage9?natural_clock_dependency(tick):recovered::ClockDependency{},stage9?natural_service39_projection():startup::Service39Projection{});
+            stage9?natural_clock_dependency(tick):recovered::ClockDependency{},stage9?natural_service39_projection():startup::Service39Projection{},array98,rng);
         uint32_t remain=accepted;while(remain){const auto n=std::min(remain,10000u);require(probe.run(n).status==startup::Status::BudgetExhausted,"Connected prefix halted");remain-=n;}
         for(uint32_t step=0;step<count;++step) {
             const uint32_t pc=u32();const int32_t sp=static_cast<int32_t>(u32()),fp=static_cast<int32_t>(u32());const auto result=value();
@@ -723,14 +749,22 @@ void string_connected_vectors(const std::filesystem::path& path,const std::files
                 general.known=u32()!=0;
                 if(general.known){general.allocations=u32();general.reallocations=u32();general.releases=u32();general.copies=u32();general.live_allocations=u32();general.conversion_cursor=u32();general.sha256=digest();for(auto& v:state48)v=u32();}
             }
+            bool expected_rng=false;uint64_t expected_seed=0;
+            if(stage10){expected_rng=u32()!=0;if(expected_rng){const uint64_t low=u32(),high=u32();expected_seed=low|(high<<32);}}
             //Only verification discards historical event objects; VM state is
             //unchanged, and literal run(1) retains candidate/commit behavior.
             startup::StartupTestAccess::discard_events(probe);const auto actual=probe.run(1);
             const auto& c=actual.context;const std::string label=std::string(names[index])+" step"+std::to_string(step);
-            require(actual.events.size()==1 && c.pc==pc && c.sp==sp && c.fp==fp && c.result==result,label+" source VM scalar state differs");
+            require(actual.events.size()==1 && c.pc==pc && c.sp==sp && c.fp==fp && c.result==result,label+" source VM scalar state differs actual pc="+hexadecimal(c.pc)+
+                " sp="+std::to_string(c.sp)+" fp="+std::to_string(c.fp)+" result="+hexadecimal(c.result.word)+"/"+std::to_string(static_cast<unsigned>(c.result.kind))+"/"+std::to_string(c.result.index)+
+                " expected pc="+hexadecimal(pc)+" sp="+std::to_string(sp)+" fp="+std::to_string(fp)+" result="+hexadecimal(result.word)+"/"+std::to_string(static_cast<unsigned>(result.kind))+"/"+std::to_string(result.index));
             require(startup::StartupTestAccess::all_slots(probe)==slots,label+" original full512 differs");
             require(c.global_writes_count==global_count && c.global_writes_sha256==globals_sha && c.local_writes==locals && c.host_reference_bindings==bindings,label+" original CURRENT full map differs");
-            require(c.service47==service && c.string_arena==strings,label+" original lifecycle/heap/cursor differs");++total;
+            require(c.service47==service,label+" original service47 lifecycle differs");
+            require(c.string_arena==strings,label+" original STRING differs actual="+c.string_arena.sha256+" expected="+strings.sha256+
+                " actual copies="+std::to_string(c.string_arena.copies)+" expected="+std::to_string(strings.copies));++total;
+            if(stage10)require(bool(c.rng)==expected_rng && (!expected_rng ||
+                (c.rng->seed_available && !c.rng->scratch_available && c.rng->seed==expected_seed)),label+" source CURRENT RNG/lifetime differs");
             if(all_hosts) {
                 require(c.general_arena==general,label+" original GENERAL1C93D4 heap differs");
                 if(general.known) {
@@ -870,7 +904,9 @@ int main(int argc, char** argv) {
         if(argc==3 && std::string(argv[1])=="--clock-component-vectors"){clock_component_vectors(argv[2]);return 0;}
         if(argc==3 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true);return 0;}
         if(argc==4 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true,std::stoull(argv[3],nullptr,0));return 0;}
+        if(argc==5 && std::string(argv[1])=="--stage10-traces"){string_traces(argv[2],true,true,std::stoull(argv[3],nullptr,0),true,static_cast<uint32_t>(std::stoul(argv[4],nullptr,0)));return 0;}
         if(argc==4 && std::string(argv[1])=="--stage9-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
+        if(argc==4 && std::string(argv[1])=="--stage10-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
         if(argc==4 && std::string(argv[1])=="--stage9-vm-fixtures"){string_vm_fixtures(argv[3],argv[2],true);return 0;}
         if(argc==3 && std::string(argv[1])=="--string-component-vectors"){string_component_vectors(argv[2]);return 0;}
         if(argc==4 && std::string(argv[1])=="--string-connected-vectors"){string_connected_vectors(argv[3],argv[2]);return 0;}
