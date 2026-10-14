@@ -14,6 +14,7 @@
 #include "startup_probe.h"
 #include "recovered/menu_primitives.h"
 #include "recovered/calendar_native.h"
+#include "recovered/service47_native.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
 #include <mmsystem.h>
@@ -75,6 +76,53 @@ bool VerifiedProjectedStartup(const dokodemo::startup::Trace& trace, const std::
         && trace.context.global_writes_complete && trace.context.global_writes.size()==700
         && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.size()==5;
 }
+dokodemo::recovered::Service47Fixture ConditionalService47Fixture() {
+    // Explicit mapped synthetic cursor input; actual game buffer availability
+    // and format contents have not been established by this probe.
+    dokodemo::recovered::Service47Fixture f;
+    f.enabled=f.control_cell_mapped=f.guard_cell_mapped=f.state_cell_mapped=f.memory_disjoint=true;
+    f.control_present=f.control_word_mapped=f.source_present=f.source_header_mapped=true;
+    f.status_cell_mapped=f.format_window_mapped=true;
+    f.source_magic=0x0011076A; f.guard=1;
+    const auto append=[&](uint32_t word) {
+        for(unsigned i=0;i<4;++i) f.format_bytes.push_back(static_cast<uint8_t>(word>>(8*i)));
+    };
+    append(0x9000001B); append(0x30272220);
+    for(uint32_t i=0;i<26;++i) append(0xB0000000|(112+4*i));
+    for(uint32_t i=0;i<26;++i) append(0x80000000);
+    return f;
+}
+bool VerifiedService47Startup(const dokodemo::startup::Trace& trace, const std::string& source,
+                             const dokodemo::script::Program& program) {
+    const std::map<std::string,uint32_t> stops={{"INU",0x6B320},{"KAERU",0x6B131},
+        {"NEKO",0x8D3A3},{"ROBO",0x6B268},{"USAGI",0x67149}};
+    const auto& state=trace.context.service47;
+    const auto& slots=trace.context.stack_window;
+    return trace.status==dokodemo::startup::Status::Halted && trace.executed==6192
+        && trace.pc==stops.at(source) && trace.sp==38 && trace.fp==8 && trace.diagnostic.opcode==0x8B
+        && trace.result.kind==dokodemo::startup::Value::Kind::Word && trace.result.word==0x10000000
+        && state.known && state.calls==1 && state.format_called && state.format_return==0
+        && state.cursor_bytes==112 && state.decoded_words==54 && state.guard==0 && state.state==0xFFFF
+        && trace.context.global_writes_complete && trace.context.global_writes.size()==700
+        && trace.context.local_writes.size()==2 && trace.context.host_reference_bindings.size()==7
+        && trace.context.host_reference_bindings.at(80)==dokodemo::startup::Value{}
+        && trace.context.host_reference_bindings.at(84)==dokodemo::startup::Value{}
+        && slots.size()>37 && slots[37].kind==dokodemo::startup::Value::Kind::Ctx28Reference
+        && slots[37].index<program.header().ctx28_count
+        && slots[37].source_file_offset==program.header().ctx28_start()+4*slots[37].index;
+}
+class Service47TestCells final : public dokodemo::recovered::Service47Cells {
+public:
+    std::array<dokodemo::recovered::Service47Cell,4> slots{};
+    dokodemo::recovered::Service47Cell load(dokodemo::recovered::Service47Address a) override {
+        if(a.table!=dokodemo::recovered::Service47Address::Table::Stack) throw std::runtime_error("Unmapped test table");
+        return slots.at(a.index);
+    }
+    void store(dokodemo::recovered::Service47Address a,dokodemo::recovered::Service47Cell value) override {
+        if(a.table!=dokodemo::recovered::Service47Address::Table::Stack) throw std::runtime_error("Unmapped test table");
+        slots.at(a.index)=value;
+    }
+};
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     std::ostringstream report;
@@ -88,6 +136,35 @@ int SelfTest(const Options& options) {
         "original startup calendar record widths and minute scalar");
     check(dokodemo::recovered::CalendarScalar7C660(dokodemo::recovered::CalendarRecord689B8({2000,1,1,0,0}))==0u,
         "source calendar anchor 2000-01-01 yields zero without host clock");
+    {
+        using namespace dokodemo::recovered;
+        Service47TestCells cells;
+        const Service47Address dst{Service47Address::Table::Stack,0};
+        Service47Fixture f;
+        f.enabled=f.control_cell_mapped=f.guard_cell_mapped=f.state_cell_mapped=f.memory_disjoint=true;
+        cells.slots[0].word=0x2000002A;
+        auto state=Service47InitialState(f);
+        Service47Host1C958(cells,dst,f,state);
+        check(state.calls==1 && state.guard==0 && state.state==0xFFFF && !state.format_called
+            && cells.slots[0].word==0x2000002A,"mapped NULL-control service47 cleanup preserves destination");
+        f.control_present=f.control_word_mapped=f.source_present=f.source_header_mapped=true;
+        f.status_cell_mapped=f.format_window_mapped=true; f.source_magic=0x0011076A; f.guard=1;
+        f.format_bytes={1,0,0,0x90,0x20,0x22,0x27,0x30};
+        cells.slots[0].word=0x90000001; cells.slots[1].word=0x20000001;
+        state=Service47InitialState(f); Service47Host1C958(cells,dst,f,state);
+        check(state.calls==1 && state.format_return==0 && state.cursor_bytes==8 && state.decoded_words==2
+            && state.state==0xFFFF && state.guard==0 && cells.slots[1].word==0x30272220,
+            "mapped array/scalar cursor retains exact tagged word and cleanup order");
+        f.format_bytes={0x2A,0,0,0x20}; cells.slots[0].word=0x90000001;
+        state=Service47InitialState(f); Service47Host1C958(cells,dst,f,state);
+        check(state.format_return==-1 && state.calls==1 && state.state==0xFFFF && cells.slots[0].word==0x90000001,
+            "original format mismatch return is discarded while host cleanup completes");
+        f.format_bytes={1,0,0,0x60}; cells.slots[0].word=0x20000001;
+        state=Service47InitialState(f); bool barrier=false;
+        try { Service47Host1C958(cells,dst,f,state); } catch(const std::runtime_error&) { barrier=true; }
+        check(barrier && state.calls==0 && cells.slots[0].word==0x20000001,
+            "unproved owned format input remains a native barrier");
+    }
     auto files = FindImages(options.assets);
     check(!files.empty(), "original decoded BMP resource exists");
     size_t decoded = 0;
@@ -162,6 +239,9 @@ int SelfTest(const Options& options) {
                 dokodemo::startup::StartupProbe projected(program,hostByte,512,{true,true,true,true,true,0});
                 check(VerifiedProjectedStartup(projected.run(10000),name),
                     (std::string("conditional host ABI projection / ") + name + " / " + std::to_string(hostByte)).c_str());
+                dokodemo::startup::StartupProbe service(program,hostByte,512,{true,true,true,true,true,0},ConditionalService47Fixture());
+                check(VerifiedService47Startup(service.run(10000),name,program),
+                    (std::string("conditional mapped service47 and ctx28 startup / ")+name+" / "+std::to_string(hostByte)).c_str());
             }
         }
         bool dicLoaded = dictionary.load_original(base / (std::string(name) + ".DIC"), diagnostic);
@@ -215,7 +295,7 @@ struct Application {
     GameFont gameFont;
     Image messageImage;
     bool messageVisible=false;
-    bool savedSuccessfully=false, loadedSuccessfully=false, startupPrefixVerified=false;
+    bool savedSuccessfully=false, loadedSuccessfully=false, startupPrefixVerified=false, service47Verified=false;
     int width = 1080, height = 760; HDC bufferDC = nullptr; HBITMAP buffer = nullptr; HGDIOBJ oldBuffer = nullptr; void* pixels = nullptr;
     explicit Application(Options value) : options(std::move(value)) {
         images = FindImages(options.assets);
@@ -298,7 +378,7 @@ struct Application {
         auto source = messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
         Text(dc, L"Исходный ресурс: " + source, {24,y,width-24,y+28}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
         Text(dc, status, {24,y+30,width-24,y+78}, RGB(211,219,223));
-        Text(dc, L"←/→ ресурсы   F1/F4 KSC   F2 сообщение   F3 музыка   F5/F9 save/load   F12 снимок", {24,height-62,width-24,height-32}, RGB(167,181,192));
+        Text(dc, L"←/→ ресурсы   F1/F4 KSC   F2 сообщение   F3 музыка   F6 условная проба   F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
         std::wostringstream metrics; metrics << L"Win32 · " << frames << L" кадров · " << inputEvents << L" событий ввода · " << images.size() << L" ресурсов";
         Text(dc, metrics.str(), {24,height-31,width-24,height-8}, RGB(125,149,163));
     }
@@ -339,6 +419,7 @@ struct Application {
         else if (key == VK_F3) Audio();
         else if (key == VK_F4) StartupProbe();
         else if (key == VK_F5) Save();
+        else if (key == VK_F6) Service47Probe();
         else if (key == VK_F9) Load();
         else if (key == VK_F12) Capture();
         else if (key == VK_ESCAPE) DestroyWindow(window);
@@ -371,6 +452,27 @@ struct Application {
         else status = L"KSC достиг лимита исполнения; продолжение требует проверки контекста.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream(options.evidence / L"startup-diagnostic.txt", std::ios::binary) << Utf8(status) << '\n';
+    }
+    void Service47Probe() {
+        messageVisible=false;
+        if(!program.loaded()) {status=L"NEKO.KSC не загружен.";return;}
+        dokodemo::startup::StartupProbe probe(program,0,512,{true,true,true,true,true,0},ConditionalService47Fixture());
+        const auto trace=probe.run(10000);
+        service47Verified=VerifiedService47Startup(trace,"NEKO",program);
+        status=L"Условная проба с тестовым buffer: "+std::to_wstring(trace.executed)
+            +L" команд, service47 выполнен; следующий барьер builtin 0x61. Доступность исходного buffer не доказана.";
+        std::filesystem::create_directories(options.evidence);
+        const auto& state47=trace.context.service47;
+        std::ofstream report(options.evidence/L"service47-probe.json",std::ios::binary);
+        report<<"{\"conditional_probe\":true,\"host_byte\":0,\"executed\":"<<trace.executed
+            <<",\"pc\":"<<trace.pc<<",\"sp\":"<<trace.sp<<",\"fp\":"<<trace.fp
+            <<",\"result_raw\":"<<trace.result.word<<",\"service47_calls\":"<<state47.calls
+            <<",\"cursor_bytes\":"<<state47.cursor_bytes<<",\"decoded_words\":"<<state47.decoded_words
+            <<",\"guard\":"<<unsigned(state47.guard)<<",\"state_u16\":"<<state47.state
+            <<",\"globals\":"<<trace.context.global_writes.size()<<",\"locals\":"<<trace.context.local_writes.size()
+            <<",\"bindings\":"<<trace.context.host_reference_bindings.size()
+            <<",\"verified\":"<<(service47Verified?"true":"false")
+            <<",\"actual_buffer_available\":false,\"host_initialization_observed\":false,\"full_game\":false}\n";
     }
     void MessageFixture() {
         messageVisible=false;
@@ -413,7 +515,7 @@ struct Application {
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;
-            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
+            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
         }
         if (options.smoke && elapsed > 2.0) {
             Capture();
@@ -423,6 +525,8 @@ struct Application {
                 << ",\n  \"input_method\": \"WM_KEYDOWN\",\n  \"native_save_ok\": " << (savedSuccessfully ? "true" : "false")
                 << ",\n  \"native_load_ok\": " << (loadedSuccessfully ? "true" : "false")
                 << ",\n  \"startup_prefix_verified\": " << (startupPrefixVerified ? "true" : "false")
+                << ",\n  \"conditional_service47_verified\": " << (service47Verified ? "true" : "false")
+                << ",\n  \"actual_buffer_available\": false"
                 << ",\n  \"original_message_rendered\": " << (messageVisible ? "true" : "false")
                 << ",\n  \"full_game\": false,\n  \"source\": " << JsonString(messageVisible ? "scripts/original/NEKO.KSC" : Utf8(image.path.wstring())) << "\n}\n";
             DestroyWindow(window);
@@ -462,7 +566,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             }
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }
         }
-        return options.smoke && (!app.imageLoaded || app.frames < 30 || app.inputEvents < 7 || !app.savedSuccessfully || !app.loadedSuccessfully
-            || !app.startupPrefixVerified || !app.messageVisible) ? 1 : 0;
+        return options.smoke && (!app.imageLoaded || app.frames < 30 || app.inputEvents < 8 || !app.savedSuccessfully || !app.loadedSuccessfully
+            || !app.startupPrefixVerified || !app.service47Verified || !app.messageVisible) ? 1 : 0;
     } catch (const std::exception& error) { Output(std::string("ERROR: ")+error.what()+"\n"); return 2; }
 }

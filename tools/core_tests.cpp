@@ -8,6 +8,7 @@
 #include "recovered/game_primitives.h"
 #include "recovered/menu_primitives.h"
 #include "recovered/calendar_native.h"
+#include "recovered/service47_native.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -215,11 +216,60 @@ void calendar_primitive_tests() {
     require(narrowed==CalendarRecord{{0xff,0xff,0,0xff,0xff,0,0}}, "Calendar field widths are not civil-date normalization");
     std::cout << "{\"test\":\"recovered_calendar_smoke\",\"checks\":4,\"host_clock_substituted\":false,\"passed\":true}\n";
 }
+class Service47SmokeCells final : public dokodemo::recovered::Service47Cells {
+public:
+    std::vector<dokodemo::recovered::Service47Cell> slots = std::vector<dokodemo::recovered::Service47Cell>(4);
+    dokodemo::recovered::Service47Cell load(dokodemo::recovered::Service47Address a) override {
+        require(a.table==dokodemo::recovered::Service47Address::Table::Stack, "Unmapped service47 smoke table");
+        return slots.at(a.index);
+    }
+    void store(dokodemo::recovered::Service47Address a, dokodemo::recovered::Service47Cell v) override {
+        require(a.table==dokodemo::recovered::Service47Address::Table::Stack, "Unmapped service47 smoke table");
+        slots.at(a.index)=v;
+    }
+};
+void service47_primitive_tests() {
+    using namespace dokodemo::recovered;
+    Service47SmokeCells cells;
+    const Service47Address dst{Service47Address::Table::Stack,0};
+    Service47Fixture empty;
+    empty.enabled=empty.control_cell_mapped=empty.guard_cell_mapped=empty.state_cell_mapped=empty.memory_disjoint=true;
+    auto state=Service47InitialState(empty);
+    cells.slots[0].word=0x2000002A;
+    Service47Host1C958(cells,dst,empty,state);
+    require(state.calls==1 && state.guard==0 && state.state==0xFFFF && !state.format_called
+        && cells.slots[0].word==0x2000002A, "Mapped NULL-control service47 cleanup must not touch destination");
+    Service47Fixture ready=empty;
+    ready.control_present=ready.control_word_mapped=ready.source_present=ready.source_header_mapped=true;
+    ready.status_cell_mapped=ready.format_window_mapped=true;
+    ready.source_magic=0x0011076A; ready.status=0; ready.guard=1;
+    ready.format_bytes={1,0,0,0x90,0x20,0x22,0x27,0x30};
+    cells.slots[0].word=0x90000001; cells.slots[1].word=0x20000001;
+    state=Service47InitialState(ready);
+    Service47Host1C958(cells,dst,ready,state);
+    require(state.calls==1 && state.format_called && state.format_return==0 && state.cursor_bytes==8
+        && state.decoded_words==2 && state.guard==0 && state.state==0xFFFF && cells.slots[1].word==0x30272220,
+        "Mapped array/scalar cursor must preserve tagged word and clear guard/state after decode");
+    Service47Fixture mismatch=ready;
+    mismatch.format_bytes={0x2A,0,0,0x20}; cells.slots[0].word=0x90000001;
+    state=Service47InitialState(mismatch);
+    Service47Host1C958(cells,dst,mismatch,state);
+    require(state.format_called && state.format_return==-1 && state.calls==1 && cells.slots[0].word==0x90000001
+        && state.state==0xFFFF, "Original cursor -1 is discarded by host while cleanup still occurs");
+    bool barrier=false;
+    state=Service47InitialState(ready);
+    Service47Fixture owned=ready; owned.format_bytes={1,0,0,0x60}; cells.slots[0].word=0x20000001;
+    try { Service47Host1C958(cells,dst,owned,state); }
+    catch (const std::runtime_error&) { barrier=true; }
+    require(barrier && cells.slots[0].word==0x20000001 && state.calls==0,
+        "Unproved owned source must raise a native barrier rather than fake copy/release");
+    std::cout << "{\"test\":\"recovered_service47_smoke\",\"checks\":4,\"actual_buffer_available\":false,\"passed\":true}\n";
+}
 }
 int main(int argc, char** argv) {
     try {
         require(argc == 2, "Usage: core-tests <assets/native directory>");
-        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests();
+        hash_tests(); cp932_tests(); program_tests(argv[1]); model_tests(argv[1]); primitive_tests(); menu_primitive_tests(); calendar_primitive_tests(); service47_primitive_tests();
         std::cout << "{\"test\":\"portable_core\",\"passed\":true}\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

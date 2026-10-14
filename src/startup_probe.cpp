@@ -4,6 +4,7 @@
 #include "recovered/game_primitives.h"
 #include "recovered/calendar_native.h"
 #include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -31,6 +32,27 @@ uint32_t handler_for(int opcode) {
     return opcode >= 0 && static_cast<size_t>(opcode) < recovered::ksc_handler_va.size() ?
         recovered::ksc_handler_va[static_cast<size_t>(opcode)] : 0;
 }
+Value service47_value(recovered::Service47Address address, const script::Program& program) {
+    using Table = recovered::Service47Address::Table;
+    if (address.table == Table::Stack) return Value::stack_reference(address.index);
+    if (address.table == Table::Global)
+        return Value::global_reference(address.index, program.header().global_start() + 4 * address.index);
+    return Value::local_reference(address.index, program.header().pool_end() + 4 * address.index);
+}
+recovered::Service47Address service47_address(const Value& value) {
+    using Table = recovered::Service47Address::Table;
+    require(value.kind != Value::Kind::Word, "Service47 argument needs explicit mapped Arena reference");
+    require(value.kind != Value::Kind::Ctx28Reference, "Service47 ctx28 destination mapping is outside recovered writable cells");
+    return {value.kind == Value::Kind::StackReference ? Table::Stack :
+            value.kind == Value::Kind::GlobalReference ? Table::Global : Table::Local, value.index};
+}
+class MappedService47Cells final : public recovered::Service47Cells {
+public:
+    std::function<recovered::Service47Cell(recovered::Service47Address)> reader;
+    std::function<void(recovered::Service47Address, recovered::Service47Cell)> writer;
+    recovered::Service47Cell load(recovered::Service47Address a) override { return reader(a); }
+    void store(recovered::Service47Address a, recovered::Service47Cell v) override { writer(a, v); }
+};
 }
 
 Value Value::integer(int32_t value) {
@@ -45,6 +67,10 @@ Value Value::global_reference(uint32_t index, uint32_t file_offset) {
 }
 Value Value::local_reference(uint32_t index, uint32_t file_offset) {
     Value result; result.kind = Kind::LocalReference; result.index = index;
+    result.source_file_offset = file_offset; return result;
+}
+Value Value::ctx28_reference(uint32_t index, uint32_t file_offset) {
+    Value result; result.kind = Kind::Ctx28Reference; result.index = index;
     result.source_file_offset = file_offset; return result;
 }
 bool Value::operator==(const Value& other) const {
@@ -68,9 +94,11 @@ const char* status_name(Status status) {
 }
 
 StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
-                          uint16_t stack_slot_limit, HostAbiProjection projection)
-    : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection) {
+                          uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47)
+    : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection),
+      service47_fixture_(std::move(service47)) {
     context_.pc = program.header().entrypoint;
+    context_.service47 = recovered::Service47InitialState(service47_fixture_);
     const auto* command = program.command(context_.pc);
     if (host_byte > 1 || !program.loaded() || stack_slot_limit < 3 || stack_slot_limit > 512 ||
         !command || command->opcode != 0x30) {
@@ -172,6 +200,7 @@ Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) co
     result.host_flag_104_known = context.host_flag_104_known; result.host_flag_104 = context.host_flag_104;
     result.local_writes = context.local_writes;
     result.host_reference_bindings = context.host_reference_bindings;
+    result.service47 = context.service47;
     result.global_writes_complete = include_globals;
     result.global_writes_count = static_cast<uint32_t>(context.global_writes.size());
     core::Sha256 digest;
@@ -297,6 +326,13 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             value = static_cast<int32_t>(raw) - static_cast<int32_t>(1u << (width * 8));
         else value = static_cast<int32_t>(raw & payload_mask);
         push(candidate, Value::integer(value));
+    } else if (op == 0x99) {
+        //715F8..71680 pushes ctx+28 + unsigned16 index as Arena-relative
+        //tagB. This constructs an identity; it does not read/rebase its word.
+        //670DC..670EC bind ctx28 to the original source table after locals.
+        const uint32_t index = operand(1, 2);
+        require(index < program_.header().ctx28_count, "Opcode99 index outside original ctx28 mapping");
+        push(candidate, Value::ctx28_reference(index, program_.header().ctx28_start() + 4 * index));
     } else if (op == 0x89) {
         //70EEC..70F20 copies ctx+30 into the old top (7581C performs no
         //destination release), then clears ctx+30 with7515C. Owned clone is
@@ -491,17 +527,46 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
                     require(second.index < program_.header().local_count, "F0 local binding outside mapped table");
                 else require(second.kind == Value::Kind::GlobalReference && second.index < program_.header().global_count,
                              "F0 registration requires a mapped Arena reference");
+            } else if (service == 47) {
+                require(host_abi_projection_.allows_direct_registrations(),
+                        "Service47 requires legacy mapped/disjoint/initialized host ABI premises and SLOT0/1");
+                (void)service47_address(second);
+                if (second.kind == Value::Kind::StackReference) slot(candidate, static_cast<int32_t>(second.index));
+                else require(second.index < (second.kind == Value::Kind::GlobalReference ? program_.header().global_count :
+                                             program_.header().local_count), "Service47 argument outside mapped table");
+                require(service47_fixture_.enabled, "Service47 conditional buffer/control availability is not supplied");
             } else require(service == 78 && second.kind == Value::Kind::Word && second.word == boolean_false,
                            "Unimplemented F0 host service/arguments: service=" + std::to_string(service));
             release_supported(candidate.result);
             builtin.valid = true; builtin.pc = command.pc; builtin.id = 0xF0; builtin.argc = 2;
             builtin.handler_va = 0x6AD88; builtin.host_service = service;
-            builtin.host_handler_va = registration == registrations.end() ? 0x1D2FC : registration->second.second;
+            builtin.host_handler_va = service == 47 ? 0x1C958 : registration == registrations.end() ? 0x1D2FC : registration->second.second;
             builtin.arguments = {first, second}; builtin.result.word = boolean_false;
-            candidate.result = builtin.result;
-            if (registration == registrations.end()) { candidate.host_flag_104_known = true; candidate.host_flag_104 = 0; }
-            else candidate.host_reference_bindings[registration->second.first] = second;
+            //684DC releases prior result;6ADC4/6AE10 clear arguments before
+            //the host handler. Destination/argument aliases see these clears.
+            candidate.result = {};
             pop(candidate); pop(candidate);
+            if (service == 47) {
+                candidate.host_reference_bindings[0x54] = second; //1C970 JAL delay slot.
+                MappedService47Cells cells;
+                cells.reader = [&](recovered::Service47Address a) {
+                    const Value v = read_reference(candidate, service47_value(a, program_));
+                    recovered::Service47Cell cell; cell.word = v.word;
+                    cell.is_reference = v.kind != Value::Kind::Word;
+                    if (cell.is_reference) cell.reference = service47_address(v);
+                    return cell;
+                };
+                cells.writer = [&](recovered::Service47Address a, recovered::Service47Cell cell) {
+                    Value v; v.word = cell.word;
+                    if (cell.is_reference) v = service47_value(cell.reference, program_);
+                    write_reference(candidate, service47_value(a, program_), v);
+                };
+                recovered::Service47Host1C958(cells, service47_address(second), service47_fixture_, candidate.service47);
+                candidate.host_reference_bindings[0x50] = {}; //1B334,1B354 delay stores.
+                candidate.host_reference_bindings[0x54] = {};
+            } else if (registration == registrations.end()) { candidate.host_flag_104_known = true; candidate.host_flag_104 = 0; }
+            else candidate.host_reference_bindings[registration->second.first] = second;
+            candidate.result = builtin.result;
         }
     } else {
         throw std::runtime_error("Unknown semantics: opcode=" + hex(static_cast<uint32_t>(op)) +

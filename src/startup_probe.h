@@ -1,5 +1,6 @@
 #pragma once
 #include "script_vm.h"
+#include "recovered/service47_native.h"
 #include <array>
 #include <cstdint>
 #include <map>
@@ -15,13 +16,14 @@
 namespace dokodemo::startup {
 
 struct Value {
-    enum class Kind : uint8_t { Word, StackReference, GlobalReference, LocalReference };
+    enum class Kind : uint8_t { Word, StackReference, GlobalReference, LocalReference, Ctx28Reference };
     Kind kind = Kind::Word;
     uint32_t word = 0, index = 0, source_file_offset = UINT32_MAX;
     static Value integer(int32_t value);
     static Value stack_reference(uint32_t index);
     static Value global_reference(uint32_t index, uint32_t file_offset);
     static Value local_reference(uint32_t index, uint32_t file_offset);
+    static Value ctx28_reference(uint32_t index, uint32_t file_offset);
     bool operator==(const Value& other) const;
 };
 
@@ -38,6 +40,7 @@ struct Snapshot {
     std::map<uint32_t, Value> global_writes;
     std::map<uint32_t, Value> local_writes; // Small original ctx+24 table, complete in every snapshot.
     std::map<uint32_t, Value> host_reference_bindings; // Singleton fields by byte offset; symbolic Arena pointer identity.
+    recovered::Service47State service47;
     // Final contexts keep the full map. Event snapshots carry a canonical
     // digest/count instead; replay Event.global_write_delta to reconstruct it.
     bool global_writes_complete = true;
@@ -106,7 +109,8 @@ public:
     // stack_slot_limit is a native resource cap <= original 512-slot allocation,
     // exposed for bounded failure checks; ordinary callers use the default.
     StartupProbe(const script::Program& program, uint8_t host_byte,
-                 uint16_t stack_slot_limit = 512, HostAbiProjection projection = {});
+                 uint16_t stack_slot_limit = 512, HostAbiProjection projection = {},
+                 recovered::Service47Fixture service47 = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -124,11 +128,13 @@ private:
         std::map<uint32_t, Value> global_writes;
         std::map<uint32_t, Value> local_writes;
         std::map<uint32_t, Value> host_reference_bindings;
+        recovered::Service47State service47;
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
     uint16_t stack_slot_limit_ = 512;
     HostAbiProjection host_abi_projection_;
+    recovered::Service47Fixture service47_fixture_;
     Context context_;
     Status status_ = Status::Running;
     script::Diagnostic diagnostic_;

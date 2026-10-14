@@ -44,6 +44,12 @@ struct StartupTestAccess {
         return probe.snapshot(probe.context_);
     }
     static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
+    static Snapshot repeat47(StartupProbe& probe, uint32_t pc) {
+        probe.context_.pc = pc; probe.context_.sp = 38;
+        probe.context_.slots[36] = Value::integer(47); probe.context_.slots[37] = Value::stack_reference(8);
+        probe.status_ = Status::Running;
+        return probe.snapshot(probe.context_);
+    }
     static Snapshot chain_initial(StartupProbe& probe, uint32_t pc, int32_t sp, int32_t fp,
                                   const std::vector<Value>& slots, Value result,
                                   const std::map<uint32_t, Value>& globals,
@@ -51,6 +57,7 @@ struct StartupTestAccess {
                                   const std::map<uint32_t, Value>& bindings) {
         iterator_initial(probe, pc, sp, fp, slots, result, globals);
         probe.context_.local_writes = locals; probe.context_.host_reference_bindings = bindings;
+        probe.context_.service47 = recovered::Service47InitialState(probe.service47_fixture_);
         return probe.snapshot(probe.context_);
     }
     static bool malformed_branch_halts(StartupProbe& probe, uint32_t pc, uint32_t size) {
@@ -84,7 +91,8 @@ void value_json(const startup::Value& value) {
     } else {
         std::cout << "{\"tag\":11,\"symbolic_native_reference\":true,\"table\":\""
                   << (value.kind == startup::Value::Kind::StackReference ? "stack" :
-                      value.kind == startup::Value::Kind::LocalReference ? "local" : "global")
+                      value.kind == startup::Value::Kind::LocalReference ? "local" :
+                      value.kind == startup::Value::Kind::Ctx28Reference ? "ctx28" : "global")
                   << "\",\"index\":" << value.index << ",\"source_file_offset\":";
         if (value.source_file_offset == UINT32_MAX) std::cout << "null";
         else std::cout << value.source_file_offset;
@@ -112,7 +120,17 @@ void snapshot_json(const startup::Snapshot& snapshot) {
         if (!binding_first) std::cout << ','; binding_first = false;
         std::cout << '"' << entry.first << "\":"; value_json(entry.second);
     }
-    std::cout << "}},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
+    std::cout << '}';
+    if (snapshot.service47.calls) {
+        const auto& s = snapshot.service47;
+        std::cout << ",\"service47\":{\"known\":true,\"control_present\":" << (s.control_present ? "true" : "false")
+                  << ",\"source_present\":" << (s.source_present ? "true" : "false") << ",\"guard\":" << unsigned(s.guard)
+                  << ",\"state\":" << s.state << ",\"calls\":" << s.calls << ",\"cursor_bytes\":" << s.cursor_bytes
+                  << ",\"decoded_words\":" << s.decoded_words << ",\"format_called\":" << (s.format_called ? "true" : "false")
+                  << ",\"format_return\":" << s.format_return << ",\"null_free_calls\":" << s.null_free_calls
+                  << ",\"released_entities\":" << s.released_entities << '}';
+    }
+    std::cout << "},\"global_writes_complete\":" << (snapshot.global_writes_complete ? "true" : "false")
               << ",\"global_writes_count\":" << snapshot.global_writes_count
               << ",\"global_writes_sha256\":\"" << snapshot.global_writes_sha256 << "\",\"global_writes\":{";
     bool first = true;
@@ -180,7 +198,7 @@ bool same_context(const startup::Snapshot& a, const startup::Snapshot& b) {
         a.state == b.state && a.result == b.result && a.stack_window == b.stack_window &&
         a.timer_base_set == b.timer_base_set && a.timer_base_pc == b.timer_base_pc &&
         a.host_flag_104_known == b.host_flag_104_known && a.host_flag_104 == b.host_flag_104 &&
-        a.host_reference_bindings == b.host_reference_bindings &&
+        a.host_reference_bindings == b.host_reference_bindings && a.service47 == b.service47 &&
         a.global_writes == b.global_writes && a.local_writes == b.local_writes && a.global_writes_complete == b.global_writes_complete &&
         a.global_writes_count == b.global_writes_count && a.global_writes_sha256 == b.global_writes_sha256;
 }
@@ -310,7 +328,8 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
     std::ifstream stream(vectors, std::ios::binary); require(bool(stream), "Chain vectors missing");
     char magic[8]{}; uint32_t expected_count = 0;
     stream.read(magic, 8); stream.read(reinterpret_cast<char*>(&expected_count), 4);
-    require(std::string(magic, 6) == "DCH4V1" && expected_count > 0, "Chain fixture schema");
+    const bool service47_vectors = std::string(magic, 6) == "DS47V1";
+    require((std::string(magic, 6) == "DCH4V1" || service47_vectors) && expected_count > 0, "Chain fixture schema");
     const char* names[] = {"INU", "KAERU", "NEKO", "ROBO", "USAGI"};
     std::array<script::Program, 5> programs; script::Diagnostic error;
     for (size_t i = 0; i < programs.size(); ++i)
@@ -323,7 +342,7 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
         require(bool(stream), "Chain truncated record"); size_t at = 0;
         const auto next = [&]() { require(at < fields.size(), "Chain truncated field"); return fields[at++]; };
         const auto value = [&]() {
-            startup::Value result; const uint32_t kind = next(); require(kind <= 3, "Chain invalid kind");
+            startup::Value result; const uint32_t kind = next(); require(kind <= (service47_vectors ? 4u : 3u), "Chain invalid kind");
             result.kind = static_cast<startup::Value::Kind>(kind); result.word = next();
             result.index = next(); result.source_file_offset = next(); return result;
         };
@@ -341,15 +360,38 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
         const int32_t sp = static_cast<int32_t>(next()), fp = static_cast<int32_t>(next());
         const uint32_t cap = next(); const auto prior = value(); const auto input_slots = slots();
         const auto globals = writes(), locals = writes(), bindings = writes();
+        recovered::Service47Fixture service_fixture;
+        if (service47_vectors) {
+            service_fixture.enabled = next() != 0; service_fixture.control_cell_mapped = next() != 0;
+            service_fixture.guard_cell_mapped = next() != 0; service_fixture.state_cell_mapped = next() != 0;
+            service_fixture.memory_disjoint = next() != 0; service_fixture.control_present = next() != 0;
+            service_fixture.control_word_mapped = next() != 0; service_fixture.source_present = next() != 0;
+            service_fixture.source_header_mapped = next() != 0; service_fixture.status_cell_mapped = next() != 0;
+            service_fixture.format_window_mapped = next() != 0;
+            service_fixture.source_magic = next(); service_fixture.status = next(); service_fixture.format_source_offset = next();
+            service_fixture.guard = static_cast<uint8_t>(next()); service_fixture.state = static_cast<uint16_t>(next());
+            service_fixture.depth_limit = next(); service_fixture.word_limit = next();
+            const uint32_t length = next(); require(length <= 65536, "Service47 source fixture cap");
+            for (uint32_t i = 0; i < length; ++i) service_fixture.format_bytes.push_back(static_cast<uint8_t>(next()));
+        }
         const uint32_t boundary = next(), expected_pc = next();
         const int32_t expected_sp = static_cast<int32_t>(next()), expected_fp = static_cast<int32_t>(next());
         const auto expected_result = value(); const auto expected_slots = slots();
         const auto expected_globals = writes(), expected_locals = writes(), expected_bindings = writes();
+        recovered::Service47State expected_service;
+        if (service47_vectors) {
+            expected_service.known = next() != 0; expected_service.control_present = next() != 0;
+            expected_service.source_present = next() != 0; expected_service.guard = static_cast<uint8_t>(next());
+            expected_service.state = static_cast<uint16_t>(next()); expected_service.calls = next(); expected_service.cursor_bytes = next();
+            expected_service.decoded_words = next(); expected_service.format_called = next() != 0;
+            expected_service.format_return = static_cast<int32_t>(next()); expected_service.null_free_calls = next();
+            expected_service.released_entities = next();
+        }
         require(at == fields.size() && source < programs.size() && host <= 1 && cap <= 512, "Chain fields");
         // This verification path explicitly supplies the five ABI premises.
         // Default production callers do not get this conditional projection.
         auto projection = conditional_abi; projection.selected_record_index = count % 2;
-        startup::StartupProbe probe(programs[source], static_cast<uint8_t>(host), static_cast<uint16_t>(cap), projection);
+        startup::StartupProbe probe(programs[source], static_cast<uint8_t>(host), static_cast<uint16_t>(cap), projection, service_fixture);
         const auto before = startup::StartupTestAccess::chain_initial(probe, pc, sp, fp, input_slots, prior, globals, locals, bindings);
         const auto all_before = startup::StartupTestAccess::all_slots(probe);
         const auto actual = probe.run(1); const auto& after = startup::StartupTestAccess::all_slots(probe);
@@ -366,6 +408,7 @@ void chain_oracle_checks(const std::filesystem::path& vectors, const std::filesy
                     actual.context.global_writes == expected_globals && actual.context.local_writes == expected_locals &&
                     actual.context.host_reference_bindings == expected_bindings && std::equal(expected_slots.begin(), expected_slots.end(), after.begin()),
                     label + " context differs from original words");
+            if (service47_vectors) require(actual.context.service47 == expected_service, label + " service47 state differs");
             require(std::all_of(after.begin() + expected_slots.size(), after.end(), [](const startup::Value& v) { return v == startup::Value{}; }),
                     label + " wrote outside recorded stack");
         }
@@ -439,8 +482,61 @@ void calendar_scalar_checks(const std::filesystem::path& path) {
     std::cout<<"{\"calendar_scalar_checks\":\"pass\",\"vectors\":"<<count<<"}\n";
 }
 
+recovered::Service47Fixture natural_service47_fixture() {
+    recovered::Service47Fixture f;
+    f.enabled = f.control_cell_mapped = f.guard_cell_mapped = f.state_cell_mapped = f.memory_disjoint = true;
+    f.control_present = f.control_word_mapped = f.source_present = f.source_header_mapped = true;
+    f.status_cell_mapped = f.format_window_mapped = true; f.source_magic = 0x11076A; f.guard = 1;
+    const auto append = [&](uint32_t word) {
+        for (unsigned i = 0; i < 4; ++i) f.format_bytes.push_back(static_cast<uint8_t>(word >> (8 * i)));
+    };
+    append(0x9000001B); append(0x30272220);
+    for (uint32_t i = 0; i < 26; ++i) append(0xB0000000 | (112 + 4 * i));
+    for (uint32_t i = 0; i < 26; ++i) append(0x80000000);
+    return f; //Synthetic mapped conditional stream, not an observed save/blob.
+}
+void service47_traces(const std::filesystem::path& base) {
+    stream_events = true;
+    script::Program program; script::Diagnostic error;
+    for (const char* name : {"INU", "KAERU", "NEKO", "ROBO", "USAGI"}) {
+        require(program.load_original(base / (std::string(name) + ".KSC"), error), error.text());
+        for (uint8_t host : {uint8_t(0), uint8_t(1)}) {
+            startup::StartupProbe probe(program, host, 512, conditional_abi, natural_service47_fixture());
+            startup::Trace trace;
+            do { trace = probe.run(10000); } while (trace.status == startup::Status::BudgetExhausted);
+            require(trace.status == startup::Status::Halted && trace.executed > 6189 && trace.context.service47.calls == 1 &&
+                    trace.context.service47.format_called && trace.context.service47.format_return == 0,
+                    "Connected service47 did not naturally advance: " + trace.diagnostic.reason);
+            require(same_context(trace.context, probe.run(1).context), "Service47 repeated halt changed state");
+            output(name, program, trace);
+            startup::StartupProbe resumed(program, host, 512, conditional_abi, natural_service47_fixture());
+            startup::Trace other;
+            do { other = resumed.run(127); } while (other.status == startup::Status::BudgetExhausted);
+            require(same_context(trace.context, other.context), "Service47 resumable trace differs");
+            startup::StartupProbe repeated(program, host, 512, conditional_abi, natural_service47_fixture());
+            const auto prefix = repeated.run(6189); const uint32_t service_pc = prefix.pc;
+            const auto first = repeated.run(1);
+            require(first.executed == 6190 && first.context.service47.calls == 1, "First47 lifecycle call failed");
+            const auto before_repeat = startup::StartupTestAccess::repeat47(repeated, service_pc);
+            const auto before_slots = startup::StartupTestAccess::all_slots(repeated);
+            const auto second = repeated.run(1);
+            require(second.status == startup::Status::Halted && same_context(before_repeat, second.context) &&
+                    before_slots == startup::StartupTestAccess::all_slots(repeated) &&
+                    second.diagnostic.reason.find("63378") != std::string::npos,
+                    "Second47 reused cleared guard/prepared buffer or committed partial state");
+            auto null_fixture = natural_service47_fixture(); null_fixture.control_present = false; null_fixture.guard = 0;
+            startup::StartupProbe null_probe(program, host, 512, conditional_abi, null_fixture);
+            null_probe.run(6189); require(null_probe.run(1).context.service47.calls == 1, "NULLcontrol47 failed");
+            startup::StartupTestAccess::repeat47(null_probe, service_pc);
+            require(null_probe.run(1).context.service47.calls == 2, "Repeated NULLcontrol47 failed");
+        }
+    }
+    std::cout << "{\"service47_connected_resume_checks\":\"pass\",\"traces\":10,\"repeat_ready_barriers\":10,\"repeat_null_successes\":10}\n";
+}
 int main(int argc, char** argv) {
     try {
+        if (argc==3 && std::string(argv[1])=="--service47-traces") { service47_traces(argv[2]);return 0; }
+        if (argc==4 && std::string(argv[1])=="--service47-vectors") { chain_oracle_checks(argv[3],argv[2],"service47_original_word_checks");return 0; }
         if (argc==3 && std::string(argv[1])=="--calendar-scalar-vectors") { calendar_scalar_checks(argv[2]);return 0; }
         require(argc == 4 || argc == 6 || argc == 7, "Supply original KSC directory, stage2 vectors, iterator vectors [chain vectors --stream]");
         stream_events = argc >= 6 && std::string(argv[5]) == "--stream";
