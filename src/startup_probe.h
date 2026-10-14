@@ -2,11 +2,13 @@
 #include "script_vm.h"
 #include <array>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
 // BOOT-proved startup prefix only. No PSP CPU/OS/GPU emulation, no dialogue
-// fixture, no semantics for opcode14. See research/startup/README.md.
+// fixture. Opcode14 supports mapped references and non-owned copies only.
+// See research/startup/README.md for tested domains and explicit barriers.
 namespace dokodemo::startup {
 
 struct Value {
@@ -29,7 +31,13 @@ struct Snapshot {
     uint32_t timer_base_pc = 0;      // Absolute scheduler time is external.
     bool host_flag_104_known = false;
     uint8_t host_flag_104 = 0;
+    std::map<uint32_t, Value> global_writes;
 };
+
+// BOOT 6BC20/6BCB8 tests the raw low 28 bits, without numeric conversion.
+// This decision alone does not implement owned-string release or resolve an
+// unknown reference address. The probe rejects those lifecycle/address paths.
+bool branch_condition(uint8_t opcode, uint32_t word);
 
 struct BuiltinCall {
     bool valid = false;
@@ -74,6 +82,7 @@ public:
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
     Trace run(uint32_t instruction_budget);
 private:
+    friend struct StartupTestAccess;
     struct Context {
         std::array<Value, 512> slots{};
         uint32_t pc = 0, state = 2;
@@ -82,6 +91,7 @@ private:
         bool timer_base_set = false, host_flag_104_known = false;
         uint32_t timer_base_pc = 0;
         uint8_t host_flag_104 = 0;
+        std::map<uint32_t, Value> global_writes;
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
@@ -97,6 +107,9 @@ private:
     const Value& slot(const Context& context, int32_t index) const;
     void push(Context& context, Value value) const;
     Value pop(Context& context) const;
+    Value read_reference(const Context& context, const Value& reference,
+                         uint32_t following_words = 0) const;
+    void write_reference(Context& context, const Value& reference, Value value) const;
     void require_target(uint32_t pc) const;
     void execute(Context& candidate, const script::Command& command,
                  BuiltinCall& builtin) const;

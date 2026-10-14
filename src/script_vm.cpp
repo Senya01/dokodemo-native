@@ -1,13 +1,6 @@
 #include "script_vm.h"
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <bcrypt.h>
-#pragma comment(lib, "bcrypt.lib")
+#include "core_hash.h"
+#include "core/cp932.h"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -47,25 +40,7 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path) {
     return bytes;
 }
 std::string hash_bytes(const std::vector<uint8_t>& bytes) {
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-        throw std::runtime_error("SHA256 provider unavailable");
-    DWORD length = 0, used = 0;
-    NTSTATUS status = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
-        reinterpret_cast<PUCHAR>(&length), sizeof(length), &used, 0);
-    std::vector<uint8_t> object(length);
-    if (status >= 0) status = BCryptCreateHash(algorithm, &hash, object.data(), length, nullptr, 0, 0);
-    std::array<uint8_t, 32> digest{};
-    if (status >= 0) status = BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()), static_cast<ULONG>(bytes.size()), 0);
-    if (status >= 0) status = BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0);
-    if (hash) BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(algorithm, 0);
-    if (status < 0) throw std::runtime_error("SHA256 operation failed");
-    std::ostringstream out;
-    out << std::hex << std::setfill('0');
-    for (auto byte : digest) out << std::setw(2) << unsigned(byte);
-    return out.str();
+    return core::sha256_hex(bytes.data(), bytes.size());
 }
 template<size_t N> bool known(const std::string& hash, const char* const (&hashes)[N]) {
     return std::any_of(std::begin(hashes), std::end(hashes), [&](const char* value) { return hash == value; });
@@ -108,9 +83,9 @@ std::string c_string(const std::vector<uint8_t>& bytes, uint32_t at, uint32_t en
     return std::string(begin, zero);
 }
 uint32_t cp932_length(const std::string& text) {
-    int count = MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-    if (!count && !text.empty()) throw std::runtime_error("Invalid CP932 dictionary text");
-    return static_cast<uint32_t>(count);
+    const auto count = core::count_cp932(text);
+    if (!count.valid) throw std::runtime_error("Invalid CP932 dictionary text");
+    return static_cast<uint32_t>(count.code_units);
 }
 bool usable(const Value& value) { return value.kind != Value::Kind::Unknown && value.kind != Value::Kind::Opaque; }
 } // namespace
@@ -265,10 +240,14 @@ void Program::parse() {
 }
 
 bool Dictionary::load_original(const std::filesystem::path& path, Diagnostic& error) {
+    try { return load_original_bytes(read_file(path), path, error); }
+    catch (const std::exception& ex) { source_ = {}; records_.clear(); error.reason = ex.what(); return false; }
+}
+bool Dictionary::load_original_bytes(std::vector<uint8_t> data, const std::filesystem::path& source,
+                                     Diagnostic& error) {
     source_ = {}; records_.clear();
     try {
-        auto data = read_file(path);
-        source_ = {path, hash_bytes(data)};
+        source_ = {source, hash_bytes(data)};
         if (!known(source_.sha256, dic_hashes)) throw std::runtime_error("Unverified DIC SHA256");
         auto size = static_cast<uint32_t>(data.size());
         if (uint_at(data, 0, 4, size) != 0x900000A2) throw std::runtime_error("Unsupported DIC header");

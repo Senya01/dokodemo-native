@@ -78,6 +78,11 @@ struct DictionaryRecord {
 class Dictionary {
 public:
     bool load_original(const std::filesystem::path& path, Diagnostic& error);
+    // Data-only counterpart to the file adapter; original five hash pins and
+    // exact record validation still apply. source is provenance metadata.
+    // Failure clears records/source and retains the diagnostic.
+    bool load_original_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
+                             Diagnostic& error);
     const Source& source() const { return source_; }
     const std::vector<DictionaryRecord>& records() const { return records_; }
 private:

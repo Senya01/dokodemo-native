@@ -1,5 +1,6 @@
 #include "startup_probe.h"
 #include "recovered/ksc_dispatch_addresses.h"
+#include "recovered/game_primitives.h"
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -43,6 +44,11 @@ Value Value::global_reference(uint32_t index, uint32_t file_offset) {
 bool Value::operator==(const Value& other) const {
     return kind == other.kind && word == other.word && index == other.index &&
         source_file_offset == other.source_file_offset;
+}
+bool branch_condition(uint8_t opcode, uint32_t word) {
+    require(opcode == 0x11 || opcode == 0x12, "Unsupported conditional branch opcode");
+    const bool nonzero = (word & payload_mask) != 0;
+    return opcode == 0x11 ? !nonzero : nonzero;
 }
 const char* status_name(Status status) {
     switch (status) {
@@ -98,6 +104,45 @@ void StartupProbe::require_target(uint32_t pc) const {
     require(destination && destination->opcode >= 0,
             "Call target misses original command boundary: " + hex(pc));
 }
+Value StartupProbe::read_reference(const Context& context, const Value& reference,
+                                   uint32_t following_words) const {
+    if (reference.kind == Value::Kind::StackReference) {
+        require(reference.index <= UINT32_MAX - following_words, "Reference index overflow");
+        const uint32_t index = reference.index + following_words;
+        require(index < stack_slot_limit_, "Referenced stack word outside allocation/native cap");
+        return slot(context, static_cast<int32_t>(index));
+    }
+    require(reference.kind == Value::Kind::GlobalReference,
+            "Unresolved raw value/reference arena address");
+    require(reference.index <= UINT32_MAX - following_words, "Reference index overflow");
+    const uint32_t index = reference.index + following_words;
+    require(index < program_.header().global_count, "Referenced global word outside original table");
+    const auto written = context.global_writes.find(index);
+    if (written != context.global_writes.end()) return written->second;
+    const uint32_t word = program_.initial_word(script::Table::Global, static_cast<uint16_t>(index));
+    if (word >> 28 == 0xB) {
+        // BOOT 66EA0..66F40: original selector4/index:u16 addresses the global
+        // table. Keep exact slot identity, without inventing an arena base.
+        const uint32_t selector = static_cast<uint32_t>(signed28(word) >> 16);
+        require(selector == 4, "Initial tagB selector outside tested global rebasing domain");
+        const uint32_t target = word & 0xFFFF;
+        require(target < program_.header().global_count, "Initial global reference target outside table");
+        return Value::global_reference(target, program_.header().global_start() + target * 4);
+    }
+    require(word >> 28 != 5, "Initial tag5 pool rebasing is outside this startup probe");
+    Value value; value.word = word; return value;
+}
+void StartupProbe::write_reference(Context& context, const Value& reference, Value value) const {
+    if (reference.kind == Value::Kind::StackReference) {
+        require(reference.index < stack_slot_limit_, "Referenced stack destination outside allocation/native cap");
+        slot(context, static_cast<int32_t>(reference.index)) = value;
+    } else {
+        require(reference.kind == Value::Kind::GlobalReference,
+                "Unresolved raw destination/reference arena address");
+        require(reference.index < program_.header().global_count, "Referenced global destination outside table");
+        context.global_writes[reference.index] = value;
+    }
+}
 Snapshot StartupProbe::snapshot(const Context& context) const {
     Snapshot result;
     result.pc = context.pc; result.sp = context.sp; result.fp = context.fp;
@@ -105,6 +150,7 @@ Snapshot StartupProbe::snapshot(const Context& context) const {
     result.state = context.state; result.result = context.result;
     result.timer_base_set = context.timer_base_set; result.timer_base_pc = context.timer_base_pc;
     result.host_flag_104_known = context.host_flag_104_known; result.host_flag_104 = context.host_flag_104;
+    result.global_writes = context.global_writes;
     // The diagnostic window displays initialized argument words above SP too.
     const auto count = static_cast<size_t>(std::min<int32_t>(512, std::max<int32_t>(context.sp + 4, 8)));
     result.stack_window.assign(context.slots.begin(), context.slots.begin() + count);
@@ -126,6 +172,36 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
     uint32_t next = command.pc + command.size;
     if (op == 0x03) {
         // Actual handler is the common 6B9B8 instruction-cost path.
+    } else if (op == 0x10 || op == 0x11 || op == 0x12) {
+        const uint32_t destination = operand(1, 3);
+        bool take = true;
+        if (op != 0x10) {
+            require(candidate.sp > 0, "Conditional branch stack underflow");
+            const Value value = slot(candidate, candidate.sp - 1);
+            require(value.kind == Value::Kind::Word,
+                    "Branch needs a known raw payload; symbolic/reference arena offsets are unproved");
+            release_supported(candidate.result); release_supported(value);
+            take = branch_condition(static_cast<uint8_t>(op), value.word);
+            pop(candidate); candidate.result = {}; // 7515C clears transferred result.
+        }
+        if (take) { require_target(destination); next = destination; }
+    } else if (op == 0x14) {
+        require(candidate.sp >= 2, "Opcode14 requires two references");
+        const Value left = slot(candidate, candidate.sp - 2), right = slot(candidate, candidate.sp - 1);
+        const auto is_reference = [](const Value& value) {
+            return value.kind != Value::Kind::Word || value.word >> 28 == 0xB;
+        };
+        require(is_reference(left) && is_reference(right), "Opcode14: not a reference value");
+        // Original two tagB guards make its numeric/string conversion blocks
+        // unreachable. Resolve mapped addresses, then test the referenced RHS.
+        const Value header = read_reference(candidate, right);
+        require(header.kind == Value::Kind::Word && header.word >> 28 == 9, "Opcode14: not an array");
+        const Value first = read_reference(candidate, right, 1);
+        release_supported(first); // 7581C copies all words except owned tag6.
+        // 7581C overwrites without releasing the old destination. Both operands
+        // remain; 6BF50..6BF90 pushes exactly I(1), irrespective of array count.
+        write_reference(candidate, left, first);
+        push(candidate, Value::integer(1));
     } else if (op == 0x30) {
         int32_t count = static_cast<int32_t>(operand(1, 1));
         slot(candidate, candidate.sp + count);
@@ -155,11 +231,46 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
         push(candidate, Value::global_reference(index, program_.header().global_start() + index * 4));
     } else if (op == 0x51) {
         require(candidate.sp >= 2, "Assignment requires two operands");
-        Value reference = slot(candidate, candidate.sp - 2), value = slot(candidate, candidate.sp - 1);
-        require(reference.kind == Value::Kind::StackReference,
-                "Only proved stack-reference assignment is supported here");
-        Value& destination = slot(candidate, static_cast<int32_t>(reference.index));
-        release_supported(destination); destination = value; pop(candidate); pop(candidate);
+        const Value reference = slot(candidate, candidate.sp - 2);
+        const Value previous = read_reference(candidate, reference);
+        release_supported(previous);
+        // Original 7515C clears destination before the RHS is read. Preserve
+        // alias behavior too; assignment transfers ownership rather than copy.
+        write_reference(candidate, reference, {});
+        const Value value = slot(candidate, candidate.sp - 1);
+        write_reference(candidate, reference, value); pop(candidate); pop(candidate);
+    } else if (op == 0x53) {
+        require(candidate.sp > 0, "Opcode53 requires a reference");
+        release_supported(candidate.result);
+        const Value reference = pop(candidate);
+        candidate.result = reference; // Original result retains consumed tagB.
+        Value value = read_reference(candidate, reference);
+        if (value.kind == Value::Kind::Word) value.word = recovered::increment_value(value.word);
+        write_reference(candidate, reference, value);
+    } else if (op == 0xF5) {
+        require(candidate.sp >= 2, "OpcodeF5 requires reference and integer index");
+        const Value reference = slot(candidate, candidate.sp - 2), index_value = slot(candidate, candidate.sp - 1);
+        require(index_value.kind == Value::Kind::Word && index_value.word >> 28 == 2,
+                "OpcodeF5 index must be tag2; original error path is outside this probe");
+        const int32_t index = signed28(index_value.word);
+        const Value header = read_reference(candidate, reference);
+        require(header.kind == Value::Kind::Word && header.word >> 28 == 9,
+                "OpcodeF5 array-check diagnostic/error path is outside this probe");
+        require(index >= 0 && static_cast<uint32_t>(index) < (header.word & 0xFFF),
+                "OpcodeF5 array index outside original low12 count; error service is unimplemented");
+        const uint32_t delta = static_cast<uint32_t>(index) + 1;
+        require(reference.index <= UINT32_MAX - delta, "OpcodeF5 reference index overflow");
+        const uint32_t target = reference.index + delta;
+        Value element;
+        if (reference.kind == Value::Kind::StackReference) {
+            require(target < stack_slot_limit_, "OpcodeF5 element outside stack allocation/native cap");
+            element = Value::stack_reference(target);
+        } else {
+            require(reference.kind == Value::Kind::GlobalReference && target < program_.header().global_count,
+                    "OpcodeF5 element outside mapped global table");
+            element = Value::global_reference(target, program_.header().global_start() + target * 4);
+        }
+        pop(candidate); pop(candidate); push(candidate, element);
     } else if (op == 0x41) {
         require(candidate.sp > 0, "Timer base needs an operand");
         Value value = slot(candidate, candidate.sp - 1);
