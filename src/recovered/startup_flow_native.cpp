@@ -67,7 +67,7 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
     if (services.HostCancelled()) return StartupFlowStop::HostCancelled;
     const auto kind1 = StartupOptions4F59C(1);
     const auto kind0 = StartupOptions4F59C(0);
-    (void)kind0; //second local record4F608; first call consumes kind1.
+    services.BeginModuleRequest(0x4F61C, "disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx", kind1);
     auto module = RunStartupModule4F4E8(services,
         "disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx", kind1);
     if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
@@ -78,7 +78,18 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         }
     }
     if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
-    services.UnsupportedFollowingModule(); //next4F640 gate is separately unsupported
+    services.BeginModuleRequest(0x4F640, "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx", kind0);
+    module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx", kind0);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
+    }
+    if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
+    services.UnsupportedFollowingModule(); // no further module assumed
     return StartupFlowStop::Unsupported;
 }
 } // namespace dokodemo::recovered

@@ -46,6 +46,9 @@ public:
     virtual StartupModuleOutcome StartModule(int32_t uid, uint32_t bytes,
         const void* args, int32_t* status, const void* options) = 0;
     virtual StartupModuleOutcome CloseModuleFile(int32_t fd) = 0;
+    // Native ownership/diagnostic boundary before a source wrapper invocation.
+    // This is not a PSP import and has no source return value.
+    virtual void BeginModuleRequest(uint32_t, const char*, const StartupModuleOptions&) {}
     virtual void UnsupportedFollowingModule() = 0;
     virtual bool HostCancelled() const = 0;
 };

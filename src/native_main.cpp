@@ -1035,12 +1035,145 @@ int SelfTest(const Options& options) {
     std::ofstream(options.evidence / L"self-test.txt", std::ios::binary) << text;
     return failures ? 1 : 0;
 }
+void WriteModuleTokenValue(std::ostream& out, const dokodemo::recovered::NativeModuleToken& value) {
+    out << "{\"owner\":" << value.owner << ",\"generation\":" << value.generation
+        << ",\"serial\":" << value.serial << ",\"uid\":" << value.uid << '}';
+}
+std::string StartupHexBytes(const uint8_t* bytes, size_t count) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(count * 2);
+    for (size_t i = 0; i < count; ++i) {
+        result += hex[bytes[i] >> 4]; result += hex[bytes[i] & 15];
+    }
+    return result;
+}
+void WriteModuleInitializationValue(std::ostream& out,
+    const dokodemo::recovered::Atrac3plusInitializationSnapshot& value) {
+    const auto boolean = [](bool item) { return item ? "true" : "false"; };
+    out << "{\"present\":" << boolean(value.present);
+    if (!value.present) { out << '}'; return; }
+    out << ",\"prefix_entered\":" << boolean(value.prefix_entered)
+        << ",\"dependency_blocked\":" << boolean(value.dependency_blocked)
+        << ",\"aborted\":" << boolean(value.aborted)
+        << ",\"owner\":" << value.owner << ",\"generation\":" << value.generation
+        << ",\"serial\":" << value.serial << ",\"native_state_address\":" << value.native_state_address
+        << ",\"source_segment\":" << value.source_segment << ",\"source_segment_offset\":" << value.source_segment_offset
+        << ",\"record_count\":" << value.record_count << ",\"record_stride\":" << value.record_stride
+        << ",\"record_bytes\":" << value.record_bytes << ",\"initial_source_known_bytes\":" << value.initial_source_known_bytes
+        << ",\"known_bytes\":" << value.known_bytes << ",\"writes_count\":" << value.writes_count
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(value.bytes.data(), value.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(value.known.data(), value.known.size()))
+        << ",\"frontier_source_pc\":" << value.frontier_source_pc
+        << ",\"frontier_delay_pc\":" << value.frontier_delay_pc << ",\"frontier_stub_va\":" << value.frontier_stub_va
+        << ",\"frontier_import_index\":" << value.frontier_import_index << ",\"frontier_nid\":" << value.frontier_nid
+        << ",\"arg0_record_index\":" << value.arg0_record_index << ",\"arg0_record_offset\":" << value.arg0_record_offset
+        << ",\"arg1\":" << value.arg1 << ",\"frontier_arguments_prepared\":" << boolean(value.frontier_arguments_prepared)
+        << ",\"helper_calls_entered\":" << value.helper_calls_entered << ",\"loop_iterations_completed\":" << value.loop_iterations_completed
+        << ",\"external_services_dispatched\":" << value.external_services_dispatched
+        << ",\"external_resources_acquired\":" << value.external_resources_acquired << ",\"writes\":[";
+    bool first = true;
+    for (size_t i = 0; i < value.writes_count && i < value.writes.size(); ++i) {
+        const auto& item = value.writes[i];
+        if (!first) out << ',';
+        first = false;
+        out << "{\"ordinal\":" << item.ordinal << ",\"source_pc\":" << item.source_pc
+            << ",\"offset\":" << item.offset << ",\"width\":" << item.width << ",\"value\":" << item.value << '}';
+    }
+    out << "]}";
+}
+void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::NativeModuleSnapshot& record) {
+    const auto boolean = [](bool value) { return value ? "true" : "false"; };
+    out << "{\"token\":"; WriteModuleTokenValue(out, record.token);
+    out << ",\"state\":" << JsonString(dokodemo::recovered::NativeModuleStateName(record.state))
+        << ",\"production_domain\":" << boolean(record.domain == dokodemo::recovered::NativeModuleDomain::Production)
+        << ",\"name\":" << JsonString(record.name) << ",\"encoded_sha256\":" << JsonString(record.encoded_sha256)
+        << ",\"plaintext_sha256\":" << JsonString(record.plaintext_sha256)
+        << ",\"implementation\":" << JsonString(record.implementation)
+        << ",\"policy\":" << JsonString(record.policy)
+        << ",\"encoded_bytes\":" << record.encoded_bytes << ",\"plaintext_bytes\":" << record.plaintext_bytes
+        << ",\"input_live\":" << boolean(record.input_live) << ",\"active_calls\":" << record.active_calls
+        << ",\"owned_providers\":" << record.owned_providers << ",\"incoming_bindings\":" << record.incoming_bindings
+        << ",\"start_source_va\":" << record.start_source_va << ",\"stop_source_va\":" << record.stop_source_va
+        << ",\"entry_frontier_source_pc\":" << record.entry_frontier_source_pc
+        << ",\"entry_frontier\":" << JsonString(record.entry_frontier)
+        << ",\"partial_start_supported\":" << boolean(record.partial_start_supported)
+        << ",\"input\":{\"owner\":" << record.input.owner << ",\"generation\":" << record.input.generation
+        << ",\"serial\":" << record.input.serial << ",\"host_address\":" << record.input.host_address
+        << ",\"source_coordinate\":" << record.input.source_coordinate << ",\"size\":" << record.input.size << "},\"imports\":[";
+    bool first = true;
+    for (const auto& item : record.imports) {
+        if (!first) out << ',';
+        first = false;
+        out << "{\"module\":"; WriteModuleTokenValue(out, item.module);
+        out << ",\"library\":" << JsonString(item.library) << ",\"abi\":" << JsonString(item.abi)
+            << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
+            << ",\"nid\":" << item.nid << ",\"source_stub_va\":" << item.source_stub_va
+            << ",\"resolved\":" << boolean(item.resolved) << ",\"provider_serial\":" << item.provider_serial
+            << ",\"provider_owner\":" << item.provider_owner << ",\"provider_generation\":" << item.provider_generation
+            << ",\"provider_module\":"; WriteModuleTokenValue(out, item.provider_module);
+        out << ",\"binding_generation\":" << item.binding_generation << '}';
+    }
+    out << "],\"exports\":["; first = true;
+    for (const auto& item : record.exports) {
+        if (!first) out << ',';
+        first = false;
+        out << "{\"module\":"; WriteModuleTokenValue(out, item.module);
+        out << ",\"library\":" << JsonString(item.library) << ",\"kind\":" << JsonString(item.kind)
+            << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
+            << ",\"nid\":" << item.nid << ",\"relative_va\":" << item.relative_va
+            << ",\"lifecycle_callable\":" << boolean(item.lifecycle_callable) << '}';
+    }
+    out << "],\"initialization\":";
+    WriteModuleInitializationValue(out, record.initialization);
+    out << '}';
+}
+void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
+    const auto boolean = [](bool value) { return value ? "true" : "false"; };
+    out << "{\"request_index\":" << item.request_index << ",\"wrapper_callsite\":" << item.wrapper_callsite
+        << ",\"path\":" << JsonString(item.path) << ",\"flags\":" << item.flags
+        << ",\"options_hex\":" << JsonString(StartupHexBytes(item.options.data(), item.options.size()))
+        << ",\"request_owner\":" << item.request_owner << ",\"pending\":" << boolean(item.pending)
+        << ",\"frontier\":" << JsonString(item.frontier) << ",\"frontier_source_pc\":" << item.frontier_source_pc
+        << ",\"frontier_module_relative\":" << boolean(item.frontier_module_relative)
+        << ",\"source_fd\":" << item.source_fd << ",\"file_native_object\":" << item.file_native_object
+        << ",\"file_backend_owner\":" << item.file_backend_owner << ",\"file_backend_generation\":" << item.file_backend_generation
+        << ",\"file_backend_serial\":" << item.file_backend_serial << ",\"encoded_file_bytes\":" << item.encoded_file_bytes
+        << ",\"file_live\":" << boolean(item.file_live) << ",\"staging_owner\":" << item.staging_owner
+        << ",\"staging_generation\":" << item.staging_generation << ",\"staging_serial\":" << item.staging_serial
+        << ",\"staging_host_address\":" << item.staging_host_address << ",\"staging_known_bytes\":" << item.staging_known_bytes
+        << ",\"staging_committed_bytes\":" << item.staging_committed_bytes << ",\"staging_page_bytes\":" << item.staging_page_bytes
+        << ",\"staging_source_coordinate\":" << item.staging_source_coordinate << ",\"staging_requested\":" << item.staging_requested
+        << ",\"staging_transferred\":" << item.staging_transferred << ",\"staging_read_error\":" << item.staging_read_error
+        << ",\"staging_file_position\":" << item.staging_file_position << ",\"staging_live\":" << boolean(item.staging_live)
+        << ",\"staging_borrow_live\":" << boolean(item.staging_borrow_live) << ",\"staging_host_read\":" << boolean(item.staging_host_read)
+        << ",\"staging_full_read\":" << boolean(item.staging_full_read) << ",\"staging_hash_matches\":" << boolean(item.staging_hash_matches)
+        << ",\"staging_sha256\":" << JsonString(item.staging_sha256) << ",\"staging_freed_after_joins\":" << boolean(item.staging_freed_after_joins)
+        << ",\"token\":"; WriteModuleTokenValue(out, item.token);
+    out << ",\"module_uid_assigned\":" << boolean(item.module_uid_assigned)
+        << ",\"module_load_returned\":" << boolean(item.module_load_returned)
+        << ",\"module_load_result\":" << (item.module_load_returned ? std::to_string(item.module_load_result) : "null")
+        << ",\"module_input_live\":" << boolean(item.module_input_live) << ",\"module_start_called\":" << boolean(item.module_start_called)
+        << ",\"module_start_returned\":" << boolean(item.module_start_returned)
+        << ",\"module_start_result\":" << (item.module_start_returned ? std::to_string(item.module_start_result) : "null")
+        << ",\"module_start_entry_returned\":" << boolean(item.module_start_entry_returned)
+        << ",\"module_start_entry_result\":" << (item.module_start_entry_returned ? std::to_string(item.module_start_entry_result) : "null")
+        << ",\"source_close_called\":" << boolean(item.source_close_called) << ",\"source_close_returned\":" << boolean(item.source_close_returned)
+        << ",\"source_close_result\":" << (item.source_close_returned ? std::to_string(item.source_close_result) : "null")
+        << ",\"module_file_closed_while_input_live\":" << boolean(item.module_file_closed_while_input_live)
+        << ",\"module_stop_called\":" << boolean(item.module_stop_called) << ",\"module_stop_returned\":" << boolean(item.module_stop_returned)
+        << ",\"module_stop_result\":" << (item.module_stop_returned ? std::to_string(item.module_stop_result) : "null")
+        << ",\"module_unloaded\":" << boolean(item.module_unloaded)
+        << ",\"module_input_released\":" << boolean(item.module_input_released) << ",\"host_file_closed\":" << boolean(item.host_file_closed)
+        << ",\"module_initialization_blocked\":" << boolean(item.module_initialization_blocked)
+        << ",\"module_initialization_abort_called\":" << boolean(item.module_initialization_abort_called)
+        << ",\"module_initialization_aborted\":" << boolean(item.module_initialization_aborted)
+        << ",\"record_live\":" << boolean(item.record_live) << ",\"record\":";
+    WriteModuleRecordValue(out, item.record);
+    out << '}';
+}
 void WriteModuleObservation(std::ostream& out, const dokodemo::StartupObservation& observation) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
-    const auto token = [&out](const dokodemo::recovered::NativeModuleToken& value) {
-        out << "{\"owner\":" << value.owner << ",\"generation\":" << value.generation
-            << ",\"serial\":" << value.serial << ",\"uid\":" << value.uid << '}';
-    };
     out << ",\"module_manager_owner\":" << observation.module_manager_owner
         << ",\"module_generation\":" << observation.module_generation
         << ",\"module_serial\":" << observation.module_serial
@@ -1054,48 +1187,17 @@ void WriteModuleObservation(std::ostream& out, const dokodemo::StartupObservatio
         << ",\"module_stop_result\":" << observation.module_stop_result
         << ",\"module_unloaded\":" << boolean(observation.module_unloaded)
         << ",\"module_input_released\":" << boolean(observation.module_input_released)
-        << ",\"module_record\":{\"token\":";
-    const auto& record = observation.module_record;
-    token(record.token);
-    out << ",\"state\":" << JsonString(dokodemo::recovered::NativeModuleStateName(record.state))
-        << ",\"production_domain\":" << boolean(record.domain == dokodemo::recovered::NativeModuleDomain::Production)
-        << ",\"name\":" << JsonString(record.name) << ",\"encoded_sha256\":" << JsonString(record.encoded_sha256)
-        << ",\"plaintext_sha256\":" << JsonString(record.plaintext_sha256)
-        << ",\"implementation\":" << JsonString(record.implementation)
-        << ",\"encoded_bytes\":" << record.encoded_bytes << ",\"plaintext_bytes\":" << record.plaintext_bytes
-        << ",\"input_live\":" << boolean(record.input_live) << ",\"active_calls\":" << record.active_calls
-        << ",\"input\":{\"owner\":" << record.input.owner << ",\"generation\":" << record.input.generation
-        << ",\"serial\":" << record.input.serial << ",\"host_address\":" << record.input.host_address
-        << ",\"source_coordinate\":" << record.input.source_coordinate << ",\"size\":" << record.input.size << "},\"imports\":[";
-    bool first = true;
-    for (const auto& item : record.imports) {
-        if (!first) out << ',';
-        first = false;
-        out << "{\"module\":"; token(item.module);
-        out << ",\"library\":" << JsonString(item.library) << ",\"abi\":" << JsonString(item.abi)
-            << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
-            << ",\"nid\":" << item.nid << ",\"source_stub_va\":" << item.source_stub_va
-            << ",\"resolved\":" << boolean(item.resolved) << ",\"provider_serial\":" << item.provider_serial
-            << ",\"binding_generation\":" << item.binding_generation << '}';
-    }
-    out << "],\"exports\":["; first = true;
-    for (const auto& item : record.exports) {
-        if (!first) out << ',';
-        first = false;
-        out << "{\"module\":"; token(item.module);
-        out << ",\"library\":" << JsonString(item.library) << ",\"kind\":" << JsonString(item.kind)
-            << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
-            << ",\"nid\":" << item.nid << ",\"relative_va\":" << item.relative_va
-            << ",\"lifecycle_callable\":" << boolean(item.lifecycle_callable) << '}';
-    }
-    out << "]},\"module_providers\":["; first = true;
+        << ",\"module_record\":";
+    WriteModuleRecordValue(out, observation.module_record);
+    out << ",\"module_providers\":["; bool first = true;
     for (const auto& item : observation.module_providers) {
         if (!first) out << ',';
         first = false;
         out << "{\"owner\":" << item.token.owner << ",\"generation\":" << item.token.generation
             << ",\"serial\":" << item.token.serial << ",\"library\":" << JsonString(item.library)
             << ",\"abi\":" << JsonString(item.abi) << ",\"version\":" << item.version
-            << ",\"nid\":" << item.nid << ",\"synthetic_only\":" << boolean(item.synthetic_only) << '}';
+            << ",\"nid\":" << item.nid << ",\"synthetic_only\":" << boolean(item.synthetic_only)
+            << ",\"module\":"; WriteModuleTokenValue(out, item.module); out << '}';
     }
     out << ']';
 }
@@ -1113,6 +1215,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"worker_state\":" << JsonString(observation.worker_state)
         << ",\"barrier\":" << JsonString(observation.barrier)
         << ",\"barrier_source_pc\":" << observation.barrier_source_pc
+        << ",\"barrier_module_relative\":" << boolean(observation.barrier_module_relative)
         << ",\"owner\":" << observation.owner << ",\"last_event\":" << observation.last_event
         << ",\"dropped_events\":" << observation.dropped_events
         << ",\"caller_thread_id\":" << observation.caller_thread_id
@@ -1168,6 +1271,25 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"module_uid\":" << observation.module_uid
         << ",\"module_binding_frontier\":" << JsonString(observation.module_binding_frontier);
     WriteModuleObservation(out, observation);
+    out << ",\"current_module_index\":" << observation.current_module_index
+        << ",\"no_current_module_sentinel\":" << dokodemo::StartupNoCurrentModule
+        << ",\"current_frontier\":" << JsonString(observation.current_frontier)
+        << ",\"current_frontier_source_pc\":" << observation.current_frontier_source_pc
+        << ",\"current_frontier_module_relative\":" << boolean(observation.current_frontier_module_relative)
+        << ",\"module_observations\":[";
+    bool firstModule = true;
+    for (const auto& item : observation.module_observations) {
+        if (!firstModule) out << ',';
+        firstModule = false;
+        WriteModuleRequestValue(out, item);
+    }
+    out << "],\"module_records\":["; firstModule = true;
+    for (const auto& item : observation.module_records) {
+        if (!firstModule) out << ',';
+        firstModule = false;
+        WriteModuleRecordValue(out, item);
+    }
+    out << ']';
     out << ",\"status\":" << JsonString(dokodemo::StartupRuntimeCodeName(observation.status.code))
         << ",\"preceding_psp_history\":" << boolean(observation.preceding_psp_history)
         << ",\"constructors_established\":" << boolean(observation.constructors_established)
@@ -1179,7 +1301,10 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         first = false;
         out << "{\"ordinal\":" << event.ordinal << ",\"operation\":" << JsonString(event.operation)
             << ",\"origin\":" << JsonString(event.origin) << ",\"detail\":" << JsonString(event.detail)
-            << ",\"source_pc\":" << event.source_pc << ",\"thread\":" << event.thread
+            << ",\"source_pc\":" << event.source_pc << ",\"source_pc_domain\":" << JsonString(event.source_pc_domain)
+            << ",\"module_request_index\":" << event.module_request_index << ",\"module\":";
+        WriteModuleTokenValue(out, event.module);
+        out << ",\"thread\":" << event.thread
             << ",\"native_object\":" << event.native_object << ",\"owner\":" << event.owner
             << ",\"value\":" << event.value << ",\"source_return\":" << boolean(event.source_return)
             << ",\"win32_error\":" << event.win32_error << ",\"wait_result\":" << event.wait_result
@@ -1188,9 +1313,9 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
     out << "]}\n";
     if (!out) throw std::runtime_error("Native startup observation write failed");
 }
-bool AtFirstNativeModuleBoundary(const dokodemo::StartupObservation& observation) {
+bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) {
     const auto& module = observation.module_record;
-    return observation.domain == "WindowsNativeEntry1184" && observation.barrier_source_pc == 0x4F640
+    return observation.domain == "WindowsNativeEntry1184"
         && observation.caller_state == "SourceSleeping" && observation.worker_state == "Blocked"
         && observation.uid_slot_written && observation.stored_thread_uid > 0
         && observation.callback_uid > 0 && observation.callback_setup_returned
@@ -1236,6 +1361,98 @@ bool AtFirstNativeModuleBoundary(const dokodemo::StartupObservation& observation
         && !observation.preceding_psp_history && !observation.constructors_established
         && !observation.reached_100C && !observation.full_game && observation.dropped_events == 0;
 }
+bool AtracPrefixAtDependency(const dokodemo::recovered::Atrac3plusInitializationSnapshot& value) {
+    if (!value.present || !value.prefix_entered || !value.dependency_blocked || value.aborted
+        || !value.owner || !value.generation || !value.serial || !value.native_state_address
+        || value.source_segment != 1 || value.source_segment_offset != 0xA0
+        || value.record_count != 4 || value.record_stride != 0x148 || value.record_bytes != 1312
+        || value.initial_source_known_bytes != 0 || value.known_bytes != 10 || value.writes_count != 4
+        || value.frontier_source_pc != 0x1684 || value.frontier_delay_pc != 0x1688
+        || value.frontier_stub_va != 0x3640 || value.frontier_import_index != 2 || value.frontier_nid != 0x9D3F790C
+        || value.arg0_record_index != 0 || value.arg0_record_offset != 0x44 || value.arg1 != 0x1000
+        || !value.frontier_arguments_prepared || value.helper_calls_entered != 1 || value.loop_iterations_completed != 0
+        || value.external_services_dispatched != 0 || value.external_resources_acquired != 0) return false;
+    for (size_t i = 0; i < value.known.size(); ++i) {
+        const bool expectedKnown = i < 4 || i == 0x6C || i == 0x6D || (i >= 0xAC && i < 0xB0);
+        if (value.known[i] != static_cast<uint8_t>(expectedKnown)) return false;
+        // Unmarked physical bytes have no source initialization authority.
+    }
+    if (value.bytes[0] != 1 || value.bytes[1] || value.bytes[2] || value.bytes[3]
+        || value.bytes[0x6C] != 0x28 || value.bytes[0x6D] != 0x5C
+        || value.bytes[0xAC] || value.bytes[0xAD] || value.bytes[0xAE] != 0x20 || value.bytes[0xAF]) return false;
+    constexpr std::array<uint32_t, 4> pcs{0x1678,0x1680,0x16D4,0x16E0};
+    constexpr std::array<uint32_t, 4> offsets{0xAC,0,0x6C,0x6D};
+    constexpr std::array<uint32_t, 4> widths{4,4,1,1};
+    constexpr std::array<uint32_t, 4> values{0x00200000,1,0x28,0x5C};
+    for (size_t i = 0; i < value.writes.size(); ++i) {
+        const auto& item = value.writes[i];
+        if (item.ordinal != i || item.source_pc != pcs[i] || item.offset != offsets[i]
+            || item.width != widths[i] || item.value != values[i]) return false;
+    }
+    return true;
+}
+bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
+    if (!FirstNativeModuleRetained(observation) || observation.module_observations.size() != 2
+        || observation.module_records.size() != 2 || observation.current_module_index != 1
+        || !observation.barrier_module_relative || !observation.current_frontier_module_relative
+        || observation.barrier_source_pc != 0x1684 || observation.current_frontier_source_pc != 0x1684) return false;
+    const auto& first = observation.module_observations[0];
+    const auto& second = observation.module_observations[1];
+    const auto& record = second.record;
+    if (first.request_index != 0 || second.request_index != 1 || second.wrapper_callsite != 0x4F640
+        || first.token.uid != observation.module_uid || second.token.uid <= 0 || first.token.uid == second.token.uid
+        || first.token.owner != second.token.owner || first.token.generation != second.token.generation
+        || first.token.serial == second.token.serial || !first.record_live || !second.record_live
+        || !first.module_input_live || !first.source_close_called || !first.source_close_returned || first.file_live
+        || first.record.state != dokodemo::recovered::NativeModuleState::Started
+        || second.path != "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx" || second.flags != 0
+        || second.options != std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || second.request_owner != observation.owner || second.source_fd < 0 || !second.file_live
+        || !second.module_uid_assigned || !second.module_load_returned || second.module_load_result != second.token.uid
+        || !second.module_start_called || second.module_start_returned || second.module_start_entry_returned
+        || !second.module_initialization_blocked || second.module_initialization_aborted || second.module_stop_called
+        || second.source_close_called || second.source_close_returned || !second.module_input_live
+        || record.state != dokodemo::recovered::NativeModuleState::EntryBlocked || !record.input_live
+        || !record.partial_start_supported || record.imports.size() != 7 || record.exports.size() != 28
+        || record.policy != "WindowsAtrac3plusExact0001_4001PartialInitV1"
+        || record.token.uid != second.token.uid || record.token.serial != second.token.serial
+        || second.encoded_file_bytes != 19524 || second.staging_requested != 19524 || second.staging_transferred != 19524
+        || second.staging_known_bytes != 19524 || second.staging_file_position != 0 || second.staging_read_error != 0
+        || !second.staging_live || !second.staging_borrow_live || !second.staging_host_read
+        || !second.staging_full_read || !second.staging_hash_matches
+        || second.staging_sha256 != "edfc95810a5881f7f752eee255693e75ba1ade6862b557126c5236c2b47bbca4"
+        || record.input.size != 19524 || record.input.host_address != second.staging_host_address
+        || record.input.owner != second.staging_owner || record.input.generation != second.staging_generation
+        || record.input.serial != second.staging_serial || record.input.source_coordinate != second.staging_source_coordinate
+        || first.staging_owner != second.staging_owner || first.staging_generation != second.staging_generation
+        || first.staging_serial == second.staging_serial || first.staging_host_address == second.staging_host_address
+        || !first.staging_page_bytes || !second.staging_page_bytes
+        || uint64_t(first.staging_source_coordinate) + first.staging_committed_bytes > second.staging_source_coordinate
+        || !AtracPrefixAtDependency(record.initialization)) return false;
+    for (size_t i = 0; i < record.imports.size(); ++i) {
+        const auto& item = record.imports[i];
+        if (item.version != 0 || item.attributes != (i < 2 ? 1 : 0x4001) || item.resolved || item.provider_serial) return false;
+    }
+    return std::none_of(record.exports.begin(), record.exports.end(), [](const auto& item) { return item.lifecycle_callable; });
+}
+bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.module_observations.size() != 2 || !observation.module_records.empty()
+        || !observation.caller_joined || !observation.worker_joined || !observation.resources_closed
+        || observation.callback_dispatch_count != 1 || observation.callback_dispatch_thread != observation.worker_thread_id
+        || observation.dropped_events || observation.module_input_live || observation.staging_live || observation.staging_borrow_live) return false;
+    for (const auto& item : observation.module_observations) {
+        if (item.record_live || item.file_live || item.staging_live || item.staging_borrow_live || item.module_input_live
+            || !item.module_unloaded || !item.module_input_released || !item.staging_freed_after_joins) return false;
+    }
+    const auto& first = observation.module_observations[0];
+    const auto& second = observation.module_observations[1];
+    return first.module_stop_called && first.module_stop_returned && first.module_stop_result == 0
+        && !first.module_initialization_abort_called && second.module_initialization_abort_called
+        && second.module_initialization_aborted && !second.module_stop_called && !second.module_stop_returned
+        && !second.module_start_returned && !second.module_start_entry_returned
+        && !second.source_close_called && !second.source_close_returned && second.host_file_closed
+        && second.record.initialization.aborted;
+}
 int ConnectedStartupTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     dokodemo::StartupRuntimeStatus createStatus;
@@ -1245,12 +1462,12 @@ int ConnectedStartupTest(const Options& options) {
     const auto duplicate = startup->Start();
     auto boundary = startup->Observe();
     const auto deadline = GetTickCount64() + 5000;
-    while (!AtFirstNativeModuleBoundary(boundary) && GetTickCount64() < deadline && boundary.status) {
+    while (!AtNativeModuleSequenceBoundary(boundary) && GetTickCount64() < deadline && boundary.status) {
         Sleep(1);
         boundary = startup->Observe();
     }
     WriteStartupObservation(options.evidence / L"startup-boundary.json", boundary);
-    const bool reached = AtFirstNativeModuleBoundary(boundary);
+    const bool reached = AtNativeModuleSequenceBoundary(boundary);
     const auto requested = startup->RequestExit();
     const auto exitDeadline = GetTickCount64() + 2000;
     auto dispatched = startup->Observe();
@@ -1271,13 +1488,16 @@ int ConnectedStartupTest(const Options& options) {
         && !after.staging_live && !after.staging_borrow_live && after.staging_freed_after_joins
         && after.module_stop_called && after.module_stop_returned && after.module_stop_result == 0
         && after.module_unloaded && after.module_input_released && !after.module_input_live
-        && after.dropped_events == 0;
+        && NativeModuleSequenceClosed(after) && after.dropped_events == 0;
     std::ofstream summary(options.evidence / L"connected-startup-test.json", std::ios::binary);
     summary << "{\"same_application_coordinator\":true,\"passed\":" << (ok ? "true" : "false")
-        << ",\"first_module_boundary\":" << (reached ? "true" : "false")
+        << ",\"multi_module_boundary\":" << (reached ? "true" : "false")
         << ",\"actual_encoded_staging\":" << (boundary.staging_full_read && boundary.staging_hash_matches ? "true" : "false")
         << ",\"native_module_load_start_close\":" << (reached ? "true" : "false")
         << ",\"native_lifecycle_only\":true,\"all_audio_exports_implemented\":false"
+        << ",\"owned_modules\":" << boundary.module_records.size()
+        << ",\"second_partial_start_without_return\":" << (reached ? "true" : "false")
+        << ",\"partial_init_aborted_after_joins\":" << (NativeModuleSequenceClosed(after) ? "true" : "false")
         << ",\"duplicate_start_rejected\":" << (duplicate.code == dokodemo::StartupRuntimeCode::AlreadyStarted ? "true" : "false")
         << ",\"preceding_psp_history\":false,\"PRX_bodies_implemented\":0,\"required_PRX_bodies\":9"
         << ",\"old_ECB_advanced\":0,\"coverage_delta\":0,\"full_game\":false}\n";
@@ -1350,12 +1570,12 @@ struct Application {
         startupObservation = nativeStartup->Observe();
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
-        else if (startupObservation.barrier_source_pc == 0x4F640 && startupObservation.module_start_returned)
-            startupStatus = L"Нативный запуск: жизненный цикл audiocodec поддержан; следующий модуль ещё не восстановлен.";
+        else if (AtNativeModuleSequenceBoundary(startupObservation))
+            startupStatus = L"Первый модуль запущен; инициализация второго ожидает восстановления аудиосервиса.";
         else if (startupObservation.barrier_source_pc == 0x4F53C && startupObservation.staging_full_read)
-            startupStatus = L"Нативный запуск: файл audiocodec.prx проверен; нативное связывание пока не реализовано.";
+            startupStatus = L"Нативный запуск: файл модуля проверен; достигнута невосстановленная функция.";
         else if (startupObservation.barrier_source_pc == 0x4F53C)
-            startupStatus = L"Нативный запуск: проверяется модуль audiocodec.prx.";
+            startupStatus = L"Нативный запуск: проверяется текущий модуль.";
         else startupStatus = L"Нативный запуск: рабочий поток проверяет игровой носитель.";
     }
     bool CloseNativeStartup() {
@@ -1740,7 +1960,7 @@ struct Application {
             ++frames; last = now; InvalidateRect(window,nullptr,FALSE);
         }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
-            && AtFirstNativeModuleBoundary(startupObservation)) {
+            && AtNativeModuleSequenceBoundary(startupObservation)) {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-boundary.json", startupObservation);
@@ -1827,7 +2047,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (options.connectedStartupWindowTest) {
             app.RefreshNativeStartup();
             WriteStartupObservation(options.evidence / L"window-startup-after-close.json", app.startupObservation);
-            const bool ok = app.startupObservation.barrier_source_pc == 0x4F640
+            const bool ok = NativeModuleSequenceClosed(app.startupObservation)
                 && app.startupObservation.module_uid > 0
                 && app.startupObservation.module_load_returned && app.startupObservation.module_start_returned
                 && app.startupObservation.module_start_result == 0
@@ -1844,6 +2064,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             report << "{\"passed\":" << (ok ? "true" : "false") << ",\"frames\":" << app.frames
                 << ",\"old_key_sequence_executed\":false,\"automatic_native_startup\":true"
                 << ",\"native_module_lifecycle\":true,\"full_audio_body\":false"
+                << ",\"multi_module_partial_init\":true,\"second_Start_returned\":false"
                 << ",\"old_ECB_advanced\":0,\"coverage_delta\":0,\"full_game\":false}\n";
             return ok ? 0 : 1;
         }

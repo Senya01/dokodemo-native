@@ -1,5 +1,6 @@
 #pragma once
 #include "audiocodec_module_native.h"
+#include "atrac3plus_module_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -13,9 +14,10 @@ namespace dokodemo::recovered {
 enum class NativeModuleCode {
     Ok, InvalidInput, IdentityMismatch, AlreadyLoaded, InvalidToken, WrongState,
     Exhausted, NotLinked, UnimplementedExport, IncompatibleProvider,
-    DuplicateProvider, InvalidProvider, Busy, SyntheticProviderForbidden
+    DuplicateProvider, InvalidProvider, Busy, SyntheticProviderForbidden,
+    UnsupportedEntry, UnsupportedPolicy, InputOverlap
 };
-enum class NativeModuleState { Loaded, Started, Stopped };
+enum class NativeModuleState { Loaded, Started, Stopped, EntryBlocked, InitializationAborted };
 enum class NativeModuleDomain { Production, SyntheticControls };
 struct NativeModuleToken {
     uint64_t owner = 0, generation = 0, serial = 0;
@@ -38,6 +40,7 @@ struct NativeModuleResult {
     int32_t source_result = 0; // meaningful ONLY when source_return
     bool entry_return = false;
     int32_t entry_result = 0; // entry result and host service result are separate
+    uint32_t entry_source_pc = 0, frontier_source_pc = 0, frontier_import_index = 0;
     NativeModuleToken token;
     explicit operator bool() const { return code == NativeModuleCode::Ok; }
 };
@@ -48,6 +51,8 @@ struct NativeModuleImportSnapshot {
     uint32_t nid = 0, source_stub_va = 0;
     bool resolved = false;
     uint64_t provider_serial = 0;
+    uint64_t provider_owner = 0, provider_generation = 0;
+    NativeModuleToken provider_module;
     uint64_t binding_generation = 1;
 };
 struct NativeModuleExportSnapshot {
@@ -66,6 +71,12 @@ struct NativeModuleSnapshot {
     NativeModuleInputView input;
     bool input_live = false;
     uint32_t active_calls = 0;
+    uint32_t owned_providers = 0, incoming_bindings = 0;
+    uint32_t start_source_va = 0, stop_source_va = 0;
+    uint32_t entry_frontier_source_pc = 0;
+    std::string policy, entry_frontier;
+    bool partial_start_supported = false;
+    Atrac3plusInitializationSnapshot initialization;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -85,6 +96,9 @@ struct NativeModuleProvider {
     uint32_t nid = 0;
     bool synthetic_only = false;
     std::shared_ptr<NativeModuleCallable> callable;
+    // Optional REAL registry owner in the isolated synthetic ABI. No export
+    // metadata auto-registers a provider. A provider pins this owner when called.
+    NativeModuleToken module;
 };
 struct NativeModuleProviderToken { uint64_t owner = 0, generation = 0, serial = 0; };
 struct NativeModuleProviderResult {
@@ -97,6 +111,7 @@ struct NativeModuleProviderSnapshot {
     uint16_t version = 0;
     uint32_t nid = 0;
     bool synthetic_only = false;
+    NativeModuleToken module;
 };
 class NativeModuleCallBorrow final {
 public:
@@ -121,9 +136,11 @@ public:
     NativeModuleManager(const NativeModuleManager&) = delete;
     NativeModuleManager& operator=(const NativeModuleManager&) = delete;
     NativeModuleResult LoadAudiocodec(std::shared_ptr<NativeModuleInputLease>);
+    NativeModuleResult Load(std::shared_ptr<NativeModuleInputLease>);
     NativeModuleResult Start(NativeModuleToken, uint32_t bytes, const void* args,
                              int32_t* status, const void* options);
     NativeModuleResult Stop(NativeModuleToken); // host policy calls exact AE0 body
+    NativeModuleResult AbortInitialization(NativeModuleToken); // host-only partial init, no source Stop
     NativeModuleResult Unload(NativeModuleToken); // host policy; fails while started/borrowed
     NativeModuleResult AdvanceGeneration(); // only with no modules/providers
     NativeModuleProviderResult RegisterProvider(NativeModuleProvider);
@@ -131,6 +148,9 @@ public:
     NativeModuleCode BorrowImport(NativeModuleToken, uint32_t index, NativeModuleCallBorrow&);
     NativeModuleCallResult CallExport(NativeModuleToken, uint32_t index);
     bool Snapshot(NativeModuleToken, NativeModuleSnapshot&) const;
+    bool InitializationSnapshot(NativeModuleToken, Atrac3plusInitializationSnapshot&) const noexcept;
+    // Live records in publication order. All data/mask pointers are sanitized.
+    std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;
     uint64_t Owner() const noexcept;
     uint64_t Generation() const noexcept;

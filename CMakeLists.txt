@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
+option(DOKODEMO_ALLOW_EXTERNAL_BUILD "Allow an explicitly selected build directory on another volume" OFF)
 cmake_path(IS_PREFIX CMAKE_SOURCE_DIR "${CMAKE_BINARY_DIR}" NORMALIZE build_inside)
-if(NOT build_inside OR CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
-    message(FATAL_ERROR "Configure in a build directory inside the workspace, for example -B build/cmake.")
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR OR (NOT build_inside AND NOT DOKODEMO_ALLOW_EXTERNAL_BUILD))
+    message(FATAL_ERROR "Use an out-of-source build: -B build/cmake, or explicitly set DOKODEMO_ALLOW_EXTERNAL_BUILD=ON for another volume.")
 endif()
 project(dokodemo_native LANGUAGES CXX)
 
@@ -17,6 +18,7 @@ add_library(dokodemo-core STATIC
     src/recovered/startup_flow_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
+    src/recovered/atrac3plus_module_native.cpp
     src/model_formats.cpp
     src/recovered/game_primitives.cpp
     src/recovered/menu_primitives.cpp

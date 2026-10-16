@@ -9,6 +9,7 @@ namespace {
 // Host envelopes, NOT recovered service ABIs. No complete production ME/cache
 // capability is implemented. Only isolated controls have a callable test ABI.
 constexpr const char* ImportAbi = "unrecovered-psp32-audiocodec-import-v1";
+constexpr const char* AtracImportAbi = "unrecovered-psp32-atrac3plus-import-v1";
 constexpr const char* SyntheticAbi = "synthetic-stage16-u32x4-v1";
 // This namespace is a Windows registry namespace, not PSP kernel UID state.
 std::atomic<uint64_t> next_manager_owner{1}, next_module_uid{0x10000000};
@@ -33,7 +34,10 @@ bool SameInput(const NativeModuleInputView& a, const NativeModuleInputView& b) n
 }
 bool KnownInput(const NativeModuleInputView& view) noexcept {
     if (!view.bytes || !view.initialized || !view.owner || !view.generation || !view.serial ||
-        !view.host_address || view.size != 3232) return false;
+        !view.host_address || (view.size != 3232 && view.size != 19524) ||
+        view.host_address != uint64_t(reinterpret_cast<uintptr_t>(view.bytes)) ||
+        view.host_address > (std::numeric_limits<uint64_t>::max)() - view.size ||
+        uint64_t(view.source_coordinate) + view.size > (uint64_t(1) << 32)) return false;
     for (uint32_t i = 0; i < view.size; ++i) if (view.initialized[i] != 1) return false;
     return true;
 }
@@ -48,13 +52,16 @@ struct ProviderRecord {
     NativeModuleProviderToken token;
     NativeModuleProvider definition;
     bool registered = true;
+    std::shared_ptr<struct ModuleRecord> module;
 };
 struct CallGate { bool executing = false; };
 struct ModuleRecord {
     NativeModuleSnapshot data;
     core::Sha256Digest digest{};
     std::shared_ptr<NativeModuleInputLease> input;
-    std::array<std::shared_ptr<ProviderRecord>, 8> bindings{};
+    std::vector<std::shared_ptr<ProviderRecord>> bindings;
+    int32_t (*start)() noexcept = nullptr;
+    int32_t (*stop)() noexcept = nullptr;
 };
 bool InputLive(const ModuleRecord& record) noexcept {
     NativeModuleInputView now;
@@ -79,17 +86,27 @@ struct NativeModuleManager::Impl {
     uint64_t owner = 0, generation = 1, serial = 0;
     NativeModuleDomain domain;
     std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
-    std::shared_ptr<ModuleRecord> module;
+    std::vector<std::shared_ptr<ModuleRecord>> modules;
     std::vector<std::shared_ptr<ProviderRecord>> providers;
     explicit Impl(NativeModuleDomain selected) : domain(selected) {
         owner = TakeMonotonic(next_manager_owner, (std::numeric_limits<uint64_t>::max)() - 1);
     }
-    ~Impl() { for (const auto& provider : providers) provider->registered = false; }
-    bool Valid(NativeModuleToken token) const noexcept {
-        return module && Same(token, module->data.token) && token.owner == owner && token.generation == generation;
+    ~Impl() {
+        for (const auto& provider : providers) provider->registered = false;
+        // Detach the graph before containers retire. Borrow pins remain valid.
+        for (const auto& module : modules) module->bindings.clear();
+    }
+    std::shared_ptr<ModuleRecord> Find(NativeModuleToken token) const noexcept {
+        if (token.owner != owner || token.generation != generation) return {};
+        for (const auto& module : modules) if (Same(token, module->data.token)) return module;
+        return {};
     }
     void Bind() noexcept {
-        if (!module) return;
+        for (const auto& module : modules) {
+            module->data.owned_providers = 0; module->data.incoming_bindings = 0;
+        }
+        for (const auto& provider : providers) if (provider->module) ++provider->module->data.owned_providers;
+        for (const auto& module : modules) {
         for (size_t i = 0; i < module->data.imports.size(); ++i) {
             auto& entry = module->data.imports[i];
             auto& binding = module->bindings[i];
@@ -104,7 +121,12 @@ struct NativeModuleManager::Impl {
             }
             entry.resolved = bool(binding);
             entry.provider_serial = binding ? binding->token.serial : 0;
+            entry.provider_owner = binding ? binding->token.owner : 0;
+            entry.provider_generation = binding ? binding->token.generation : 0;
+            entry.provider_module = binding ? binding->definition.module : NativeModuleToken{};
             if (previous != entry.provider_serial) entry.binding_generation = serial;
+            if (binding && binding->module) ++binding->module->data.incoming_bindings;
+        }
         }
     }
 };
@@ -114,7 +136,10 @@ struct NativeModuleCallBorrow::Impl {
     std::shared_ptr<ProviderRecord> provider;
     std::shared_ptr<CallGate> gate;
     bool consumed = false;
-    ~Impl() { if (module) --module->data.active_calls; }
+    ~Impl() {
+        if (module) --module->data.active_calls;
+        if (provider && provider->module && provider->module != module) --provider->module->data.active_calls;
+    }
 };
 NativeModuleCallBorrow::NativeModuleCallBorrow() noexcept = default;
 NativeModuleCallBorrow::~NativeModuleCallBorrow() = default;
@@ -129,6 +154,8 @@ NativeModuleCallResult NativeModuleCallBorrow::Invoke(const std::array<uint32_t,
     if (!entered->provider->registered) return {NativeModuleCode::InvalidToken, false, false, 0};
     if (entered->gate->executing) return {NativeModuleCode::Busy, false, false, 0};
     if (!InputLive(*entered->module)) return {NativeModuleCode::InvalidInput, false, false, 0};
+    if (entered->provider->module && !InputLive(*entered->provider->module))
+        return {NativeModuleCode::InvalidInput, false, false, 0};
     // Unregistration revokes acquired-but-not-entered calls. An executing call
     // pins module/input/provider until exit. Reentrant manager mutation is Busy.
     entered->gate->executing = true;
@@ -144,16 +171,32 @@ NativeModuleManager::~NativeModuleManager() = default;
 uint64_t NativeModuleManager::Owner() const noexcept { return impl_->owner; }
 uint64_t NativeModuleManager::Generation() const noexcept { return impl_->generation; }
 NativeModuleResult NativeModuleManager::LoadAudiocodec(std::shared_ptr<NativeModuleInputLease> input) {
+    if (impl_->gate->executing) return Result(NativeModuleCode::Busy);
+    NativeModuleInputView view;
+    if (!input || !input->View(view) || view.size != 3232) return Result(NativeModuleCode::InvalidInput);
+    return Load(std::move(input));
+}
+NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLease> input) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
-    if (self.module) return Result(NativeModuleCode::AlreadyLoaded);
     if (!self.owner || self.serial == (std::numeric_limits<uint64_t>::max)()) return Result(NativeModuleCode::Exhausted);
     NativeModuleInputView view;
     if (!input || !input->View(view) || !KnownInput(view)) return Result(NativeModuleCode::InvalidInput);
     core::Sha256 hash; hash.update(view.bytes, view.size); // same physical span; no payload copy
     const auto digest = core::hex_digest(hash.digest());
     const auto* descriptor = FindAudiocodecModuleDescriptor(digest, view.size);
-    if (!descriptor) return Result(NativeModuleCode::IdentityMismatch);
+    const auto* atrac = FindAtrac3plusModuleDescriptor(digest, view.size);
+    if (!descriptor && !atrac) return Result(NativeModuleCode::IdentityMismatch);
+    const char* name = descriptor ? descriptor->name : atrac->name;
+    for (const auto& live : self.modules) {
+        if (live->data.name == name) return Result(NativeModuleCode::AlreadyLoaded);
+        const auto& old = live->data.input;
+        if ((old.owner == view.owner && old.generation == view.generation && old.serial == view.serial) ||
+            (view.host_address < old.host_address + old.size && old.host_address < view.host_address + view.size) ||
+            (uint64_t(view.source_coordinate) < uint64_t(old.source_coordinate) + old.size &&
+             uint64_t(old.source_coordinate) < uint64_t(view.source_coordinate) + view.size))
+            return Result(NativeModuleCode::InputOverlap);
+    }
     NativeModuleInputView confirmed;
     if (!input->View(confirmed) || !KnownInput(confirmed) || !SameInput(view, confirmed))
         return Result(NativeModuleCode::InvalidInput);
@@ -165,12 +208,17 @@ NativeModuleResult NativeModuleManager::LoadAudiocodec(std::shared_ptr<NativeMod
     record->input = std::move(input);
     record->data.domain = self.domain;
     record->data.input = view;
-    record->data.name = descriptor->name;
+    record->data.name = name;
     record->data.encoded_sha256 = digest;
+    record->data.input_live = true;
+    if (descriptor) {
     record->data.plaintext_sha256 = descriptor->plaintext_sha256;
     record->data.encoded_bytes = descriptor->encoded_bytes;
     record->data.plaintext_bytes = descriptor->plaintext_bytes;
     record->data.implementation = "WindowsDeferredExact0009V1/aot-audiocodec-lifecycle-AD8-AE0-v1";
+    record->data.policy = "WindowsDeferredExact0009V1";
+    record->data.start_source_va = 0xAD8; record->data.stop_source_va = 0xAE0;
+    record->start = AudiocodecStartAD8; record->stop = AudiocodecStopAE0;
     record->data.input_live = true;
     record->data.imports.reserve(8); record->data.exports.reserve(12);
     for (const auto& library : descriptor->imports) {
@@ -201,58 +249,135 @@ NativeModuleResult NativeModuleManager::LoadAudiocodec(std::shared_ptr<NativeMod
     }};
     for (const auto& entry : audio) Export(*record, "sceAudiocodec", "function", 0x4001, entry[0], entry[1], false);
     Export(*record, "sceAudiocodec_driver", "function", 0x0001, 0x62518B7E, 0xAD8, false);
+    } else {
+        // This exact unencoded ELF has its OWN Windows metadata/partial-init
+        // policy. Exact0009V1 has not been broadened to0001/4001.
+        if (atrac->attributes != 0x0006 || atrac->version != 0x0101 ||
+            atrac->start_source_va != 0x11A0 || atrac->stop_source_va != 0x121C)
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256 = atrac->input_sha256; // input already ELF; no transformation
+        record->data.encoded_bytes = atrac->input_bytes; record->data.plaintext_bytes = atrac->input_bytes;
+        record->data.policy = "WindowsAtrac3plusExact0001_4001PartialInitV1";
+        record->data.implementation = "aot-atrac3plus-11A0-first-record-prefix-to1684-v1";
+        record->data.start_source_va = atrac->start_source_va; record->data.stop_source_va = atrac->stop_source_va;
+        record->data.partial_start_supported = true; record->data.initialization.present = true;
+        record->data.initialization.native_state_address = uint64_t(reinterpret_cast<uintptr_t>(&record->data.initialization));
+        record->data.entry_frontier = "module-relative1684 sceAudiocodecCheckNeedMem NID9D3F790C stub3640;no production provider/ABI";
+        record->data.imports.reserve(7); record->data.exports.reserve(28);
+        for (const auto& library : atrac->imports) {
+            if (!Atrac3plusImportPolicyAllows(library.name, library.version, library.attributes,
+                    library.entry_words, library.variable_count, library.function_count) ||
+                uint32_t(library.first_function) + library.function_count > atrac->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for (uint16_t i = 0; i < library.function_count; ++i) {
+                const auto& function = atrac->functions[library.first_function + i];
+                NativeModuleImportSnapshot entry;
+                entry.library = library.name; entry.version = library.version; entry.attributes = library.attributes;
+                entry.abi = self.domain == NativeModuleDomain::SyntheticControls ? SyntheticAbi : AtracImportAbi;
+                entry.nid = function.nid; entry.source_stub_va = function.source_stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if (record->data.imports.size() != 7) return Result(NativeModuleCode::UnsupportedPolicy);
+        for (const auto& entry : atrac->exports)
+            Export(*record, entry.library, entry.variable ? "variable" : "function", entry.attributes,
+                   entry.nid, entry.source_va, false); // NO fully callable new export; aliases metadata-only
+    }
+    record->bindings.resize(record->data.imports.size());
+    self.modules.reserve(self.modules.size() + 1); // final fallible registry allocation BEFORE UID publication
     const auto uid = TakeMonotonic(next_module_uid, uint64_t((std::numeric_limits<int32_t>::max)()));
     if (!uid) return Result(NativeModuleCode::Exhausted);
     record->data.token = {self.owner, self.generation, ++self.serial, static_cast<int32_t>(uid)};
+    if (atrac) {
+        auto& initialization = record->data.initialization;
+        initialization.owner = self.owner; initialization.generation = self.generation; initialization.serial = self.serial;
+    }
     for (auto& entry : record->data.imports) entry.module = record->data.token;
     for (auto& entry : record->data.exports) entry.module = record->data.token;
-    self.module = std::move(record); // noexcept ownership publication before returned UID
-    self.Bind(); // attrs0009 Windows deferred-call policy; original firmware UNKNOWN
-    return Returned(self.module->data.token, self.module->data.token.uid);
+    const auto token = record->data.token;
+    self.modules.push_back(std::move(record)); // capacity reserved; noexcept ownership publication
+    self.Bind(); // exact per-module policies; production providers NONE; original firmware UNKNOWN
+    return Returned(token, token.uid);
 }
 NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t bytes,
         const void* args, int32_t* status, const void* options) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
-    if (!self.Valid(token)) return Result(NativeModuleCode::InvalidToken);
+    const auto owned = self.Find(token);
+    if (!owned) return Result(NativeModuleCode::InvalidToken);
     if (bytes || args || status || options) return Result(NativeModuleCode::InvalidInput, token);
-    auto& record = *self.module;
+    auto& record = *owned;
     if (record.data.state != NativeModuleState::Loaded) return Result(NativeModuleCode::WrongState, token);
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
-    const int32_t entry_result = AudiocodecStartAD8();
+    if (record.data.partial_start_supported) {
+        if (!RunAtrac3plusStartPrefix(record.data.initialization)) return Result(NativeModuleCode::InvalidInput, token);
+        record.data.entry_frontier_source_pc = record.data.initialization.frontier_source_pc;
+        record.data.state = NativeModuleState::EntryBlocked;
+        auto out = Result(NativeModuleCode::UnsupportedEntry, token);
+        out.frontier_source_pc = record.data.initialization.frontier_source_pc;
+        out.frontier_import_index = record.data.initialization.frontier_import_index;
+        return out; // NO entry/body/Start-service return
+    }
+    if (!record.start) return Result(NativeModuleCode::UnsupportedEntry, token);
+    const int32_t entry_result = record.start();
     record.data.state = NativeModuleState::Started;
     // Explicit Windows Start-service policy: the exact entry's zero indicates
     // resident success, exposed as service success0. No original firmware result
     // is inferred. The source wrapper accepts any nonnegative service result.
     auto result = Returned(token, entry_result == 0 ? 0 : -1);
-    result.entry_return = true; result.entry_result = entry_result; return result;
+    result.entry_return = true; result.entry_result = entry_result;
+    result.entry_source_pc = record.data.start_source_va; return result;
 }
 NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
-    if (!self.Valid(token)) return Result(NativeModuleCode::InvalidToken);
-    auto& record = *self.module;
-    if (record.data.active_calls) return Result(NativeModuleCode::Busy, token);
+    const auto owned = self.Find(token);
+    if (!owned) return Result(NativeModuleCode::InvalidToken);
+    auto& record = *owned;
+    if (record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings)
+        return Result(NativeModuleCode::Busy, token);
     if (record.data.state != NativeModuleState::Started) return Result(NativeModuleCode::WrongState, token);
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
-    const int32_t entry_result = AudiocodecStopAE0();
+    if (!record.stop) return Result(NativeModuleCode::UnsupportedEntry, token);
+    const int32_t entry_result = record.stop();
     record.data.state = NativeModuleState::Stopped;
     auto result = Returned(token, entry_result); // host policy, not a game Stop import
-    result.entry_return = true; result.entry_result = entry_result; return result;
+    result.entry_return = true; result.entry_result = entry_result;
+    result.entry_source_pc = record.data.stop_source_va; return result;
+}
+NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken token) {
+    auto& self = *impl_;
+    if (self.gate->executing) return Result(NativeModuleCode::Busy);
+    const auto owned = self.Find(token);
+    if (!owned) return Result(NativeModuleCode::InvalidToken);
+    auto& data = owned->data;
+    if (data.active_calls || data.owned_providers || data.incoming_bindings) return Result(NativeModuleCode::Busy, token);
+    if (data.state != NativeModuleState::EntryBlocked || !data.partial_start_supported)
+        return Result(NativeModuleCode::WrongState, token);
+    if (!AbortAtrac3plusInitialization(data.initialization)) return Result(NativeModuleCode::WrongState, token);
+    data.state = NativeModuleState::InitializationAborted;
+    return Result(NativeModuleCode::Ok, token); // host operation, NO source Stop/entry/service result
 }
 NativeModuleResult NativeModuleManager::Unload(NativeModuleToken token) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
-    if (!self.Valid(token)) return Result(NativeModuleCode::InvalidToken);
-    if (self.module->data.active_calls) return Result(NativeModuleCode::Busy, token);
-    if (self.module->data.state == NativeModuleState::Started) return Result(NativeModuleCode::WrongState, token);
-    self.module.reset(); // exports/imports/bindings removed, then last owned input lease
+    const auto owned = self.Find(token);
+    if (!owned) return Result(NativeModuleCode::InvalidToken);
+    if (owned->data.active_calls || owned->data.owned_providers || owned->data.incoming_bindings)
+        return Result(NativeModuleCode::Busy, token);
+    if (owned->data.state == NativeModuleState::Started || owned->data.state == NativeModuleState::EntryBlocked)
+        return Result(NativeModuleCode::WrongState, token);
+    for (auto at = self.modules.begin(); at != self.modules.end(); ++at) {
+        if (*at != owned) continue;
+        self.modules.erase(at); break; // no callbacks; stable owned object pin across vector mutation
+    }
+    self.Bind(); // detach this consumer's provider edges before last input lease retires
     return Result(NativeModuleCode::Ok, token);
 }
 NativeModuleResult NativeModuleManager::AdvanceGeneration() {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
-    if (self.module || !self.providers.empty()) return Result(NativeModuleCode::Busy);
+    if (!self.modules.empty() || !self.providers.empty()) return Result(NativeModuleCode::Busy);
     if (self.generation == (std::numeric_limits<uint64_t>::max)()) return Result(NativeModuleCode::Exhausted);
     ++self.generation; return Result(NativeModuleCode::Ok);
 }
@@ -268,6 +393,13 @@ NativeModuleProviderResult NativeModuleManager::RegisterProvider(NativeModulePro
     // with separately recovered semantics is implemented and reviewed.
     if (self.domain != NativeModuleDomain::SyntheticControls || !definition.synthetic_only ||
         definition.abi != SyntheticAbi) return {NativeModuleCode::IncompatibleProvider, {}};
+    std::shared_ptr<ModuleRecord> provider_module;
+    if (definition.module.owner || definition.module.generation || definition.module.serial || definition.module.uid) {
+        provider_module = self.Find(definition.module);
+        if (!provider_module) return {NativeModuleCode::InvalidToken, {}};
+        if (provider_module->data.state != NativeModuleState::Started || !InputLive(*provider_module))
+            return {NativeModuleCode::WrongState, {}};
+    }
     for (const auto& provider : self.providers) {
         const auto& old = provider->definition;
         if (old.library == definition.library && old.version == definition.version && old.nid == definition.nid)
@@ -275,6 +407,7 @@ NativeModuleProviderResult NativeModuleManager::RegisterProvider(NativeModulePro
     }
     if (!self.owner || self.serial == (std::numeric_limits<uint64_t>::max)()) return {NativeModuleCode::Exhausted, {}};
     auto record = std::make_shared<ProviderRecord>(); record->definition = std::move(definition);
+    record->module = std::move(provider_module);
     record->token = {self.owner, self.generation, self.serial + 1};
     self.providers.push_back(record); // may throw; no registry mutation on failure
     ++self.serial; self.Bind(); return {NativeModuleCode::Ok, record->token};
@@ -297,40 +430,66 @@ NativeModuleCode NativeModuleManager::BorrowImport(NativeModuleToken token, uint
     auto& self = *impl_;
     if (self.gate->executing) return NativeModuleCode::Busy;
     if (out) return NativeModuleCode::Busy;
-    if (!self.Valid(token)) return NativeModuleCode::InvalidToken;
-    if (index >= self.module->bindings.size()) return NativeModuleCode::InvalidInput;
-    if (self.module->data.state != NativeModuleState::Started) return NativeModuleCode::WrongState;
-    if (!InputLive(*self.module)) return NativeModuleCode::InvalidInput;
-    if (!self.module->bindings[index]) return NativeModuleCode::NotLinked;
-    if (self.module->data.active_calls == (std::numeric_limits<uint32_t>::max)()) return NativeModuleCode::Exhausted;
+    const auto module = self.Find(token);
+    if (!module) return NativeModuleCode::InvalidToken;
+    if (index >= module->bindings.size()) return NativeModuleCode::InvalidInput;
+    if (module->data.state != NativeModuleState::Started &&
+        !(module->data.state == NativeModuleState::EntryBlocked &&
+          index == module->data.initialization.frontier_import_index)) return NativeModuleCode::WrongState;
+    if (!InputLive(*module)) return NativeModuleCode::InvalidInput;
+    const auto provider = module->bindings[index];
+    if (!provider) return NativeModuleCode::NotLinked;
+    if (module->data.active_calls == (std::numeric_limits<uint32_t>::max)() ||
+        (provider->module && provider->module != module &&
+         provider->module->data.active_calls == (std::numeric_limits<uint32_t>::max)()))
+        return NativeModuleCode::Exhausted;
     auto borrow = std::make_shared<NativeModuleCallBorrow::Impl>();
-    borrow->module = self.module; borrow->provider = self.module->bindings[index]; borrow->gate = self.gate;
-    ++self.module->data.active_calls;
+    borrow->module = module; borrow->provider = provider; borrow->gate = self.gate;
+    ++module->data.active_calls;
+    if (provider->module && provider->module != module) ++provider->module->data.active_calls;
     out.impl_ = std::move(borrow); return NativeModuleCode::Ok;
 }
 NativeModuleCallResult NativeModuleManager::CallExport(NativeModuleToken token, uint32_t index) {
-    if (!impl_->Valid(token)) return {NativeModuleCode::InvalidToken, false, false, 0};
-    if (index >= impl_->module->data.exports.size()) return {NativeModuleCode::InvalidInput, false, false, 0};
+    if (impl_->gate->executing) return {NativeModuleCode::Busy, false, false, 0};
+    const auto module = impl_->Find(token);
+    if (!module) return {NativeModuleCode::InvalidToken, false, false, 0};
+    if (index >= module->data.exports.size()) return {NativeModuleCode::InvalidInput, false, false, 0};
     // Lifecycle entries have separate typed Start/Stop APIs; alias equality never
     // installs a provider. Audio branches, including local zero branches, are not ported.
-    if (impl_->module->data.exports[index].lifecycle_callable)
+    if (module->data.exports[index].lifecycle_callable)
         return {NativeModuleCode::WrongState, false, false, 0};
     return {NativeModuleCode::UnimplementedExport, false, false, 0};
 }
 bool NativeModuleManager::Snapshot(NativeModuleToken token, NativeModuleSnapshot& out) const {
-    if (!impl_->Valid(token)) return false;
-    auto snapshot = impl_->module->data; snapshot.input_live = InputLive(*impl_->module);
+    const auto module = impl_->Find(token);
+    if (!module) return false;
+    auto snapshot = module->data; snapshot.input_live = InputLive(*module);
     // Diagnostics carry address identity, never a dereferenceable borrowed span.
     // A returned snapshot can outlive registry mutation without exposing a UAF.
     snapshot.input.bytes = nullptr; snapshot.input.initialized = nullptr;
     out = std::move(snapshot); return true;
+}
+bool NativeModuleManager::InitializationSnapshot(NativeModuleToken token,
+    Atrac3plusInitializationSnapshot& out) const noexcept {
+    const auto module = impl_->Find(token);
+    if (!module || !module->data.initialization.present) return false;
+    out = module->data.initialization; return true; // fixed-size values; no allocation or span capability
+}
+std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
+    std::vector<NativeModuleSnapshot> out; out.reserve(impl_->modules.size());
+    for (const auto& module : impl_->modules) {
+        auto snapshot = module->data; snapshot.input_live = InputLive(*module);
+        snapshot.input.bytes = nullptr; snapshot.input.initialized = nullptr;
+        out.push_back(std::move(snapshot));
+    }
+    return out;
 }
 std::vector<NativeModuleProviderSnapshot> NativeModuleManager::Providers() const {
     std::vector<NativeModuleProviderSnapshot> out; out.reserve(impl_->providers.size());
     for (const auto& provider : impl_->providers) {
         const auto& definition = provider->definition;
         out.push_back({provider->token, definition.library, definition.abi, definition.version,
-                       definition.nid, definition.synthetic_only});
+                       definition.nid, definition.synthetic_only, definition.module});
     }
     return out;
 }
@@ -350,6 +509,9 @@ const char* NativeModuleCodeName(NativeModuleCode code) noexcept {
     case NativeModuleCode::InvalidProvider: return "InvalidProvider";
     case NativeModuleCode::Busy: return "Busy";
     case NativeModuleCode::SyntheticProviderForbidden: return "SyntheticProviderForbidden";
+    case NativeModuleCode::UnsupportedEntry: return "UnsupportedEntry";
+    case NativeModuleCode::UnsupportedPolicy: return "UnsupportedPolicy";
+    case NativeModuleCode::InputOverlap: return "InputOverlap";
     }
     return "Unknown";
 }
@@ -358,6 +520,8 @@ const char* NativeModuleStateName(NativeModuleState state) noexcept {
     case NativeModuleState::Loaded: return "Loaded";
     case NativeModuleState::Started: return "Started";
     case NativeModuleState::Stopped: return "Stopped";
+    case NativeModuleState::EntryBlocked: return "EntryBlocked";
+    case NativeModuleState::InitializationAborted: return "InitializationAborted";
     }
     return "Unknown";
 }
