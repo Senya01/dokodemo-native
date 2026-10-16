@@ -116,12 +116,28 @@ StartupProbe::StartupProbe(const script::Program& program, uint8_t host_byte,
                           uint16_t stack_slot_limit, HostAbiProjection projection, recovered::Service47Fixture service47,
                           recovered::StringFixture strings,StringService20Projection string_getters,Service48Projection service48_projection,
                           recovered::ClockDependency clock_dependency,Service39Projection service39_projection,
-                          Array98Projection array98_projection,RngProjection rng_projection)
+                          Array98Projection array98_projection,RngProjection rng_projection,
+                          recovered::CurrentTablesOwner current_tables)
     : program_(program), host_byte_(host_byte), stack_slot_limit_(stack_slot_limit), host_abi_projection_(projection),
       service47_fixture_(std::move(service47)), string_fixture_(std::move(strings)),string_getters_(std::move(string_getters)),
       service48_projection_(std::move(service48_projection)),clock_dependency_(std::move(clock_dependency)),
       service39_projection_(std::move(service39_projection)),array98_projection_(array98_projection),
       rng_projection_(std::move(rng_projection)) {
+    if (!current_tables.source_sha256().empty()) {
+        require(current_tables.available(), "Current source owner lifetime is unavailable");
+        const auto& layout = current_tables.layout();
+        require(current_tables.source_sha256() == program.source().sha256 &&
+                current_tables.source_size() == program.bytes().size() &&
+                layout.local_count == program.header().local_count &&
+                layout.ctx28_count == program.header().ctx28_count &&
+                layout.global_count == program.header().global_count &&
+                layout.code_size == program.header().code_size && layout.pool_size == program.header().pool_size,
+                "Current source owner does not belong to this verified Program/layout");
+        require(std::equal(program.bytes().begin() + 28, program.bytes().begin() + program.header().pool_start(),
+                           current_tables.image_bytes().begin() + 28),
+                "Current source owner bytecode changed after verified Program parsing");
+        context_.current_tables = std::move(current_tables);
+    }
     context_.pc = program.header().entrypoint;
     context_.service47 = recovered::Service47InitialState(service47_fixture_);
     const auto* command = program.command(context_.pc);
@@ -152,24 +168,69 @@ const Value& StartupProbe::slot(const Context& context, int32_t index) const {
     return context.slots[static_cast<size_t>(index)];
 }
 void StartupProbe::push(Context& context, Value value) const {
-    slot(context, context.sp) = value; ++context.sp;
+    if (context.current_tables.source_sha256().empty()) {
+        slot(context, context.sp) = value; ++context.sp; return;
+    }
+    const int32_t index = context.sp;
+    slot(context, index); ++context.sp;
+    if (context.current_tables.available()) {
+        context.current_tables.memory().Write(context.current_tables.mapping().context_base + 0x5c, 2, static_cast<uint32_t>(context.sp));
+        context.current_tables.StoreWord(recovered::CurrentTable::Stack, static_cast<uint32_t>(index), loaded_word(context, value));
+    }
+    slot(context, index) = value;
 }
 Value StartupProbe::pop(Context& context) const {
     require(context.sp > 0, "Operand stack underflow");
-    --context.sp; Value value = slot(context, context.sp); slot(context, context.sp) = {}; return value;
+    if (context.current_tables.source_sha256().empty()) {
+        --context.sp; Value value = slot(context, context.sp); slot(context, context.sp) = {}; return value;
+    }
+    --context.sp; Value value = slot(context, context.sp); slot(context, context.sp) = {};
+    if (context.current_tables.available()) {
+        context.current_tables.memory().Write(context.current_tables.mapping().context_base + 0x5c, 2, static_cast<uint32_t>(context.sp));
+        context.current_tables.StoreWord(recovered::CurrentTable::Stack, static_cast<uint32_t>(context.sp), 0);
+    }
+    return value;
 }
 void StartupProbe::require_target(uint32_t pc) const {
     const auto* destination = program_.command(pc);
     require(destination && destination->opcode >= 0,
             "Call target misses original command boundary: " + hex(pc));
 }
-Value StartupProbe::read_reference(const Context& context, const Value& reference,
+Value StartupProbe::loaded_value(const Context& context, uint32_t word) const {
+    Value value; value.word = word;
+    if (word >> 28 != 11) return value;
+    recovered::CurrentTablesAddress address;
+    require(context.current_tables.ResolveReference(word, address), "Current reference has no live loaded physical identity");
+    if (address.table == recovered::CurrentTable::Stack) return Value::stack_reference(address.index);
+    if (address.table == recovered::CurrentTable::Local)
+        return Value::local_reference(address.index, program_.header().pool_end() + 4 * address.index);
+    if (address.table == recovered::CurrentTable::Global)
+        return Value::global_reference(address.index, program_.header().global_start() + 4 * address.index);
+    if (address.table == recovered::CurrentTable::Ctx28)
+        return Value::ctx28_reference(address.index, program_.header().ctx28_start() + 4 * address.index);
+    throw std::runtime_error("Current reference targets an unsupported physical subobject");
+}
+uint32_t StartupProbe::loaded_word(const Context& context, const Value& value) const {
+    if (value.kind == Value::Kind::Word) return value.word;
+    const auto table = value.kind == Value::Kind::StackReference ? recovered::CurrentTable::Stack :
+        value.kind == Value::Kind::LocalReference ? recovered::CurrentTable::Local :
+        value.kind == Value::Kind::Ctx28Reference ? recovered::CurrentTable::Ctx28 : recovered::CurrentTable::Global;
+    const auto address = context.current_tables.Address(table, value.index);
+    return 0xB0000000u | ((address.physical - context.current_tables.reference_base()) & payload_mask);
+}
+Value StartupProbe::read_reference(Context& context, const Value& reference,
                                    uint32_t following_words) const {
+    if (!context.current_tables.source_sha256().empty())
+        require(context.current_tables.available(), "Current source image lifetime ended");
     if (reference.kind == Value::Kind::Ctx28Reference) {
         require(reference.index <= UINT32_MAX - following_words, "Ctx28 reference index overflow");
         const uint32_t index = reference.index + following_words;
         require(index < program_.header().ctx28_count, "Referenced ctx28 word outside original read-only table");
-        Value value; value.word = program_.initial_word(script::Table::Ctx28, static_cast<uint16_t>(index));
+        Value value;
+        if (context.current_tables.available()) {
+            return loaded_value(context, context.current_tables.LoadWord(recovered::CurrentTable::Ctx28, index));
+        }
+        value.word = program_.initial_word(script::Table::Ctx28, static_cast<uint16_t>(index));
         require(value.word >> 28 != 5 && value.word >> 28 != 11, "Ctx28 initial pool/reference rebasing is outside proved domain");
         return value;
     }
@@ -185,6 +246,8 @@ Value StartupProbe::read_reference(const Context& context, const Value& referenc
         require(index < program_.header().local_count, "Referenced local word outside original ctx24 table");
         const auto written = context.local_writes.find(index);
         if (written != context.local_writes.end()) return written->second;
+        if (context.current_tables.available())
+            return loaded_value(context, context.current_tables.LoadWord(recovered::CurrentTable::Local, index));
         const uint32_t word = program_.initial_word(script::Table::Local, static_cast<uint16_t>(index));
         require(word >> 28 != 5 && word >> 28 != 0xB,
                 "Initial local pool/reference rebasing is outside the tested startup domain");
@@ -197,6 +260,8 @@ Value StartupProbe::read_reference(const Context& context, const Value& referenc
     require(index < program_.header().global_count, "Referenced global word outside original table");
     const auto written = context.global_writes.find(index);
     if (written != context.global_writes.end()) return written->second;
+    if (context.current_tables.available())
+        return loaded_value(context, context.current_tables.LoadWord(recovered::CurrentTable::Global, index));
     const uint32_t word = program_.initial_word(script::Table::Global, static_cast<uint16_t>(index));
     if (word >> 28 == 0xB) {
         // BOOT 66EA0..66F40: original selector4/index:u16 addresses the global
@@ -211,17 +276,30 @@ Value StartupProbe::read_reference(const Context& context, const Value& referenc
     Value value; value.word = word; return value;
 }
 void StartupProbe::write_reference(Context& context, const Value& reference, Value value) const {
+    if (reference.kind == Value::Kind::Ctx28Reference) {
+        require(!context.current_tables.source_sha256().empty(), "Unresolved raw destination/reference arena address");
+        require(context.current_tables.available(), "Ctx28 destination requires explicit loaded image owner/lifetime");
+        require(reference.index < program_.header().ctx28_count, "Ctx28 destination outside loaded table");
+        context.current_tables.StoreWord(recovered::CurrentTable::Ctx28, reference.index, loaded_word(context, value));
+        return;
+    }
     if (reference.kind == Value::Kind::StackReference) {
         require(reference.index < stack_slot_limit_, "Referenced stack destination outside allocation/native cap");
         slot(context, static_cast<int32_t>(reference.index)) = value;
+        if (context.current_tables.available())
+            context.current_tables.StoreWord(recovered::CurrentTable::Stack, reference.index, loaded_word(context, value));
     } else if (reference.kind == Value::Kind::LocalReference) {
         require(reference.index < program_.header().local_count, "Referenced local destination outside original ctx24 table");
         context.local_writes[reference.index] = value;
+        if (context.current_tables.available())
+            context.current_tables.StoreWord(recovered::CurrentTable::Local, reference.index, loaded_word(context, value));
     } else {
         require(reference.kind == Value::Kind::GlobalReference,
                 "Unresolved raw destination/reference arena address");
         require(reference.index < program_.header().global_count, "Referenced global destination outside table");
         context.global_writes[reference.index] = value;
+        if (context.current_tables.available())
+            context.current_tables.StoreWord(recovered::CurrentTable::Global, reference.index, loaded_word(context, value));
     }
 }
 Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) const {
@@ -236,6 +314,15 @@ Snapshot StartupProbe::snapshot(const Context& context, bool include_globals) co
     result.service47 = context.service47;
     result.string_arena = context.strings.summary();
     result.general_arena = context.general_heap.summary();result.service48=context.service48;
+    const auto retain_counts = [](recovered::StringArenaSummary& summary, const std::array<uint32_t, 4>& history) {
+        if (!summary.known) return;
+        summary.allocations += history[0]; summary.reallocations += history[1];
+        summary.releases += history[2]; summary.copies += history[3];
+    };
+    retain_counts(result.string_arena, context.string_history);
+    retain_counts(result.general_arena, context.general_history);
+    if (!context.current_tables.source_sha256().empty())
+        result.current_tables = std::make_shared<const recovered::CurrentTablesOwner>(context.current_tables);
     result.global_writes_complete = include_globals;
     result.global_writes_count = static_cast<uint32_t>(context.global_writes.size());
     core::Sha256 digest;
@@ -269,7 +356,19 @@ Trace StartupProbe::trace() const {
 void StartupProbe::execute(Context& candidate, const script::Command& command,
                            BuiltinCall& builtin) const {
     const int op = command.opcode;
-    const auto operand = [&](uint32_t at, uint8_t width) { return program_.operand(command, at, width); };
+    const bool loaded_current = !candidate.current_tables.source_sha256().empty();
+    if (loaded_current) {
+        require(candidate.current_tables.available(), "Current source image lifetime ended");
+        // Explicit handler-entry projection: the caller has fetched this
+        // opcode. This bridge is separate from original dispatcher execution.
+        candidate.current_tables.memory().Write(candidate.current_tables.mapping().code_object_base + 4, 4, command.pc + 1);
+    }
+    const auto operand = [&](uint32_t at, uint8_t width) {
+        const auto value = program_.operand(command, at, width);
+        if (loaded_current && op != 0x11 && op != 0x12)
+            candidate.current_tables.memory().Write(candidate.current_tables.mapping().code_object_base + 4, 4, command.pc + at + width);
+        return value;
+    };
     uint32_t next = command.pc + command.size;
     const auto release_supported = [&](const Value& value) {
         if(value.kind==Value::Kind::Word && value.word>>28==6) {
@@ -294,9 +393,26 @@ void StartupProbe::execute(Context& candidate, const script::Command& command,
             const Value value = slot(candidate, candidate.sp - 1);
             require(value.kind == Value::Kind::Word,
                     "Branch needs a known raw payload; symbolic/reference arena offsets are unproved");
-            release_supported(candidate.result); release_supported(value);
-            take = branch_condition(static_cast<uint8_t>(op), value.word);
-            pop(candidate); candidate.result = {}; // 7515C clears transferred result.
+            release_supported(candidate.result);
+            if (loaded_current) {
+                const auto ctx = candidate.current_tables.mapping().context_base;
+                candidate.current_tables.memory().Write(ctx + 0x30, 4, 0);
+                --candidate.sp;
+                candidate.current_tables.memory().Write(ctx + 0x5c, 2, static_cast<uint32_t>(candidate.sp));
+                candidate.result = value;
+                candidate.current_tables.memory().Write(ctx + 0x30, 4, loaded_word(candidate, value));
+                slot(candidate, candidate.sp) = {};
+                candidate.current_tables.StoreWord(recovered::CurrentTable::Stack, static_cast<uint32_t>(candidate.sp), 0);
+                take = branch_condition(static_cast<uint8_t>(op), value.word);
+                candidate.current_tables.memory().Write(candidate.current_tables.mapping().code_object_base + 4, 4,
+                    take ? destination : command.pc + command.size);
+                release_supported(value); candidate.result = {};
+                candidate.current_tables.memory().Write(ctx + 0x30, 4, 0);
+            } else {
+                release_supported(value);
+                take = branch_condition(static_cast<uint8_t>(op), value.word);
+                pop(candidate); candidate.result = {}; //7515C clears transferred result.
+            }
         }
         if (take) { require_target(destination); next = destination; }
     } else if (op == 0x14) {

@@ -10,6 +10,15 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <cctype>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <tlhelp32.h>
+#endif
 
 using namespace dokodemo;
 namespace dokodemo::startup {
@@ -48,6 +57,27 @@ struct StartupTestAccess {
     static const std::array<Value, 512>& all_slots(const StartupProbe& probe) { return probe.context_.slots; }
     static void set_strings(StartupProbe& probe,recovered::StringArena arena) {probe.context_.strings=std::move(arena);}
     static void discard_events(StartupProbe& probe) {probe.events_.clear();}
+    static void current_initial(StartupProbe& probe, const Snapshot& saved,
+                                const std::vector<Value>& values,
+                                recovered::CurrentTablesOwner tables,
+                                recovered::StringArena strings, recovered::StringArena general,
+                                recovered::RngNativeOwner rng) {
+        auto& c=probe.context_;
+        c.pc=saved.pc;c.sp=saved.sp;c.fp=saved.fp;c.saved_fp=saved.saved_fp;c.saved_sp=saved.saved_sp;
+        c.state=saved.state;c.result=saved.result;c.timer_base_set=saved.timer_base_set;c.timer_base_pc=saved.timer_base_pc;
+        c.host_flag_104_known=saved.host_flag_104_known;c.host_flag_104=saved.host_flag_104;
+        c.global_writes=saved.global_writes;c.local_writes=saved.local_writes;c.host_reference_bindings=saved.host_reference_bindings;
+        c.service47=saved.service47;c.service48=saved.service48;
+        require_size(values.size());std::copy(values.begin(),values.end(),c.slots.begin());
+        c.current_tables=std::move(tables);c.strings=std::move(strings);c.general_heap=std::move(general);c.rng=std::move(rng);
+        c.string_history={saved.string_arena.allocations,saved.string_arena.reallocations,saved.string_arena.releases,saved.string_arena.copies};
+        c.general_history={saved.general_arena.allocations,saved.general_arena.reallocations,saved.general_arena.releases,saved.general_arena.copies};
+        probe.status_=Status::Running;probe.diagnostic_={};probe.events_.clear();probe.first_builtin_={};
+    }
+    static void require_size(size_t n) {if(n!=512)throw std::runtime_error("Current checkpoint requires full512");}
+    static const recovered::StringArena& current_strings(const StartupProbe& p) {return p.context_.strings;}
+    static const recovered::StringArena& current_general(const StartupProbe& p) {return p.context_.general_heap;}
+    static const recovered::CurrentTablesOwner& current_tables(const StartupProbe& p) {return p.context_.current_tables;}
     static Snapshot set_service(StartupProbe& probe, recovered::Service47State state) {
         probe.context_.service47=state;return probe.snapshot(probe.context_);
     }
@@ -899,8 +929,112 @@ void bulk_raw_checks(const std::filesystem::path& path) {
     std::cout<<"{\"bulk_independent_native_checks\":\"pass\",\"cases\":"<<count
         <<",\"success_full_memory\":"<<successes<<",\"explicit_cut_cases\":"<<cuts<<"}\n";
 }
+// Stage11 verification-only CURRENT checkpoint transport. Initial complete
+// physical bytes + per-command ordered stores are a lossless physical capture;
+// neither this reader nor the production VM invents the checkpoint history.
+void stage11_current(const std::filesystem::path& base,const std::filesystem::path& path) {
+    const auto artifact=[](const std::filesystem::path& p) {
+        require(!p.is_absolute() && !p.has_root_name(),"Stage11 artifact must be workspace relative");
+        for(const auto& part:p){auto s=part.string();std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});require(s!=".." && s!="external" && (s.size()<4 || s.substr(s.size()-4)!=".iso"),"Stage11 forbidden artifact component");}
+    };
+    artifact(base);artifact(path);
+    std::ifstream in(path,std::ios::binary);require(bool(in),"Stage11 input missing");
+    const auto u32=[&]() {uint32_t v=0;in.read(reinterpret_cast<char*>(&v),4);require(bool(in),"Stage11 input truncated");return v;};
+    const auto u64=[&]() {const uint64_t low=u32(),high=u32();return low|(high<<32);};
+    const auto bytes=[&](uint32_t n) {require(n<=16*1024*1024,"Stage11 byte extent");std::vector<uint8_t> b(n);in.read(reinterpret_cast<char*>(b.data()),n);require(bool(in),"Stage11 bytes truncated");return b;};
+    const auto value=[&]() {startup::Value v;const auto kind=u32();require(kind<=4,"Stage11 value kind");v.kind=static_cast<startup::Value::Kind>(kind);v.word=u32();v.index=u32();v.source_file_offset=u32();return v;};
+    const auto mapping=[&]() {std::map<uint32_t,startup::Value> m;const auto n=u32();require(n<65536,"Stage11 map extent");for(uint32_t i=0;i<n;++i){const auto k=u32();m.emplace(k,value());}return m;};
+    const auto region=[&]() {recovered::CurrentTablesRegion r;r.base=u32();r.identity=u64();r.live=u32()!=0;const auto n=u32();r.bytes=bytes(n);r.readable=bytes(n);r.writable=bytes(n);return r;};
+    const auto hexbytes=[](const std::vector<uint8_t>& b) {static const char digits[]="0123456789abcdef";for(const auto v:b)std::cout<<digits[v>>4]<<digits[v&15];};
+    const auto arena_json=[&](const recovered::StringArena& a) {
+        std::cout<<"{\"ready\":"<<(a.ready()?"true":"false");
+        if(a.ready()){std::cout<<",\"common_base\":"<<a.common_base()<<",\"cursor\":"<<a.conversion_cursor()<<",\"control_hex\":\"";hexbytes(a.control_bytes());std::cout<<"\",\"heap_hex\":\"";hexbytes(a.heap_bytes());std::cout<<"\",\"live\":[";bool first=true;for(const auto& p:a.live_blocks()){if(!first)std::cout<<',';first=false;std::cout<<'['<<p.first<<','<<p.second<<']';}std::cout<<']';}std::cout<<'}';
+    };
+    const auto physical_json=[&](const startup::StartupProbe& probe) {
+        std::cout<<"{\"STRING\":";arena_json(startup::StartupTestAccess::current_strings(probe));std::cout<<",\"GENERAL\":";arena_json(startup::StartupTestAccess::current_general(probe));
+        std::cout<<",\"regions\":[";bool first=true;
+        for(const auto& r:startup::StartupTestAccess::current_tables(probe).memory().Capture()){
+            if(!first){std::cout<<',';}
+            first=false;std::cout<<"{\"base\":"<<r.base<<",\"identity\":"<<r.identity<<",\"live\":"<<(r.live?"true":"false")<<",\"bytes_hex\":\"";hexbytes(r.bytes);std::cout<<"\",\"readable_hex\":\"";hexbytes(r.readable);std::cout<<"\",\"writable_hex\":\"";hexbytes(r.writable);std::cout<<"\"}";
+        }std::cout<<"]}";
+    };
+    const auto slots_json=[&](const startup::StartupProbe& p) {std::cout<<'[';bool first=true;for(const auto& v:startup::StartupTestAccess::all_slots(p)){if(!first)std::cout<<',';first=false;value_json(v);}std::cout<<']';};
+    require(u32()==0x31494353u,"Stage11 input schema");const auto cases=u32();
+    const std::array<const char*,5> names{"INU","KAERU","NEKO","ROBO","USAGI"};
+    for(uint32_t row=0;row<cases;++row) {
+        const auto index=u32(),host=u32(),commands=u32();require(index<names.size() && host<=1 && commands<1000000,"Stage11 source/host/command extent");
+        script::Program program;script::Diagnostic error;require(program.load_original(base/(std::string(names[index])+".KSC"),error),error.text());
+        recovered::CurrentTablesInput input;auto& p=input.mapping;
+        p.image_base=u32();p.local_allocation_base=u32();p.code_object_base=u32();p.context_base=u32();p.stack_base=u32();p.stack_count=u32();p.frame_pointer=static_cast<int16_t>(u32());p.reference_base=u32();p.shared_globals_base=u32();p.shared_globals_count=static_cast<uint16_t>(u32());p.callback=u32();p.module_base=u32();
+        p.image_identity=u64();p.local_identity=u64();p.code_identity=u64();p.context_identity=u64();p.stack_identity=u64();p.globals_identity=u64();
+        p.allocator_boundary_available=u32()!=0;p.borrowed_image_lifetime_available=u32()!=0;
+        const auto read_mask=u32(),write_mask=u32();require(read_mask<=1 && write_mask<=1,"Stage11 explicit uniform image mask");input.readable.assign(program.bytes().size(),static_cast<uint8_t>(read_mask));input.writable.assign(program.bytes().size(),static_cast<uint8_t>(write_mask));
+        input.context=region();input.stack=region();input.local_allocation=region();input.code_object=region();input.retained_globals=region();
+        input.borrowed_image=std::make_shared<recovered::CurrentTablesStorageImage>();input.borrowed_image->source_address=p.image_base;input.borrowed_image->identity=p.image_identity;input.borrowed_image->live=true;input.borrowed_image->bytes=program.bytes();input.borrowed_image->initialized=input.readable;
+        if(!input.retained_globals.bytes.empty()){input.retained_global_image=std::make_shared<recovered::CurrentTablesStorageImage>();auto& g=*input.retained_global_image;g.source_address=input.retained_globals.base;g.identity=input.retained_globals.identity;g.live=input.retained_globals.live;g.bytes=input.retained_globals.bytes;g.initialized=input.retained_globals.readable;}
+        auto tables=program.load_current_tables(std::move(input));
+        startup::Snapshot saved;saved.pc=u32();saved.sp=static_cast<int32_t>(u32());saved.fp=static_cast<int32_t>(u32());saved.saved_fp=static_cast<int32_t>(u32());saved.saved_sp=static_cast<int32_t>(u32());saved.state=u32();saved.result=value();
+        saved.timer_base_set=u32()!=0;saved.timer_base_pc=u32();saved.host_flag_104_known=u32()!=0;saved.host_flag_104=static_cast<uint8_t>(u32());
+        std::vector<startup::Value> slots(512);for(auto& v:slots)v=value();saved.global_writes=mapping();saved.local_writes=mapping();saved.host_reference_bindings=mapping();
+        auto& s=saved.service47;s.known=u32()!=0;s.control_present=u32()!=0;s.source_present=u32()!=0;s.guard=static_cast<uint8_t>(u32());s.state=static_cast<uint16_t>(u32());s.calls=u32();s.cursor_bytes=u32();s.decoded_words=u32();s.format_called=u32()!=0;s.format_return=static_cast<int32_t>(u32());s.null_free_calls=u32();s.released_entities=u32();
+        auto& t=saved.service48;t.manager_record=u32();t.destination_registered=u32()!=0;t.format_called=u32()!=0;t.registered_word=u32();t.cursor_bytes=u32();t.decoded_words=u32();t.format_return=static_cast<int32_t>(u32());t.payload_clears=u32();t.record_releases=u32();t.manager_clears=u32();t.completed_calls=u32();t.heap_release_calls=u32();t.null_release_calls=u32();
+        const auto import_arena=[&](recovered::StringArenaSummary& summary) {
+            recovered::StringArena a;summary.known=u32()!=0;if(!summary.known)return a;
+            summary.allocations=u32();summary.reallocations=u32();summary.releases=u32();summary.copies=u32();
+            auto f=natural_string_fixture();f.common_base=u32();f.heap_base=u32();f.heap_size=u32();f.conversion_cursor=u32();const auto ctl=bytes(32),heap=bytes(f.heap_size);f.initial_heap=heap;return recovered::StringArena::FromMappedStorage(f,ctl,heap);
+        };
+        auto strings=import_arena(saved.string_arena),general=import_arena(saved.general_arena);
+        const auto seed=u32(),draws=u32();const auto current_seed=u64(),scenario=u64();const auto text=bytes(u32());
+        startup::RngProjection rng;rng.enabled=u32()!=0;
+        if(rng.enabled){rng.current.ApplyInitializerTimeT32(seed,scenario,std::string(text.begin(),text.end()));require(draws<=2,"Stage11 retained RNG prefix extent");for(uint32_t i=0;i<draws;++i)(void)rng.current.NextC3234();require(rng.current.Snapshot().seed==current_seed,"Stage11 literal RNG prefix mismatch");}
+        // Raw current context/table byte writes are supplied by the source
+        // checkpoint bridge, before the command-effect observation boundary.
+        const auto patch_count=u32();for(uint32_t i=0;i<patch_count;++i){const auto address=u32(),width=u32(),word=u32();tables.memory().Write(address,width,word);}
+        startup::Array98Projection array;array.enabled=true;
+        startup::StartupProbe probe(program,static_cast<uint8_t>(host),512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),natural_service48_projection(),natural_clock_dependency(),natural_service39_projection(),array,rng,tables);
+        startup::StartupTestAccess::current_initial(probe,saved,slots,tables,std::move(strings),std::move(general),rng.current);
+        // Changed-domain regressions only: no replay of accepted old streams.
+        auto twin=probe;
+        const auto twin_before=twin.run(0).context;
+        const auto twin_image=startup::StartupTestAccess::current_tables(twin).image_bytes();
+        const auto twin_stack=startup::StartupTestAccess::current_tables(twin).memory().Bytes(p.stack_identity);
+        const auto twin_context=startup::StartupTestAccess::current_tables(twin).memory().Bytes(p.context_identity);
+        startup::StartupProbe readonly(program,static_cast<uint8_t>(host),512,conditional_abi,natural_service47_fixture(),natural_string_fixture(),natural_string_getters(),natural_service48_projection(),natural_clock_dependency(),natural_service39_projection(),array,rng);
+        startup::StartupTestAccess::current_initial(readonly,saved,slots,{},startup::StartupTestAccess::current_strings(probe),startup::StartupTestAccess::current_general(probe),rng.current);
+        const auto ro_before=readonly.run(0).context;const auto ro_after=readonly.run(1);
+        require(ro_after.status==startup::Status::Halted && ro_after.events.empty() && same_context(ro_before,ro_after.context) && startup::StartupTestAccess::all_slots(readonly)==startup::StartupTestAccess::all_slots(probe),"Stage11 historical readonly guard changed state");
+        std::cout<<"{\"kind\":\"initial\",\"source\":\""<<names[index]<<".KSC\",\"host\":"<<host<<",\"state\":";snapshot_json(probe.run(0).context);std::cout<<",\"all512\":";slots_json(probe);std::cout<<",\"physical\":";physical_json(probe);std::cout<<"}\n";
+        for(uint32_t step=0;step<=commands;++step){
+            const auto offset=startup::StartupTestAccess::current_tables(probe).memory().effect_count();const auto before=probe.run(0).context;const auto result=probe.run(1);
+            std::cout<<"{\"kind\":\"command\",\"source\":\""<<names[index]<<".KSC\",\"host\":"<<host<<",\"step\":"<<step<<",\"status\":\""<<startup::status_name(result.status)<<"\",\"before\":";snapshot_json(before);std::cout<<",\"after\":";snapshot_json(result.context);std::cout<<",\"all512\":";slots_json(probe);
+            std::cout<<",\"table_effects\":[";bool first=true;for(const auto& e:startup::StartupTestAccess::current_tables(probe).effects_from(offset)){if(!first)std::cout<<',';first=false;std::cout<<'['<<static_cast<unsigned>(e.kind)<<','<<e.address<<','<<e.width<<','<<e.before<<','<<e.value<<','<<e.identity<<']';}std::cout<<']';
+            if(!(before.string_arena==result.context.string_arena) || !(before.general_arena==result.context.general_arena)){std::cout<<",\"physical\":";physical_json(probe);}
+            std::cout<<",\"diagnostic\":\""<<result.diagnostic.reason<<"\"}\n";
+            startup::StartupTestAccess::discard_events(probe);if(result.status!=startup::Status::BudgetExhausted)break;
+            const auto& twin_tables=startup::StartupTestAccess::current_tables(twin);
+            require(same_context(twin_before,twin.run(0).context) && twin_image==twin_tables.image_bytes() &&
+                twin_stack==twin_tables.memory().Bytes(p.stack_identity) && twin_context==twin_tables.memory().Bytes(p.context_identity),"Stage11 source image/VM candidate COW contaminated twin");
+        }
+    }
+    require(in.peek()==EOF,"Stage11 trailing input");
+}
+
+void stage11_module_paths() {
+#ifdef _WIN32
+    const HANDLE modules=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,GetCurrentProcessId());
+    require(modules!=INVALID_HANDLE_VALUE,"Module snapshot failed");
+    MODULEENTRY32W entry{};entry.dwSize=sizeof(entry);
+    if(Module32FirstW(modules,&entry))do {std::cout<<std::filesystem::path(entry.szExePath).u8string()<<'\n';}while(Module32NextW(modules,&entry));
+    CloseHandle(modules);
+#else
+    std::ifstream maps("/proc/self/maps");require(bool(maps),"Runtime maps unavailable");std::string line;
+    while(std::getline(maps,line)){const auto at=line.find('/');if(at!=std::string::npos)std::cout<<line.substr(at)<<'\n';}
+#endif
+}
 int main(int argc, char** argv) {
     try {
+        if(argc==2 && std::string(argv[1])=="--stage11-module-paths"){stage11_module_paths();return 0;}
+        if(argc==4 && std::string(argv[1])=="--stage11-current"){stage11_current(argv[2],argv[3]);return 0;}
         if(argc==3 && std::string(argv[1])=="--clock-component-vectors"){clock_component_vectors(argv[2]);return 0;}
         if(argc==3 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true);return 0;}
         if(argc==4 && std::string(argv[1])=="--stage9-traces"){string_traces(argv[2],true,true,std::stoull(argv[3],nullptr,0));return 0;}

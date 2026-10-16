@@ -56,6 +56,9 @@ struct Snapshot {
     std::string global_writes_sha256;
     // Allocated only after the first RNG command, preserving old projections.
     std::shared_ptr<const recovered::RngSnapshot> rng;
+    // Present only in the separate explicit loaded-image domain. Retains full
+    // physical bytes, masks, identities and ordered accesses through COW.
+    std::shared_ptr<const recovered::CurrentTablesOwner> current_tables;
 };
 
 // BOOT 6BC20/6BCB8 tests the raw low 28 bits, without numeric conversion.
@@ -160,7 +163,8 @@ public:
                  recovered::Service47Fixture service47 = {}, recovered::StringFixture strings = {},
                  StringService20Projection string_getters = {}, Service48Projection service48 = {},
                  recovered::ClockDependency clock = {}, Service39Projection service39 = {},
-                 Array98Projection array98 = {}, RngProjection rng = {});
+                 Array98Projection array98 = {}, RngProjection rng = {},
+                 recovered::CurrentTablesOwner current_tables = {});
     // Per-call budget must be 1..10000. Returns cumulative executed/events.
     // Budget exhaustion can be resumed. Unknown opcode/ABI paths halt; repeated
     // run() calls preserve PC, SP, FP, slots, builtin result and host flag.
@@ -183,6 +187,10 @@ private:
         recovered::StringArena general_heap;
         recovered::Service48State service48;
         recovered::RngNativeOwner rng;
+        recovered::CurrentTablesOwner current_tables;
+        // Verification checkpoint imports retain historical observable counts
+        // separately from a component's newly imported physical arena counters.
+        std::array<uint32_t, 4> string_history{}, general_history{};
     };
     const script::Program& program_;
     uint8_t host_byte_ = 0;
@@ -207,8 +215,10 @@ private:
     const Value& slot(const Context& context, int32_t index) const;
     void push(Context& context, Value value) const;
     Value pop(Context& context) const;
-    Value read_reference(const Context& context, const Value& reference,
+    Value read_reference(Context& context, const Value& reference,
                          uint32_t following_words = 0) const;
+    Value loaded_value(const Context& context, uint32_t word) const;
+    uint32_t loaded_word(const Context& context, const Value& value) const;
     void write_reference(Context& context, const Value& reference, Value value) const;
     void require_target(uint32_t pc) const;
     void execute(Context& candidate, const script::Command& command,

@@ -1,5 +1,6 @@
 #pragma once
 #include "manager_queue_native.h"
+#include "current_tables_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -126,6 +127,130 @@ struct ContextOwnerCreateResult {
     std::string original_failure_effect;
 };
 
+// Original20DC path split, including strcpy/strchr read widths and ordering.
+// This bounded projection excludes their ABI spill registers/stack slots.
+struct ContextOwnerPathInput {
+    uint32_t input_address = 0, local_address = 0;
+    std::array<uint8_t,256> input{}, input_mask{}, local{}, local_mask{};
+};
+struct ContextOwnerPathResult {
+    ContextOwnerBoundary boundary;
+    uint32_t return_value = 0;
+    std::array<uint8_t,256> local{}, local_mask{};
+    std::vector<ContextOwnerSuffixAccess> effects;
+};
+ContextOwnerPathResult SplitConstructionPath20DC(const ContextOwnerPathInput& input);
+
+// Explicit conditional returns at64518's virtual/import call boundaries.
+// They are supplied evidence, never installed firmware/HostAbi availability.
+// Exact call PC, callee, a0..a3 and order must match the source wrapper.
+struct ContextOwnerFileAbiEvent {
+    uint32_t call_pc = 0, callee = 0;
+    std::array<uint32_t,4> arguments{};
+    uint32_t result = 0;
+};
+struct ContextOwnerFile64518Input {
+    uint32_t object_address = 0, path_address = 0, size_output_address = 0;
+    uint32_t allocation_address = 0;
+    uint8_t allocator_fill = 0xA5;
+    // Bytes actually written by the imported read. A zero mask retains the
+    // physical allocator byte. Short read status is not rounded to full size.
+    std::vector<uint8_t> read_bytes, read_mask;
+    std::vector<ContextOwnerFileAbiEvent> evidence;
+};
+using ContextOwnerStorageImage = CurrentTablesStorageImage;
+struct ContextOwnerFile64518Result {
+    ContextOwnerBoundary boundary;
+    bool completed = false, allocation_released = false, size_written = false;
+    uint32_t return_value = 0, size_value = 0;
+    std::shared_ptr<ContextOwnerStorageImage> image;
+    std::vector<ContextOwnerFileAbiEvent> consumed;
+    std::vector<ContextOwnerSuffixAccess> effects;
+};
+ContextOwnerFile64518Result ExecuteConstructionFile64518FromAbiEvidence(
+    const ContextOwnerFile64518Input& input);
+struct ContextOwnerHeapCheckpoint {
+    // Exact manual physical heap premise; not game allocator readiness.
+    uint32_t controller = 0x1C93D4;
+    std::vector<ContextOwnerPreparedBlock> blocks;
+};
+struct ContextOwnerHeapResult {
+    ContextOwnerBoundary boundary;
+    bool completed = false;
+    uint32_t return_value = 0;
+    std::vector<uint8_t> payload_allocator_initialized;
+    std::vector<ContextOwnerPreparedBlock> blocks;
+    std::vector<ContextOwnerSuffixAccess> effects;
+};
+// Source63D14→63318→62FA8, positive direction1/first-free-block split domain.
+// Failed allocations, reverse direction and general free-list walks are cuts.
+ContextOwnerHeapResult AllocateConstructionVm63D14(const ContextOwnerHeapCheckpoint& heap,
+                                                 uint32_t requested_bytes);
+struct ContextOwnerConstructorDomain {
+    ContextOwnerPreparedBlock context, globals;
+    ContextOwnerHeapCheckpoint dynamic_heap, registry_heap;
+    CurrentTablesInput loader;
+};
+struct ContextOwnerConstructorResult {
+    ContextOwnerBoundary boundary;
+    bool reached_loader = false, loader_completed = false;
+    uint32_t callback_pointer = 0;
+    ContextOwnerPreparedBlock context, globals;
+    std::vector<uint8_t> context_source_written;
+    ContextOwnerHeapCheckpoint dynamic_heap, registry_heap;
+    std::vector<ContextOwnerSuffixAccess> prefix_effects;
+    // Loader body and allocator-seam effects are separate ordered projections.
+    std::shared_ptr<CurrentTablesOwner> tables;
+};
+// Actual6656C/65FF4 and list publication, then real shared-image66FDC loader.
+// Finite positive first-free split heaps and an available8-slot registry are
+// explicit premises. Stops BEFORE the unknown callback at6664C.
+ContextOwnerConstructorResult ExecuteConstruction6656CToCallback(
+    ContextOwnerConstructorDomain input);
+
+struct ContextOwnerConstructionInputs {
+    // Source checkpoint domain: empty directory-manager vector, initialized
+    // file object (lazy flag1), initial storage ptr0/index-1. These are premises
+    // at exact source words, not a claim that the game's loader installed them.
+    uint32_t source_owner_address = 0;
+    uint32_t manager_address = 0;
+    uint32_t manager_count = 0;
+    ContextOwnerGlobalWord file_object_lazy_flag;
+    ContextOwnerGlobalWord initial_storage_pointer;
+    ContextOwnerGlobalWord initial_storage_index;
+    ContextOwnerFile64518Input file;
+    // Genuine2E7C negative-directory-index path can reuse a preexisting ptr.
+    // This explicit synthetic checkpoint is not proof of a fresh KSC loader.
+    std::shared_ptr<ContextOwnerStorageImage> preexisting_image;
+    ContextOwnerHeapCheckpoint heap;
+};
+class ContextOwnerConstructionToken {
+public:
+    ContextOwnerConstructionToken() = default;
+    explicit operator bool() const { return serial_ != 0; }
+private:
+    friend class OwnedContextOwner;
+    ManagerToken owner_;
+    uint64_t serial_ = 0;
+};
+struct ContextOwnerConstructionResult {
+    ContextOwnerBoundary boundary;
+    ContextOwnerConstructionToken constructor_entry;
+    bool reached_constructor_entry = false;
+};
+struct ContextOwnerConstructionSnapshot {
+    bool started = false, closed = false, constructor_entry_consumed = false;
+    bool preexisting_storage_reused = false;
+    uint32_t source_vm_address = 0, storage_pointer = 0, storage_index = 0;
+    std::string formatted_path;
+    ContextOwnerPathResult split;
+    ContextOwnerFile64518Result file;
+    ContextOwnerHeapResult heap;
+    std::shared_ptr<ContextOwnerConstructorResult> constructor;
+    std::vector<ContextOwnerSuffixAccess> effects;
+    std::vector<ManagerAllocation> native_released_backing;
+};
+
 // Actual portable owned96 payload + owned164 cookie/entries. It is not an
 // installed PSP singleton and does not execute the unresolved230EC setup.
 // Masked bytes distinguish source-written fields from allocator unknowns.
@@ -145,6 +270,20 @@ public:
     // directory/name prefix and stops BEFORE actual C36C0. No return is faked.
     ContextOwnerPrefixResult ContinueInitialization23194AfterProducer(
         const OwnedProducer& producer, const ContextOwnerLoadCheckpoint& load) const;
+    // Actual linked prefix/formatter/storage in the declared empty-manager and
+    // explicit64518 ABI domain. Stops BEFORE6656C; cannot create prepared2327C.
+    ContextOwnerConstructionResult BeginActualConstruction23194(
+        const OwnedProducer& producer, const ContextOwnerLoadCheckpoint& load,
+        const ContextOwnerConstructionInputs& input);
+    // One-shot mutable borrow of actual owned image at6656C entry. Caller
+    // must check image.live after owner Close. No constructor/callback return.
+    std::shared_ptr<ContextOwnerStorageImage> ConsumeConstructionEntry(
+        const ContextOwnerConstructionToken& token);
+    // Explicit native COW branch rebind, never a source clone operation.
+    bool RebindConstructionImageAfterNativeFork(std::shared_ptr<ContextOwnerStorageImage> image);
+    ContextOwnerConstructorResult ContinueActualConstruction6656C(
+        const ContextOwnerConstructionToken& token, ContextOwnerConstructorDomain domain);
+    ContextOwnerConstructionSnapshot ConstructionSnapshot() const;
     // Explicit prepared nonzero branch2327C; never NULL branch231F4.
     // Returns a private, owner-bound one-shot token for reached call23208.
     ContextOwnerActivationResult PrepareNonzero2327CActivationAfterUnverifiedLoadAndConstructor(

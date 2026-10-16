@@ -635,6 +635,93 @@ dokodemo::recovered::ContextOwnerPreparedNonzero2327C ConditionalPreparedActivat
     word(3,4,0);word(3,8,0);
     return p;
 }
+// Finite source checkpoint, shared by the five sealed construction joins.
+// It does not assert that the game's heap, directory manager or file loader
+// reached this state. The KSC bytes themselves come from the verified Program.
+dokodemo::recovered::ContextOwnerPreparedBlock ConstructionDomainBlock(
+        uint32_t address,uint32_t size,uint8_t fill) {
+    dokodemo::recovered::ContextOwnerPreparedBlock b;
+    b.address=address;b.bytes.assign(size,fill);b.initialized.assign(size,1);b.writable=true;
+    return b;
+}
+dokodemo::recovered::ContextOwnerHeapCheckpoint ConstructionDomainHeap(
+        uint32_t controller,uint32_t arena,uint32_t size) {
+    using namespace dokodemo::recovered;
+    ContextOwnerHeapCheckpoint h;h.controller=controller;
+    h.blocks={ConstructionDomainBlock(controller,64,0),ConstructionDomainBlock(arena,size,0xCC)};
+    const auto put=[](ContextOwnerPreparedBlock& b,uint32_t offset,uint32_t width,uint32_t value) {
+        for(uint32_t j=0;j<width;++j)b.bytes.at(offset+j)=static_cast<uint8_t>(value>>(8*j));
+    };
+    auto& c=h.blocks[0];auto& b=h.blocks[1];const uint32_t first=arena+32,end=arena+size-32;
+    put(c,4,4,arena);put(c,8,4,end);put(c,12,4,7);put(c,16,1,1);
+    constexpr uint8_t name[]={0x46,0x49,0x4E,0x49,0x54,0x45,0};
+    std::copy(std::begin(name),std::end(name),c.bytes.begin()+17);
+    for(uint32_t off:{0u,32u,size-32}) {
+        std::fill_n(b.bytes.begin()+off,32,uint8_t{0});put(b,off+15,1,0x79);
+    }
+    put(b,4,4,first);put(b,20,4,first);put(b,14,1,1);
+    put(b,32,4,arena);put(b,36,4,end);put(b,44,2,7);
+    put(b,48,4,arena);put(b,52,4,end);put(b,56,4,end-first-16);
+    put(b,size-32,4,first);put(b,size-18,1,1);put(b,size-16,4,first);
+    return h;
+}
+struct OwnedActualConstructionPrefix {
+    OwnedProducerPrefix initialized;
+    dokodemo::recovered::ContextOwnerConstructionResult entry;
+    dokodemo::recovered::ContextOwnerConstructorResult constructor;
+    dokodemo::recovered::ContextOwnerConstructionSnapshot snapshot;
+    bool verified=false;
+};
+OwnedActualConstructionPrefix ConstructActualConstructionPrefix(
+        const dokodemo::script::Program& program,uint32_t character_index) {
+    using namespace dokodemo::recovered;
+    OwnedActualConstructionPrefix out;
+    constexpr const char* hashes[]={
+        "c64773090b1c331d043b264b291c8948a8b99787f541ddc44d8e1d027958c93b",
+        "1a0c7a42970951d46254aaaccff5b5b5a4b551b1bcf63b9fb0ca4a9ac3021405",
+        "d94768138b839591a81f4a7d3eebe1887877a799f9c73f287a253431d90a7ec3",
+        "89882ec234e9bb3cb204bbabb6b1cdc190242275450179c2619c85aea33066b2",
+        "16ee223dcb98c962648d4b62ffd14e06d19f9ea6b28a2d39d2c5a59e2c607a24"};
+    // Refuse unloaded, failed-load or mismatched script inputs BEFORE creating
+    // owners, storage or checkpoint heaps. This preserves the OwnerR2 guard.
+    if(!program.loaded()||program.bytes().size()<28||character_index>=5
+        ||program.source().sha256!=hashes[character_index]) return out;
+    out.initialized=ConstructProducerPrefix({true,0x200A00});
+    if(!out.initialized.verified||!out.initialized.producer
+        ||!out.initialized.prefix.callbackOwner) return out;
+    ContextOwnerLoadCheckpoint load;load.source_address=0x200000;
+    load.source_stack_address=0x22F000;load.initialized.fill(1);
+    load.bytes[0x58]=static_cast<uint8_t>(character_index);
+    ContextOwnerConstructionInputs input;input.source_owner_address=0x200600;
+    // Storage directory-manager checkpoint; distinct from the GM queue above.
+    input.manager_address=0x200A00;input.manager_count=0;
+    input.initial_storage_pointer={true,0x600000};input.initial_storage_index={true,0xFFFFFFFF};
+    input.preexisting_image=std::make_shared<ContextOwnerStorageImage>();
+    auto& image=*input.preexisting_image;
+    image.source_address=0x600000;image.identity=0x600000;image.live=true;
+    image.bytes=program.bytes();image.initialized.assign(image.bytes.size(),1);
+    input.heap=ConstructionDomainHeap(0x1C93D4,0x202000,0x7020);
+    auto& owner=*out.initialized.prefix.callbackOwner;
+    out.entry=owner.BeginActualConstruction23194(*out.initialized.producer,load,input);
+    if(!out.entry.reached_constructor_entry) {out.snapshot=owner.ConstructionSnapshot();return out;}
+    ContextOwnerConstructorDomain domain;
+    domain.globals=ConstructionDomainBlock(0x1C9454,0x50,0);
+    domain.dynamic_heap=ConstructionDomainHeap(0x240000,0x400000,0x20000);
+    domain.loader.borrowed_image=input.preexisting_image;
+    domain.loader.source_sha256=program.source().sha256;
+    domain.loader.readable.assign(image.bytes.size(),1);domain.loader.writable.assign(image.bytes.size(),1);
+    // These explicit finite-domain premises do not enable generic HostAbi or
+    // establish a storage producer, historical allocator readiness or callback.
+    domain.loader.mapping.allocator_boundary_available=true;
+    domain.loader.mapping.borrowed_image_lifetime_available=true;
+    out.constructor=owner.ContinueActualConstruction6656C(out.entry.constructor_entry,std::move(domain));
+    out.snapshot=owner.ConstructionSnapshot();
+    out.verified=out.constructor.reached_loader&&out.constructor.loader_completed
+        &&out.constructor.boundary.source_pc==0x6664C&&out.constructor.callback_pointer==0
+        &&out.constructor.tables&&out.constructor.tables->shared_image()==out.snapshot.file.image
+        &&out.snapshot.file.image->bytes.at(2)==0x44&&!owner.Snapshot().initialization_tail_applied;
+    return out;
+}
 int SelfTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     std::ostringstream report;
@@ -1098,14 +1185,18 @@ struct Application {
     }
     void ManagerProbe() {
         messageVisible=false;
-        auto extended=ConstructOwnerSuffixPrefix({true,0},ConditionalLoadCheckpoint(0));
+        auto extended=ConstructActualConstructionPrefix(program,0);
         auto& initialized=extended.initialized;
         auto& built=initialized.prefix;
         managerVerified=extended.verified;
+        if(!built.manager||!built.callbackOwner||!initialized.producer) {
+            status=L"Для условного создания VM нужен проверенный NEKO.KSC и живой owner.";
+            return;
+        }
         managerQueue=std::move(built.manager); // Keep real owned storage alive in the application.
         callbackOwner=std::move(built.callbackOwner);
         producer=std::move(initialized.producer);
-        status=L"Условная инициализация продолжена до форматирования пути. Загрузка сценария и kernel остаются барьерами.";
+        status=L"Условное создание VM: путь, allocation и таблицы загружены; неизвестный callback остаётся барьером.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence/L"manager-queue-probe.json",std::ios::binary);
         report<<"{\"native_owned_storage\":true,\"allocated_bytes\":"<<built.snapshot.allocated_bytes
@@ -1124,9 +1215,16 @@ struct Application {
             <<",\"producer_source_input_explicit\":true,\"allocator_return_explicit\":true"
             <<",\"conditional_owner_checkpoint\":false,\"owner_remaining_initialization_unknown\":true"
             <<",\"owner_budget_initialized\":false"
-            <<",\"suffix_entry_pc\":"<<extended.suffix.entry_pc
-            <<",\"suffix_boundary_pc\":"<<extended.suffix.boundary.source_pc
-            <<",\"suffix_callee\":"<<extended.suffix.boundary.callee
+            <<",\"suffix_entry_pc\":"<<uint32_t{0x23194}
+            <<",\"constructor_entry_reached\":"<<(extended.entry.reached_constructor_entry?"true":"false")
+            <<",\"constructor_boundary_pc\":"<<extended.constructor.boundary.source_pc
+            <<",\"constructor_callback_pointer\":"<<extended.constructor.callback_pointer
+            <<",\"source_loader_returned\":"<<(extended.constructor.loader_completed?"true":"false")
+            <<",\"whole_constructor_returned\":false"
+            <<",\"manual_heap_and_empty_globals_premise\":true"
+            <<",\"preexisting_storage_origin_unverified\":true"
+            <<",\"shared_image_bytes\":"<<(extended.snapshot.file.image?extended.snapshot.file.image->bytes.size():0)
+            <<",\"source_vm_address\":"<<extended.snapshot.source_vm_address
             <<",\"CLoadMan_checkpoint_explicit\":true,\"actual_CLoadMan_created\":false"
             <<",\"kernel_return_observed\":false"
             <<",\"verified\":"<<(managerVerified?"true":"false")

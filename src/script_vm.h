@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "recovered/current_tables_native.h"
 
 // Restricted KSC v20030204 reader/interpreter. No PSP CPU, OS or GPU emulation.
 // Source tables and strings are data; reading them never emits dialogue.
@@ -59,6 +60,10 @@ public:
     uint32_t initial_word(Table table, uint16_t index) const;
     std::string pool_bytes(uint32_t relative) const;
     bool loaded() const { return !bytes_.empty(); }
+    // Explicit source-loader domain. The caller supplies actual masks and
+    // allocator/context/stack/lifetime mappings; default input is unavailable.
+    // The original verified image and its identity always come from Program.
+    recovered::CurrentTablesOwner load_current_tables(recovered::CurrentTablesInput input) const;
 private:
     Header header_;
     Source source_;

@@ -142,6 +142,14 @@ bool Program::load_original_bytes(std::vector<uint8_t> bytes, const std::filesys
         return false;
     }
 }
+recovered::CurrentTablesOwner Program::load_current_tables(recovered::CurrentTablesInput input) const {
+    if (!loaded()) throw std::runtime_error("Current source loader requires a verified original Program");
+    if (input.readable.size() != bytes_.size() || input.writable.size() != bytes_.size())
+        throw std::runtime_error("Current source loader requires exact explicit image byte masks");
+    input.image = bytes_;
+    input.source_sha256 = source_.sha256;
+    return recovered::CurrentTablesOwner::Load(input);
+}
 void Program::parse() {
     auto size = static_cast<uint32_t>(bytes_.size());
     if (size < 28 || uint_at(bytes_, 0, 4, size) != 0x0043534B || uint_at(bytes_, 4, 4, size) != 0x20030204)
