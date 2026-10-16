@@ -108,6 +108,72 @@ dokodemo::recovered::ClockCallbackReturn ReadCapturedClockSample(const std::file
         throw std::runtime_error("Captured sample does not match the explicit Windows/RTC ABI conversion");
     return {true,cached};
 }
+// This reader accepts the flat captured-input schema, including metadata arrays.
+// Capture success is a required premise; arithmetic consistency alone is insufficient.
+std::map<std::string,std::string> CapturedRngFields(const std::string& json) {
+    size_t at=0;
+    if(json.compare(0,3,"\xEF\xBB\xBF")==0) at=3;
+    const auto whitespace=[&]() {
+        at=json.find_first_not_of(" \t\r\n",at);
+        if(at==std::string::npos) throw std::runtime_error("Incomplete RNG sample object");
+    };
+    whitespace();
+    if(json[at++]!='{') throw std::runtime_error("RNG sample must be an object");
+    std::map<std::string,std::string> fields;
+    whitespace();
+    if(json[at]=='}') throw std::runtime_error("Empty RNG sample object");
+    for(;;) {
+        whitespace();
+        if(json[at++]!='"') throw std::runtime_error("Invalid RNG sample field");
+        const auto key_start=at;
+        while(at<json.size()&&json[at]!='"') {
+            if(json[at]=='\\'||static_cast<unsigned char>(json[at])<0x20)
+                throw std::runtime_error("RNG sample keys must be plain schema names");
+            ++at;
+        }
+        if(at==json.size()) throw std::runtime_error("Incomplete RNG sample key");
+        const auto key=json.substr(key_start,at++-key_start);
+        whitespace();
+        if(json[at++]!=':') throw std::runtime_error("Missing RNG sample field separator");
+        whitespace();
+        const auto value_start=at;
+        bool quoted=false,escaped=false;
+        unsigned arrays=0;
+        for(;at<json.size();++at) {
+            const auto ch=json[at];
+            if(quoted) {
+                if(escaped) escaped=false;
+                else if(ch=='\\') escaped=true;
+                else if(ch=='"') quoted=false;
+            } else if(ch=='"') quoted=true;
+            else if(ch=='[') ++arrays;
+            else if(ch==']') {
+                if(!arrays) throw std::runtime_error("Invalid RNG sample array");
+                --arrays;
+            } else if(ch=='{') throw std::runtime_error("Nested RNG sample object is unsupported");
+            else if((ch==','||ch=='}')&&!arrays) break;
+        }
+        if(at==json.size()||quoted||arrays) throw std::runtime_error("Incomplete RNG sample value");
+        const auto value_end=json.find_last_not_of(" \t\r\n",at-1);
+        if(value_end==std::string::npos||value_end<value_start
+           ||!fields.emplace(key,json.substr(value_start,value_end-value_start+1)).second)
+            throw std::runtime_error("Empty or duplicate RNG sample field");
+        if(json[at++]=='}') break;
+    }
+    if(json.find_first_not_of(" \t\r\n",at)!=std::string::npos)
+        throw std::runtime_error("Trailing RNG sample data");
+    return fields;
+}
+uint64_t CapturedRngInteger(const std::map<std::string,std::string>& fields,
+                            const std::string& key,bool quoted=false) {
+    auto text=fields.at(key);
+    if(quoted&&text.size()>=2&&text.front()=='"'&&text.back()=='"')
+        text=text.substr(1,text.size()-2);
+    if(text.empty()||text.find_first_not_of("0123456789")!=std::string::npos
+       ||(text.size()>1&&text.front()=='0'))
+        throw std::runtime_error("Invalid RNG sample unsigned integer");
+    return std::stoull(text,nullptr,10);
+}
 struct CapturedRngSeed {
     uint64_t filetime_100ns=0;
     int32_t offset_minutes=0;
@@ -120,23 +186,35 @@ CapturedRngSeed ReadCapturedRngSeed(const std::filesystem::path& path) {
     std::array<char,16385> buffer{};input.read(buffer.data(),static_cast<std::streamsize>(buffer.size()));
     const auto count=input.gcount();
     if(count==static_cast<std::streamsize>(buffer.size())) throw std::runtime_error("RNG sample exceeds size limit");
-    const std::string json(buffer.data(),static_cast<size_t>(count));
-    const std::string key="\"effective_offset_minutes\"";
-    const auto at=json.find(key),colon=at==std::string::npos?at:json.find(':',at+key.size());
-    if(colon==std::string::npos) throw std::runtime_error("Missing RNG timezone offset");
-    const auto begin=json.find_first_not_of(" \t\r\n",colon+1);
-    if(begin==std::string::npos) throw std::runtime_error("Missing RNG offset integer");
-    const auto end=json.find_first_not_of("-0123456789",begin);
-    size_t used=0;const auto offset=std::stoll(json.substr(begin,end-begin),&used,10);
-    if(used!=end-begin||offset < -1440||offset>1440) throw std::runtime_error("Invalid RNG timezone offset");
-    CapturedRngSeed seed;seed.filetime_100ns=ClockSampleInteger(json,"utc_filetime_100ns");
+    const auto fields=CapturedRngFields(std::string(buffer.data(),static_cast<size_t>(count)));
+    if(fields.at("schema")!="\"dokodemo.stage10.actual-rng-initialization-sample.v1\"")
+        throw std::runtime_error("Unsupported RNG capture schema");
+    for(const auto* field:{"available","precise_sample_observed","utc_date_returned",
+                           "timezone_returned","local_date_returned","civil_filetime_returned"})
+        if(fields.at(field)!="true") throw std::runtime_error("RNG capture did not return successful input");
+    if(CapturedRngInteger(fields,"timezone_query_result")>2||CapturedRngInteger(fields,"last_error")!=0)
+        throw std::runtime_error("RNG capture reports an API error");
+    const auto& offset_text=fields.at("effective_offset_minutes");
+    const auto digits=offset_text.size()&&offset_text.front()=='-'?size_t{1}:size_t{0};
+    if(digits==offset_text.size()||offset_text.find_first_not_of("0123456789",digits)!=std::string::npos)
+        throw std::runtime_error("Invalid RNG timezone offset");
+    const auto offset=std::stoll(offset_text,nullptr,10);
+    if(offset < -1440||offset>1440) throw std::runtime_error("Invalid RNG timezone offset");
+    CapturedRngSeed seed;seed.filetime_100ns=CapturedRngInteger(fields,"utc_filetime_100ns",true);
     seed.offset_minutes=static_cast<int32_t>(offset);
     if(!dokodemo::platform::RngSeedFromUtcFileTimeAndOffset(seed.filetime_100ns,seed.offset_minutes,seed.conversion)
-       ||seed.conversion.local_civil_epoch_seconds!=ClockSampleInteger(json,"seed_u32")
-       ||ClockSampleInteger(json,"seed_high_u32")!=0
-       ||seed.conversion.utc_tick_us!=ClockSampleInteger(json,"utc_rtc_tick_us")
-       ||seed.conversion.local_tick_us!=ClockSampleInteger(json,"local_rtc_tick_us"))
+       ||seed.conversion.local_civil_epoch_seconds!=CapturedRngInteger(fields,"seed_u32")
+       ||CapturedRngInteger(fields,"seed_high_u32")!=0
+       ||seed.conversion.utc_tick_us!=CapturedRngInteger(fields,"utc_rtc_tick_us",true)
+       ||seed.conversion.local_tick_us!=CapturedRngInteger(fields,"local_rtc_tick_us",true))
         throw std::runtime_error("RNG sample contradicts the explicit successful RTC initialization ABI");
+    constexpr char hex[]="0123456789abcdef";
+    std::string output="\"";
+    for(const auto byte:seed.conversion.source_sp20_bytes) {
+        output+=hex[byte>>4];output+=hex[byte&15];
+    }
+    output+='"';
+    if(fields.at("source_sp20_hex")!=output) throw std::runtime_error("RNG initializer output bytes disagree");
     return seed;
 }
 void Output(const std::string& text) {

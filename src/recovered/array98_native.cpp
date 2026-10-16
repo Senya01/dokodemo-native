@@ -82,7 +82,10 @@ void copy7581C(BulkCells& cells, BulkAddress target, BulkAddress argument, Strin
         cells.store(target, source); // Source75844: no release, even over tag6.
         return;
     }
-    uint32_t value = cells.load(target).word;
+    const BulkCell destination = cells.load(target);
+    require(!destination.is_reference && destination.word >> 28 == 6, 0x753E0,
+        "Array98 owned copy to non-owned destination needs live tag/pointer publication");
+    uint32_t value = destination.word;
     strings(arena).copy7581C(value, source.word);
     BulkCell output; output.word = value;
     cells.store(target, output);

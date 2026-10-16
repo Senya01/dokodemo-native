@@ -19,6 +19,9 @@ private:
 // Tag5/6 numeric conversion C1E0C and numeric symbolic references remain cuts.
 // String equality/copy/release use the unchanged CURRENT StringArena only when
 // reached. nullptr authorizes scalar/reference work, never heap readiness.
+// Owned copy to a non6 or symbolic-reference destination is a protective cut
+// before the string getter/cursor/allocation: live intermediate tag/pointer
+// publication is unsupported by this storage path. This is not a PSP fault.
 // StringArena's checked failure policy does not reproduce raw partial faults.
 int32_t Array98Apply(BulkCells& cells, BulkAddress rows_argument,
     BulkAddress predicates_argument, BulkAddress actions_argument,
