@@ -14,6 +14,7 @@
 #include "game_font.h"
 #include "model_formats.hpp"
 #include "startup_probe.h"
+#include "startup_runtime_win32.h"
 #include "recovered/menu_primitives.h"
 #include "recovered/calendar_native.h"
 #include "recovered/service47_native.h"
@@ -39,23 +40,32 @@
 
 using namespace native_port;
 namespace {
-struct Options { bool selfTest = false, smoke = false, constructionSmoke = false; std::filesystem::path assets, evidence, clockSample, rngSample; };
+struct Options {
+    bool selfTest = false, smoke = false, constructionSmoke = false;
+    bool connectedStartupTest = false, connectedStartupWindowTest = false;
+    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia;
+};
 Options ParseOptions() {
     Options options;
     int count = 0; auto args = CommandLineToArgvW(GetCommandLineW(), &count);
     for (int i = 1; i < count; ++i) {
         std::wstring arg = args[i];
         if (arg == L"--self-test") options.selfTest = true;
+        else if (arg == L"--connected-startup-test") options.connectedStartupTest = true;
+        else if (arg == L"--connected-startup-window-test") options.connectedStartupWindowTest = true;
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
         else if (arg == L"--evidence" && i + 1 < count) options.evidence = args[++i];
         else if (arg == L"--clock-sample" && i + 1 < count) options.clockSample = args[++i];
         else if (arg == L"--rng-sample" && i + 1 < count) options.rngSample = args[++i];
+        else if (arg == L"--startup-media-root" && i + 1 < count) options.startupMedia = args[++i];
         else { LocalFree(args); throw std::runtime_error("Unknown or incomplete command line argument"); }
     }
     LocalFree(args);
     options.assets = ResolveAssets(options.assets);
+    if (options.startupMedia.empty()) options.startupMedia = options.assets.parent_path() / L"iso";
+    options.startupMedia = std::filesystem::absolute(options.startupMedia);
     if (options.evidence.empty()) options.evidence = std::filesystem::current_path() / L"evidence";
     options.evidence = std::filesystem::absolute(options.evidence);
     if(options.clockSample.empty()&&(options.selfTest||options.smoke)) {
@@ -1025,8 +1035,138 @@ int SelfTest(const Options& options) {
     std::ofstream(options.evidence / L"self-test.txt", std::ios::binary) << text;
     return failures ? 1 : 0;
 }
+void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::StartupObservation& observation) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) throw std::runtime_error("Cannot write native startup observation");
+    const auto boolean = [](bool value) { return value ? "true" : "false"; };
+    constexpr char hex[] = "0123456789abcdef";
+    std::string pendingOptions;
+    for (uint8_t byte : observation.pending_module_options) {
+        pendingOptions += hex[byte >> 4]; pendingOptions += hex[byte & 15];
+    }
+    out << "{\"domain\":" << JsonString(observation.domain)
+        << ",\"caller_state\":" << JsonString(observation.caller_state)
+        << ",\"worker_state\":" << JsonString(observation.worker_state)
+        << ",\"barrier\":" << JsonString(observation.barrier)
+        << ",\"barrier_source_pc\":" << observation.barrier_source_pc
+        << ",\"owner\":" << observation.owner << ",\"last_event\":" << observation.last_event
+        << ",\"dropped_events\":" << observation.dropped_events
+        << ",\"caller_thread_id\":" << observation.caller_thread_id
+        << ",\"worker_thread_id\":" << observation.worker_thread_id
+        << ",\"stored_thread_uid\":" << observation.stored_thread_uid
+        << ",\"uid_slot_written\":" << boolean(observation.uid_slot_written)
+        << ",\"callback_uid\":" << observation.callback_uid
+        << ",\"callback_create_result\":" << observation.callback_create_result
+        << ",\"callback_register_result\":" << observation.callback_register_result
+        << ",\"callback_setup_returned\":" << boolean(observation.callback_setup_returned)
+        << ",\"callback_dispatch_count\":" << observation.callback_dispatch_count
+        << ",\"callback_dispatch_thread\":" << observation.callback_dispatch_thread
+        << ",\"source_fd\":" << observation.source_fd
+        << ",\"media_live\":" << boolean(observation.media_live)
+        << ",\"file_live\":" << boolean(observation.file_live)
+        << ",\"callback_live\":" << boolean(observation.callback_live)
+        << ",\"caller_joined\":" << boolean(observation.caller_joined)
+        << ",\"worker_joined\":" << boolean(observation.worker_joined)
+        << ",\"resources_closed\":" << boolean(observation.resources_closed)
+        << ",\"exit_requested\":" << boolean(observation.exit_requested)
+        << ",\"media_volume\":" << observation.media_volume
+        << ",\"media_file_index\":" << observation.media_file_index
+        << ",\"file_native_object\":" << observation.file_native_object
+        << ",\"file_backend_owner\":" << observation.file_backend_owner
+        << ",\"file_backend_generation\":" << observation.file_backend_generation
+        << ",\"file_backend_serial\":" << observation.file_backend_serial
+        << ",\"pending_module_live\":" << boolean(observation.pending_module_live)
+        << ",\"pending_module_owner\":" << observation.pending_module_owner
+        << ",\"pending_module_flags\":" << observation.pending_module_flags
+        << ",\"pending_module_path\":" << JsonString(observation.pending_module_path)
+        << ",\"pending_module_options_hex\":" << JsonString(pendingOptions)
+        << ",\"status\":" << JsonString(dokodemo::StartupRuntimeCodeName(observation.status.code))
+        << ",\"preceding_psp_history\":" << boolean(observation.preceding_psp_history)
+        << ",\"constructors_established\":" << boolean(observation.constructors_established)
+        << ",\"reached_100C\":" << boolean(observation.reached_100C)
+        << ",\"full_game\":" << boolean(observation.full_game) << ",\"events\":[";
+    bool first = true;
+    for (const auto& event : observation.events) {
+        if (!first) out << ',';
+        first = false;
+        out << "{\"ordinal\":" << event.ordinal << ",\"operation\":" << JsonString(event.operation)
+            << ",\"origin\":" << JsonString(event.origin) << ",\"detail\":" << JsonString(event.detail)
+            << ",\"source_pc\":" << event.source_pc << ",\"thread\":" << event.thread
+            << ",\"native_object\":" << event.native_object << ",\"owner\":" << event.owner
+            << ",\"value\":" << event.value << ",\"source_return\":" << boolean(event.source_return)
+            << ",\"win32_error\":" << event.win32_error << ",\"wait_result\":" << event.wait_result
+            << ",\"crt_errno\":" << event.crt_errno << ",\"dos_errno\":" << event.dos_errno << '}';
+    }
+    out << "]}\n";
+    if (!out) throw std::runtime_error("Native startup observation write failed");
+}
+bool AtFirstNativeModuleBoundary(const dokodemo::StartupObservation& observation) {
+    return observation.domain == "WindowsNativeEntry1184" && observation.barrier_source_pc == 0x4F53C
+        && observation.caller_state == "SourceSleeping" && observation.worker_state == "Blocked"
+        && observation.uid_slot_written && observation.stored_thread_uid > 0
+        && observation.callback_uid > 0 && observation.callback_setup_returned
+        && observation.callback_create_result == observation.callback_uid
+        && observation.callback_register_result == 0 && observation.source_fd >= 0
+        && observation.media_live && observation.file_live && observation.callback_live
+        && observation.pending_module_live && observation.pending_module_owner == observation.owner
+        && observation.pending_module_flags == 0
+        && observation.pending_module_path == "disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx"
+        && observation.pending_module_options == std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        && observation.file_native_object && observation.file_backend_owner
+        && observation.file_backend_generation && observation.file_backend_serial
+        && observation.caller_thread_id && observation.worker_thread_id
+        && observation.caller_thread_id != observation.worker_thread_id
+        && !observation.preceding_psp_history && !observation.constructors_established
+        && !observation.reached_100C && !observation.full_game && observation.dropped_events == 0;
+}
+int ConnectedStartupTest(const Options& options) {
+    std::filesystem::create_directories(options.evidence);
+    dokodemo::StartupRuntimeStatus createStatus;
+    auto startup = dokodemo::StartupCoordinator::Create({options.startupMedia.wstring()}, createStatus);
+    if (!startup || !createStatus) throw std::runtime_error("Cannot create native startup coordinator");
+    const auto started = startup->Start();
+    const auto duplicate = startup->Start();
+    auto boundary = startup->Observe();
+    const auto deadline = GetTickCount64() + 5000;
+    while (!AtFirstNativeModuleBoundary(boundary) && GetTickCount64() < deadline && boundary.status) {
+        Sleep(1);
+        boundary = startup->Observe();
+    }
+    WriteStartupObservation(options.evidence / L"startup-boundary.json", boundary);
+    const bool reached = AtFirstNativeModuleBoundary(boundary);
+    const auto requested = startup->RequestExit();
+    const auto exitDeadline = GetTickCount64() + 2000;
+    auto dispatched = startup->Observe();
+    while (!dispatched.callback_dispatch_count && GetTickCount64() < exitDeadline && dispatched.status) {
+        Sleep(1);
+        dispatched = startup->Observe();
+    }
+    WriteStartupObservation(options.evidence / L"startup-exit-dispatch.json", dispatched);
+    const auto closed = startup->Close(5000);
+    const auto closedAgain = startup->Close(5000);
+    const auto after = startup->Observe();
+    WriteStartupObservation(options.evidence / L"startup-after-close.json", after);
+    const bool ok = started && duplicate.code == dokodemo::StartupRuntimeCode::AlreadyStarted
+        && reached && requested && dispatched.callback_dispatch_count == 1
+        && dispatched.callback_dispatch_thread == boundary.worker_thread_id
+        && closed && closedAgain && after.caller_joined && after.worker_joined && after.resources_closed
+        && !after.callback_live && !after.file_live && !after.media_live && !after.pending_module_live
+        && after.dropped_events == 0;
+    std::ofstream summary(options.evidence / L"connected-startup-test.json", std::ios::binary);
+    summary << "{\"same_application_coordinator\":true,\"passed\":" << (ok ? "true" : "false")
+        << ",\"first_module_boundary\":" << (reached ? "true" : "false")
+        << ",\"duplicate_start_rejected\":" << (duplicate.code == dokodemo::StartupRuntimeCode::AlreadyStarted ? "true" : "false")
+        << ",\"preceding_psp_history\":false,\"PRX_bodies_implemented\":0,\"required_PRX_bodies\":9"
+        << ",\"old_ECB_advanced\":0,\"coverage_delta\":0,\"full_game\":false}\n";
+    Output(std::string("CONNECTED_STARTUP ") + (ok ? "PASS" : "FAIL") + "\n");
+    return ok ? 0 : 1;
+}
 struct Application {
     Options options; HWND window = nullptr; HFONT font = nullptr, titleFont = nullptr;
+    std::unique_ptr<dokodemo::StartupCoordinator> nativeStartup;
+    dokodemo::StartupObservation startupObservation;
+    std::wstring startupStatus = L"Нативный запуск ещё не начат.";
+    bool startupWindowCloseSent = false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
     std::wstring status; uint64_t frames = 0, inputEvents = 0; bool imageLoaded = false, smokeInputSent = false;
@@ -1067,7 +1207,48 @@ struct Application {
         if (program.load_original(options.assets / L"scripts/original/NEKO.KSC", diagnostic)) vm = std::make_unique<dokodemo::script::Vm>(program);
         std::wstring fontError; gameFont.Load(options.assets / L"graphics/font",fontError);
     }
-    ~Application() { ReleaseBuffer(); DeleteObject(font); DeleteObject(titleFont); }
+    ~Application() {
+        if (nativeStartup) (void)nativeStartup->Close();
+        ReleaseBuffer(); DeleteObject(font); DeleteObject(titleFont);
+    }
+    void BeginNativeStartup() {
+        dokodemo::StartupRuntimeStatus created;
+        nativeStartup = dokodemo::StartupCoordinator::Create({options.startupMedia.wstring()}, created);
+        if (!nativeStartup || !created) {
+            startupStatus = L"Нативный запуск: не удалось создать владельца Windows-сервисов.";
+            return;
+        }
+        const auto started = nativeStartup->Start();
+        if (!started) startupStatus = L"Нативный запуск: ошибка создания потоков Windows.";
+        else RefreshNativeStartup();
+    }
+    void RefreshNativeStartup() {
+        if (!nativeStartup) return;
+        startupObservation = nativeStartup->Observe();
+        if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
+        else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
+        else if (startupObservation.barrier_source_pc == 0x4F53C)
+            startupStatus = L"Нативный запуск: файл audiocodec.prx открыт; его загрузчик ещё не реализован.";
+        else startupStatus = L"Нативный запуск: рабочий поток проверяет игровой носитель.";
+    }
+    bool CloseNativeStartup() {
+        if (!nativeStartup) return true;
+        (void)nativeStartup->RequestExit();
+        const auto deadline = GetTickCount64() + 250;
+        RefreshNativeStartup();
+        while (startupObservation.callback_live && !startupObservation.callback_dispatch_count && GetTickCount64() < deadline) {
+            Sleep(1);
+            RefreshNativeStartup();
+        }
+        const auto closed = nativeStartup->Close(5000);
+        RefreshNativeStartup();
+        if (!closed) startupStatus = L"Нативный запуск: ожидается безопасное завершение потоков.";
+        return bool(closed);
+    }
+    void RequestWindowClose() {
+        if (CloseNativeStartup()) DestroyWindow(window);
+        else InvalidateRect(window, nullptr, FALSE);
+    }
     void ReleaseBuffer() {
         if (bufferDC && oldBuffer) SelectObject(bufferDC, oldBuffer);
         if (buffer) DeleteObject(buffer);
@@ -1100,7 +1281,8 @@ struct Application {
         Text(dc, L"Doko Demo Issyo · native recovery", {24,18,width-24,58}, RGB(241,244,246));
         SelectObject(dc, font);
         Text(dc, L"Промежуточная сборка восстановления. Полная игра пока не реализована.", {24,58,width-24,88}, RGB(255,198,109));
-        int top = 104, bottom = std::max(top + 100, height - 178);
+        Text(dc, startupStatus, {24,88,width-24,118}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
+        int top = 128, bottom = std::max(top + 100, height - 178);
         int availableW = width - 48, availableH = bottom - top;
         double scale = std::min(double(availableW) / 480.0, double(availableH) / 272.0);
         int vw = int(480 * scale), vh = int(272 * scale), vx = (width-vw)/2, vy = top+(availableH-vh)/2;
@@ -1178,7 +1360,7 @@ struct Application {
         else if (key == VK_F9) Load();
         else if (key == VK_F10) ClockStorageProbe();
         else if (key == VK_F12) Capture();
-        else if (key == VK_ESCAPE) DestroyWindow(window);
+        else if (key == VK_ESCAPE) RequestWindowClose();
         InvalidateRect(window,nullptr,FALSE);
     }
     void StartupProbe() {
@@ -1419,6 +1601,7 @@ struct Application {
         else status = Utf8(result.message);
     }
     void Tick() {
+        RefreshNativeStartup();
         LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
         elapsed = double(now.QuadPart-start.QuadPart)/frequency.QuadPart;
         auto reading = dokodemo::save::ReadSystemClock();
@@ -1428,6 +1611,20 @@ struct Application {
         state.last_observed_utc_offset_minutes = reading.utc_offset_minutes;
         if (double(now.QuadPart-last.QuadPart)/frequency.QuadPart >= 1.0/60.0) {
             ++frames; last = now; InvalidateRect(window,nullptr,FALSE);
+        }
+        if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
+            && AtFirstNativeModuleBoundary(startupObservation)) {
+            startupWindowCloseSent = true;
+            std::filesystem::create_directories(options.evidence);
+            WriteStartupObservation(options.evidence / L"window-startup-boundary.json", startupObservation);
+            Capture();
+            PostMessageW(window, WM_CLOSE, 0, 0); // actual app shutdown route, no old F-key sequence
+        }
+        if (options.connectedStartupWindowTest && elapsed > 5.0 && !startupWindowCloseSent) {
+            startupWindowCloseSent = true;
+            std::filesystem::create_directories(options.evidence);
+            WriteStartupObservation(options.evidence / L"window-startup-unexpected.json", startupObservation);
+            PostMessageW(window, WM_CLOSE, 0, 0);
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;
@@ -1474,6 +1671,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case WM_PAINT: app->Paint(); return 0;
         case WM_ERASEBKGND: return 1;
         case WM_KEYDOWN: app->Key(wParam); return 0;
+        case WM_CLOSE: app->RequestWindowClose(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: return DefWindowProcW(window,message,wParam,lParam);
     }
@@ -1482,12 +1680,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     try {
         SetProcessDPIAware(); auto options = ParseOptions();
+        if (options.connectedStartupTest) return ConnectedStartupTest(options);
         if (options.selfTest) return SelfTest(options);
         Application app(options);
         WNDCLASSW wc{}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance; wc.lpszClassName = L"DokodemoNativeRecovery"; wc.hCursor = LoadCursorW(nullptr,IDC_ARROW);
         if (!RegisterClassW(&wc)) throw std::runtime_error("Cannot register Win32 window");
         auto window = CreateWindowExW(0,wc.lpszClassName,L"Doko Demo Issyo — native recovery (incomplete)",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1100,800,nullptr,nullptr,instance,&app);
         if (!window) throw std::runtime_error("Cannot create Win32 window");
+        app.BeginNativeStartup();
         ShowWindow(window, show); UpdateWindow(window);
         MSG message{}; bool running = true;
         while (running) {
@@ -1496,6 +1696,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 TranslateMessage(&message); DispatchMessageW(&message);
             }
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }
+        }
+        if (options.connectedStartupWindowTest) {
+            app.RefreshNativeStartup();
+            WriteStartupObservation(options.evidence / L"window-startup-after-close.json", app.startupObservation);
+            const bool ok = app.startupObservation.barrier_source_pc == 0x4F53C
+                && app.startupObservation.callback_dispatch_count == 1
+                && app.startupObservation.callback_dispatch_thread == app.startupObservation.worker_thread_id
+                && app.startupObservation.caller_joined && app.startupObservation.worker_joined
+                && app.startupObservation.resources_closed && app.frames >= 6 && app.inputEvents == 0;
+            std::ofstream report(options.evidence / L"connected-window-test.json", std::ios::binary);
+            report << "{\"passed\":" << (ok ? "true" : "false") << ",\"frames\":" << app.frames
+                << ",\"old_key_sequence_executed\":false,\"automatic_native_startup\":true"
+                << ",\"old_ECB_advanced\":0,\"coverage_delta\":0,\"full_game\":false}\n";
+            return ok ? 0 : 1;
         }
         if(options.constructionSmoke) {
             return !app.imageLoaded || app.frames < 30 || app.inputEvents != 2

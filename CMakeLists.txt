@@ -14,6 +14,7 @@ add_library(dokodemo-core STATIC
     src/core/cp932.cpp
     src/script_vm.cpp
     src/startup_probe.cpp
+    src/recovered/startup_flow_native.cpp
     src/model_formats.cpp
     src/recovered/game_primitives.cpp
     src/recovered/menu_primitives.cpp
