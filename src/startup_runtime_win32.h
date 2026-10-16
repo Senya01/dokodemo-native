@@ -51,6 +51,16 @@ struct StartupObservation {
     bool pending_module_live = false;
     std::string pending_module_path;
     std::vector<uint8_t> pending_module_options; //actual20B request copy, never a PRX payload
+    uint64_t encoded_file_bytes = 0, staging_owner = 0, staging_generation = 0, staging_serial = 0;
+    uint64_t staging_host_address = 0, staging_known_bytes = 0;
+    int64_t staging_file_position = -1;
+    uint32_t staging_source_coordinate = 0, staging_requested = 0, staging_transferred = 0;
+    uint32_t staging_read_error = 0;
+    bool staging_live = false, staging_borrow_live = false, staging_host_read = false;
+    bool staging_full_read = false, staging_hash_matches = false, staging_freed_after_joins = false;
+    bool module_uid_assigned = false, module_load_returned = false, module_start_called = false;
+    int32_t module_uid = 0;
+    std::string staging_sha256, module_binding_frontier;
     StartupRuntimeStatus status;
     std::vector<StartupRuntimeEvent> events; // bounded metadata, never payloads
 };

@@ -1,6 +1,8 @@
 #include "startup_runtime_win32.h"
 #include "startup_memory_backend_win32.h"
 #include "recovered/startup_flow_native.h"
+#include "recovered/audiocodec_module_native.h"
+#include "core_hash.h"
 #include <windows.h>
 #include <process.h>
 #include <algorithm>
@@ -31,6 +33,7 @@ struct NativeFailure {};
 // Adapter return encoding: -1 means an actual native operation/registry validation
 // failed; 0 means success for status calls. Exact PSP error numbers are unknown.
 constexpr int32_t AdapterError = -1;
+constexpr uint32_t EncodedModuleBytes = 3232, HostStagingCoordinate = 0x61000000;
 }
 
 struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
@@ -64,6 +67,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     StartupNativeFile file;
     uint64_t file_native = 0;
     uint64_t file_runtime_owner = 0;
+    uint64_t encoded_file_size = 0;
     std::string source_file_path;
     struct PendingModuleRequest {
         bool live = false;
@@ -73,6 +77,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         StartupNativeFile backend_file;
         recovered::StartupModuleOptions options{};
         std::string path;
+        StartupNativeBlock staging;
+        StartupAllocationBorrow staging_borrow;
     } pending_module;
     std::atomic<bool> cancelled{false};
 
@@ -476,7 +482,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                      false, opened.host_handle, closed.win32_error);
             } else {
                 file = opened.handle; file_native = opened.host_handle;
-                file_runtime_owner = state.owner; source_file_path = path;
+                file_runtime_owner = state.owner; encoded_file_size = opened.file_size;
+                source_file_path = path;
             }
         }
         std::lock_guard<std::mutex> lock(metadata);
@@ -486,37 +493,178 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             state.file_backend_owner = file.owner;
             state.file_backend_generation = file.generation;
             state.file_backend_serial = file.serial;
+            state.encoded_file_bytes = encoded_file_size;
         }
         EmitLocked("IoOpenAdapter", "SourceAdapter", 0x4F514, fd, true, opened.host_handle,
                    opened.status.win32_error, 0, "accepted WindowsStartupBackend::OpenRead;flags1/mode0");
         return fd;
     }
-    void UnsupportedLoadModule(int32_t fd, uint32_t flags,
+    recovered::StartupModuleOutcome ModuleStopResult(recovered::StartupModuleStop stop,
+        const char* frontier, DWORD error = 0, uint32_t source_pc = 0x4F53C) {
+        std::lock_guard<std::mutex> lock(metadata);
+        state.module_binding_frontier = frontier;
+        if (stop == recovered::StartupModuleStop::Unsupported) {
+            state.barrier_source_pc = source_pc; state.worker_state = "Blocked";
+            state.barrier = frontier;
+        } else if (stop == recovered::StartupModuleStop::HostFailure) {
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
+        }
+        EmitLocked("ModuleCallStop", stop == recovered::StartupModuleStop::Unsupported ? "Unsupported" : "HostLifecycle",
+                   source_pc, 0, false, file_native, error, 0, frontier);
+        return stop; //no source service result exists in this alternative
+    }
+    recovered::StartupModuleOutcome LoadModuleById(int32_t fd, uint32_t flags,
                                const recovered::StartupModuleOptions& option) override {
+        using Stop = recovered::StartupModuleStop;
+        if (HostCancelled()) return Stop::HostCancelled;
+        {
         std::lock_guard<std::mutex> lock(metadata);
         if (!IsCurrent(true) || !file || fd < 0 || fd != state.source_fd ||
             !state.file_live || file_runtime_owner != state.owner ||
             file.owner != state.file_backend_owner || file.generation != state.file_backend_generation ||
             file.serial != state.file_backend_serial || flags != 0 ||
-            option != recovered::StartupOptions4F59C(1)) throw NativeFailure{};
+            option != recovered::StartupOptions4F59C(1) || pending_module.staging) throw NativeFailure{};
         pending_module.live = true; pending_module.fd = fd; pending_module.flags = flags;
         pending_module.owner = state.owner; pending_module.backend_file = file;
         pending_module.options = option; pending_module.path = source_file_path;
         state.pending_module_owner = pending_module.owner; state.pending_module_live = true;
         state.pending_module_flags = pending_module.flags; state.pending_module_path = pending_module.path;
         state.pending_module_options.assign(pending_module.options.begin(), pending_module.options.end());
-        std::string option_hex;
-        const char digits[] = "0123456789abcdef";
-        for (const uint8_t byte : pending_module.options) {
-            option_hex += digits[byte >> 4]; option_hex += digits[byte & 15];
+        EmitLocked("LoadModuleByID-enter", "SourceCall", 0x4F53C, fd, false, file_native, 0, 0,
+                   "flags0;owned pending options20/path;no completed source Load result");
         }
-        state.barrier_source_pc = 0x4F53C; state.worker_state = "Blocked";
-        state.barrier = "Unsupported LoadModuleByID: original PRX body has no native implementation";
-        EmitLocked("UnsupportedLoadModuleByID", "Unsupported", 0x4F53C, fd, false, file_native, 0, 0,
-                   "flags=" + std::to_string(pending_module.flags) + ";options=" + option_hex +
-                   ";path=" + pending_module.path + ";backend-owner=" + std::to_string(file.owner) +
-                   ";backend-generation=" + std::to_string(file.generation) +
-                   ";backend-serial=" + std::to_string(file.serial) + ";live fd;no source v0/moduleUID");
+        if (encoded_file_size != EncodedModuleBytes)
+            return ModuleStopResult(Stop::Unsupported, "Encoded audiocodec file extent differs from the validated input");
+        const auto position = backend->Seek64(file, 0, 1);
+        Emit("ModuleObserveFilePosition", "HostModuleInput", 0x4F53C, position.position,
+             false, file_native, position.status.win32_error, 0, "same accepted-backend fd;whence1;no rewind");
+        if (!position.status)
+            return ModuleStopResult(Stop::HostFailure, "Module file-position observation failed", position.status.win32_error);
+        { std::lock_guard<std::mutex> lock(metadata); state.staging_file_position = position.position; }
+        if (position.position != 0)
+            return ModuleStopResult(Stop::Unsupported, "Only actual fresh-open position0 is supported for module input");
+        if (HostCancelled()) return Stop::HostCancelled;
+        StartupPartitionRequest request;
+        request.bytes = EncodedModuleBytes; request.source_base = HostStagingCoordinate;
+        const auto allocation = backend->Allocate(request);
+        if (!allocation.status)
+            return ModuleStopResult(Stop::HostFailure, "Module staging allocation failed", allocation.status.win32_error);
+        // Publish primitive ownership immediately. Backend remains the allocation owner.
+        pending_module.staging = allocation.handle;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.staging_live = true; state.staging_owner = allocation.handle.owner;
+            state.staging_generation = allocation.handle.generation; state.staging_serial = allocation.handle.serial;
+            state.staging_host_address = allocation.host_address;
+            state.staging_source_coordinate = allocation.source_base;
+            EmitLocked("ModuleStagingAllocated", "HostModuleInput", 0, allocation.requested_bytes,
+                       false, allocation.host_address, 0, 0, "61000000 is host staging coordinate;not PSP/module placement");
+        }
+        if (allocation.requested_bytes != EncodedModuleBytes || allocation.source_base != HostStagingCoordinate ||
+            !allocation.live || !allocation.readable || !allocation.writable)
+            return ModuleStopResult(Stop::HostFailure, "Module staging allocation geometry mismatch");
+        StartupHostStatus borrowed;
+        pending_module.staging_borrow = backend->Borrow(pending_module.staging, borrowed);
+        if (!borrowed)
+            return ModuleStopResult(Stop::HostFailure, "Module staging borrow failed", borrowed.win32_error);
+        { std::lock_guard<std::mutex> lock(metadata); state.staging_borrow_live = true; }
+        StartupRawBorrowSpan span;
+        auto access = pending_module.staging_borrow.Span(span);
+        if (!access || span.size != EncodedModuleBytes || !span.bytes || !span.initialized ||
+            !span.readable || !span.writable || span.source_base != HostStagingCoordinate ||
+            span.handle.owner != pending_module.staging.owner || span.handle.generation != pending_module.staging.generation ||
+            span.handle.serial != pending_module.staging.serial)
+            return ModuleStopResult(Stop::HostFailure, "Module staging lease geometry/identity failed", access.win32_error);
+        if (HostCancelled()) return Stop::HostCancelled;
+        const auto read = backend->ReadInto(file, pending_module.staging, 0, EncodedModuleBytes);
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.staging_requested = read.requested; state.staging_transferred = read.transferred;
+            state.staging_host_read = read.host_result; state.staging_read_error = read.status.win32_error;
+            EmitLocked("ModuleReadInto", "HostModuleInput", 0x4F53C, read.transferred, false,
+                       read.destination_host_address, read.status.win32_error, 0, StartupHostCodeName(read.status.code));
+        }
+        access = pending_module.staging_borrow.Span(span); //revalidate before every consumed range
+        if (!access || span.size != EncodedModuleBytes || !span.bytes || !span.initialized ||
+            !span.readable || span.source_base != HostStagingCoordinate ||
+            span.host_address != allocation.host_address || span.handle.owner != allocation.handle.owner ||
+            span.handle.generation != allocation.handle.generation || span.handle.serial != allocation.handle.serial)
+            return ModuleStopResult(Stop::HostFailure, "Module lease changed after input read", access.win32_error);
+        uint32_t known = 0;
+        for (uint32_t i = 0; i < EncodedModuleBytes; ++i) if (span.initialized[i] == 1) ++known;
+        { std::lock_guard<std::mutex> lock(metadata); state.staging_known_bytes = known; }
+        if (!read.status || !read.host_result || read.requested != EncodedModuleBytes ||
+            read.transferred != EncodedModuleBytes || read.file_position != 0 ||
+            read.destination_host_address != span.host_address)
+            return ModuleStopResult(Stop::HostFailure, "Module read failed/short/position or destination mismatch", read.status.win32_error);
+        if (known != EncodedModuleBytes)
+            return ModuleStopResult(Stop::HostFailure, "Module input contains unknown bytes");
+        { std::lock_guard<std::mutex> lock(metadata); state.staging_full_read = true; }
+        if (HostCancelled()) return Stop::HostCancelled;
+        core::Sha256 hash;
+        hash.update(span.bytes, EncodedModuleBytes); //direct one owned allocation;no payload mirror
+        const auto digest = core::hex_digest(hash.digest());
+        const auto* descriptor = recovered::FindAudiocodecModuleDescriptor(digest, EncodedModuleBytes);
+        const bool identity_matches = descriptor != nullptr;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.staging_sha256 = digest;
+            state.staging_hash_matches = identity_matches;
+            EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, identity_matches ? 1 : 0,
+                       false, span.host_address, 0, 0, digest);
+        }
+        if (!identity_matches)
+            return ModuleStopResult(Stop::Unsupported, "Actual encoded module identity has no supported native definition");
+        if (HostCancelled()) return Stop::HostCancelled;
+        // Exact identity selects recovered metadata only. No runtime decode,
+        // mapping, relocation, import binding or module entry has occurred.
+        const auto& first_library = descriptor->imports.front();
+        const auto& first_function = descriptor->functions[first_library.first_function];
+        Emit("ModuleRecoveredDescriptor", "RecoveredMetadata", 0x4F53C,
+             static_cast<int64_t>(descriptor->functions.size()), false, 0, 0, 0, descriptor->name);
+        Emit("ModulePlaintextIdentityMetadata", "RecoveredMetadata", 0x4F53C,
+             descriptor->plaintext_bytes, false, 0, 0, 0, descriptor->plaintext_sha256);
+        Emit("ModuleFirstRecordedImport", "RecoveredMetadata", 0x4F53C,
+             first_function.nid, false, 0, 0, 0, first_library.name);
+        Emit("ModuleRecordedImportAttributes", "RecoveredMetadata", 0x4F53C,
+             first_library.attributes, false, 0, 0, 0,
+             "all3 records:version0/words5/variables0;later660 weak bit8;original firmware policy unknown");
+        // Table order does not establish first execution or PSP eager failure.
+        // The actual pending fd/options/borrow stay owned across this barrier.
+        return ModuleStopResult(Stop::Unsupported,
+            "Native audiocodec binding policy/providers not implemented;recorded sceMeAudio_driver/C00D873B;attributes0x0009;8 imports;original PSP policy unknown");
+    }
+    recovered::StartupModuleOutcome StartModule(int32_t uid, uint32_t bytes, const void* args,
+        int32_t* status, const void* options_arg) override {
+        if (HostCancelled()) return recovered::StartupModuleStop::HostCancelled;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.module_start_called = true;
+            if (!IsCurrent(true) || bytes || args || status || options_arg ||
+                !state.module_uid_assigned || uid != state.module_uid)
+                throw NativeFailure{};
+        }
+        return ModuleStopResult(recovered::StartupModuleStop::Unsupported,
+            "No supported native module Start/entry contract", 0, 0x4F560);
+    }
+    recovered::StartupModuleOutcome CloseModuleFile(int32_t fd) override {
+        if (HostCancelled()) return recovered::StartupModuleStop::HostCancelled;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            if (!IsCurrent(true) || !file || !state.file_live || fd != state.source_fd ||
+                file_runtime_owner != state.owner || file.owner != state.file_backend_owner ||
+                file.generation != state.file_backend_generation || file.serial != state.file_backend_serial)
+                throw NativeFailure{};
+        }
+        const auto closed = backend->CloseFile(file);
+        if (closed) { file = {}; std::lock_guard<std::mutex> lock(metadata); state.file_live = false; }
+        Emit("SourceCloseModuleFile", "SourceAdapter", 0x4F570, closed ? 0 : AdapterError,
+             true, file_native, closed.win32_error, 0, "source ignores returned close value;module resources independent");
+        return recovered::StartupModuleReturned{closed ? 0 : AdapterError};
+    }
+    void UnsupportedFollowingModule() override {
+        (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
+            "Next libatrac3plus native module operation is independently unsupported", 0, 0x4F640);
     }
     bool HostCancelled() const override { return cancelled.load(); }
     void BarrierPump() {
@@ -618,6 +766,23 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         bool ok = true;
         { std::lock_guard<std::mutex> lock(metadata);
           pending_module.live = false; state.pending_module_live = false; }
+        if (pending_module.staging) {
+            // Both actual contexts joined before releasing the retained input lease.
+            pending_module.staging_borrow.Reset();
+            { std::lock_guard<std::mutex> lock(metadata); state.staging_borrow_live = false; }
+            Emit("ModuleStagingBorrowReset", "HostLifecycle", 0, 1, false, state.staging_host_address);
+            const auto released = backend->Free(pending_module.staging);
+            if (released) pending_module.staging = {}; //primitive retirement before telemetry
+            {
+                std::lock_guard<std::mutex> lock(metadata);
+                if (released) {
+                    state.staging_live = false;
+                    state.staging_freed_after_joins = state.caller_joined && state.worker_joined;
+                } else ok = false;
+                EmitLocked("FreeModuleStaging", "HostLifecycle", 0, released ? 1 : 0, false,
+                           state.staging_host_address, released.win32_error, 0, StartupHostCodeName(released.code));
+            }
+        }
         if (file) {
             const auto closed = backend->CloseFile(file);
             if (closed) { file = {}; std::lock_guard<std::mutex> lock(metadata); state.file_live = false; }
@@ -645,7 +810,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             Emit("TlsFree", "HostTLS", 0, freed, false, tls_index, error);
             if (freed) tls_index = TLS_OUT_OF_INDEXES; else ok = false;
         }
-        if (backend) {
+        if (backend && !pending_module.staging) {
             const auto closed = backend->Close();
             Emit("CloseAcceptedBackend", "HostLifecycle", 0, closed ? 1 : 0, false, 0, closed.win32_error);
             if (!closed) ok = false;

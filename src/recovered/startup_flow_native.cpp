@@ -31,6 +31,30 @@ int ExitCallback1564(StartupFlowServices& services, int, int, void*) {
     services.ExitGame();
     return 0; //1574 only after the chosen native ExitGame adaptation returned.
 }
+StartupModuleOutcome RunStartupModule4F4E8(StartupFlowServices& services,
+    const char* path, const StartupModuleOptions& options) {
+    int32_t fd;
+    for (;;) {
+        if (services.HostCancelled()) return StartupModuleStop::HostCancelled;
+        fd = services.OpenRead(path, 1, 0);
+        if (fd >= 0) break;
+        (void)services.CheckCallback(0x4F524);
+    }
+    auto load = services.LoadModuleById(fd, 0, options);
+    const auto* loaded = std::get_if<StartupModuleReturned>(&load);
+    if (!loaded) return load;
+    const int32_t uid = loaded->value;
+    if (uid < 0) return StartupModuleReturned{-1}; //4F548; no source close/unload
+    if (services.HostCancelled()) return StartupModuleStop::HostCancelled;
+    auto start = services.StartModule(uid, 0, nullptr, nullptr, nullptr);
+    const auto* started = std::get_if<StartupModuleReturned>(&start);
+    if (!started) return start;
+    if (started->value < 0) return StartupModuleReturned{-1}; //4F568; fd retained
+    if (services.HostCancelled()) return StartupModuleStop::HostCancelled;
+    auto close = services.CloseModuleFile(fd);
+    if (!std::holds_alternative<StartupModuleReturned>(close)) return close;
+    return StartupModuleReturned{uid}; //4F578; close value ignored, return LOAD UID
+}
 StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
     (void)SetupStartupCallback1584(services); //F7C ignores registration result.
     for (;;) {
@@ -44,14 +68,17 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
     const auto kind1 = StartupOptions4F59C(1);
     const auto kind0 = StartupOptions4F59C(0);
     (void)kind0; //second local record4F608; first call consumes kind1.
-    int32_t fd;
-    for (;;) {
-        if (services.HostCancelled()) return StartupFlowStop::HostCancelled;
-        fd = services.OpenRead("disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx", 1, 0);
-        if (fd >= 0) break; //source accepts fd0 too.
-        (void)services.CheckCallback(0x4F524);
+    auto module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx", kind1);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
     }
-    services.UnsupportedLoadModule(fd, 0, kind1); //4F53C, no fabricated v0.
+    if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
+    services.UnsupportedFollowingModule(); //next4F640 gate is separately unsupported
     return StartupFlowStop::Unsupported;
 }
 } // namespace dokodemo::recovered

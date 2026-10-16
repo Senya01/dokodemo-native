@@ -1080,6 +1080,29 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"pending_module_flags\":" << observation.pending_module_flags
         << ",\"pending_module_path\":" << JsonString(observation.pending_module_path)
         << ",\"pending_module_options_hex\":" << JsonString(pendingOptions)
+        << ",\"encoded_file_bytes\":" << observation.encoded_file_bytes
+        << ",\"staging_owner\":" << observation.staging_owner
+        << ",\"staging_generation\":" << observation.staging_generation
+        << ",\"staging_serial\":" << observation.staging_serial
+        << ",\"staging_host_address\":" << observation.staging_host_address
+        << ",\"staging_known_bytes\":" << observation.staging_known_bytes
+        << ",\"staging_file_position\":" << observation.staging_file_position
+        << ",\"staging_source_coordinate\":" << observation.staging_source_coordinate
+        << ",\"staging_requested\":" << observation.staging_requested
+        << ",\"staging_transferred\":" << observation.staging_transferred
+        << ",\"staging_read_error\":" << observation.staging_read_error
+        << ",\"staging_live\":" << boolean(observation.staging_live)
+        << ",\"staging_borrow_live\":" << boolean(observation.staging_borrow_live)
+        << ",\"staging_host_read\":" << boolean(observation.staging_host_read)
+        << ",\"staging_full_read\":" << boolean(observation.staging_full_read)
+        << ",\"staging_hash_matches\":" << boolean(observation.staging_hash_matches)
+        << ",\"staging_sha256\":" << JsonString(observation.staging_sha256)
+        << ",\"staging_freed_after_joins\":" << boolean(observation.staging_freed_after_joins)
+        << ",\"module_uid_assigned\":" << boolean(observation.module_uid_assigned)
+        << ",\"module_load_returned\":" << boolean(observation.module_load_returned)
+        << ",\"module_start_called\":" << boolean(observation.module_start_called)
+        << ",\"module_uid\":" << observation.module_uid
+        << ",\"module_binding_frontier\":" << JsonString(observation.module_binding_frontier)
         << ",\"status\":" << JsonString(dokodemo::StartupRuntimeCodeName(observation.status.code))
         << ",\"preceding_psp_history\":" << boolean(observation.preceding_psp_history)
         << ",\"constructors_established\":" << boolean(observation.constructors_established)
@@ -1114,6 +1137,17 @@ bool AtFirstNativeModuleBoundary(const dokodemo::StartupObservation& observation
         && observation.pending_module_options == std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
         && observation.file_native_object && observation.file_backend_owner
         && observation.file_backend_generation && observation.file_backend_serial
+        && observation.encoded_file_bytes == 3232 && observation.staging_requested == 3232
+        && observation.staging_transferred == 3232 && observation.staging_known_bytes == 3232
+        && observation.staging_file_position == 0 && observation.staging_source_coordinate == 0x61000000
+        && observation.staging_owner == observation.file_backend_owner
+        && observation.staging_generation == observation.file_backend_generation
+        && observation.staging_serial && observation.staging_host_address
+        && observation.staging_live && observation.staging_borrow_live && observation.staging_host_read
+        && observation.staging_full_read && observation.staging_hash_matches && observation.staging_read_error == 0
+        && observation.staging_sha256 == "cea81b33d4eab3607da188b0435a8582ffc7c208337c05f7e3139f0133bcb318"
+        && !observation.module_uid_assigned && !observation.module_load_returned && !observation.module_start_called
+        && observation.module_binding_frontier.find("sceMeAudio_driver/C00D873B") != std::string::npos
         && observation.caller_thread_id && observation.worker_thread_id
         && observation.caller_thread_id != observation.worker_thread_id
         && !observation.preceding_psp_history && !observation.constructors_established
@@ -1151,10 +1185,12 @@ int ConnectedStartupTest(const Options& options) {
         && dispatched.callback_dispatch_thread == boundary.worker_thread_id
         && closed && closedAgain && after.caller_joined && after.worker_joined && after.resources_closed
         && !after.callback_live && !after.file_live && !after.media_live && !after.pending_module_live
+        && !after.staging_live && !after.staging_borrow_live && after.staging_freed_after_joins
         && after.dropped_events == 0;
     std::ofstream summary(options.evidence / L"connected-startup-test.json", std::ios::binary);
     summary << "{\"same_application_coordinator\":true,\"passed\":" << (ok ? "true" : "false")
         << ",\"first_module_boundary\":" << (reached ? "true" : "false")
+        << ",\"actual_encoded_staging\":" << (boundary.staging_full_read && boundary.staging_hash_matches ? "true" : "false")
         << ",\"duplicate_start_rejected\":" << (duplicate.code == dokodemo::StartupRuntimeCode::AlreadyStarted ? "true" : "false")
         << ",\"preceding_psp_history\":false,\"PRX_bodies_implemented\":0,\"required_PRX_bodies\":9"
         << ",\"old_ECB_advanced\":0,\"coverage_delta\":0,\"full_game\":false}\n";
@@ -1227,8 +1263,10 @@ struct Application {
         startupObservation = nativeStartup->Observe();
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
+        else if (startupObservation.barrier_source_pc == 0x4F53C && startupObservation.staging_full_read)
+            startupStatus = L"Нативный запуск: файл audiocodec.prx проверен; нативное связывание пока не реализовано.";
         else if (startupObservation.barrier_source_pc == 0x4F53C)
-            startupStatus = L"Нативный запуск: файл audiocodec.prx открыт; его загрузчик ещё не реализован.";
+            startupStatus = L"Нативный запуск: проверяется модуль audiocodec.prx.";
         else startupStatus = L"Нативный запуск: рабочий поток проверяет игровой носитель.";
     }
     bool CloseNativeStartup() {
