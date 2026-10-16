@@ -571,7 +571,7 @@ ContextOwnerConstructionResult OwnedContextOwner::BeginActualConstruction23194(
     q.split=SplitConstructionPath20DC(path);
     if(q.split.boundary.kind!=ContextOwnerStop::None){out.boundary=q.split.boundary;return out;}
     q.effects.insert(q.effects.end(),q.split.effects.begin(),q.split.effects.end());
-    q.effects.push_back({0x2EC0,0xF6980,4,in.manager_address,"read"});
+    q.effects.push_back({0x2EC4,0xF6980,4,in.manager_address,"read"});
     q.effects.push_back({0x2D44,in.manager_address+0x118,4,0,"read"});
     q.storage_index=0xFFFFFFFF;q.effects.push_back({0x2EDC,0x10E450,4,q.storage_index,"write"});
     q.effects.push_back({0x2EEC,0x10E44C,4,q.storage_pointer,"read"});

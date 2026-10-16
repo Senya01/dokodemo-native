@@ -657,7 +657,7 @@ dokodemo::recovered::ContextOwnerHeapCheckpoint ConstructionDomainHeap(
     constexpr uint8_t name[]={0x46,0x49,0x4E,0x49,0x54,0x45,0};
     std::copy(std::begin(name),std::end(name),c.bytes.begin()+17);
     for(uint32_t off:{0u,32u,size-32}) {
-        std::fill_n(b.bytes.begin()+off,32,uint8_t{0});put(b,off+15,1,0x79);
+        std::fill_n(b.bytes.begin()+off,32,uint8_t{0});put(b,off+12,2,7);put(b,off+15,1,0x79);
     }
     put(b,4,4,first);put(b,20,4,first);put(b,14,1,1);
     put(b,32,4,arena);put(b,36,4,end);put(b,44,2,7);
