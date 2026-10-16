@@ -196,7 +196,8 @@ CapturedRngSeed ReadCapturedRngSeed(const std::filesystem::path& path) {
         throw std::runtime_error("RNG capture reports an API error");
     const auto& offset_text=fields.at("effective_offset_minutes");
     const auto digits=offset_text.size()&&offset_text.front()=='-'?size_t{1}:size_t{0};
-    if(digits==offset_text.size()||offset_text.find_first_not_of("0123456789",digits)!=std::string::npos)
+    if(digits==offset_text.size()||offset_text.find_first_not_of("0123456789",digits)!=std::string::npos
+       ||(offset_text.size()-digits>1&&offset_text[digits]=='0'))
         throw std::runtime_error("Invalid RNG timezone offset");
     const auto offset=std::stoll(offset_text,nullptr,10);
     if(offset < -1440||offset>1440) throw std::runtime_error("Invalid RNG timezone offset");
