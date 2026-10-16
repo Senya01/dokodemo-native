@@ -26,10 +26,12 @@ CurrentTablesRegion scalar_region(uint32_t address, uint32_t width, uint32_t wor
 
 struct CurrentTablesMemory::State {
     struct Data {
-        std::vector<uint8_t> owned_bytes, readable, writable;
+        std::vector<uint8_t> owned_bytes, readable, writable, owned_initialized;
         std::shared_ptr<CurrentTablesStorageImage> shared_image;
         std::vector<uint8_t>& bytes() { return shared_image ? shared_image->bytes : owned_bytes; }
         const std::vector<uint8_t>& bytes() const { return shared_image ? shared_image->bytes : owned_bytes; }
+        std::vector<uint8_t>& initialized() { return shared_image ? shared_image->initialized : owned_initialized; }
+        const std::vector<uint8_t>& initialized() const { return shared_image ? shared_image->initialized : owned_initialized; }
     };
     struct Region { uint32_t base; uint64_t identity; bool live; std::shared_ptr<Data> data; };
     struct Log { CurrentTablesEffect effect; std::shared_ptr<const Log> left, right; uint64_t size = 1; };
@@ -51,6 +53,26 @@ struct CurrentTablesMemory::State {
     size_t by_identity(uint64_t identity) const {
         for (size_t i = 0; i < regions.size(); ++i) if (regions[i].identity == identity) return i;
         throw std::runtime_error("CURRENT unknown allocation identity");
+    }
+    // Native snapshot COW, not a source clone. Detach all regions borrowing
+    // the same backing once. External owner handles alone do not cause COW:
+    // live mutable borrows deliberately write through until Data is shared.
+    void prepare_write(size_t index) {
+        const auto image = regions[index].data->shared_image;
+        if (!image) {
+            if (regions[index].data.use_count() != 1)
+                regions[index].data = std::make_shared<Data>(*regions[index].data);
+            return;
+        }
+        bool shared = false;
+        for (const auto& r : regions)
+            if (r.data->shared_image == image && r.data.use_count() != 1) shared = true;
+        if (!shared) return;
+        auto clone = std::make_shared<CurrentTablesStorageImage>(*image);
+        for (auto& r : regions) if (r.data->shared_image == image) {
+            r.data = std::make_shared<Data>(*r.data);
+            r.data->shared_image = clone;
+        }
     }
     void append(CurrentTablesEffect effect) {
         need(count != UINT64_MAX, "CURRENT effect counter overflow");
@@ -89,6 +111,8 @@ void CurrentTablesMemory::Map(CurrentTablesRegion input) {
     }
     auto data = std::make_shared<State::Data>(); data->owned_bytes = std::move(input.bytes);
     data->readable = std::move(input.readable); data->writable = std::move(input.writable);
+    // Preserve the effective known/readable mask of prior owned mappings.
+    data->owned_initialized = data->readable;
     detach(); state_->regions.push_back({input.base, input.identity, input.live, std::move(data)});
 }
 void CurrentTablesMemory::MapSharedImage(std::shared_ptr<CurrentTablesStorageImage> image,
@@ -98,15 +122,41 @@ void CurrentTablesMemory::MapSharedImage(std::shared_ptr<CurrentTablesStorageIma
     Map({image->source_address, image->identity, image->bytes, std::move(readable), std::move(writable), true});
     state_->regions.back().data->shared_image = std::move(image);
     state_->regions.back().data->owned_bytes.clear();
+    state_->regions.back().data->owned_initialized.clear();
+}
+void CurrentTablesMemory::BindSharedImage(uint64_t identity, std::shared_ptr<CurrentTablesStorageImage> image) {
+    const size_t index = state_->by_identity(identity); const auto& r = state_->regions[index];
+    need(r.live && image && image->live, "CURRENT bind requires live region and storage");
+    need(image->source_address == r.base && image->identity == r.identity &&
+         image->bytes.size() == r.data->bytes().size() && image->bytes == r.data->bytes(),
+         "CURRENT bind storage geometry/bytes differ");
+    need(image->initialized.size() == image->bytes.size() &&
+         std::all_of(image->initialized.begin(), image->initialized.end(), [](uint8_t x) { return x <= 1; }) &&
+         image->initialized == r.data->initialized(), "CURRENT bind initialized knowledge differs");
+    if (r.data->shared_image) {
+        need(r.data->shared_image == image, "CURRENT bind cannot replace shared storage");
+        return;
+    }
+    detach(); auto& target = state_->regions[index];
+    if (target.data.use_count() != 1) target.data = std::make_shared<State::Data>(*target.data);
+    target.data->shared_image = std::move(image);
+    target.data->owned_bytes.clear(); target.data->owned_initialized.clear();
 }
 std::shared_ptr<CurrentTablesStorageImage> CurrentTablesMemory::SharedImage(uint64_t identity) const {
     return state_->regions[state_->by_identity(identity)].data->shared_image;
 }
 CurrentTablesMemory CurrentTablesMemory::Fork() const {
     CurrentTablesMemory out = *this; out.detach();
+    std::vector<std::pair<std::shared_ptr<CurrentTablesStorageImage>, std::shared_ptr<CurrentTablesStorageImage>>> clones;
     for (auto& r : out.state_->regions) if (r.data->shared_image) {
+        const auto original = r.data->shared_image;
+        auto found = std::find_if(clones.begin(), clones.end(), [&](const auto& item) { return item.first == original; });
+        if (found == clones.end()) {
+            clones.emplace_back(original, std::make_shared<CurrentTablesStorageImage>(*original));
+            found = clones.end() - 1;
+        }
         r.data = std::make_shared<State::Data>(*r.data);
-        r.data->shared_image = std::make_shared<CurrentTablesStorageImage>(*r.data->shared_image);
+        r.data->shared_image = found->second;
     }
     return out;
 }
@@ -115,7 +165,7 @@ uint32_t CurrentTablesMemory::Peek(uint32_t address, uint32_t width) const {
     const size_t offset = address - r.base; uint32_t value = 0;
     for (uint32_t i = 0; i < width; ++i) {
         need(r.data->readable[offset + i] != 0, "CURRENT unreadable physical byte");
-        need(!r.data->shared_image || r.data->shared_image->initialized[offset + i] != 0, "CURRENT uninitialized storage byte");
+        need(r.data->initialized()[offset + i] != 0, "CURRENT uninitialized storage byte");
         value |= uint32_t(r.data->bytes()[offset + i]) << (8 * i);
     }
     return value;
@@ -131,25 +181,17 @@ void CurrentTablesMemory::Write(uint32_t address, uint32_t width, uint32_t value
         need(original.data->writable[offset + i] != 0, "CURRENT readonly physical byte");
         before |= uint32_t(original.data->bytes()[offset + i]) << (8 * i);
     }
-    detach(); auto& r = state_->regions[index];
-    if (r.data.use_count() != 1) {
-        r.data = std::make_shared<State::Data>(*r.data);
-        if (r.data->shared_image) r.data->shared_image = std::make_shared<CurrentTablesStorageImage>(*r.data->shared_image);
-    }
+    detach(); state_->prepare_write(index); auto& r = state_->regions[index];
     for (uint32_t i = 0; i < width; ++i) {
         r.data->bytes()[offset + i] = static_cast<uint8_t>(value >> (8 * i));
-        if (r.data->shared_image) r.data->shared_image->initialized[offset + i] = 1;
+        r.data->initialized()[offset + i] = 1;
     }
     if (width < 4) value &= (1u << (8 * width)) - 1;
     state_->append({CurrentTablesEffect::Kind::Write, address, width, before, value, r.identity});
 }
 void CurrentTablesMemory::EndLifetime(uint64_t identity) {
     const size_t index = state_->by_identity(identity); need(state_->regions[index].live, "CURRENT lifetime already ended");
-    detach(); auto& r = state_->regions[index]; r.live = false;
-    if (r.data.use_count() != 1) {
-        r.data = std::make_shared<State::Data>(*r.data);
-        if (r.data->shared_image) r.data->shared_image = std::make_shared<CurrentTablesStorageImage>(*r.data->shared_image);
-    }
+    detach(); state_->prepare_write(index); auto& r = state_->regions[index]; r.live = false;
     if (r.data->shared_image) r.data->shared_image->live = false;
     state_->append({CurrentTablesEffect::Kind::LifetimeEnd, r.base, 0, 0, 0, identity});
 }
@@ -161,9 +203,16 @@ uint64_t CurrentTablesMemory::Identity(uint32_t address, uint32_t width) const {
 const std::vector<uint8_t>& CurrentTablesMemory::Bytes(uint64_t identity) const { return state_->regions[state_->by_identity(identity)].data->bytes(); }
 const std::vector<uint8_t>& CurrentTablesMemory::Readable(uint64_t identity) const { return state_->regions[state_->by_identity(identity)].data->readable; }
 const std::vector<uint8_t>& CurrentTablesMemory::Writable(uint64_t identity) const { return state_->regions[state_->by_identity(identity)].data->writable; }
+const std::vector<uint8_t>& CurrentTablesMemory::Initialized(uint64_t identity) const { return state_->regions[state_->by_identity(identity)].data->initialized(); }
 std::vector<CurrentTablesRegion> CurrentTablesMemory::Capture() const {
     std::vector<CurrentTablesRegion> out;
     for (const auto& r : state_->regions) out.push_back({r.base, r.identity, r.data->bytes(), r.data->readable, r.data->writable, r.live && (!r.data->shared_image || r.data->shared_image->live)});
+    return out;
+}
+std::vector<CurrentTablesSnapshotRegion> CurrentTablesMemory::CaptureWithInitialized() const {
+    std::vector<CurrentTablesSnapshotRegion> out;
+    for (const auto& r : state_->regions) out.push_back({r.base, r.identity, r.data->bytes(), r.data->readable, r.data->writable,
+        r.data->initialized(), r.live && (!r.data->shared_image || r.data->shared_image->live)});
     return out;
 }
 std::vector<CurrentTablesEffect> CurrentTablesMemory::effects() const {

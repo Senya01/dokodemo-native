@@ -1,5 +1,6 @@
 #include "context_owner_native.h"
 #include "producer_native.h"
+#include "context_callback_native.h"
 #include <algorithm>
 #include <atomic>
 #include <new>
@@ -37,6 +38,10 @@ struct OwnedContextOwner::Impl {
     ContextOwnerSuffixSnapshot suffix;
     ContextOwnerConstructionSnapshot construction;
     uint64_t construction_serial = 0;
+    uint64_t producer_identity = 0, callback_serial = 0;
+    bool callback_consumed = false;
+    ContextOwnerLoadCheckpoint construction_load;
+    std::shared_ptr<ContextCallbackResult> callback;
     std::vector<std::weak_ptr<ContextOwnerStorageImage>> prior_native_fork_images;
     uint64_t suffix_serial = 0;
     uint64_t generation = 0;
@@ -540,6 +545,7 @@ ContextOwnerConstructionResult OwnedContextOwner::BeginActualConstruction23194(
         out.boundary=Boundary(ContextOwnerStop::NativeDomain,0x2754,"explicit initialized file-object byte1 and exact64518 input domain required");return out;
     }
     auto& q=s.construction;q.started=true;q.storage_pointer=in.initial_storage_pointer.value;
+    s.producer_identity=producer.NativeIdentity();s.construction_load=load;
     q.storage_index=in.initial_storage_index.value;q.effects=prefix.transcript;
     q.formatted_path=prefix.directory+"\\"+prefix.filename;
     // Bounded actual format %s\\%s: same memcpy data widths/order. Formatter
@@ -633,6 +639,92 @@ ContextOwnerConstructorResult OwnedContextOwner::ContinueActualConstruction6656C
     if(out.tables && out.tables->shared_image()!=image) {
         out.boundary=Boundary(ContextOwnerStop::NativeDomain,0x66FDC,"unjoined native fork: explicit construction alias rebind required");
     }
+    if(out.loader_completed && out.boundary.kind==ContextOwnerStop::InitializationCall && out.boundary.source_pc==0x6664C && out.callback_pointer==0x1C0FC) {
+        out.callback_continuation.owner_=OwnerIdentity();out.callback_continuation.serial_=++impl_->callback_serial;
+        q.constructor=std::make_shared<ContextOwnerConstructorResult>(out);
+    }
+    return out;
+}
+ContextCallbackResult OwnedContextOwner::ContinueActualCallback6664C(
+        const ContextOwnerCallbackContinuation& token,OwnedProducer& producer) {
+    auto& s=*impl_;auto& q=s.construction;ContextCallbackResult out;
+    auto refuse=[&](const char* text){out.boundary=Boundary(ContextOwnerStop::NativeDomain,0x6664C,text);};
+    if(s.closed || !token || !(token.owner_==OwnerIdentity()) || token.serial_!=s.callback_serial || s.callback_consumed ||
+       s.producer_identity!=producer.NativeIdentity() || !q.constructor || !q.constructor->tables || !q.constructor->tables->available() ||
+       q.constructor->callback_pointer!=0x1C0FC) {
+        refuse("live construction/producer and unused owner-bound callback continuation required");return out;
+    }
+    for(uint32_t j=0;j<8;++j)if(s.construction_load.initialized[0x4E4+j]!=1) {
+        out.boundary=Boundary(ContextOwnerStop::NativeDomain,j<4?0x1C138:0x1C140,"source-known child masks required; native atomic guard before mapping/effects");return out;
+    }
+    for(uint32_t j=0;j<8;++j)if(s.construction_load.bytes[0x4E4+j]!=0) {
+        out.boundary=Boundary(ContextOwnerStop::NativeDomain,0x1E88C,"positive child path unavailable; native atomic guard before mapping/effects");return out;
+    }
+    auto borrow=producer.BorrowCallbackBacking();
+    if(!borrow.token){refuse("live registered producer108 borrow unavailable");return out;}
+    auto& tables=*q.constructor->tables;auto& memory=tables.memory();
+    auto map=[&](uint32_t address,std::vector<uint8_t> bytes,std::vector<uint8_t> initialized,
+                 uint64_t identity,std::vector<uint8_t> readable,std::vector<uint8_t> writable) {
+        auto image=std::make_shared<CurrentTablesStorageImage>();image->source_address=address;image->identity=identity;image->live=true;
+        image->bytes=std::move(bytes);image->initialized=std::move(initialized);memory.MapSharedImage(image,std::move(readable),std::move(writable));
+    };
+    auto scalar=[&](uint32_t address,uint32_t word) {
+        std::vector<uint8_t> bytes(4);for(uint32_t j=0;j<4;++j)bytes[j]=uint8_t(word>>(8*j));
+        map(address,std::move(bytes),std::vector<uint8_t>(4,1),next_owner_arena.fetch_add(1),std::vector<uint8_t>(4,1),std::vector<uint8_t>(4,address==0x10CDC8?1:0));
+    };
+    try {
+        std::vector<uint8_t> permission(108,0);std::fill(permission.begin(),permission.begin()+12,uint8_t(1));
+        memory.MapSharedImage(borrow.backing,permission,permission);
+        const auto existing=memory.CaptureWithInitialized();
+        for(const auto& block:q.constructor->registry_heap.blocks) {
+            std::vector<uint32_t> edges={block.address,block.address+static_cast<uint32_t>(block.bytes.size())};
+            for(const auto& r:existing)if(r.base>=block.address && uint64_t(r.base)+r.bytes.size()<=uint64_t(block.address)+block.bytes.size()) {
+                const auto off=r.base-block.address;
+                if(!std::equal(r.bytes.begin(),r.bytes.end(),block.bytes.begin()+off) || !std::equal(r.initialized.begin(),r.initialized.end(),block.initialized.begin()+off))
+                    throw std::runtime_error("source heap/current-view bytes or initialized masks differ");
+                edges.push_back(r.base);edges.push_back(r.base+static_cast<uint32_t>(r.bytes.size()));
+            }
+            // Fixed finite partition anticipates BOTH measured52-byte nodes.
+            // Free-list metadata shares their physical payload bytes; no
+            // second overlapping host region is introduced on later append.
+            for(uint32_t edge:{0x202560u,0x202594u,0x2025B0u,0x2025E4u})
+                if(edge>block.address && uint64_t(edge)<uint64_t(block.address)+block.bytes.size())edges.push_back(edge);
+            std::sort(edges.begin(),edges.end());edges.erase(std::unique(edges.begin(),edges.end()),edges.end());
+            for(size_t j=1;j<edges.size();++j) {
+                const uint32_t a=edges[j-1],n=edges[j]-a;
+                bool occupied=false;for(const auto& r:existing)if(a>=r.base && uint64_t(a)+n<=uint64_t(r.base)+r.bytes.size())occupied=true;
+                if(occupied)continue;
+                const uint32_t off=a-block.address;
+                map(a,{block.bytes.begin()+off,block.bytes.begin()+off+n},{block.initialized.begin()+off,block.initialized.begin()+off+n},
+                    next_owner_arena.fetch_add(1),std::vector<uint8_t>(n,1),std::vector<uint8_t>(n,1));
+            }
+        }
+        const auto identity=memory.Identity(q.source_vm_address,4);
+        if(!memory.SharedImage(identity)) {
+            auto image=std::make_shared<CurrentTablesStorageImage>();image->source_address=q.source_vm_address;image->identity=identity;image->live=true;
+            image->bytes=memory.Bytes(identity);image->initialized=memory.Initialized(identity);memory.BindSharedImage(identity,image);
+        }
+        scalar(0x10CDC8,borrow.singleton.value);scalar(0x10CDC4,s.construction_load.source_address);
+        scalar(0x1C9454,borrow.registered_callback.value);
+        const auto& load=s.construction_load;
+        map(load.source_address+0x4E4,{load.bytes.begin()+0x4E4,load.bytes.begin()+0x4EC},
+            {load.initialized.begin()+0x4E4,load.initialized.begin()+0x4EC},next_owner_arena.fetch_add(1),std::vector<uint8_t>(8,1),std::vector<uint8_t>(8,0));
+        ContextCallbackInput input;input.entry_pc=0x6664C;input.return_pc=0x66654;input.context=q.source_vm_address;input.loadman=load.source_address;
+        input.image=tables.shared_image();input.arguments={input.context,0x20000000,tables.layout().ctx28_count,input.image->source_address};
+        s.callback_consumed=true;out=ExecuteContextCallback1C0FC(producer,borrow,memory,input);
+        // One explicit boundary mirror of changed physical state; no extra
+        // source writes or measured global clock are claimed by copying it.
+        for(const auto& r:memory.CaptureWithInitialized())for(auto& block:q.constructor->registry_heap.blocks)
+            if(r.base>=block.address && uint64_t(r.base)+r.bytes.size()<=uint64_t(block.address)+block.bytes.size()) {
+                const auto off=r.base-block.address;std::copy(r.bytes.begin(),r.bytes.end(),block.bytes.begin()+off);
+                std::copy(r.initialized.begin(),r.initialized.end(),block.initialized.begin()+off);
+            }
+        q.heap.blocks=q.constructor->registry_heap.blocks;
+        q.constructor->context.bytes=memory.Bytes(identity);q.constructor->context.initialized=memory.Initialized(identity);
+        for(const auto& e:out.effects)if(std::string(e.operation)=="write" && e.address>=q.source_vm_address && uint64_t(e.address)+e.width<=uint64_t(q.source_vm_address)+0x47C)
+            for(uint32_t j=0;j<e.width;++j)q.constructor->context_source_written[e.address-q.source_vm_address+j]=1;
+        s.callback=std::make_shared<ContextCallbackResult>(out);
+    }catch(const std::exception& e){(void)producer.CancelCallbackBorrow(borrow.token);refuse(e.what());}
     return out;
 }
 ContextOwnerActivationResult OwnedContextOwner::PrepareNonzero2327CActivationAfterUnverifiedLoadAndConstructor(

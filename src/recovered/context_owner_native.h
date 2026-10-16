@@ -50,6 +50,15 @@ struct ContextOwnerCallbackInputs {
 };
 class OwnedContextOwner;
 class OwnedProducer;
+struct ContextCallbackResult;
+class ContextOwnerCallbackContinuation {
+public:
+    explicit operator bool() const { return serial_ != 0; }
+private:
+    friend class OwnedContextOwner;
+    ManagerToken owner_;
+    uint64_t serial_ = 0;
+};
 
 // Separate caller-provided CLoadMan4F4 checkpoint. No fields are copied to
 // CKingKai96, producer108, or the manager base projection.
@@ -201,6 +210,7 @@ struct ContextOwnerConstructorResult {
     std::vector<ContextOwnerSuffixAccess> prefix_effects;
     // Loader body and allocator-seam effects are separate ordered projections.
     std::shared_ptr<CurrentTablesOwner> tables;
+    ContextOwnerCallbackContinuation callback_continuation;
 };
 // Actual6656C/65FF4 and list publication, then real shared-image66FDC loader.
 // Finite positive first-free split heaps and an available8-slot registry are
@@ -283,6 +293,10 @@ public:
     bool RebindConstructionImageAfterNativeFork(std::shared_ptr<ContextOwnerStorageImage> image);
     ContextOwnerConstructorResult ContinueActualConstruction6656C(
         const ContextOwnerConstructionToken& token, ContextOwnerConstructorDomain domain);
+    // Actual callback only through66654, using live producer108 and the
+    // explicit CLoadMan checkpoint retained by Begin; no2327C shortcut.
+    ContextCallbackResult ContinueActualCallback6664C(
+        const ContextOwnerCallbackContinuation& token, OwnedProducer& producer);
     ContextOwnerConstructionSnapshot ConstructionSnapshot() const;
     // Explicit prepared nonzero branch2327C; never NULL branch231F4.
     // Returns a private, owner-bound one-shot token for reached call23208.

@@ -25,6 +25,14 @@ struct CurrentTablesRegion {
     std::vector<uint8_t> bytes, readable, writable;
     bool live = true;
 };
+// New explicit-domain observer; historical Capture retains its exact schema.
+// Initialized knowledge is independent of readable/writable permission.
+struct CurrentTablesSnapshotRegion {
+    uint32_t base = 0;
+    uint64_t identity = 0;
+    std::vector<uint8_t> bytes, readable, writable, initialized;
+    bool live = true;
+};
 // Shared source storage lease: construction storage and ctx28 borrow this SAME
 // mutable image. Native snapshot forks expose their new handle explicitly.
 struct CurrentTablesStorageImage {
@@ -43,6 +51,10 @@ public:
     void Map(CurrentTablesRegion region);
     void MapSharedImage(std::shared_ptr<CurrentTablesStorageImage> image,
                         std::vector<uint8_t> readable, std::vector<uint8_t> writable);
+    // Administrative adoption, not source stores. Exact owned base/identity/
+    // bytes/initialized knowledge required; permissions/log stay unchanged.
+    // A shared region accepts its SAME handle only; expired regions stay dead.
+    void BindSharedImage(uint64_t identity, std::shared_ptr<CurrentTablesStorageImage> image);
     std::shared_ptr<CurrentTablesStorageImage> SharedImage(uint64_t identity) const;
     CurrentTablesMemory Fork() const;
     uint32_t Read(uint32_t address, uint32_t width);
@@ -54,7 +66,9 @@ public:
     const std::vector<uint8_t>& Bytes(uint64_t identity) const;
     const std::vector<uint8_t>& Readable(uint64_t identity) const;
     const std::vector<uint8_t>& Writable(uint64_t identity) const;
+    const std::vector<uint8_t>& Initialized(uint64_t identity) const;
     std::vector<CurrentTablesRegion> Capture() const;
+    std::vector<CurrentTablesSnapshotRegion> CaptureWithInitialized() const;
     std::vector<CurrentTablesEffect> effects() const;
     std::vector<CurrentTablesEffect> effects_from(uint64_t first) const;
     uint64_t effect_count() const;

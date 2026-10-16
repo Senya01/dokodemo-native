@@ -24,6 +24,7 @@ add_library(dokodemo-core STATIC
     src/recovered/string_native.cpp
     src/recovered/service48_native.cpp
     src/recovered/context_owner_native.cpp
+    src/recovered/context_callback_native.cpp
     src/recovered/clock_native.cpp
     src/recovered/service39_native.cpp
     src/recovered/producer_native.cpp

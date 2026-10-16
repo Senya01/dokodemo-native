@@ -20,6 +20,7 @@
 #include "recovered/bulk_array_native.h"
 #include "recovered/manager_queue_native.h"
 #include "recovered/context_owner_native.h"
+#include "recovered/context_callback_native.h"
 #include "recovered/producer_native.h"
 #include "audio_catalog.h"
 #include <shellapi.h>
@@ -30,6 +31,7 @@
 #include <chrono>
 #include <iostream>
 #include <memory>
+#include <utility>
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -37,7 +39,7 @@
 
 using namespace native_port;
 namespace {
-struct Options { bool selfTest = false, smoke = false; std::filesystem::path assets, evidence, clockSample, rngSample; };
+struct Options { bool selfTest = false, smoke = false, constructionSmoke = false; std::filesystem::path assets, evidence, clockSample, rngSample; };
 Options ParseOptions() {
     Options options;
     int count = 0; auto args = CommandLineToArgvW(GetCommandLineW(), &count);
@@ -45,6 +47,7 @@ Options ParseOptions() {
         std::wstring arg = args[i];
         if (arg == L"--self-test") options.selfTest = true;
         else if (arg == L"--smoke-test") options.smoke = true;
+        else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
         else if (arg == L"--evidence" && i + 1 < count) options.evidence = args[++i];
         else if (arg == L"--clock-sample" && i + 1 < count) options.clockSample = args[++i];
@@ -554,7 +557,8 @@ struct OwnedProducerPrefix {
     dokodemo::recovered::ProducerSnapshot snapshot;
     bool verified=false;
 };
-OwnedProducerPrefix ConstructProducerPrefix(dokodemo::recovered::ProducerInput input) {
+OwnedProducerPrefix ConstructProducerPrefix(dokodemo::recovered::ProducerInput input,
+        dokodemo::recovered::ProducerAllocationPlan allocation = {}) {
     using namespace dokodemo::recovered;
     OwnedProducerPrefix result;
     result.prefix=ConstructManagerPrefix();
@@ -565,7 +569,7 @@ OwnedProducerPrefix ConstructProducerPrefix(dokodemo::recovered::ProducerInput i
     if(result.prefix.initializationCut.kind!=ContextOwnerStop::InitializationCall
         ||result.prefix.initializationCut.source_pc!=0x2318C
         ||result.prefix.initializationCut.callee!=0x1B188) return result;
-    auto made=OwnedProducer::Create(input);
+    auto made=OwnedProducer::Create(input,std::move(allocation));
     result.initialization=made.initialization;
     result.producer=std::move(made.owner);
     if(!result.producer) return result;
@@ -669,6 +673,7 @@ struct OwnedActualConstructionPrefix {
     OwnedProducerPrefix initialized;
     dokodemo::recovered::ContextOwnerConstructionResult entry;
     dokodemo::recovered::ContextOwnerConstructorResult constructor;
+    dokodemo::recovered::ContextCallbackResult callback;
     dokodemo::recovered::ContextOwnerConstructionSnapshot snapshot;
     bool verified=false;
 };
@@ -686,9 +691,49 @@ OwnedActualConstructionPrefix ConstructActualConstructionPrefix(
     // owners, storage or checkpoint heaps. This preserves the OwnerR2 guard.
     if(!program.loaded()||program.bytes().size()<28||character_index>=5
         ||program.source().sha256!=hashes[character_index]) return out;
-    out.initialized=ConstructProducerPrefix({true,0x200A00});
+    auto staticHeap=std::make_shared<ContextOwnerHeapCheckpoint>(
+        ConstructionDomainHeap(0x1C93D4,0x202000,0x7020));
+    ProducerAllocationPlan allocation;allocation.source_address=0x202030;
+    allocation.mapped_allocator=[staticHeap](uint32_t call_pc,uint32_t bytes) {
+        std::shared_ptr<CurrentTablesStorageImage> backing;
+        if(call_pc!=0x63D24||bytes!=108) return backing;
+        auto allocated=AllocateConstructionVm63D14(*staticHeap,bytes);
+        if(!allocated.completed||allocated.return_value!=0x202030) return backing;
+        staticHeap->blocks=std::move(allocated.blocks);
+        for(const auto& block:staticHeap->blocks) {
+            if(allocated.return_value<block.address
+                ||uint64_t(allocated.return_value)+bytes>uint64_t(block.address)+block.bytes.size()) continue;
+            const auto offset=allocated.return_value-block.address;
+            backing=std::make_shared<CurrentTablesStorageImage>();
+            backing->source_address=allocated.return_value;backing->live=true;
+            backing->bytes.assign(block.bytes.begin()+offset,block.bytes.begin()+offset+bytes);
+            backing->initialized.assign(block.initialized.begin()+offset,
+                block.initialized.begin()+offset+bytes);
+            break;
+        }
+        return backing;
+    };
+    out.initialized=ConstructProducerPrefix({true,0x200A00},std::move(allocation));
     if(!out.initialized.verified||!out.initialized.producer
         ||!out.initialized.prefix.callbackOwner) return out;
+    auto registration=out.initialized.producer->BorrowCallbackBacking();
+    const auto producerBacking=registration.backing;
+    const bool registered=bool(registration.token)&&producerBacking&&producerBacking->live
+        &&registration.singleton.initialized&&registration.singleton.value==0x202030
+        &&registration.registered_callback.initialized&&registration.registered_callback.value==0x1C0FC;
+    const auto cancelled=out.initialized.producer->CancelCallbackBorrow(registration.token);
+    if(!registered||cancelled.kind!=ProducerStop::None) return out;
+    // Administrative component seam: mirror the actual shared initializer
+    // stores into its aggregate finite heap, never a detached Snapshot copy.
+    for(auto& block:staticHeap->blocks) {
+        if(producerBacking->source_address<block.address
+            ||uint64_t(producerBacking->source_address)+producerBacking->bytes.size()
+                >uint64_t(block.address)+block.bytes.size()) continue;
+        const auto offset=producerBacking->source_address-block.address;
+        std::copy(producerBacking->bytes.begin(),producerBacking->bytes.end(),block.bytes.begin()+offset);
+        std::copy(producerBacking->initialized.begin(),producerBacking->initialized.end(),
+            block.initialized.begin()+offset);
+    }
     ContextOwnerLoadCheckpoint load;load.source_address=0x200000;
     load.source_stack_address=0x22F000;load.initialized.fill(1);
     load.bytes[0x58]=static_cast<uint8_t>(character_index);
@@ -700,24 +745,34 @@ OwnedActualConstructionPrefix ConstructActualConstructionPrefix(
     auto& image=*input.preexisting_image;
     image.source_address=0x600000;image.identity=0x600000;image.live=true;
     image.bytes=program.bytes();image.initialized.assign(image.bytes.size(),1);
-    input.heap=ConstructionDomainHeap(0x1C93D4,0x202000,0x7020);
+    input.heap=*staticHeap;
     auto& owner=*out.initialized.prefix.callbackOwner;
     out.entry=owner.BeginActualConstruction23194(*out.initialized.producer,load,input);
     if(!out.entry.reached_constructor_entry) {out.snapshot=owner.ConstructionSnapshot();return out;}
     ContextOwnerConstructorDomain domain;
     domain.globals=ConstructionDomainBlock(0x1C9454,0x50,0);
+    for(uint32_t i=0;i<4;++i)domain.globals.bytes[i]=
+        static_cast<uint8_t>(registration.registered_callback.value>>(8*i));
     domain.dynamic_heap=ConstructionDomainHeap(0x240000,0x400000,0x20000);
     domain.loader.borrowed_image=input.preexisting_image;
     domain.loader.source_sha256=program.source().sha256;
     domain.loader.readable.assign(image.bytes.size(),1);domain.loader.writable.assign(image.bytes.size(),1);
-    // These explicit finite-domain premises do not enable generic HostAbi or
-    // establish a storage producer, historical allocator readiness or callback.
+    // These finite premises do not establish a storage producer or historical
+    // allocator readiness. The callback slot comes from the live initializer;
+    // the distinct loader mapping.callback argument remains zero.
     domain.loader.mapping.allocator_boundary_available=true;
     domain.loader.mapping.borrowed_image_lifetime_available=true;
     out.constructor=owner.ContinueActualConstruction6656C(out.entry.constructor_entry,std::move(domain));
+    if(out.constructor.loader_completed&&out.constructor.callback_pointer==0x1C0FC
+        &&out.constructor.callback_continuation)
+        out.callback=owner.ContinueActualCallback6664C(out.constructor.callback_continuation,
+            *out.initialized.producer);
     out.snapshot=owner.ConstructionSnapshot();
+    out.initialized.snapshot=out.initialized.producer->Snapshot();
     out.verified=out.constructor.reached_loader&&out.constructor.loader_completed
-        &&out.constructor.boundary.source_pc==0x6664C&&out.constructor.callback_pointer==0
+        &&out.constructor.boundary.source_pc==0x6664C&&out.constructor.callback_pointer==0x1C0FC
+        &&out.callback.completed&&out.callback.producer_adopted&&out.callback.return_pc==0x66654
+        &&out.callback.node==0x202560&&out.callback.return_residue==out.callback.node+0x30
         &&out.constructor.tables&&out.constructor.tables->shared_image()==out.snapshot.file.image
         &&out.snapshot.file.image->bytes.at(2)==0x44&&!owner.Snapshot().initialization_tail_applied;
     return out;
@@ -975,6 +1030,7 @@ struct Application {
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
     std::wstring status; uint64_t frames = 0, inputEvents = 0; bool imageLoaded = false, smokeInputSent = false;
+    unsigned constructionSmokePasses = 0;
     LARGE_INTEGER frequency{}, start{}, last{}; double elapsed = 0;
     dokodemo::save::FoundationState state;
     dokodemo::save::ClockTracker clock;
@@ -1196,7 +1252,9 @@ struct Application {
         managerQueue=std::move(built.manager); // Keep real owned storage alive in the application.
         callbackOwner=std::move(built.callbackOwner);
         producer=std::move(initialized.producer);
-        status=L"Условное создание VM: путь, allocation и таблицы загружены; неизвестный callback остаётся барьером.";
+        status=managerVerified
+            ?L"Путь VM: producer и callback выполнены; внешний запуск ещё не замкнут."
+            :L"Путь VM остановлен на проверке; подробности в manager-queue-probe.json.";
         std::filesystem::create_directories(options.evidence);
         std::ofstream report(options.evidence/L"manager-queue-probe.json",std::ios::binary);
         report<<"{\"native_owned_storage\":true,\"allocated_bytes\":"<<built.snapshot.allocated_bytes
@@ -1220,8 +1278,19 @@ struct Application {
             <<",\"constructor_boundary_pc\":"<<extended.constructor.boundary.source_pc
             <<",\"constructor_callback_pointer\":"<<extended.constructor.callback_pointer
             <<",\"source_loader_returned\":"<<(extended.constructor.loader_completed?"true":"false")
+            <<",\"actual_callback_completed\":"<<(extended.callback.completed?"true":"false")
+            <<",\"producer_callback_adopted\":"<<(extended.callback.producer_adopted?"true":"false")
+            <<",\"callback_return_pc\":"<<extended.callback.return_pc
+            <<",\"callback_host_address\":"<<extended.callback.node
+            <<",\"callback_return_residue\":"<<extended.callback.return_residue
             <<",\"whole_constructor_returned\":false"
-            <<",\"manual_heap_and_empty_globals_premise\":true"
+            <<",\"manual_heap_and_loader_globals_premise\":true"
+            <<",\"native_global_initialized_bytes\":80,\"source_global_known_initial_bytes\":44,\"source_global_known_after_loader_bytes\":46"
+            <<",\"source_loader_unknown_preimage_bytes\":2,\"initial_masks_identical\":false"
+            <<",\"source_prior_storage_index\":123,\"native_prior_storage_index\":"<<uint32_t{0xFFFFFFFF}
+            <<",\"storage_index_dead_preimage_refinement\":true"
+            <<",\"static_call_boundary_composition\":true,\"native_global_clock_measured\":false"
+            <<",\"actual_CKingKai_caller_receiver_created\":false,\"CURRENT_ECB_header_established\":false"
             <<",\"preexisting_storage_origin_unverified\":true"
             <<",\"shared_image_bytes\":"<<(extended.snapshot.file.image?extended.snapshot.file.image->bytes.size():0)
             <<",\"source_vm_address\":"<<extended.snapshot.source_vm_address
@@ -1362,7 +1431,14 @@ struct Application {
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;
-            for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F8,VK_F10,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
+            if(options.constructionSmoke) {
+                for(unsigned i=0;i<2;++i) {
+                    SendMessageW(window,WM_KEYDOWN,VK_F7,0);
+                    if(managerVerified) ++constructionSmokePasses;
+                }
+            } else {
+                for(auto key : {VK_RIGHT,VK_LEFT,VK_F5,VK_F9,VK_F1,VK_F4,VK_F6,VK_F7,VK_F8,VK_F10,VK_F2}) SendMessageW(window,WM_KEYDOWN,key,0);
+            }
         }
         if (options.smoke && elapsed > 2.0) {
             Capture();
@@ -1370,6 +1446,9 @@ struct Application {
             report << "{\n  \"native_win32_loop\": true,\n  \"frames\": " << frames << ",\n  \"input_events\": " << inputEvents
                 << ",\n  \"image_loaded\": " << (imageLoaded ? "true" : "false") << ",\n  \"asset_count\": " << images.size()
                 << ",\n  \"input_method\": \"WM_KEYDOWN\",\n  \"native_save_ok\": " << (savedSuccessfully ? "true" : "false")
+                << ",\n  \"construction_only\": " << (options.constructionSmoke ? "true" : "false")
+                << ",\n  \"construction_passes\": " << constructionSmokePasses
+                << ",\n  \"legacy_smoke_sequence_run\": " << (options.constructionSmoke ? "false" : "true")
                 << ",\n  \"native_load_ok\": " << (loadedSuccessfully ? "true" : "false")
                 << ",\n  \"startup_prefix_verified\": " << (startupPrefixVerified ? "true" : "false")
                 << ",\n  \"conditional_service47_verified\": " << (service47Verified ? "true" : "false")
@@ -1417,6 +1496,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 TranslateMessage(&message); DispatchMessageW(&message);
             }
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }
+        }
+        if(options.constructionSmoke) {
+            return !app.imageLoaded || app.frames < 30 || app.inputEvents != 2
+                || app.constructionSmokePasses != 2 || !app.managerVerified || !app.producer
+                || app.savedSuccessfully || app.loadedSuccessfully || app.startupPrefixVerified
+                || app.service47Verified || app.bulkVerified || app.storageVerified
+                || app.clockStorageVerified || app.messageVisible ? 1 : 0;
         }
         return options.smoke && (!app.imageLoaded || app.frames < 30 || app.inputEvents < 9 || !app.savedSuccessfully || !app.loadedSuccessfully
             || !app.startupPrefixVerified || !app.service47Verified || !app.bulkVerified || !app.managerVerified

@@ -1,11 +1,13 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace dokodemo::recovered {
+struct CurrentTablesStorageImage;
 enum class ProducerStop {
     None, MissingInput, NativeDomain, NativeAllocationFailure,
     SourceNullAllocationFault, AllocatorCall, NullSingleton, ForeignSingleton, ChildCall, Closed
@@ -27,6 +29,11 @@ struct ProducerAllocationPlan {
     uint8_t allocator_fill = 0xA5;
     bool force_native_failure = false;
     bool boundary_returns = true;
+    // Optional actual finite allocator seam, called AFTER registration at the
+    // original63D24 boundary. It returns the exact physical108-byte payload
+    // and initialized mask; empty preserves the historical supplied-return
+    // domain. This is not an allocator/kernel availability flag.
+    std::function<std::shared_ptr<CurrentTablesStorageImage>(uint32_t,uint32_t)> mapped_allocator;
 };
 struct ProducerReleasePlan {
     bool boundary_returns = true;
@@ -62,6 +69,19 @@ struct ProducerMutation {
     ProducerBoundary boundary;
 };
 class OwnedProducer;
+class ProducerCallbackToken {
+public:
+    explicit operator bool() const { return serial_ != 0; }
+private:
+    friend class OwnedProducer;
+    uint64_t owner_ = 0, generation_ = 0, serial_ = 0;
+};
+struct ProducerCallbackBorrow {
+    ProducerBoundary boundary;
+    ProducerCallbackToken token;
+    std::shared_ptr<CurrentTablesStorageImage> backing;
+    ProducerGlobal singleton, registered_callback;
+};
 struct ProducerCreateResult {
     std::unique_ptr<OwnedProducer> owner;
     ProducerMutation initialization;
@@ -95,6 +115,22 @@ public:
     // Native checkpoint injection only; deliberately no source-byte credit.
     ProducerMutation SetChildFromCheckpoint(uint32_t child);
     ProducerSnapshot Snapshot() const;
+    // Native ownership seam for source-proven1C0FC only. The returned image
+    // is the ACTUAL published108-byte payload. A detached Snapshot is not a
+    // writable borrow. No callback/allocator success is implied by borrowing.
+    ProducerCallbackBorrow BorrowCallbackBacking();
+    // One-shot explicit native COW adoption; only source list head/tail bytes
+    // may differ. Private generations reject foreign/reused/stale borrows.
+    ProducerBoundary AdoptCallbackState(const ProducerCallbackToken& token,
+        std::shared_ptr<CurrentTablesStorageImage> backing);
+    ProducerBoundary ValidateCallbackBorrow(const ProducerCallbackToken& token) const;
+    ProducerBoundary CancelCallbackBorrow(const ProducerCallbackToken& token);
+    // Boundary adoption AFTER the explicit mapped zero-aux1B578/1C044 path
+    // has logged its real host/prod frees and singleton clear. The historical
+    // Release1B578 default positive-child guard is deliberately unchanged.
+    ProducerBoundary AdoptMappedCallbackRelease(const ProducerCallbackToken& token,
+        std::shared_ptr<CurrentTablesStorageImage> backing, uint32_t released_host);
+    uint64_t NativeIdentity() const;
     // Native RAII releases all remaining payloads, including source orphans.
     // It is not the PSP destructor or a proof of its temporal behavior.
     void Close();
