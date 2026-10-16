@@ -125,6 +125,7 @@ public:
     StartupHostStatus RestoreSerialization(StartupNativeSerializationToken token);
     StartupHostStatus Close();
     std::vector<StartupHostCall> HostCalls() const;
+    uint64_t DroppedHostCalls() const;
 private:
     struct Impl;
     explicit WindowsStartupBackend(std::unique_ptr<Impl> impl);

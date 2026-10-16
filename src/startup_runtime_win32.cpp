@@ -2,6 +2,7 @@
 #include "startup_memory_backend_win32.h"
 #include "recovered/startup_flow_native.h"
 #include "recovered/audiocodec_module_native.h"
+#include "recovered/module_manager_native.h"
 #include "core_hash.h"
 #include <windows.h>
 #include <process.h>
@@ -34,6 +35,26 @@ struct NativeFailure {};
 // failed; 0 means success for status calls. Exact PSP error numbers are unknown.
 constexpr int32_t AdapterError = -1;
 constexpr uint32_t EncodedModuleBytes = 3232, HostStagingCoordinate = 0x61000000;
+// The manager retains this SAME direct borrow, not a vector copy or an opaque
+// success proof. Primitive block ownership stays in pending_module for explicit
+// fallible Free after manager unload and last borrow release. No destructor Free.
+struct WindowsModuleInputLease final : recovered::NativeModuleInputLease {
+    StartupAllocationBorrow borrow;
+    StartupNativeBlock block;
+    bool View(recovered::NativeModuleInputView& out) const noexcept override {
+        try {
+            StartupRawBorrowSpan span;
+            if (!borrow.Span(span) || !span.readable || span.size != EncodedModuleBytes ||
+                span.source_base != HostStagingCoordinate || span.handle.owner != block.owner ||
+                span.handle.generation != block.generation || span.handle.serial != block.serial)
+                return false;
+            out.bytes = span.bytes; out.initialized = span.initialized;
+            out.owner = span.handle.owner; out.generation = span.handle.generation; out.serial = span.handle.serial;
+            out.host_address = span.host_address; out.source_coordinate = span.source_base;
+            out.size = EncodedModuleBytes; return true;
+        } catch (...) { return false; }
+    }
+};
 }
 
 struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
@@ -55,6 +76,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     StartupObservation state;
     std::deque<StartupRuntimeEvent> events;
     std::unique_ptr<WindowsStartupBackend> backend;
+    recovered::NativeModuleManager modules;
+    recovered::NativeModuleToken module_token;
+    std::weak_ptr<WindowsModuleInputLease> module_input;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
     HANDLE caller = nullptr, worker = nullptr, cancel = nullptr, exit_event = nullptr;
@@ -84,6 +108,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
 
     explicit Impl(const StartupRuntimeOptions& input) : options(input) {
         state.owner = next_runtime_owner.fetch_add(1);
+        state.module_manager_owner = modules.Owner();
+        state.module_generation = modules.Generation();
     }
     void EmitLocked(const char* operation, const char* origin, uint32_t pc = 0,
                     int64_t value = 0, bool returned = false, uint64_t object = 0,
@@ -502,13 +528,17 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     recovered::StartupModuleOutcome ModuleStopResult(recovered::StartupModuleStop stop,
         const char* frontier, DWORD error = 0, uint32_t source_pc = 0x4F53C) {
         std::lock_guard<std::mutex> lock(metadata);
-        state.module_binding_frontier = frontier;
         if (stop == recovered::StartupModuleStop::Unsupported) {
-            state.barrier_source_pc = source_pc; state.worker_state = "Blocked";
-            state.barrier = frontier;
+            state.barrier_source_pc = source_pc;
         } else if (stop == recovered::StartupModuleStop::HostFailure) {
             FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
         }
+        try {
+            state.module_binding_frontier = frontier;
+            if (stop == recovered::StartupModuleStop::Unsupported) {
+                state.worker_state = "Blocked"; state.barrier = frontier;
+            }
+        } catch (...) { ++state.dropped_events; } // text never changes the typed stop/ownership
         EmitLocked("ModuleCallStop", stop == recovered::StartupModuleStop::Unsupported ? "Unsupported" : "HostLifecycle",
                    source_pc, 0, false, file_native, error, 0, frontier);
         return stop; //no source service result exists in this alternative
@@ -616,8 +646,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         if (!identity_matches)
             return ModuleStopResult(Stop::Unsupported, "Actual encoded module identity has no supported native definition");
         if (HostCancelled()) return Stop::HostCancelled;
-        // Exact identity selects recovered metadata only. No runtime decode,
-        // mapping, relocation, import binding or module entry has occurred.
+        // Exact identity selects the accepted offline source relation. No runtime
+        // decode, mapping, MIPS execution or relocation is performed.
         const auto& first_library = descriptor->imports.front();
         const auto& first_function = descriptor->functions[first_library.first_function];
         Emit("ModuleRecoveredDescriptor", "RecoveredMetadata", 0x4F53C,
@@ -629,23 +659,74 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         Emit("ModuleRecordedImportAttributes", "RecoveredMetadata", 0x4F53C,
              first_library.attributes, false, 0, 0, 0,
              "all3 records:version0/words5/variables0;later660 weak bit8;original firmware policy unknown");
-        // Table order does not establish first execution or PSP eager failure.
-        // The actual pending fd/options/borrow stay owned across this barrier.
-        return ModuleStopResult(Stop::Unsupported,
-            "Native audiocodec binding policy/providers not implemented;recorded sceMeAudio_driver/C00D873B;attributes0x0009;8 imports;original PSP policy unknown");
+        // Prepare the lease before registry publication. Allocation ownership is
+        // already primitive/pending, so exceptions cannot lose the block. Moving
+        // the borrow transfers its exact Storage/physical span, with no payload copy.
+        auto lease = std::make_shared<WindowsModuleInputLease>();
+        lease->block = pending_module.staging;
+        lease->borrow = std::move(pending_module.staging_borrow);
+        module_input = lease; // nonowning observation only; manager takes strong lease
+        recovered::NativeModuleResult loaded;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            loaded = modules.LoadAudiocodec(std::move(lease));
+            if (loaded) {
+                // Publish the primitive registry identity BEFORE fallible telemetry.
+                module_token = loaded.token;
+                state.module_uid = loaded.token.uid; state.module_uid_assigned = true;
+                state.module_load_returned = loaded.source_return;
+                state.module_manager_owner = loaded.token.owner;
+                state.module_generation = loaded.token.generation; state.module_serial = loaded.token.serial;
+                state.module_input_live = true;
+                pending_module.live = false; state.pending_module_live = false;
+                EmitLocked("ModuleRegistryPublished", "WindowsModulePolicy", 0, loaded.token.uid, false,
+                           loaded.token.serial, 0, 0, "owned UID;exact encoded->offline plaintext->compiled lifecycle relation");
+                EmitLocked("ModuleDeferredImportPolicy", "WindowsModulePolicy", 0, 8, false,
+                           loaded.token.owner, 0, 0, "attrs0009;exact version/ABI;production providers NONE;all8 unresolved;original firmware UNKNOWN");
+                for (const auto& library : descriptor->imports) {
+                    for (uint16_t i = 0; i < library.function_count; ++i) {
+                        const auto& function = descriptor->functions[library.first_function + i];
+                        EmitLocked("ModuleImportUnresolved", "RecoveredMetadata", function.source_stub_va,
+                                   function.nid, false, loaded.token.serial, 0, 0, library.name);
+                    }
+                }
+                EmitLocked("ModuleExportMetadataRegistered", "WindowsModulePolicy", 0, 12, false,
+                           loaded.token.serial, 0, 0, "11functions/1variable;only anonymous Start/Stop callable;8audio+driveralias metadata-only");
+                EmitLocked("LoadModuleByID-return", "SourceAdapter", 0x4F53C, loaded.source_result, true,
+                           loaded.token.serial, 0, 0, "genuine Windows registry UID;no claimed PSP UID/placement/GP/relocation");
+            }
+        }
+        if (!loaded || !loaded.source_return)
+            return ModuleStopResult(Stop::HostFailure, "Native module ownership/identity registry load failed");
+        return recovered::StartupModuleReturned{loaded.source_result};
     }
     recovered::StartupModuleOutcome StartModule(int32_t uid, uint32_t bytes, const void* args,
         int32_t* status, const void* options_arg) override {
         if (HostCancelled()) return recovered::StartupModuleStop::HostCancelled;
+        recovered::NativeModuleResult started_module;
         {
             std::lock_guard<std::mutex> lock(metadata);
-            state.module_start_called = true;
             if (!IsCurrent(true) || bytes || args || status || options_arg ||
                 !state.module_uid_assigned || uid != state.module_uid)
                 throw NativeFailure{};
+            state.module_start_called = true;
+            EmitLocked("StartModule-enter", "SourceCall", 0x4F560, uid, false, module_token.serial,
+                       0, 0, "bytes0/argsNULL/statusNULL/optionsNULL");
+            started_module = modules.Start(module_token, bytes, args, status, options_arg);
+            if (started_module && started_module.source_return) {
+                state.module_start_returned = true; state.module_start_result = started_module.source_result;
+                EmitLocked("ModuleStartEntryAD8-return", "RecoveredNativeEntry", 0xAD8,
+                           started_module.entry_result, true, module_token.serial, 0, 0,
+                           "exact JR RA/ADDU V0,ZERO,ZERO;no calls/memory/GP;entry result separate from Start service");
+                EmitLocked("StartModule-return", "SourceAdapter", 0x4F560, started_module.source_result,
+                           true, module_token.serial, 0, 0,
+                           "explicit Windows Start service policy success0 for resident entry0;original firmware result UNKNOWN");
+            }
         }
-        return ModuleStopResult(recovered::StartupModuleStop::Unsupported,
-            "No supported native module Start/entry contract", 0, 0x4F560);
+        if (!started_module || !started_module.source_return)
+            return ModuleStopResult(recovered::StartupModuleStop::HostFailure,
+                "Native module Start validation failed", 0, 0x4F560);
+        return recovered::StartupModuleReturned{started_module.source_result};
     }
     recovered::StartupModuleOutcome CloseModuleFile(int32_t fd) override {
         if (HostCancelled()) return recovered::StartupModuleStop::HostCancelled;
@@ -657,14 +738,29 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 throw NativeFailure{};
         }
         const auto closed = backend->CloseFile(file);
-        if (closed) { file = {}; std::lock_guard<std::mutex> lock(metadata); state.file_live = false; }
+        if (closed) {
+            file = {}; // primitive retirement before fallible observations
+            auto retained = module_input.lock();
+            recovered::NativeModuleInputView retained_view;
+            const bool still_live = retained && retained->View(retained_view) &&
+                retained_view.owner == pending_module.staging.owner &&
+                retained_view.generation == pending_module.staging.generation &&
+                retained_view.serial == pending_module.staging.serial &&
+                retained_view.host_address == state.staging_host_address;
+            std::lock_guard<std::mutex> lock(metadata); state.file_live = false;
+            state.module_input_live = still_live;
+            state.module_file_closed_while_input_live = still_live;
+            EmitLocked("SourceFileClosedWhileModuleInputLive", "WindowsModulePolicy", 0x4F570,
+                       state.module_file_closed_while_input_live ? 1 : 0, false, state.staging_host_address,
+                       0, 0, "fd retired;manager still owns SAME physical allocation borrow");
+        }
         Emit("SourceCloseModuleFile", "SourceAdapter", 0x4F570, closed ? 0 : AdapterError,
              true, file_native, closed.win32_error, 0, "source ignores returned close value;module resources independent");
         return recovered::StartupModuleReturned{closed ? 0 : AdapterError};
     }
     void UnsupportedFollowingModule() override {
         (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
-            "Next libatrac3plus native module operation is independently unsupported", 0, 0x4F640);
+            "Next4F640 disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx kind0(text2/data2/access1) native module operation unsupported;no body/UID", 0, 0x4F640);
     }
     bool HostCancelled() const override { return cancelled.load(); }
     void BarrierPump() {
@@ -766,6 +862,49 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         bool ok = true;
         { std::lock_guard<std::mutex> lock(metadata);
           pending_module.live = false; state.pending_module_live = false; }
+        if (module_token.uid > 0 && !state.module_unloaded) {
+            std::lock_guard<std::mutex> lock(metadata);
+            if (!state.caller_joined || !state.worker_joined) {
+                state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+            }
+            // No game Stop/unload import occurs in the recovered wrapper. Host
+            // session cleanup calls the exact AE0 body only AFTER both joins.
+            if (state.module_start_returned && !state.module_stop_returned) {
+                state.module_stop_called = true;
+                const auto stopped_module = modules.Stop(module_token);
+                if (!stopped_module || !stopped_module.entry_return) {
+                    EmitLocked("HostModuleStopFailed", "HostModulePolicy", 0, 0, false,
+                               module_token.serial, 0, 0, recovered::NativeModuleCodeName(stopped_module.code));
+                    state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                }
+                state.module_stop_returned = true; state.module_stop_result = stopped_module.entry_result;
+                EmitLocked("ModuleStopEntryAE0-return", "HostPolicyRecoveredNativeEntry", 0xAE0,
+                           stopped_module.entry_result, false, module_token.serial, 0, 0,
+                           "host teardown invokes source-backed body after BOTH joins;no game Stop import/result");
+            }
+            // Preserve the last real record as metadata. Snapshot failure must
+            // not prevent unloading or change primitive allocation ownership.
+            try {
+                if (modules.Snapshot(module_token, state.module_record))
+                    state.module_state = recovered::NativeModuleStateName(state.module_record.state);
+            } catch (...) { ++state.dropped_events; }
+            const auto unloaded = modules.Unload(module_token);
+            if (!unloaded) {
+                EmitLocked("HostModuleUnloadFailed", "HostModulePolicy", 0, 0, false,
+                           module_token.serial, 0, 0, recovered::NativeModuleCodeName(unloaded.code));
+                state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+            }
+            state.module_unloaded = true;
+            state.module_input_released = module_input.expired();
+            state.module_input_live = !state.module_input_released;
+            EmitLocked("HostModuleRegistryUnloaded", "HostModulePolicy", 0, module_token.uid, false,
+                       module_token.serial, 0, 0, "imports/exports/UID removed;no source Unload import");
+            EmitLocked("ModuleInputLeaseReleased", "HostModulePolicy", 0,
+                       state.module_input_released ? 1 : 0, false, state.staging_host_address);
+            if (!state.module_input_released) {
+                state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+            }
+        }
         if (pending_module.staging) {
             // Both actual contexts joined before releasing the retained input lease.
             pending_module.staging_borrow.Reset();
@@ -788,7 +927,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             if (closed) { file = {}; std::lock_guard<std::mutex> lock(metadata); state.file_live = false; }
             else ok = false;
             Emit("HostCloseSourceFile", "HostLifecycle", 0, closed ? 1 : 0, false, file_native, closed.win32_error,
-                 0, "owner teardown;source4F570 was never reached");
+                 0, "owner teardown of any still-open source fd;distinct from source4F570 close");
         }
         if (callback) {
             { std::lock_guard<std::mutex> lock(metadata); callback->registered = false; notifications = 0; }
@@ -880,6 +1019,15 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     const auto& self = *impl_;
     std::lock_guard<std::mutex> lock(self.metadata);
     auto out = self.state;
+    if (self.module_token.uid > 0 && !self.state.module_unloaded) {
+        if (self.modules.Snapshot(self.module_token, out.module_record)) {
+            out.module_state = recovered::NativeModuleStateName(out.module_record.state);
+            out.module_input_live = out.module_record.input_live;
+        }
+    }
+    out.module_providers = self.modules.Providers();
+    // The retained last record after unload is historical metadata, not live input.
+    if (out.module_unloaded) out.module_record.input_live = false;
     for (const auto& event : self.events) if (event.ordinal > after_event) out.events.push_back(event);
     return out;
 }

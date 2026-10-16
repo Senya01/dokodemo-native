@@ -28,6 +28,14 @@ bool Same(StartupNativeBlock a, StartupNativeBlock b) {
     return a.owner == b.owner && a.generation == b.generation && a.serial == b.serial;
 }
 uint64_t Address(const void* p) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(p)); }
+struct ScopedNativeHandle {
+    HANDLE value = nullptr;
+    explicit ScopedNativeHandle(HANDLE handle) noexcept : value(handle) {}
+    ~ScopedNativeHandle() { if (value && value != INVALID_HANDLE_VALUE) (void)CloseHandle(value); }
+    ScopedNativeHandle(const ScopedNativeHandle&) = delete;
+    ScopedNativeHandle& operator=(const ScopedNativeHandle&) = delete;
+    void Release() noexcept { value = nullptr; }
+};
 }
 
 struct StartupAllocationBorrow::Storage {
@@ -67,8 +75,15 @@ struct WindowsStartupBackend::Impl {
     std::vector<File> files;
     std::vector<StartupNativeSerializationToken> tokens;
     std::vector<StartupHostCall> calls;
-    void Log(const char* op, const void* address, uint64_t size, uint64_t result, DWORD error = 0) {
-        calls.push_back({calls.size(), Address(address), size, result, GetCurrentThreadId(), error, op});
+    uint64_t dropped_calls = 0, call_attempts = 0;
+    void Log(const char* op, const void* address, uint64_t size, uint64_t result, DWORD error = 0) noexcept {
+        const uint64_t ordinal = call_attempts;
+        if (call_attempts != (std::numeric_limits<uint64_t>::max)()) ++call_attempts;
+        try {
+            calls.push_back({ordinal, Address(address), size, result, GetCurrentThreadId(), error, op});
+        } catch (...) {
+            if (dropped_calls != (std::numeric_limits<uint64_t>::max)()) ++dropped_calls;
+        }
     }
     StartupHostStatus Find(StartupNativeBlock handle, size_t& index) const {
         if (closed) return Error(StartupHostCode::Closed);
@@ -110,20 +125,24 @@ struct WindowsStartupBackend::Impl {
 };
 WindowsStartupBackend::WindowsStartupBackend(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 std::unique_ptr<WindowsStartupBackend> WindowsStartupBackend::Create(StartupHostStatus& status) {
-    auto impl = std::make_unique<Impl>();
+    // Allocate the wrapper before any native resource; no raw mutex crosses a
+    // fallible final wrapper allocation.
+    auto owner = std::unique_ptr<WindowsStartupBackend>(
+        new WindowsStartupBackend(std::make_unique<Impl>()));
+    auto& impl = owner->impl_;
     impl->serialization = CreateMutexW(nullptr, FALSE, nullptr);
     const DWORD error = impl->serialization ? 0 : GetLastError();
     impl->Log("CreateMutexW", nullptr, 0, Address(impl->serialization), error);
     if (!impl->serialization) { status = Error(StartupHostCode::HostFailure, error); return {}; }
     status = {};
-    return std::unique_ptr<WindowsStartupBackend>(new WindowsStartupBackend(std::move(impl)));
+    return owner;
 }
 WindowsStartupBackend::~WindowsStartupBackend() {
     // Destruction must be quiescent. Explicit Close reports busy borrows/tokens.
     // If a caller destroys an owner with a borrow, invalidate the lease but let
     // its shared storage retain the host reservation until the borrow dies.
     if (!impl_) return;
-    (void)Close();
+    try { (void)Close(); } catch (...) {}
     for (auto& block : impl_->blocks) block->live = false;
     for (const auto& file : impl_->files) (void)CloseHandle(file.native);
     if (impl_->serialization) {
@@ -164,10 +183,11 @@ StartupNativeDescription WindowsStartupBackend::Allocate(const StartupPartitionR
     b->committed = committed; b->requested = request.bytes; b->source = request.source_base; b->page = info.dwPageSize;
     out = s.Describe(b);
     if (!out.status) {
+        const void* address = b->allocation;
         const BOOL released = VirtualFree(b->allocation, 0, MEM_RELEASE);
         const DWORD free_error = released ? 0 : GetLastError();
-        s.Log("VirtualFreeRejectedGeometry", b->allocation, 0, static_cast<uint64_t>(released), free_error);
         if (released) b->allocation = nullptr;
+        s.Log("VirtualFreeRejectedGeometry", address, 0, static_cast<uint64_t>(released), free_error);
         return out;
     }
     s.blocks.push_back(std::move(b));
@@ -183,12 +203,15 @@ StartupHostStatus WindowsStartupBackend::Free(StartupNativeBlock handle) {
     size_t i = 0; auto status = s.Find(handle, i); if (!status) return status;
     auto& b = s.blocks[i];
     if (b.use_count() != 1) return Error(StartupHostCode::Borrowed);
+    const void* address = b->allocation;
     const BOOL result = VirtualFree(b->allocation, 0, MEM_RELEASE);
     const DWORD error = result ? 0 : GetLastError();
-    s.Log("VirtualFree", b->allocation, 0, static_cast<uint64_t>(result), error);
+    if (result) {
+        b->allocation = nullptr; b->live = false;
+        s.blocks.erase(s.blocks.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+    s.Log("VirtualFree", address, 0, static_cast<uint64_t>(result), error);
     if (!result) return Error(StartupHostCode::HostFailure, error);
-    b->allocation = nullptr; b->live = false;
-    s.blocks.erase(s.blocks.begin() + static_cast<std::ptrdiff_t>(i));
     return {};
 }
 StartupAllocationBorrow WindowsStartupBackend::Borrow(StartupNativeBlock handle, StartupHostStatus& status) {
@@ -230,7 +253,8 @@ StartupNativeFileResult WindowsStartupBackend::OpenRead(const std::wstring& path
     if (path.empty() || path.find(L'\0') != std::wstring::npos || s.serial == std::numeric_limits<uint64_t>::max()) {
         out.status = Error(StartupHostCode::InvalidRequest); return out;
     }
-    const HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ScopedNativeHandle native_file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    const HANDLE file = native_file.value;
     const DWORD error = file == INVALID_HANDLE_VALUE ? GetLastError() : 0;
     s.Log("CreateFileW-read", nullptr, 0, Address(file), error);
     if (file == INVALID_HANDLE_VALUE) { out.status = Error(StartupHostCode::HostFailure, error); return out; }
@@ -241,12 +265,15 @@ StartupNativeFileResult WindowsStartupBackend::OpenRead(const std::wstring& path
     if (!result || size.QuadPart < 0) {
         const BOOL closed = CloseHandle(file);
         const DWORD close_error = closed ? 0 : GetLastError();
+        if (closed) native_file.Release();
         s.Log("CloseRejectedFile", file, 0, static_cast<uint64_t>(closed), close_error);
         out.status = Error(StartupHostCode::HostFailure, size_error); return out;
     }
     out.handle = {s.owner, s.generation, ++s.serial};
     out.host_handle = Address(file); out.file_size = static_cast<uint64_t>(size.QuadPart);
-    s.files.push_back({out.handle, file}); return out;
+    s.files.push_back({out.handle, file});
+    native_file.Release(); // actual registry owns it only after successful publication
+    return out;
 }
 StartupNativeSeekResult WindowsStartupBackend::Seek64(StartupNativeFile handle, int64_t offset, uint32_t whence) {
     auto& s = *impl_; std::lock_guard<std::mutex> guard(s.metadata); StartupNativeSeekResult out;
@@ -288,9 +315,11 @@ StartupHostStatus WindowsStartupBackend::CloseFile(StartupNativeFile handle) {
     auto& s = *impl_; std::lock_guard<std::mutex> guard(s.metadata);
     size_t i = 0; auto status = s.FindFile(handle, i); if (!status) return status;
     const HANDLE file = s.files[i].native; const BOOL result = CloseHandle(file);
-    const DWORD error = result ? 0 : GetLastError(); s.Log("CloseHandleFile", file, 0, static_cast<uint64_t>(result), error);
+    const DWORD error = result ? 0 : GetLastError();
+    if (result) s.files.erase(s.files.begin() + static_cast<std::ptrdiff_t>(i));
+    s.Log("CloseHandleFile", file, 0, static_cast<uint64_t>(result), error);
     if (!result) return Error(StartupHostCode::HostFailure, error);
-    s.files.erase(s.files.begin() + static_cast<std::ptrdiff_t>(i)); return {};
+    return {};
 }
 StartupNativeSerializationResult WindowsStartupBackend::SuspendSerialization(uint32_t timeout_ms) {
     auto& s = *impl_; StartupNativeSerializationResult out;
@@ -356,27 +385,36 @@ StartupHostStatus WindowsStartupBackend::Close() {
     for (const auto& b : s.blocks) if (b.use_count() != 1) return Error(StartupHostCode::Borrowed);
     while (!s.files.empty()) {
         const HANDLE file = s.files.front().native; const BOOL closed = CloseHandle(file);
-        const DWORD error = closed ? 0 : GetLastError(); s.Log("CloseFileOwner", file, 0, static_cast<uint64_t>(closed), error);
+        const DWORD error = closed ? 0 : GetLastError();
+        if (closed) s.files.erase(s.files.begin());
+        s.Log("CloseFileOwner", file, 0, static_cast<uint64_t>(closed), error);
         if (!closed) return Error(StartupHostCode::HostFailure, error);
-        s.files.erase(s.files.begin());
     }
     while (!s.blocks.empty()) {
         auto& b = s.blocks.front();
+        const void* address = b->allocation;
         const BOOL result = VirtualFree(b->allocation, 0, MEM_RELEASE);
         const DWORD error = result ? 0 : GetLastError();
-        s.Log("VirtualFreeClose", b->allocation, 0, static_cast<uint64_t>(result), error);
+        if (result) {
+            b->allocation = nullptr; b->live = false;
+            s.blocks.erase(s.blocks.begin()); // successful prefix stays retired
+        }
+        s.Log("VirtualFreeClose", address, 0, static_cast<uint64_t>(result), error);
         if (!result) return Error(StartupHostCode::HostFailure, error);
-        b->allocation = nullptr; b->live = false;
-        s.blocks.erase(s.blocks.begin()); // Successful prefix stays released on retry.
     }
-    const BOOL result = CloseHandle(s.serialization);
+    const HANDLE serialization = s.serialization;
+    const BOOL result = CloseHandle(serialization);
     const DWORD error = result ? 0 : GetLastError();
-    s.Log("CloseHandleMutex", s.serialization, 0, static_cast<uint64_t>(result), error);
+    if (result) { s.serialization = nullptr; s.closed = true; ++s.generation; }
+    s.Log("CloseHandleMutex", serialization, 0, static_cast<uint64_t>(result), error);
     if (!result) return Error(StartupHostCode::HostFailure, error);
-    s.serialization = nullptr; s.closed = true; ++s.generation; return {};
+    return {};
 }
 std::vector<StartupHostCall> WindowsStartupBackend::HostCalls() const {
     std::lock_guard<std::mutex> guard(impl_->metadata); return impl_->calls;
+}
+uint64_t WindowsStartupBackend::DroppedHostCalls() const {
+    std::lock_guard<std::mutex> guard(impl_->metadata); return impl_->dropped_calls;
 }
 const char* StartupHostCodeName(StartupHostCode code) {
     switch (code) {

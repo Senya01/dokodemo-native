@@ -1,4 +1,5 @@
 #pragma once
+#include "recovered/module_manager_native.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -60,6 +61,15 @@ struct StartupObservation {
     bool staging_full_read = false, staging_hash_matches = false, staging_freed_after_joins = false;
     bool module_uid_assigned = false, module_load_returned = false, module_start_called = false;
     int32_t module_uid = 0;
+    // Additive Stage16 API. Source fd and owned registry/input lifetimes differ.
+    uint64_t module_manager_owner = 0, module_generation = 0, module_serial = 0;
+    bool module_input_live = false, module_file_closed_while_input_live = false;
+    bool module_stop_called = false, module_unloaded = false, module_input_released = false;
+    bool module_start_returned = false, module_stop_returned = false;
+    int32_t module_start_result = 0, module_stop_result = 0;
+    std::string module_state;
+    recovered::NativeModuleSnapshot module_record;
+    std::vector<recovered::NativeModuleProviderSnapshot> module_providers;
     std::string staging_sha256, module_binding_frontier;
     StartupRuntimeStatus status;
     std::vector<StartupRuntimeEvent> events; // bounded metadata, never payloads
