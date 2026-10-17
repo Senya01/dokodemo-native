@@ -27,6 +27,7 @@
 #include <shellapi.h>
 #include <mmsystem.h>
 #include <algorithm>
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <chrono>
@@ -1048,6 +1049,39 @@ std::string StartupHexBytes(const uint8_t* bytes, size_t count) {
     }
     return result;
 }
+void WriteCheckNeedMemValue(std::ostream& out,
+    const dokodemo::recovered::NativeCheckNeedMemSnapshot& value) {
+    const auto boolean = [](bool item) { return item ? "true" : "false"; };
+    out << "{\"present\":" << boolean(value.present);
+    if (!value.present) { out << '}'; return; }
+    out << ",\"partial_callable\":" << boolean(value.partial_callable) << ",\"provider_module\":";
+    WriteModuleTokenValue(out, value.provider_module);
+    out << ",\"consumer_module\":"; WriteModuleTokenValue(out, value.consumer_module);
+    out << ",\"provider\":{\"owner\":" << value.provider.owner
+        << ",\"generation\":" << value.provider.generation << ",\"serial\":" << value.provider.serial << '}'
+        << ",\"provider_input_owner\":" << value.provider_input_owner
+        << ",\"provider_input_generation\":" << value.provider_input_generation
+        << ",\"provider_input_serial\":" << value.provider_input_serial
+        << ",\"consumer_input_owner\":" << value.consumer_input_owner
+        << ",\"consumer_input_generation\":" << value.consumer_input_generation
+        << ",\"consumer_input_serial\":" << value.consumer_input_serial
+        << ",\"buffer_native_address\":" << value.buffer_native_address
+        << ",\"caller_source_pc\":" << value.caller_source_pc
+        << ",\"buffer_record_offset\":" << value.buffer_record_offset << ",\"buffer_bytes\":" << value.buffer_bytes
+        << ",\"window_known_before\":" << value.window_known_before << ",\"window_known_after\":" << value.window_known_after;
+    const auto& body = value.body;
+    out << ",\"body\":{\"entered\":" << boolean(body.entered)
+        << ",\"host_policy_applied\":" << boolean(body.host_policy_applied)
+        << ",\"source_null\":" << boolean(body.source_null)
+        << ",\"dependency_blocked\":" << boolean(body.dependency_blocked)
+        << ",\"dependency_dispatched\":" << boolean(body.dependency_dispatched)
+        << ",\"source_return\":" << boolean(body.source_return) << ",\"source_result\":";
+    if (body.source_return) out << body.source_result; else out << "null";
+    out << ",\"codec\":" << body.codec << ",\"buffer_reads\":" << body.buffer_reads << ",\"writes\":" << body.writes
+        << ",\"entry_source_pc\":" << body.entry_source_pc << ",\"write_source_pc\":" << body.write_source_pc
+        << ",\"frontier_source_pc\":" << body.frontier_source_pc << ",\"frontier_delay_pc\":" << body.frontier_delay_pc
+        << ",\"frontier_stub_va\":" << body.frontier_stub_va << ",\"frontier_nid\":" << body.frontier_nid << "}}";
+}
 void WriteModuleInitializationValue(std::ostream& out,
     const dokodemo::recovered::Atrac3plusInitializationSnapshot& value) {
     const auto boolean = [](bool item) { return item ? "true" : "false"; };
@@ -1078,6 +1112,7 @@ void WriteModuleInitializationValue(std::ostream& out,
         if (!first) out << ',';
         first = false;
         out << "{\"ordinal\":" << item.ordinal << ",\"source_pc\":" << item.source_pc
+            << ",\"source_module\":" << JsonString(item.source_module == dokodemo::recovered::Atrac3plusWriteSource::Audiocodec ? "Audiocodec" : "Atrac3plus")
             << ",\"offset\":" << item.offset << ",\"width\":" << item.width << ",\"value\":" << item.value << '}';
     }
     out << "]}";
@@ -1109,7 +1144,8 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
         out << ",\"library\":" << JsonString(item.library) << ",\"abi\":" << JsonString(item.abi)
             << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
             << ",\"nid\":" << item.nid << ",\"source_stub_va\":" << item.source_stub_va
-            << ",\"resolved\":" << boolean(item.resolved) << ",\"provider_serial\":" << item.provider_serial
+            << ",\"resolved\":" << boolean(item.resolved) << ",\"partial_callable\":" << boolean(item.partial_callable)
+            << ",\"provider_serial\":" << item.provider_serial
             << ",\"provider_owner\":" << item.provider_owner << ",\"provider_generation\":" << item.provider_generation
             << ",\"provider_module\":"; WriteModuleTokenValue(out, item.provider_module);
         out << ",\"binding_generation\":" << item.binding_generation << '}';
@@ -1122,10 +1158,12 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
         out << ",\"library\":" << JsonString(item.library) << ",\"kind\":" << JsonString(item.kind)
             << ",\"version\":" << item.version << ",\"attributes\":" << item.attributes
             << ",\"nid\":" << item.nid << ",\"relative_va\":" << item.relative_va
-            << ",\"lifecycle_callable\":" << boolean(item.lifecycle_callable) << '}';
+            << ",\"lifecycle_callable\":" << boolean(item.lifecycle_callable)
+            << ",\"partial_callable\":" << boolean(item.partial_callable) << '}';
     }
     out << "],\"initialization\":";
     WriteModuleInitializationValue(out, record.initialization);
+    out << ",\"check_need_mem\":"; WriteCheckNeedMemValue(out, record.check_need_mem);
     out << '}';
 }
 void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
@@ -1136,7 +1174,8 @@ void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObs
         << ",\"request_owner\":" << item.request_owner << ",\"pending\":" << boolean(item.pending)
         << ",\"frontier\":" << JsonString(item.frontier) << ",\"frontier_source_pc\":" << item.frontier_source_pc
         << ",\"frontier_module_relative\":" << boolean(item.frontier_module_relative)
-        << ",\"source_fd\":" << item.source_fd << ",\"file_native_object\":" << item.file_native_object
+        << ",\"frontier_source_module\":"; WriteModuleTokenValue(out, item.frontier_source_module);
+    out << ",\"source_fd\":" << item.source_fd << ",\"file_native_object\":" << item.file_native_object
         << ",\"file_backend_owner\":" << item.file_backend_owner << ",\"file_backend_generation\":" << item.file_backend_generation
         << ",\"file_backend_serial\":" << item.file_backend_serial << ",\"encoded_file_bytes\":" << item.encoded_file_bytes
         << ",\"file_live\":" << boolean(item.file_live) << ",\"staging_owner\":" << item.staging_owner
@@ -1197,6 +1236,7 @@ void WriteModuleObservation(std::ostream& out, const dokodemo::StartupObservatio
             << ",\"serial\":" << item.token.serial << ",\"library\":" << JsonString(item.library)
             << ",\"abi\":" << JsonString(item.abi) << ",\"version\":" << item.version
             << ",\"nid\":" << item.nid << ",\"synthetic_only\":" << boolean(item.synthetic_only)
+            << ",\"partial_callable\":" << boolean(item.partial_callable)
             << ",\"module\":"; WriteModuleTokenValue(out, item.module); out << '}';
     }
     out << ']';
@@ -1216,7 +1256,8 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"barrier\":" << JsonString(observation.barrier)
         << ",\"barrier_source_pc\":" << observation.barrier_source_pc
         << ",\"barrier_module_relative\":" << boolean(observation.barrier_module_relative)
-        << ",\"owner\":" << observation.owner << ",\"last_event\":" << observation.last_event
+        << ",\"barrier_source_module\":"; WriteModuleTokenValue(out, observation.barrier_source_module);
+    out << ",\"owner\":" << observation.owner << ",\"last_event\":" << observation.last_event
         << ",\"dropped_events\":" << observation.dropped_events
         << ",\"caller_thread_id\":" << observation.caller_thread_id
         << ",\"worker_thread_id\":" << observation.worker_thread_id
@@ -1276,7 +1317,8 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"current_frontier\":" << JsonString(observation.current_frontier)
         << ",\"current_frontier_source_pc\":" << observation.current_frontier_source_pc
         << ",\"current_frontier_module_relative\":" << boolean(observation.current_frontier_module_relative)
-        << ",\"module_observations\":[";
+        << ",\"current_frontier_source_module\":"; WriteModuleTokenValue(out, observation.current_frontier_source_module);
+    out << ",\"module_observations\":[";
     bool firstModule = true;
     for (const auto& item : observation.module_observations) {
         if (!firstModule) out << ',';
@@ -1304,6 +1346,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
             << ",\"source_pc\":" << event.source_pc << ",\"source_pc_domain\":" << JsonString(event.source_pc_domain)
             << ",\"module_request_index\":" << event.module_request_index << ",\"module\":";
         WriteModuleTokenValue(out, event.module);
+        out << ",\"source_module\":"; WriteModuleTokenValue(out, event.source_module);
         out << ",\"thread\":" << event.thread
             << ",\"native_object\":" << event.native_object << ",\"owner\":" << event.owner
             << ",\"value\":" << event.value << ",\"source_return\":" << boolean(event.source_return)
@@ -1312,6 +1355,10 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
     }
     out << "]}\n";
     if (!out) throw std::runtime_error("Native startup observation write failed");
+}
+bool SameNativeModuleToken(const dokodemo::recovered::NativeModuleToken& a,
+    const dokodemo::recovered::NativeModuleToken& b) {
+    return a.owner == b.owner && a.generation == b.generation && a.serial == b.serial && a.uid == b.uid;
 }
 bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) {
     const auto& module = observation.module_record;
@@ -1347,14 +1394,26 @@ bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) 
         && observation.module_serial == module.token.serial && observation.module_uid == module.token.uid
         && module.domain == dokodemo::recovered::NativeModuleDomain::Production
         && module.state == dokodemo::recovered::NativeModuleState::Started
-        && module.input_live && module.active_calls == 0 && observation.module_providers.empty()
+        && module.input_live && module.active_calls == 0 && observation.module_providers.size() == 1
+        && observation.module_providers[0].partial_callable && !observation.module_providers[0].synthetic_only
+        && observation.module_providers[0].library == "sceAudiocodec"
+        && observation.module_providers[0].abi == "windows-owned-masked-checkneedmem-prefix-v1"
+        && observation.module_providers[0].version == 0 && observation.module_providers[0].nid == 0x9D3F790C
+        && observation.module_providers[0].token.owner == module.token.owner
+        && observation.module_providers[0].token.generation == module.token.generation
+        && observation.module_providers[0].token.serial != 0
+        && SameNativeModuleToken(observation.module_providers[0].module, module.token)
         && module.input.owner == observation.staging_owner
         && module.input.generation == observation.staging_generation
         && module.input.serial == observation.staging_serial
         && module.input.host_address == observation.staging_host_address && module.input.size == 3232
         && module.imports.size() == 8
         && std::all_of(module.imports.begin(), module.imports.end(), [](const auto& item) {
-            return item.attributes == 9 && !item.resolved && item.provider_serial == 0;
+            return item.attributes == 9 && !item.resolved && !item.partial_callable && item.provider_serial == 0;
+        })
+        && std::count_if(module.exports.begin(), module.exports.end(), [](const auto& item) { return item.partial_callable; }) == 1
+        && std::any_of(module.exports.begin(), module.exports.end(), [](const auto& item) {
+            return item.nid == 0x9D3F790C && item.relative_va == 0 && item.partial_callable && !item.lifecycle_callable;
         })
         && observation.caller_thread_id && observation.worker_thread_id
         && observation.caller_thread_id != observation.worker_thread_id
@@ -1366,28 +1425,31 @@ bool AtracPrefixAtDependency(const dokodemo::recovered::Atrac3plusInitialization
         || !value.owner || !value.generation || !value.serial || !value.native_state_address
         || value.source_segment != 1 || value.source_segment_offset != 0xA0
         || value.record_count != 4 || value.record_stride != 0x148 || value.record_bytes != 1312
-        || value.initial_source_known_bytes != 0 || value.known_bytes != 10 || value.writes_count != 4
+        || value.initial_source_known_bytes != 0 || value.known_bytes != 14 || value.writes_count != 5
         || value.frontier_source_pc != 0x1684 || value.frontier_delay_pc != 0x1688
         || value.frontier_stub_va != 0x3640 || value.frontier_import_index != 2 || value.frontier_nid != 0x9D3F790C
         || value.arg0_record_index != 0 || value.arg0_record_offset != 0x44 || value.arg1 != 0x1000
         || !value.frontier_arguments_prepared || value.helper_calls_entered != 1 || value.loop_iterations_completed != 0
-        || value.external_services_dispatched != 0 || value.external_resources_acquired != 0) return false;
+        || value.external_services_dispatched != 1 || value.external_resources_acquired != 0) return false;
     for (size_t i = 0; i < value.known.size(); ++i) {
-        const bool expectedKnown = i < 4 || i == 0x6C || i == 0x6D || (i >= 0xAC && i < 0xB0);
+        const bool expectedKnown = i < 4 || (i >= 0x44 && i < 0x48) || i == 0x6C || i == 0x6D || (i >= 0xAC && i < 0xB0);
         if (value.known[i] != static_cast<uint8_t>(expectedKnown)) return false;
         // Unmarked physical bytes have no source initialization authority.
     }
     if (value.bytes[0] != 1 || value.bytes[1] || value.bytes[2] || value.bytes[3]
         || value.bytes[0x6C] != 0x28 || value.bytes[0x6D] != 0x5C
-        || value.bytes[0xAC] || value.bytes[0xAD] || value.bytes[0xAE] != 0x20 || value.bytes[0xAF]) return false;
-    constexpr std::array<uint32_t, 4> pcs{0x1678,0x1680,0x16D4,0x16E0};
-    constexpr std::array<uint32_t, 4> offsets{0xAC,0,0x6C,0x6D};
-    constexpr std::array<uint32_t, 4> widths{4,4,1,1};
-    constexpr std::array<uint32_t, 4> values{0x00200000,1,0x28,0x5C};
+        || value.bytes[0xAC] || value.bytes[0xAD] || value.bytes[0xAE] != 0x20 || value.bytes[0xAF]
+        || value.bytes[0x44] != 1 || value.bytes[0x45] != 7 || value.bytes[0x46] != 9 || value.bytes[0x47] != 4) return false;
+    constexpr std::array<uint32_t, 5> pcs{0x1678,0x1680,0x16D4,0x16E0,0x80};
+    constexpr std::array<uint32_t, 5> offsets{0xAC,0,0x6C,0x6D,0x44};
+    constexpr std::array<uint32_t, 5> widths{4,4,1,1,4};
+    constexpr std::array<uint32_t, 5> values{0x00200000,1,0x28,0x5C,0x04090701};
     for (size_t i = 0; i < value.writes.size(); ++i) {
         const auto& item = value.writes[i];
         if (item.ordinal != i || item.source_pc != pcs[i] || item.offset != offsets[i]
-            || item.width != widths[i] || item.value != values[i]) return false;
+            || item.width != widths[i] || item.value != values[i]
+            || item.source_module != (i == 4 ? dokodemo::recovered::Atrac3plusWriteSource::Audiocodec
+                                             : dokodemo::recovered::Atrac3plusWriteSource::Atrac3plus)) return false;
     }
     return true;
 }
@@ -1395,10 +1457,32 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
     if (!FirstNativeModuleRetained(observation) || observation.module_observations.size() != 2
         || observation.module_records.size() != 2 || observation.current_module_index != 1
         || !observation.barrier_module_relative || !observation.current_frontier_module_relative
-        || observation.barrier_source_pc != 0x1684 || observation.current_frontier_source_pc != 0x1684) return false;
+        || observation.barrier_source_pc != 0x84 || observation.current_frontier_source_pc != 0x84) return false;
     const auto& first = observation.module_observations[0];
     const auto& second = observation.module_observations[1];
     const auto& record = second.record;
+    const auto& call = record.check_need_mem;
+    const auto& body = call.body;
+    const auto& provider = observation.module_providers[0];
+    if (!SameNativeModuleToken(observation.barrier_source_module, first.token)
+        || !SameNativeModuleToken(observation.current_frontier_source_module, first.token)
+        || !SameNativeModuleToken(second.frontier_source_module, first.token)
+        || second.frontier_source_pc != 0x84
+        || !call.present || !call.partial_callable || !SameNativeModuleToken(call.provider_module, first.token)
+        || !SameNativeModuleToken(call.consumer_module, second.token)
+        || call.provider.owner != provider.token.owner || call.provider.generation != provider.token.generation
+        || call.provider.serial != provider.token.serial
+        || call.provider_input_owner != first.staging_owner || call.provider_input_generation != first.staging_generation
+        || call.provider_input_serial != first.staging_serial || call.consumer_input_owner != second.staging_owner
+        || call.consumer_input_generation != second.staging_generation || call.consumer_input_serial != second.staging_serial
+        || call.caller_source_pc != 0x1684 || call.buffer_record_offset != 0x44 || call.buffer_bytes != 0x68
+        || call.window_known_before != 2 || call.window_known_after != 6
+        || call.buffer_native_address != record.initialization.native_state_address
+            + offsetof(dokodemo::recovered::Atrac3plusInitializationSnapshot, bytes) + 0x44
+        || !body.entered || !body.host_policy_applied || body.source_null || !body.dependency_blocked
+        || body.dependency_dispatched || body.source_return || body.codec != 0x1000 || body.buffer_reads != 0 || body.writes != 1
+        || body.entry_source_pc != 0 || body.write_source_pc != 0x80 || body.frontier_source_pc != 0x84
+        || body.frontier_delay_pc != 0x88 || body.frontier_stub_va != 0xAF8 || body.frontier_nid != 0xC00D873B) return false;
     if (first.request_index != 0 || second.request_index != 1 || second.wrapper_callsite != 0x4F640
         || first.token.uid != observation.module_uid || second.token.uid <= 0 || first.token.uid == second.token.uid
         || first.token.owner != second.token.owner || first.token.generation != second.token.generation
@@ -1431,7 +1515,12 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
         || !AtracPrefixAtDependency(record.initialization)) return false;
     for (size_t i = 0; i < record.imports.size(); ++i) {
         const auto& item = record.imports[i];
-        if (item.version != 0 || item.attributes != (i < 2 ? 1 : 0x4001) || item.resolved || item.provider_serial) return false;
+        if (item.version != 0 || item.attributes != (i < 2 ? 1 : 0x4001) || item.resolved) return false;
+        if (i == 2) {
+            if (!item.partial_callable || item.provider_serial != provider.token.serial
+                || item.provider_owner != provider.token.owner || item.provider_generation != provider.token.generation
+                || !SameNativeModuleToken(item.provider_module, first.token)) return false;
+        } else if (item.partial_callable || item.provider_serial) return false;
     }
     return std::none_of(record.exports.begin(), record.exports.end(), [](const auto& item) { return item.lifecycle_callable; });
 }
@@ -1439,7 +1528,8 @@ bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation)
     if (observation.module_observations.size() != 2 || !observation.module_records.empty()
         || !observation.caller_joined || !observation.worker_joined || !observation.resources_closed
         || observation.callback_dispatch_count != 1 || observation.callback_dispatch_thread != observation.worker_thread_id
-        || observation.dropped_events || observation.module_input_live || observation.staging_live || observation.staging_borrow_live) return false;
+        || observation.dropped_events || observation.module_input_live || observation.staging_live || observation.staging_borrow_live
+        || !observation.module_providers.empty()) return false;
     for (const auto& item : observation.module_observations) {
         if (item.record_live || item.file_live || item.staging_live || item.staging_borrow_live || item.module_input_live
             || !item.module_unloaded || !item.module_input_released || !item.staging_freed_after_joins) return false;
@@ -1490,11 +1580,16 @@ int ConnectedStartupTest(const Options& options) {
         && after.module_unloaded && after.module_input_released && !after.module_input_live
         && NativeModuleSequenceClosed(after) && after.dropped_events == 0;
     std::ofstream summary(options.evidence / L"connected-startup-test.json", std::ios::binary);
+    const auto* call = boundary.module_observations.size() > 1
+        ? &boundary.module_observations[1].record.check_need_mem : nullptr;
     summary << "{\"same_application_coordinator\":true,\"passed\":" << (ok ? "true" : "false")
         << ",\"multi_module_boundary\":" << (reached ? "true" : "false")
         << ",\"actual_encoded_staging\":" << (boundary.staging_full_read && boundary.staging_hash_matches ? "true" : "false")
         << ",\"native_module_load_start_close\":" << (reached ? "true" : "false")
-        << ",\"native_lifecycle_only\":true,\"all_audio_exports_implemented\":false"
+        << ",\"native_lifecycle_and_partial_export\":true,\"all_audio_exports_implemented\":false"
+        << ",\"check_need_mem_partial_provider\":" << (reached ? "true" : "false")
+        << ",\"check_need_mem_returned\":" << (call && call->present ? (call->body.source_return ? "true" : "false") : "null")
+        << ",\"ME_service_dispatched\":" << (call && call->present ? (call->body.dependency_dispatched ? "true" : "false") : "null")
         << ",\"owned_modules\":" << boundary.module_records.size()
         << ",\"second_partial_start_without_return\":" << (reached ? "true" : "false")
         << ",\"partial_init_aborted_after_joins\":" << (NativeModuleSequenceClosed(after) ? "true" : "false")

@@ -15,7 +15,7 @@ enum class NativeModuleCode {
     Ok, InvalidInput, IdentityMismatch, AlreadyLoaded, InvalidToken, WrongState,
     Exhausted, NotLinked, UnimplementedExport, IncompatibleProvider,
     DuplicateProvider, InvalidProvider, Busy, SyntheticProviderForbidden,
-    UnsupportedEntry, UnsupportedPolicy, InputOverlap
+    UnsupportedEntry, UnsupportedPolicy, InputOverlap, HostCapabilityRefused, DependencyBlocked
 };
 enum class NativeModuleState { Loaded, Started, Stopped, EntryBlocked, InitializationAborted };
 enum class NativeModuleDomain { Production, SyntheticControls };
@@ -29,6 +29,26 @@ struct NativeModuleInputView {
     uint64_t owner = 0, generation = 0, serial = 0, host_address = 0;
     uint32_t source_coordinate = 0, size = 0;
 };
+struct NativeModuleProviderToken { uint64_t owner = 0, generation = 0, serial = 0; };
+// Values identify an exact manager-issued view, never a writable host pointer.
+// Invocation compares every field with the live pinned consumer/private state.
+struct NativeCheckNeedMemBufferCapability {
+    NativeModuleToken consumer;
+    uint64_t input_owner = 0, input_generation = 0, input_serial = 0;
+    uint64_t state_owner = 0, state_generation = 0, state_serial = 0, state_address = 0;
+    uint32_t record_offset = 0, bytes = 0, writes_before = 0, known_before = 0;
+};
+struct NativeCheckNeedMemSnapshot {
+    bool present = false, partial_callable = false;
+    NativeModuleToken provider_module, consumer_module;
+    NativeModuleProviderToken provider;
+    uint64_t provider_input_owner = 0, provider_input_generation = 0, provider_input_serial = 0;
+    uint64_t consumer_input_owner = 0, consumer_input_generation = 0, consumer_input_serial = 0;
+    uint64_t buffer_native_address = 0;
+    uint32_t caller_source_pc = 0x1684, buffer_record_offset = 0x44, buffer_bytes = 0x68;
+    uint32_t window_known_before = 0, window_known_after = 0;
+    AudiocodecCheckNeedMemSnapshot body;
+};
 class NativeModuleInputLease {
 public:
     virtual ~NativeModuleInputLease() = default;
@@ -41,6 +61,9 @@ struct NativeModuleResult {
     bool entry_return = false;
     int32_t entry_result = 0; // entry result and host service result are separate
     uint32_t entry_source_pc = 0, frontier_source_pc = 0, frontier_import_index = 0;
+    NativeModuleToken dependency_module; // namespace for frontier_source_pc
+    uint32_t frontier_nid = 0, frontier_stub_va = 0;
+    bool check_need_mem_blocked = false;
     NativeModuleToken token;
     explicit operator bool() const { return code == NativeModuleCode::Ok; }
 };
@@ -49,7 +72,7 @@ struct NativeModuleImportSnapshot {
     std::string library, abi;
     uint16_t version = 0, attributes = 0;
     uint32_t nid = 0, source_stub_va = 0;
-    bool resolved = false;
+    bool resolved = false, partial_callable = false;
     uint64_t provider_serial = 0;
     uint64_t provider_owner = 0, provider_generation = 0;
     NativeModuleToken provider_module;
@@ -60,7 +83,7 @@ struct NativeModuleExportSnapshot {
     std::string library, kind;
     uint16_t version = 0, attributes = 0;
     uint32_t nid = 0, relative_va = 0;
-    bool lifecycle_callable = false;
+    bool lifecycle_callable = false, partial_callable = false;
 };
 struct NativeModuleSnapshot {
     NativeModuleToken token;
@@ -77,6 +100,7 @@ struct NativeModuleSnapshot {
     std::string policy, entry_frontier;
     bool partial_start_supported = false;
     Atrac3plusInitializationSnapshot initialization;
+    NativeCheckNeedMemSnapshot check_need_mem;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -100,7 +124,6 @@ struct NativeModuleProvider {
     // metadata auto-registers a provider. A provider pins this owner when called.
     NativeModuleToken module;
 };
-struct NativeModuleProviderToken { uint64_t owner = 0, generation = 0, serial = 0; };
 struct NativeModuleProviderResult {
     NativeModuleCode code = NativeModuleCode::Ok;
     NativeModuleProviderToken token;
@@ -112,6 +135,32 @@ struct NativeModuleProviderSnapshot {
     uint32_t nid = 0;
     bool synthetic_only = false;
     NativeModuleToken module;
+    bool partial_callable = false;
+};
+struct NativeCheckNeedMemCallResult {
+    NativeModuleCode code = NativeModuleCode::HostCapabilityRefused;
+    bool source_return = false;
+    int32_t source_result = 0;
+    NativeCheckNeedMemSnapshot snapshot;
+};
+class NativeCheckNeedMemBorrow final {
+public:
+    NativeCheckNeedMemBorrow() noexcept;
+    ~NativeCheckNeedMemBorrow();
+    NativeCheckNeedMemBorrow(NativeCheckNeedMemBorrow&&) noexcept;
+    NativeCheckNeedMemBorrow& operator=(NativeCheckNeedMemBorrow&&) noexcept;
+    NativeCheckNeedMemBorrow(const NativeCheckNeedMemBorrow&) = delete;
+    NativeCheckNeedMemBorrow& operator=(const NativeCheckNeedMemBorrow&) = delete;
+    NativeCheckNeedMemBufferCapability Buffer() const noexcept;
+    NativeCheckNeedMemCallResult Invoke(NativeCheckNeedMemBufferCapability, uint32_t codec) noexcept;
+    NativeCheckNeedMemCallResult InvokeSourceNull(uint32_t codec) noexcept;
+    void Reset() noexcept;
+    explicit operator bool() const noexcept;
+private:
+    struct Impl;
+    std::shared_ptr<Impl> impl_;
+    NativeCheckNeedMemCallResult InvokeImpl(const NativeCheckNeedMemBufferCapability*, uint32_t) noexcept;
+    friend class NativeModuleManager;
 };
 class NativeModuleCallBorrow final {
 public:
@@ -144,11 +193,15 @@ public:
     NativeModuleResult Unload(NativeModuleToken); // host policy; fails while started/borrowed
     NativeModuleResult AdvanceGeneration(); // only with no modules/providers
     NativeModuleProviderResult RegisterProvider(NativeModuleProvider);
+    // Built-in exact partial body only, from a genuine Started audiocodec owner.
+    NativeModuleProviderResult RegisterCheckNeedMemProvider(NativeModuleToken);
     NativeModuleCode UnregisterProvider(NativeModuleProviderToken);
     NativeModuleCode BorrowImport(NativeModuleToken, uint32_t index, NativeModuleCallBorrow&);
+    NativeModuleCode BorrowCheckNeedMem(NativeModuleToken, uint32_t index, NativeCheckNeedMemBorrow&);
     NativeModuleCallResult CallExport(NativeModuleToken, uint32_t index);
     bool Snapshot(NativeModuleToken, NativeModuleSnapshot&) const;
     bool InitializationSnapshot(NativeModuleToken, Atrac3plusInitializationSnapshot&) const noexcept;
+    bool CheckNeedMemSnapshot(NativeModuleToken, NativeCheckNeedMemSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;

@@ -39,4 +39,39 @@ const AudiocodecModuleDescriptor* FindAudiocodecModuleDescriptor(
         return nullptr;
     return &Descriptor;
 }
+AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
+    AudiocodecCheckNeedMemBuffer buffer, uint32_t codec, AudiocodecCheckNeedMemSnapshot& out) noexcept {
+    if (out.entered) return AudiocodecCheckNeedMemCode::HostRefused;
+    // Literal source0..D4 is bound by Stage18 SOURCE_EXPECTATIONS.v1.json.
+    // Source20 null guard precedes k1/address and codec guards.
+    if (!buffer.bytes_ && !buffer.known_ && !buffer.size_) {
+        out.entered = true; out.source_null = true; out.codec = codec;
+        out.source_return = true;
+        out.source_result = static_cast<int32_t>(int64_t(0x807F0001u) - 0x100000000LL);
+        return AudiocodecCheckNeedMemCode::Returned;
+    }
+    if (!buffer.bytes_ || !buffer.known_ || buffer.size_ != 0x68) return AudiocodecCheckNeedMemCode::HostRefused;
+    // HOST adaptation, not a numeric execution of the unknown original k1:
+    // the manager admitted this exact live owner-relative writable masked range.
+    // Original28..48 tests ((k1>>16)&18) and signed32(ptr|(ptr+68)).
+    // A bad native capability is refused OUTSIDE this body, never mapped80000023.
+    out.entered = true; out.host_policy_applied = true; out.codec = codec;
+    if (uint32_t(codec - 0x1000u) >= 5u) {
+        out.source_return = true;
+        out.source_result = static_cast<int32_t>(int64_t(0x80000004u) - 0x100000000LL);
+        return AudiocodecCheckNeedMemCode::Returned;
+    }
+    // Source7C/80 is the ONLY pre-dependency buffer access: no preimage read.
+    constexpr uint32_t magic = 0x04090701;
+    for (uint32_t i = 0; i < 4; ++i) {
+        buffer.bytes_[i] = static_cast<uint8_t>(magic >> (8 * i)); buffer.known_[i] = 1;
+    }
+    out.writes = 1; out.write_source_pc = 0x80;
+    out.dependency_blocked = true; out.frontier_source_pc = 0x84; out.frontier_delay_pc = 0x88;
+    out.frontier_stub_va = 0xAF8; out.frontier_nid = 0xC00D873B;
+    // The84 JAL target and88 delay prepare ME(a0=codec,a1=SAME buffer).
+    // No exact ME service/resources exist. Stop BEFORE dispatch; source8C..D0
+    // result mapping, CheckNeedMem return and caller continuation are unreached.
+    return AudiocodecCheckNeedMemCode::DependencyBlocked;
+}
 } // namespace dokodemo::recovered

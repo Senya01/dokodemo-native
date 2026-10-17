@@ -33,8 +33,10 @@ const Atrac3plusModuleDescriptor* FindAtrac3plusModuleDescriptor(std::string_vie
 bool Atrac3plusImportPolicyAllows(std::string_view library, uint16_t version,
     uint16_t attributes, uint8_t entry_words, uint8_t variables, uint16_t functions) noexcept;
 
+enum class Atrac3plusWriteSource { Atrac3plus, Audiocodec };
 struct Atrac3plusNativeWrite {
     uint32_t ordinal = 0, source_pc = 0, offset = 0, width = 0, value = 0;
+    Atrac3plusWriteSource source_module = Atrac3plusWriteSource::Atrac3plus;
 };
 struct Atrac3plusInitializationSnapshot {
     bool present = false, prefix_entered = false, dependency_blocked = false, aborted = false;
@@ -45,18 +47,23 @@ struct Atrac3plusInitializationSnapshot {
     // Private AOT state, NOT a copy/mapping of input bytes. bytes[i] has source
     // meaning ONLY when known[i]==1. Host value-initialization proves no BSS byte.
     std::array<uint8_t, 0x520> bytes{}, known{};
-    std::array<Atrac3plusNativeWrite, 4> writes{};
+    std::array<Atrac3plusNativeWrite, 5> writes{};
     uint32_t frontier_source_pc = 0, frontier_delay_pc = 0, frontier_stub_va = 0;
     uint32_t frontier_import_index = 0, frontier_nid = 0;
     // a0 references this owned native state, record0+44, never a PSP/host integer ABI.
     uint32_t arg0_record_index = 0, arg0_record_offset = 0, arg1 = 0;
     bool frontier_arguments_prepared = false;
     uint32_t helper_calls_entered = 0, loop_iterations_completed = 0;
+    // Counts the actual entered CheckNeedMem import; its downstream ME request
+    // has a separate dependency_dispatched=false in the typed call snapshot.
     uint32_t external_services_dispatched = 0, external_resources_acquired = 0;
 };
 // Native translation of the closed no-preimage-read prefix. It stops BEFORE
 // dispatching CheckNeedMem1684, after preparing the1688 delay-slot argument.
 // No source RA/stack/GP/mapping or source/entry/service return is manufactured.
 bool RunAtrac3plusStartPrefix(Atrac3plusInitializationSnapshot&) noexcept;
+// Fixed no-preimage-read admission/abort shapes: four ATRAC writes, optionally
+// followed by the single audiocodec CheckNeedMem write. Unknown bytes are unread.
+bool Atrac3plusCheckNeedMemStateExact(const Atrac3plusInitializationSnapshot&, bool after_write) noexcept;
 bool AbortAtrac3plusInitialization(Atrac3plusInitializationSnapshot&) noexcept;
 } // namespace dokodemo::recovered

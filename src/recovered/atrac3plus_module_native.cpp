@@ -79,8 +79,45 @@ bool RunAtrac3plusStartPrefix(Atrac3plusInitializationSnapshot& state) noexcept 
 }
 bool AbortAtrac3plusInitialization(Atrac3plusInitializationSnapshot& state) noexcept {
     if (!state.prefix_entered || !state.dependency_blocked || state.aborted ||
-        state.external_services_dispatched || state.external_resources_acquired) return false;
+        state.external_resources_acquired ||
+        (!Atrac3plusCheckNeedMemStateExact(state, false) &&
+         !Atrac3plusCheckNeedMemStateExact(state, true))) return false;
     state.aborted = true; state.dependency_blocked = false;
-    return true; // host abort retains all four writes/masks; no source Stop121C
+    return true; // host abort retains exact partial effects; no source Stop121C
+}
+bool Atrac3plusCheckNeedMemStateExact(const Atrac3plusInitializationSnapshot& state, bool after) noexcept {
+    if (!state.present || !state.prefix_entered || !state.dependency_blocked || state.aborted ||
+        !state.owner || !state.generation || !state.serial || state.source_segment != 1 ||
+        state.source_segment_offset != 0xA0 || state.record_count != 4 || state.record_stride != 0x148 ||
+        state.record_bytes != 0x520 || state.initial_source_known_bytes ||
+        state.known_bytes != (after ? 14u : 10u) || state.writes_count != (after ? 5u : 4u) ||
+        state.frontier_source_pc != 0x1684 || state.frontier_delay_pc != 0x1688 ||
+        state.frontier_stub_va != 0x3640 || state.frontier_import_index != 2 || state.frontier_nid != 0x9D3F790C ||
+        state.arg0_record_index || state.arg0_record_offset != 0x44 || state.arg1 != 0x1000 ||
+        !state.frontier_arguments_prepared || state.helper_calls_entered != 1 ||
+        state.loop_iterations_completed || state.external_resources_acquired ||
+        state.external_services_dispatched > 1 || (after && state.external_services_dispatched != 1)) return false;
+    constexpr std::array<Atrac3plusNativeWrite, 5> expected{{
+        {0,0x1678,0xAC,4,0x00200000,Atrac3plusWriteSource::Atrac3plus},
+        {1,0x1680,0,4,1,Atrac3plusWriteSource::Atrac3plus},
+        {2,0x16D4,0x6C,1,0x28,Atrac3plusWriteSource::Atrac3plus},
+        {3,0x16E0,0x6D,1,0x5C,Atrac3plusWriteSource::Atrac3plus},
+        {4,0x80,0x44,4,0x04090701,Atrac3plusWriteSource::Audiocodec}
+    }};
+    std::array<uint8_t, 0x520> mask{}, values{};
+    for (uint32_t i = 0; i < state.writes_count; ++i) {
+        const auto& got = state.writes[i]; const auto& want = expected[i];
+        if (got.ordinal != want.ordinal || got.source_pc != want.source_pc || got.offset != want.offset ||
+            got.width != want.width || got.value != want.value || got.source_module != want.source_module) return false;
+        for (uint32_t j = 0; j < want.width; ++j) {
+            mask[want.offset + j] = 1;
+            values[want.offset + j] = static_cast<uint8_t>(want.value >> (j * 8));
+        }
+    }
+    for (uint32_t i = 0; i < state.record_bytes; ++i) {
+        if (state.known[i] != mask[i]) return false;
+        if (mask[i] && state.bytes[i] != values[i]) return false; // never read unknown bytes
+    }
+    return true;
 }
 } // namespace dokodemo::recovered

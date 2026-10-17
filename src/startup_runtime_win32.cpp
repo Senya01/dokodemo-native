@@ -96,6 +96,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         StartupNativeBlock staging;
         StartupAllocationBorrow staging_borrow;
         std::weak_ptr<WindowsModuleInputLease> input;
+        recovered::NativeModuleProviderToken check_need_mem_provider;
     };
     // Prepare and insert each owner BEFORE acquiring its file/allocation. The
     // vector can move unique_ptrs; callbacks never retain vector references.
@@ -112,7 +113,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     void EmitLocked(const char* operation, const char* origin, uint32_t pc = 0,
                     int64_t value = 0, bool returned = false, uint64_t object = 0,
                     DWORD error = 0, DWORD wait = 0, std::string_view detail = {},
-                    int crt_error = 0, unsigned long dos_error = 0, bool module_relative = false) noexcept {
+                    int crt_error = 0, unsigned long dos_error = 0, bool module_relative = false,
+                    recovered::NativeModuleToken source_module = {}) noexcept {
         try {
         StartupRuntimeEvent event;
         event.ordinal = ++state.last_event; event.owner = state.owner;
@@ -124,6 +126,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             event.module_request_index = event_module_index;
             event.module = module_requests[event_module_index]->data.token;
         }
+        event.source_module = source_module.owner ? source_module :
+            module_relative ? event.module : recovered::NativeModuleToken{};
         event.win32_error = error; event.wait_result = wait;
         if (!detail.empty()) event.detail.assign(detail.data(), detail.size());
         event.crt_errno = crt_error; event.dos_errno = dos_error;
@@ -536,6 +540,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         event_module_index = state.current_module_index;
         state.current_frontier_source_pc = callsite;
         state.current_frontier_module_relative = false;
+        state.current_frontier_source_module = {};
         try { state.current_frontier = "Before source wrapper Open"; } catch (...) { ++state.dropped_events; }
         EmitLocked("ModuleRequestOwned", "HostModuleRequest", callsite, state.current_module_index,
                    false, state.owner, 0, 0, path);
@@ -563,17 +568,22 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         return opened.status ? identity : AdapterError;
     }
     recovered::StartupModuleOutcome ModuleStopResult(recovered::StartupModuleStop stop,
-        const char* frontier, DWORD error = 0, uint32_t source_pc = 0x4F53C, bool module_relative = false) {
+        const char* frontier, DWORD error = 0, uint32_t source_pc = 0x4F53C, bool module_relative = false,
+        recovered::NativeModuleToken source_module = {}) {
         std::lock_guard<std::mutex> lock(metadata);
         auto* request = CurrentModule();
         state.current_frontier_source_pc = source_pc;
         state.current_frontier_module_relative = module_relative;
+        if (!source_module.owner && module_relative && request) source_module = request->data.token;
+        state.current_frontier_source_module = source_module;
         if (request) {
             request->data.frontier_source_pc = source_pc;
             request->data.frontier_module_relative = module_relative;
+            request->data.frontier_source_module = source_module;
         }
         if (stop == recovered::StartupModuleStop::Unsupported) {
             state.barrier_source_pc = source_pc; state.barrier_module_relative = module_relative;
+            state.barrier_source_module = source_module;
         }
         else if (stop == recovered::StartupModuleStop::HostFailure)
             FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
@@ -587,7 +597,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             }
         } catch (...) { ++state.dropped_events; }
         EmitLocked("ModuleCallStop", stop == recovered::StartupModuleStop::Unsupported ? "Unsupported" : "HostLifecycle",
-                   source_pc, 0, false, request ? request->data.file_native_object : 0, error, 0, frontier, 0, 0, module_relative);
+                   source_pc, 0, false, request ? request->data.file_native_object : 0, error, 0, frontier, 0, 0,
+                   module_relative, source_module);
         return stop; // no source service v0 or entry result
     }
     recovered::StartupModuleOutcome LoadModuleById(int32_t fd, uint32_t flags,
@@ -744,6 +755,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         auto& data = request->data;
         recovered::NativeModuleResult started_module;
         uint32_t entry_frontier = 0;
+        bool provider_failed = false;
         {
             std::lock_guard<std::mutex> lock(metadata);
             data.module_start_called = true;
@@ -755,26 +767,42 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             data.module_start_result = started_module.source_result;
             data.module_start_entry_returned = started_module.entry_return;
             data.module_start_entry_result = started_module.entry_result;
-            data.module_initialization_blocked = started_module.code == recovered::NativeModuleCode::UnsupportedEntry;
+            modules.InitializationSnapshot(data.token, data.record.initialization);
+            data.module_initialization_blocked = data.record.initialization.prefix_entered &&
+                data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
+            modules.CheckNeedMemSnapshot(data.token, data.record.check_need_mem); // nonallocating outcome/effects
             entry_frontier = started_module.frontier_source_pc; // primitive outcome; independent of allocating Snapshot
             if (data.module_initialization_blocked) {
                 data.record.state = recovered::NativeModuleState::EntryBlocked;
                 modules.InitializationSnapshot(data.token, data.record.initialization); // fixed-size exact effects survive telemetry OOM
+            }
+            if (started_module.entry_return && started_module.source_return && started_module.entry_source_pc == 0xAD8) {
+                const auto registered = modules.RegisterCheckNeedMemProvider(data.token);
+                request->check_need_mem_provider = registered.token; // member-owned BEFORE telemetry
+                provider_failed = registered.code != recovered::NativeModuleCode::Ok;
+                EmitLocked("CheckNeedMemProviderRegistered", "HostPartialCapability", 0, registered.token.serial,
+                           false, data.token.serial, 0, 0, recovered::NativeModuleCodeName(registered.code));
             }
             try {
                 modules.Snapshot(data.token, data.record);
                 const auto& initialization = data.record.initialization;
                 if (initialization.prefix_entered) for (uint32_t i = 0; i < initialization.writes_count; ++i) {
                     const auto& write = initialization.writes[i];
+                    const auto write_module = write.source_module == recovered::Atrac3plusWriteSource::Audiocodec ?
+                        data.record.check_need_mem.provider_module : data.token;
                     EmitLocked("ModuleInitializationWrite", "RecoveredNativePrefix", write.source_pc, write.value,
                                false, initialization.native_state_address, 0, 0,
-                               "actual private masked AOT record state;input PRX unchanged;ordered write in record snapshot", 0, 0, true);
+                               "actual private masked AOT record state;input PRX unchanged;ordered write in record snapshot",
+                               0, 0, true, write_module);
                 }
             } catch (...) { ++state.dropped_events; }
             if (data.module_initialization_blocked)
                 EmitLocked("ModuleEntryDependency", "UnsupportedEntry", started_module.frontier_source_pc,
-                           0x9D3F790C, false, data.token.serial, 0, 0,
-                           "libatrac3plus request/token;module-relative1684->stub3640;a0=owned record0+44,a1=1000;NO dispatch/result", 0, 0, true);
+                           started_module.frontier_nid, false, data.token.serial, 0, 0,
+                           started_module.check_need_mem_blocked ?
+                           "ATRAC caller1684->audiocodec CheckNeedMem;callee84->ME stubAF8/C00D873B;codec1000,same owned record0+44;NO ME dispatch/result" :
+                           "ATRAC1684->stub3640;a0=owned record0+44,a1=1000;NO CheckNeedMem dispatch/result",
+                           0, 0, true, started_module.dependency_module);
             if (started_module.entry_return)
                 EmitLocked(started_module.entry_source_pc == 0xAD8 ? "ModuleStartEntryAD8-return" : "ModuleStartEntry-return",
                            "RecoveredNativeEntry", started_module.entry_source_pc, started_module.entry_result, true,
@@ -783,10 +811,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 EmitLocked("StartModule-return", "SourceAdapter", 0x4F560, started_module.source_result, true,
                            data.token.serial, 0, 0, "explicit Windows service policy;original firmware result UNKNOWN");
         }
+        if (provider_failed)
+            return ModuleStopResult(Stop::HostFailure, "Exact native CheckNeedMem provider registration failed");
         if (started_module.code == recovered::NativeModuleCode::UnsupportedEntry ||
             started_module.code == recovered::NativeModuleCode::NotLinked)
             return ModuleStopResult(Stop::Unsupported, "Native module entry reached exact unsupported dependency;no body/service result",
-                                    0, entry_frontier, true);
+                                    0, entry_frontier, true, started_module.dependency_module);
         if (!started_module || !started_module.source_return)
             return ModuleStopResult(Stop::HostFailure, "Native module Start validation failed", 0, 0x4F560);
         return recovered::StartupModuleReturned{started_module.source_result};
@@ -941,6 +971,16 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 if (!state.caller_joined || !state.worker_joined) {
                     state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
                 }
+                if (request.check_need_mem_provider.serial) {
+                    const auto provider = request.check_need_mem_provider;
+                    const auto revoked = modules.UnregisterProvider(provider);
+                    if (revoked != recovered::NativeModuleCode::Ok) {
+                        state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                    }
+                    request.check_need_mem_provider = {}; // retire primitive token BEFORE no-throw telemetry
+                    EmitLocked("CheckNeedMemProviderRevoked", "HostPartialCapability", 0, provider.serial,
+                               false, data.token.serial, 0, 0, "after reverse second unload/lease/free/fdClose;before firstAE0");
+                }
                 if (data.module_start_returned && !data.module_stop_returned) {
                     data.module_stop_called = true;
                     const auto stopped = modules.Stop(data.token);
@@ -966,7 +1006,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     data.record.state = recovered::NativeModuleState::InitializationAborted;
                     modules.InitializationSnapshot(data.token, data.record.initialization);
                     EmitLocked("HostModuleInitializationAborted", "HostModulePolicy", 0, data.token.uid, false,
-                               data.token.serial, 0, 0, "libatrac partial11A0->1684;no external service/resource;NO sourceStop121C");
+                               data.token.serial, 0, 0, "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
                 }
                 try { modules.Snapshot(data.token, data.record); } catch (...) { ++state.dropped_events; }
                 const auto unloaded = modules.Unload(data.token);

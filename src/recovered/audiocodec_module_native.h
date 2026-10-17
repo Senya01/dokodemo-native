@@ -43,4 +43,32 @@ struct AudiocodecModuleDescriptor {
 // implementation. The caller hashes the actual fully known input itself.
 const AudiocodecModuleDescriptor* FindAudiocodecModuleDescriptor(
     std::string_view encoded_sha256, uint32_t encoded_bytes) noexcept;
+
+enum class AudiocodecCheckNeedMemCode { HostRefused, Returned, DependencyBlocked };
+struct AudiocodecCheckNeedMemSnapshot {
+    bool entered = false, host_policy_applied = false, source_null = false;
+    bool dependency_blocked = false, dependency_dispatched = false, source_return = false;
+    int32_t source_result = 0;
+    uint32_t codec = 0, buffer_reads = 0, writes = 0;
+    uint32_t entry_source_pc = 0, write_source_pc = 0;
+    uint32_t frontier_source_pc = 0, frontier_delay_pc = 0, frontier_stub_va = 0, frontier_nid = 0;
+};
+// Only the manager's typed borrow can construct a writable span. There is no
+// public raw-pointer constructor or caller-supplied production service callback.
+class AudiocodecCheckNeedMemBuffer final {
+public:
+    AudiocodecCheckNeedMemBuffer() noexcept = default; // explicit source NULL
+private:
+    uint8_t* bytes_ = nullptr;
+    uint8_t* known_ = nullptr;
+    uint32_t size_ = 0;
+    friend class NativeCheckNeedMemBorrow;
+    friend AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
+        AudiocodecCheckNeedMemBuffer, uint32_t, AudiocodecCheckNeedMemSnapshot&) noexcept;
+};
+// Source-informed Windows adaptation: validated owner/bounds/mask capability
+// replaces the ORIGINAL PSP k1/address check, whose context remains unknown.
+// No PSP k1/pointer value or ME result is supplied by this native body.
+AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
+    AudiocodecCheckNeedMemBuffer, uint32_t codec, AudiocodecCheckNeedMemSnapshot&) noexcept;
 } // namespace dokodemo::recovered

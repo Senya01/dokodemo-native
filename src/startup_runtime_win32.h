@@ -32,6 +32,7 @@ struct StartupRuntimeEvent {
     std::string source_pc_domain;
     uint32_t module_request_index = StartupNoCurrentModule;
     recovered::NativeModuleToken module;
+    recovered::NativeModuleToken source_module; // PC namespace; module remains consumer/request
 };
 struct StartupModuleObservation {
     // Zero-based host request ordinal, NOT a PSP module index. Retired entries
@@ -40,6 +41,7 @@ struct StartupModuleObservation {
     std::string path, frontier;
     uint32_t frontier_source_pc = 0, flags = 0;
     bool frontier_module_relative = false;
+    recovered::NativeModuleToken frontier_source_module;
     std::vector<uint8_t> options; //20 source request bytes; never a module payload
     uint64_t request_owner = 0;
     bool pending = false;
@@ -77,6 +79,7 @@ struct StartupObservation {
     std::string barrier;
     uint32_t barrier_source_pc = 0;
     bool barrier_module_relative = false;
+    recovered::NativeModuleToken barrier_source_module;
     uint64_t owner = 0, last_event = 0, dropped_events = 0;
     uint32_t caller_thread_id = 0, worker_thread_id = 0, callback_dispatch_thread = 0;
     uint32_t callback_dispatch_count = 0;
@@ -121,6 +124,7 @@ struct StartupObservation {
     std::string current_frontier;
     uint32_t current_frontier_source_pc = 0;
     bool current_frontier_module_relative = false;
+    recovered::NativeModuleToken current_frontier_source_module;
     StartupRuntimeStatus status;
     std::vector<StartupRuntimeEvent> events; // bounded metadata, never payloads
 };
