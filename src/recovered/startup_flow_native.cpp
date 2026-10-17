@@ -89,7 +89,20 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         }
     }
     if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
-    services.UnsupportedFollowingModule(); // no further module assumed
+    // Retained gate4F660/delay664: only reached after the second wrapper's
+    // actual Start and sourceClose have returned and its UID is not -1.
+    services.BeginModuleRequest(0x4F660, "disc0:/PSP_GAME/USRDIR/prx/sc_sascore.prx", kind1);
+    module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/sc_sascore.prx", kind1);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
+    }
+    if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
+    services.UnsupportedFollowingModule(); // no subsequent dependency assumed
     return StartupFlowStop::Unsupported;
 }
 } // namespace dokodemo::recovered

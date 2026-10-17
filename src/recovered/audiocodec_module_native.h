@@ -85,4 +85,14 @@ class AudiocodecGetEDRAMBuffer final {
     friend bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer,uint32_t&,uint32_t&) noexcept;
 };
 bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer,uint32_t& need,uint32_t& request) noexcept;
+// Same108B physical view, but a separate release authority. Only the known
+// aligned/E/raw words may be read; the manager binds them to a live resource.
+class AudiocodecReleaseEDRAMBuffer final {
+    const uint8_t* bytes_ = nullptr;
+    const uint8_t* known_ = nullptr;
+    uint32_t size_ = 0;
+    friend class NativeModuleManager;
+    friend bool ReadAudiocodecReleaseEDRAMFields(AudiocodecReleaseEDRAMBuffer,uint32_t&,uint32_t&,uint32_t&) noexcept;
+};
+bool ReadAudiocodecReleaseEDRAMFields(AudiocodecReleaseEDRAMBuffer,uint32_t& aligned,uint32_t& need,uint32_t& raw) noexcept;
 } // namespace dokodemo::recovered

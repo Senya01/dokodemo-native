@@ -48,7 +48,7 @@ struct Atrac3plusInitializationSnapshot {
     // Private AOT state, NOT a copy/mapping of input bytes. bytes[i] has source
     // meaning ONLY when known[i]==1. Host value-initialization proves no BSS byte.
     std::array<uint8_t, 0x520> bytes{}, known{};
-    std::array<Atrac3plusNativeWrite, 32> writes{};
+    std::array<Atrac3plusNativeWrite, 64> writes{};
     uint32_t frontier_source_pc = 0, frontier_delay_pc = 0, frontier_stub_va = 0;
     uint32_t frontier_import_index = 0, frontier_nid = 0;
     // a0 references this owned native state, record0+44, never a PSP/host integer ABI.

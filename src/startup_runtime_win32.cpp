@@ -545,6 +545,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx" && callsite == 0x4F640 &&
                    option == recovered::StartupOptions4F59C(0)) {
             relative = L"PSP_GAME\\USRDIR\\prx\\libatrac3plus.prx"; request->input_bytes = 19524;
+        } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/sc_sascore.prx" && callsite == 0x4F660 &&
+                   option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
+            // Connected metadata only. Exact body/descriptor is not recovered;
+            // actual Open is allowed, Load stops before staging/body ReadInto.
+            relative = L"PSP_GAME\\USRDIR\\prx\\sc_sascore.prx";
         } else throw NativeFailure{};
         request->native_path = options.media_root;
         if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
@@ -630,6 +635,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         { std::lock_guard<std::mutex> lock(metadata); data.flags = flags;
           EmitLocked("LoadModuleByID-enter", "SourceCall", 0x4F53C, fd, false, data.file_native_object,
                      0, 0, "flags0;owned pending options20/path;no completed source Load result"); }
+        if(!request->input_bytes)
+            return ModuleStopResult(Stop::Unsupported,"Connected sc_sascore Load has no recovered descriptor/body;actual Open retained;no ReadInto or UID");
         if (data.encoded_file_bytes != request->input_bytes)
             return ModuleStopResult(Stop::Unsupported, "Module file extent differs from the validated exact input");
         const auto position = backend->Seek64(request->backend_file, 0, 1);
@@ -821,6 +828,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 }
             } catch (...) { ++state.dropped_events; }
             if(data.record.prepared_envelope.present) for(const auto& native:data.record.prepared_envelope.records) {
+                if(native.native_alloc_returned)
+                    EmitLocked("NativeCodecContextAllocated", "WindowsQueryEnvelopePolicyV2", 0, native.context_allocated?1:0,
+                               false,native.record_index,0,0,native.format_pending ?
+                               "actual discovery/allocation;format pending;open not entered;no decoder-ready/decode capability" :
+                               "actual allocation;separate open result/readiness in snapshot");
                 if(native.native_open_entered)
                     EmitLocked("NativeCodecOpen2", "WindowsPreparedEnvelopePolicy", 0, native.native_api_result,
                                false,native.record_index,0,0,"actual open2 return meaningful only when native_open_returned;original equivalence UNKNOWN");
@@ -835,7 +847,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 EmitLocked("ModuleEntryDependency", "UnsupportedEntry", started_module.frontier_source_pc,
                            started_module.frontier_nid, false, data.token.serial, 0, 0,
                            data.record.prepared_envelope.present ?
-                           "finite Windows prepared-envelope ABI;actual query/resources in per-record snapshot;1001 remains unsupported;originalME unresolved" : started_module.check_need_mem_blocked ?
+                           "finite Windows query-envelope-v2;actual phase/resources in per-record snapshot;originalME unresolved" : started_module.check_need_mem_blocked ?
                            "ATRAC caller1684->audiocodec CheckNeedMem;callee84->ME stubAF8/C00D873B;codec1000,same owned record0+44;NO ME dispatch/result" :
                            "ATRAC1684->stub3640;a0=owned record0+44,a1=1000;NO CheckNeedMem dispatch/result",
                            0, 0, true, started_module.dependency_module);
@@ -1019,13 +1031,32 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 }
                 if (data.module_start_returned && !data.module_stop_returned) {
                     data.module_stop_called = true;
+                    modules.InitializationSnapshot(data.token,data.record.initialization);
+                    const uint32_t prior_writes=data.record.initialization.writes_count;
+                    EmitLocked("ModuleStopEntry-enter","HostPolicyRecoveredNativeEntry",data.record.stop_source_va,0,false,
+                               data.token.serial,0,0,"after BOTH joins;entry body distinct from Windows ownership policy",0,0,true,data.token);
                     const auto stopped = modules.Stop(data.token);
+                    modules.InitializationSnapshot(data.token,data.record.initialization);
+                    modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
+                    for(uint32_t i=prior_writes;i<data.record.initialization.writes_count;++i) {
+                        const auto& write=data.record.initialization.writes[i];
+                        EmitLocked("ModuleStopReleaseWrite","RecoveredSourceAfterWindowsRelease",write.source_pc,write.value,false,
+                                   data.record.initialization.native_state_address,0,0,
+                                   "literal source store only after completed native owned release;Windows capability replaces PSP admission",0,0,true,
+                                   data.record.check_need_mem.provider_module);
+                    }
                     if (!stopped || !stopped.entry_return) {
                         EmitLocked("HostModuleStopFailed", "HostModulePolicy", 0, 0, false, data.token.serial,
                                    0, 0, recovered::NativeModuleCodeName(stopped.code));
                         state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
                     }
                     data.module_stop_returned = true; data.module_stop_result = stopped.entry_result;
+                    if(data.record.prepared_envelope.source_stop_returned) for(const auto& native:data.record.prepared_envelope.records) {
+                        if(native.release_source_return)
+                            EmitLocked("NativeOwnedReleaseEDRAM-return","WindowsOwnedReleaseCapabilityV2",0x77C,native.release_source_result,true,
+                                       native.record_index,0,0,"actual retirement completed before literal7A0/7A8;original low29 predicate separately reported;no ME equivalence",0,0,true,
+                                       data.record.check_need_mem.provider_module);
+                    }
                     EmitLocked(stopped.entry_source_pc == 0xAE0 ? "ModuleStopEntryAE0-return" : "ModuleStopEntry-return",
                                "HostPolicyRecoveredNativeEntry", stopped.entry_source_pc, stopped.entry_result,
                                false, data.token.serial, 0, 0, "host cleanup after BOTH joins;no source Stop service result", 0, 0, true);
@@ -1046,6 +1077,17 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                                data.token.serial, 0, 0, data.record.prepared_envelope.present ?
                                "after BOTH joins;reverse native context destruction/borrowReset/Free completed;NO sourceStop121C" :
                                "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
+                }
+                if(data.module_stop_returned && data.record.prepared_envelope.present) {
+                    const auto retired=modules.RetireStoppedCodecWorkspaces(data.token);
+                    modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
+                    if(!retired) {
+                        EmitLocked("HostStoppedCodecRetirementPending","HostModulePolicy",0,0,false,data.token.serial,
+                                   0,0,"issued query slots may own input/API pins even without HasResources;retry before Unload");
+                        state.status=Failure(StartupRuntimeCode::HostFailure);return state.status;
+                    }
+                    EmitLocked("HostStoppedCodecSlotsRetired","HostModulePolicy",0,1,false,data.token.serial,
+                               0,0,"after BOTH joins/sourceStop;all issued slots retired including pins-only Failed;source histories unchanged");
                 }
                 try { modules.Snapshot(data.token, data.record); } catch (...) { ++state.dropped_events; }
                 const auto unloaded = modules.Unload(data.token);

@@ -119,7 +119,8 @@ struct NativeModuleManager::Impl {
             for (const auto& provider : providers) {
                 const auto& definition = provider->definition;
                 if (definition.library == entry.library && definition.version == entry.version &&
-                    (definition.nid == entry.nid || (provider->prepared_envelope && entry.nid == 0x3A20A200)) &&
+                    (definition.nid == entry.nid || (provider->prepared_envelope &&
+                        (entry.nid == 0x3A20A200 || entry.nid == 0x29681260))) &&
                     definition.abi == entry.abi) {
                     binding = provider; break;
                 }
@@ -358,8 +359,9 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
             return Result(NativeModuleCode::UnsupportedPolicy);
         record->data.plaintext_sha256 = atrac->input_sha256; // input already ELF; no transformation
         record->data.encoded_bytes = atrac->input_bytes; record->data.plaintext_bytes = atrac->input_bytes;
-        record->data.policy = "WindowsAtrac3plusExact0001_4001PartialInitV1";
-        record->data.implementation = "aot-atrac3plus-11A0-first-record/typed-checkneedmem-to-ME84-v1";
+        record->data.policy = self.codec_backend ? "WindowsAtrac3plusExact0001_4001QueryEnvelopeV2" : "WindowsAtrac3plusExact0001_4001PartialInitV1";
+        record->data.implementation = self.codec_backend ? "aot-atrac3plus-11A0-four-query/121C-owned-release-v2" :
+            "aot-atrac3plus-11A0-first-record/typed-checkneedmem-to-ME84-v1";
         record->data.start_source_va = atrac->start_source_va; record->data.stop_source_va = atrac->stop_source_va;
         record->data.partial_start_supported = true; record->data.initialization.present = true;
         record->data.initialization.native_state_address = uint64_t(reinterpret_cast<uintptr_t>(&record->data.initialization));
@@ -375,7 +377,8 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
                 NativeModuleImportSnapshot entry;
                 entry.library = library.name; entry.version = library.version; entry.attributes = library.attributes;
                 entry.abi = self.domain == NativeModuleDomain::SyntheticControls ? SyntheticAbi :
-                    self.codec_backend && (function.nid == 0x9D3F790C || function.nid == 0x3A20A200) ? NativePreparedEnvelopeAbi :
+                    self.codec_backend && (function.nid == 0x9D3F790C || function.nid == 0x3A20A200 ||
+                        function.nid == 0x29681260) ? NativePreparedEnvelopeAbi :
                     function.nid == 0x9D3F790C ? CheckNeedMemAbi : AtracImportAbi;
                 entry.nid = function.nid; entry.source_stub_va = function.source_stub_va;
                 record->data.imports.push_back(std::move(entry));
@@ -400,7 +403,7 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     if (descriptor && self.domain == NativeModuleDomain::Production)
         for (auto& entry : record->data.exports)
             if (entry.library == "sceAudiocodec" && (entry.nid == 0x9D3F790C ||
-                (self.codec_backend && entry.nid == 0x3A20A200))) entry.partial_callable = true;
+                (self.codec_backend && (entry.nid == 0x3A20A200 || entry.nid == 0x29681260)))) entry.partial_callable = true;
     const auto token = record->data.token;
     self.modules.push_back(std::move(record)); // capacity reserved; noexcept ownership publication
     self.Bind(); // exact per-module policies; original firmware UNKNOWN
@@ -445,7 +448,7 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
                 (r.allocation_owner && !r.storage_freed)) ++n;
             record.data.owned_native_codec_resources=n;provider->module->data.owned_native_codec_resources=n;
         };
-        for(uint32_t index=0;index<3;++index) {
+        for(uint32_t index=0;index<envelope.records.size();++index) {
             record.data.entry_frontier_source_pc=0x1684;
             blocked.dependency_module=provider->module->data.token;blocked.frontier_source_pc=0x84;
             blocked.frontier_import_index=0;blocked.frontier_nid=0xC00D873B;blocked.frontier_stub_va=0xAF8;
@@ -478,9 +481,8 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
             state.known_bytes+=4;++state.external_services_dispatched;
             snapshot.window_known_after=snapshot.window_known_before+4;
             record.data.check_need_mem=snapshot;
-            if(index==2) { envelope.native1001_blocked=true;resources();return blocked; }
             // Do not extend these two known bytes to an unknown u32 at+28.
-            if(state.known[base+0x6C]!=1 || state.known[base+0x6D]!=1) {
+            if(index<2 && (state.known[base+0x6C]!=1 || state.known[base+0x6D]!=1)) {
                 blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
             }
             NativeCodecWorkspaceKey key;
@@ -490,18 +492,27 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
             key.provider_input={{pi.owner,pi.generation,pi.serial}};key.consumer_input={{ci.owner,ci.generation,ci.serial}};
             key.state={{state.owner,state.generation,state.serial}};key.record_index=index;
             auto& native=envelope.records[index];
-            const auto prepared=self.codec_backend->Prepare(key,state.bytes[base+0x6C],state.bytes[base+0x6D],
-                                                          provider->module->input,record.input,native);
+            if(index>=2) envelope.native1001_blocked=true;
+            const auto prepared=index<2 ? self.codec_backend->Prepare(key,state.bytes[base+0x6C],state.bytes[base+0x6D],
+                                                          provider->module->input,record.input,native) :
+                self.codec_backend->PrepareUnconfigured(key,provider->module->input,record.input,native);
             resources();
             if((prepared!=NativeCodecBackendStatus::Ok && prepared!=NativeCodecBackendStatus::NativeFailure) ||
                 !native.native_policy_return) {
                 blocked.code=prepared==NativeCodecBackendStatus::Cancelled?NativeModuleCode::DependencyBlocked:NativeModuleCode::HostCapabilityRefused;
                 return blocked;
             }
+            const bool phase=index<2 ? native.format_known && !native.format_pending && native.native_open_returned &&
+                native.native_api_result==0 && native.decoder_opened && native.decoder_ready :
+                !native.format_known && native.format_pending && !native.native_open_entered && !native.native_open_returned &&
+                !native.decoder_opened && !native.decoder_ready;
             if(native.native_policy_result==0 && (!native.provisional_live || !native.native_prepare_returned ||
-                native.native_api_result!=0 || !CommitAtrac3plusPreparedWrite(state,0,base+0x54,native.envelope_bytes,Atrac3plusWriteSource::NativePlatform))) {
+                !native.native_decoder_found || !native.native_alloc_returned || !native.context_allocated ||
+                !phase || native.decode_capability ||
+                !CommitAtrac3plusPreparedWrite(state,0,base+0x54,native.envelope_bytes,Atrac3plusWriteSource::NativePlatform))) {
                 blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
             }
+            if(index>=2) envelope.native1001_blocked=false;
             if(native.native_policy_result==0) snapshot.window_known_after+=4; // actual E producer inside104B
             if(!CompleteAudiocodecNativePrepareResult(snapshot.body,native.native_policy_result)) {
                 blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
@@ -547,7 +558,12 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
             if(acquired) ++state.external_resources_acquired;
             if(!ContinueAtrac3plusPreparedRecord(state,acquired)) { blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked; }
         }
-        return blocked; // finite1001 cut; never a module entry/service return
+        if(state.loop_iterations_completed!=4 || state.dependency_blocked || state.helper_calls_entered!=4)
+            return Result(NativeModuleCode::HostCapabilityRefused,token);
+        envelope.source_start_returned=true;
+        record.data.entry_frontier_source_pc=0;record.data.state=NativeModuleState::Started;
+        auto completed=Returned(token,0);completed.entry_return=true;completed.entry_result=0;
+        completed.entry_source_pc=0x11A0;return completed;
     }
     if (record.data.partial_start_supported) {
         NativeCheckNeedMemBorrow borrow;
@@ -610,6 +626,74 @@ NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     const auto owned = self.Find(token);
     if (!owned) return Result(NativeModuleCode::InvalidToken);
     auto& record = *owned;
+    if(record.data.state==NativeModuleState::Started && record.data.prepared_envelope.present &&
+        record.data.prepared_envelope.source_start_returned) {
+        if(record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings)
+            return Result(NativeModuleCode::Busy,token);
+        self.gate->executing=true; // before ALL virtual consumer/provider views
+        struct StopExit { CallGate& gate;~StopExit(){gate.executing=false;} } guard{*self.gate};
+        const auto provider=record.bindings[2];
+        if(!self.codec_backend || !provider || !provider->prepared_envelope || !provider->registered ||
+            !provider->module || provider->module->data.state!=NativeModuleState::Started || record.bindings[5]!=provider || record.bindings[6]!=provider ||
+            !InputLive(record) || !InputLive(*provider->module)) return Result(NativeModuleCode::HostCapabilityRefused,token);
+        auto& envelope=record.data.prepared_envelope;auto& state=record.data.initialization;
+        if(envelope.source_stop_returned || !state.prepared_envelope_policy || state.aborted || state.dependency_blocked || state.loop_iterations_completed!=4 ||
+            envelope.source_stop_next_record>4 || state.writes_count>state.writes.size()-8)
+            return Result(NativeModuleCode::HostCapabilityRefused,token);
+        envelope.source_stop_entered=true;envelope.source_stop_pending=true;
+        auto blocked=Result(NativeModuleCode::HostCapabilityRefused,token);
+        blocked.dependency_module=provider->module->data.token;
+        blocked.frontier_source_pc=0x798;blocked.frontier_import_index=5;
+        blocked.frontier_nid=0x5AD660FA;blocked.frontier_stub_va=0xB20;
+        for(;envelope.source_stop_next_record<4;++envelope.source_stop_next_record) {
+            const uint32_t index=envelope.source_stop_next_record,base=index*0x148;
+            auto& native=envelope.records[index];uint32_t sentinel=0;
+            record.data.entry_frontier_source_pc=0x1240;
+            for(uint32_t j=0;j<4;++j) {
+                if(state.known[base+0xAC+j]!=1) return blocked;
+                sentinel|=uint32_t(state.bytes[base+0xAC+j])<<(8*j);
+            }
+            if(sentinel==0x00200000) { ++envelope.source_stop_records_completed;continue; }
+            record.data.entry_frontier_source_pc=0x1254;
+            AudiocodecReleaseEDRAMBuffer buffer;
+            buffer.bytes_=state.bytes.data()+base+0x44;buffer.known_=state.known.data()+base+0x44;buffer.size_=0x6C;
+            uint32_t aligned=0,need=0,raw=0;
+            const auto tuple=[](NativeModuleToken t) { return std::array<uint64_t,4>{{t.owner,t.generation,t.serial,uint64_t(t.uid)}}; };
+            const auto& pi=provider->module->data.input;const auto& ci=record.data.input;
+            if(!ReadAudiocodecReleaseEDRAMFields(buffer,aligned,need,raw) || !native.get_edram_source_return ||
+                native.get_edram_source_result!=0 || native.release_source_return || native.key.record_index!=index ||
+                native.key.provider_module!=tuple(provider->module->data.token) || native.key.consumer_module!=tuple(token) ||
+                native.key.provider!=std::array<uint64_t,3>{{provider->token.owner,provider->token.generation,provider->token.serial}} ||
+                native.key.provider_input!=std::array<uint64_t,3>{{pi.owner,pi.generation,pi.serial}} ||
+                native.key.consumer_input!=std::array<uint64_t,3>{{ci.owner,ci.generation,ci.serial}} ||
+                native.key.state!=std::array<uint64_t,3>{{state.owner,state.generation,state.serial}} ||
+                aligned!=native.aligned_coordinate || raw!=native.raw_coordinate || need!=native.envelope_bytes ||
+                state.writes_count>state.writes.size()-2 || !InputLive(record) || !InputLive(*provider->module)) return blocked;
+            if(!native.release_source_entered) { native.release_source_entered=true;++envelope.source_release_calls_entered; }
+            // Backend snapshots retain actual API history. Source call history is
+            // manager-owned and survives a destroyed-but-Free-pending retry.
+            const bool qr=native.query_source_return,gr=native.get_edram_source_return;
+            const int32_t qv=native.query_source_result,gv=native.get_edram_source_result;
+            const auto released=self.codec_backend->Release(native.key,aligned,need,raw,native);
+            native.query_source_return=qr;native.query_source_result=qv;
+            native.get_edram_source_return=gr;native.get_edram_source_result=gv;native.release_source_entered=true;
+            uint32_t remaining=0;
+            for(const auto& r:envelope.records) if(r.provisional_live || (r.context_transferred && !r.context_destroyed) ||
+                (r.allocation_owner && !r.storage_freed)) ++remaining;
+            record.data.owned_native_codec_resources=remaining;provider->module->data.owned_native_codec_resources=remaining;
+            if(released!=NativeCodecBackendStatus::Ok || !native.release_native_completed || !native.storage_freed)
+                return blocked; // no source result/zero stores; cursor retained
+            // Nonallocating publication capacity was checked BEFORE retirement.
+            if(!CommitAtrac3plusPreparedWrite(state,0x7A0,base+0x50,0,Atrac3plusWriteSource::Audiocodec) ||
+                !CommitAtrac3plusPreparedWrite(state,0x7A8,base+0xAC,0,Atrac3plusWriteSource::Audiocodec)) return blocked;
+            native.release_source_return=true;native.release_source_result=0;++envelope.source_release_calls_returned;
+            ++envelope.source_stop_records_completed;
+        }
+        envelope.source_stop_pending=false;envelope.source_stop_returned=true;
+        record.data.entry_frontier_source_pc=0;record.data.state=NativeModuleState::Stopped;
+        auto completed=Returned(token,0);completed.entry_return=true;completed.entry_result=0;
+        completed.entry_source_pc=0x121C;return completed;
+    }
     if (record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings || record.data.owned_native_codec_resources)
         return Result(NativeModuleCode::Busy, token);
     if (record.data.state != NativeModuleState::Started) return Result(NativeModuleCode::WrongState, token);
@@ -634,7 +718,7 @@ NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken to
         self.gate->executing=true;
         struct Exit { CallGate& gate;~Exit(){gate.executing=false;} } guard{*self.gate};
         if(!self.codec_backend) return Result(NativeModuleCode::HostCapabilityRefused,token);
-        for(size_t n=2;n;--n) {
+        for(size_t n=data.prepared_envelope.records.size();n;--n) {
             auto& s=data.prepared_envelope.records[n-1];
             if(s.state==NativeCodecWorkspaceState::Unissued) continue;
             const bool qr=s.query_source_return,gr=s.get_edram_source_return;
@@ -660,6 +744,29 @@ NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken to
     data.state = NativeModuleState::InitializationAborted;
     return Result(NativeModuleCode::Ok, token); // host operation, NO source Stop/entry/service result
 }
+NativeModuleResult NativeModuleManager::RetireStoppedCodecWorkspaces(NativeModuleToken token) {
+    auto& self=*impl_;
+    if(self.gate->executing) return Result(NativeModuleCode::Busy,token);
+    const auto owned=self.Find(token);if(!owned) return Result(NativeModuleCode::InvalidToken,token);
+    auto& data=owned->data;
+    if(data.state!=NativeModuleState::Stopped || !data.prepared_envelope.source_stop_returned || !self.codec_backend)
+        return Result(NativeModuleCode::WrongState,token);
+    self.gate->executing=true;
+    struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*self.gate};
+    for(auto& native:data.prepared_envelope.records) {
+        if(native.state==NativeCodecWorkspaceState::Unissued || native.state==NativeCodecWorkspaceState::Retired) continue;
+        const bool qr=native.query_source_return,gr=native.get_edram_source_return,sr=native.release_source_return;
+        const int32_t qv=native.query_source_result,gv=native.get_edram_source_result,sv=native.release_source_result;
+        const bool se=native.release_source_entered;
+        native.host_retirement_entered=true;
+        const auto retired=self.codec_backend->Retire(native.key,native);
+        native.host_retirement_entered=true;native.host_retirement_returned=retired==NativeCodecBackendStatus::Ok;
+        native.query_source_return=qr;native.query_source_result=qv;native.get_edram_source_return=gr;native.get_edram_source_result=gv;
+        native.release_source_entered=se;native.release_source_return=sr;native.release_source_result=sv;
+        if(retired!=NativeCodecBackendStatus::Ok) return Result(NativeModuleCode::Busy,token);
+    }
+    return Result(NativeModuleCode::Ok,token); // NO source release/zero write/history
+}
 NativeModuleResult NativeModuleManager::Unload(NativeModuleToken token) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
@@ -669,6 +776,9 @@ NativeModuleResult NativeModuleManager::Unload(NativeModuleToken token) {
         return Result(NativeModuleCode::Busy, token);
     if (owned->data.state == NativeModuleState::Started || owned->data.state == NativeModuleState::EntryBlocked)
         return Result(NativeModuleCode::WrongState, token);
+    for(const auto& native:owned->data.prepared_envelope.records)
+        if(native.state!=NativeCodecWorkspaceState::Unissued && native.state!=NativeCodecWorkspaceState::Retired)
+            return Result(NativeModuleCode::Busy,token);
     for (auto at = self.modules.begin(); at != self.modules.end(); ++at) {
         if (*at != owned) continue;
         self.modules.erase(at); break; // no callbacks; stable owned object pin across vector mutation
@@ -759,7 +869,7 @@ NativeModuleProviderResult NativeModuleManager::RegisterPreparedEnvelopeProvider
     struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*s.gate};
     if(module->data.name!="sceAudiocodec_Driver" || !InputLive(*module)) return {NativeModuleCode::InvalidInput,{}};
     for(const auto& p:s.providers) if(p->definition.library=="sceAudiocodec" &&
-        (p->definition.nid==0x9D3F790C || p->definition.nid==0x3A20A200)) return {NativeModuleCode::DuplicateProvider,{}};
+        (p->definition.nid==0x9D3F790C || p->definition.nid==0x3A20A200 || p->definition.nid==0x29681260)) return {NativeModuleCode::DuplicateProvider,{}};
     if(!s.owner || s.serial==UINT64_MAX) return {NativeModuleCode::Exhausted,{}};
     auto p=std::make_shared<ProviderRecord>();p->module=module;p->prepared_envelope=true;
     p->definition.library="sceAudiocodec";p->definition.abi=NativePreparedEnvelopeAbi;

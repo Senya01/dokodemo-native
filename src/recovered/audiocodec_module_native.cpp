@@ -92,4 +92,16 @@ bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer b,uint32_t& need,uint32
     request=(need+63u)|63u; // recovered67C/6A8/6B0; modulo32 arithmetic
     return true;
 }
+bool ReadAudiocodecReleaseEDRAMFields(AudiocodecReleaseEDRAMBuffer b,uint32_t& aligned,uint32_t& need,uint32_t& raw) noexcept {
+    if(!b.bytes_ || !b.known_ || b.size_!=0x6C) return false;
+    for(const uint32_t offset:{0x0Cu,0x10u,0x68u})
+        for(uint32_t j=0;j<4;++j) if(b.known_[offset+j]!=1) return false;
+    aligned=need=raw=0;
+    for(uint32_t j=0;j<4;++j) {
+        aligned|=uint32_t(b.bytes_[0x0C+j])<<(8*j);
+        need|=uint32_t(b.bytes_[0x10+j])<<(8*j);
+        raw|=uint32_t(b.bytes_[0x68+j])<<(8*j);
+    }
+    return true;
+}
 } // namespace dokodemo::recovered

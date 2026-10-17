@@ -81,7 +81,7 @@ bool RunAtrac3plusStartPrefix(Atrac3plusInitializationSnapshot& state) noexcept 
 bool AbortAtrac3plusInitialization(Atrac3plusInitializationSnapshot& state) noexcept {
     if (state.prepared_envelope_policy) {
         if (!state.prefix_entered || !state.dependency_blocked || state.aborted ||
-            state.writes_count > state.writes.size() || state.helper_calls_entered > 3 || state.loop_iterations_completed > 2)
+            state.writes_count > state.writes.size() || state.helper_calls_entered > 4 || state.loop_iterations_completed > 4)
             return false;
         std::array<uint8_t,0x520> mask{}, values{};
         for (uint32_t n=0;n<state.writes_count;++n) {
@@ -110,14 +110,21 @@ bool CommitAtrac3plusPreparedWrite(Atrac3plusInitializationSnapshot& s,uint32_t 
     const auto ordinal=s.writes_count; Store(s,pc,offset,4,value); s.writes[ordinal].source_module=origin;return true;
 }
 bool ContinueAtrac3plusPreparedRecord(Atrac3plusInitializationSnapshot& s,bool allocated) noexcept {
-    if(!s.prepared_envelope_policy || s.aborted || !s.dependency_blocked || s.arg0_record_index>=2 ||
+    if(!s.prepared_envelope_policy || s.aborted || !s.dependency_blocked || s.arg0_record_index>=4 ||
         s.loop_iterations_completed!=s.arg0_record_index || s.writes_count>s.writes.size()-6) return false;
     const uint32_t base=s.arg0_record_index*0x148;
     if(allocated) {
-        Store(s,0x16A8,base+0xF0,4,0x1000);
+        Store(s,0x16A8,base+0xF0,4,s.arg1);
         Store(s,0x16AC,base,4,0);
     }
     ++s.loop_iterations_completed;
+    if(s.loop_iterations_completed==4) {
+        // Actual11A0 loops have now received all four helper returns. Neither
+        // loop tests helper v0. Source1210 produces literal module entry0.
+        s.dependency_blocked=false;s.frontier_arguments_prepared=false;
+        s.frontier_source_pc=s.frontier_delay_pc=s.frontier_stub_va=s.frontier_import_index=s.frontier_nid=0;
+        return true;
+    }
     const uint32_t next=s.loop_iterations_completed, next_base=next*0x148;
     ++s.helper_calls_entered;
     Store(s,0x1678,next_base+0xAC,4,0x00200000);

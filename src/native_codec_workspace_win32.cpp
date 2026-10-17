@@ -60,7 +60,7 @@ struct WorkspaceSlot {
     ~WorkspaceSlot() { if(provisional) api->free(&provisional); }
 };
 bool KeyValid(const NativeCodecWorkspaceKey& k) noexcept {
-    if(k.record_index>=2) return false;
+    if(k.record_index>=4) return false;
     for(auto x:k.provider_module) if(!x) return false;
     for(auto x:k.consumer_module) if(!x) return false;
     for(const auto* tuple:{&k.provider,&k.provider_input,&k.consumer_input,&k.state})
@@ -78,15 +78,17 @@ struct WindowsCodecWorkspace final : NativeCodecWorkspaceOperations {
     bool HasResources() const noexcept override;
     NativeCodecBackendStatus Close() noexcept override;
     NativeCodecBackendStatus Prepare(const NativeCodecWorkspaceKey&,uint8_t,uint8_t,std::shared_ptr<void>,std::shared_ptr<void>,NativeCodecWorkspaceSnapshot&) noexcept override;
+    NativeCodecBackendStatus PrepareUnconfigured(const NativeCodecWorkspaceKey&,std::shared_ptr<void>,std::shared_ptr<void>,NativeCodecWorkspaceSnapshot&) noexcept override;
     NativeCodecBackendStatus Allocate(const NativeCodecWorkspaceKey&,uint32_t,NativeCodecWorkspaceSnapshot&) noexcept override;
     NativeCodecBackendStatus Retire(const NativeCodecWorkspaceKey&,NativeCodecWorkspaceSnapshot&) noexcept override;
+    NativeCodecBackendStatus Release(const NativeCodecWorkspaceKey&,uint32_t,uint32_t,uint32_t,NativeCodecWorkspaceSnapshot&) noexcept override;
 };
 struct WindowsCodecWorkspace::Impl {
     std::shared_ptr<WindowsStartupBackend> backend;
     std::shared_ptr<NativeCodecSessionState> session;
 #ifdef DOKODEMO_FFMPEG_ROOT
     std::shared_ptr<CodecApi> api;
-    std::array<WorkspaceSlot,2> slots;
+    std::array<WorkspaceSlot,4> slots;
 #endif
     std::unique_ptr<Impl> next_deferred;
 };
@@ -120,7 +122,7 @@ WindowsCodecWorkspace::~WindowsCodecWorkspace() {
 #ifdef DOKODEMO_FFMPEG_ROOT
     if(!impl_) return;
     bool pending=false;
-    for(size_t i=2;i;--i) {
+    for(size_t i=impl_->slots.size();i;--i) {
         auto& s=impl_->slots[i-1];
         if(s.data.state==NativeCodecWorkspaceState::Unissued || s.data.state==NativeCodecWorkspaceState::Retired) continue;
         NativeCodecWorkspaceSnapshot ignored;
@@ -139,11 +141,12 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Prepare(const NativeCodecWorkspa
                                                             std::shared_ptr<void> provider_input,std::shared_ptr<void> consumer_input,
                                                             NativeCodecWorkspaceSnapshot& out) noexcept {
 #ifdef DOKODEMO_FFMPEG_ROOT
-    if(!Ready() || !KeyValid(key) || !provider_input || !consumer_input) return NativeCodecBackendStatus::Refused;
+    if(!Ready() || !KeyValid(key) || key.record_index>=2 || !provider_input || !consumer_input) return NativeCodecBackendStatus::Refused;
     auto& s=impl_->slots[key.record_index];
     if(s.data.state!=NativeCodecWorkspaceState::Unissued) return NativeCodecBackendStatus::Refused;
     if(impl_->session->cancelled.load()) return NativeCodecBackendStatus::Cancelled;
     auto& d=s.data; d.key=key; d.record_index=key.record_index; d.codec=0x1000;
+    d.format_known=true;
     d.format_b1=b1; d.format_b2=b2; d.channels=(b1>>2)&7;
     d.max_input_bytes=(((b1&3u)<<8)|b2)*8u+8u;
     d.api_codec_version=impl_->api->codec_version; d.api_util_version=impl_->api->util_version;
@@ -151,8 +154,12 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Prepare(const NativeCodecWorkspa
     d.state=NativeCodecWorkspaceState::Preparing; s.api=impl_->api;
     s.provider_input=std::move(provider_input);s.consumer_input=std::move(consumer_input);
     if(d.channels!=2 || b1!=0x28 || b2!=0x5C) { d.state=NativeCodecWorkspaceState::Failed; out=d; return NativeCodecBackendStatus::Refused; }
+    d.native_decoder_find_entered=true;
     const AVCodec* codec=s.api->find(AV_CODEC_ID_ATRAC3P);
+    d.native_decoder_find_returned=true;d.native_decoder_found=codec!=nullptr;
     if(!codec) { d.state=NativeCodecWorkspaceState::Failed; out=d; return NativeCodecBackendStatus::Unsupported; }
+    d.native_decoder_id=uint32_t(codec->id);
+    if(codec->id!=AV_CODEC_ID_ATRAC3P || codec->type!=AVMEDIA_TYPE_AUDIO) { d.state=NativeCodecWorkspaceState::Failed;out=d;return NativeCodecBackendStatus::Refused; }
     d.native_prepare_entered=true;
     d.native_alloc_entered=true;
     s.provisional=s.api->alloc(codec);
@@ -162,13 +169,14 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Prepare(const NativeCodecWorkspa
         d.native_policy_return=true; d.native_policy_result=-2;
         d.state=NativeCodecWorkspaceState::Failed; out=d; return NativeCodecBackendStatus::NativeFailure;
     }
-    ++d.context_allocations; d.provisional_live=true;
+    ++d.context_allocations; d.provisional_live=true;d.context_allocated=true;
     s.api->layout(&s.provisional->ch_layout,int(d.channels));
     s.provisional->block_align=int(d.max_input_bytes);
     s.provisional->thread_count=1; // explicit single-thread Windows prepare policy
     d.native_open_entered=true;
     d.native_api_result=s.api->open(s.provisional,codec,nullptr);
     d.native_open_returned=true;
+    d.decoder_opened=d.native_api_result==0;
     d.native_prepare_returned=true;
     if(impl_->session->cancelled.load()) { out=d; return NativeCodecBackendStatus::Cancelled; }
     d.native_policy_return=true;
@@ -179,9 +187,47 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Prepare(const NativeCodecWorkspa
         d.state=NativeCodecWorkspaceState::Failed; out=d; return NativeCodecBackendStatus::NativeFailure;
     }
     if(d.native_api_result!=0) { d.native_policy_return=false; out=d; return NativeCodecBackendStatus::Refused; }
+    d.decoder_ready=true;
     d.native_policy_result=0; d.state=NativeCodecWorkspaceState::Prepared; out=d; return NativeCodecBackendStatus::Ok;
 #else
     (void)key;(void)b1;(void)b2;(void)provider_input;(void)consumer_input;(void)out;return NativeCodecBackendStatus::Unsupported;
+#endif
+}
+NativeCodecBackendStatus WindowsCodecWorkspace::PrepareUnconfigured(const NativeCodecWorkspaceKey& key,
+        std::shared_ptr<void> provider_input,std::shared_ptr<void> consumer_input,NativeCodecWorkspaceSnapshot& out) noexcept {
+#ifdef DOKODEMO_FFMPEG_ROOT
+    if(!Ready() || !KeyValid(key) || key.record_index<2 || !provider_input || !consumer_input)
+        return NativeCodecBackendStatus::Refused;
+    auto& s=impl_->slots[key.record_index];
+    if(s.data.state!=NativeCodecWorkspaceState::Unissued) return NativeCodecBackendStatus::Refused;
+    if(impl_->session->cancelled.load()) return NativeCodecBackendStatus::Cancelled;
+    auto& d=s.data;d.key=key;d.record_index=key.record_index;d.codec=0x1001;
+    d.format_pending=true;d.state=NativeCodecWorkspaceState::Preparing;
+    d.api_codec_version=impl_->api->codec_version;d.api_util_version=impl_->api->util_version;
+    d.envelope_bytes=uint32_t(sizeof(NativeCodecWorkspace));d.envelope_alignment=uint32_t(alignof(NativeCodecWorkspace));
+    s.api=impl_->api;s.provider_input=std::move(provider_input);s.consumer_input=std::move(consumer_input);
+    d.native_prepare_entered=true;
+    d.native_decoder_find_entered=true;
+    const AVCodec* codec=s.api->find(AV_CODEC_ID_ATRAC3);
+    d.native_decoder_find_returned=true;d.native_decoder_found=codec!=nullptr;
+    if(!codec) { d.native_prepare_returned=true;d.state=NativeCodecWorkspaceState::Failed;out=d;return NativeCodecBackendStatus::Unsupported; }
+    d.native_decoder_id=uint32_t(codec->id);
+    if(codec->id!=AV_CODEC_ID_ATRAC3 || codec->type!=AVMEDIA_TYPE_AUDIO) { d.native_prepare_returned=true;d.state=NativeCodecWorkspaceState::Failed;out=d;return NativeCodecBackendStatus::Refused; }
+    // Pinned options.c allocates/defaults context and private ownership only.
+    // ATRAC3 init requires later format/extradata. No format byte, AVCodecContext
+    // format field, init/open or decode is touched on this allocation-only path.
+    d.native_alloc_entered=true;s.provisional=s.api->alloc(codec);d.native_alloc_returned=true;
+    d.native_prepare_returned=true;
+    if(!s.provisional) {
+        d.native_error_class=1;d.native_policy_return=true;d.native_policy_result=-2;
+        d.state=NativeCodecWorkspaceState::Failed;out=d;return NativeCodecBackendStatus::NativeFailure;
+    }
+    ++d.context_allocations;d.context_allocated=true;d.provisional_live=true;
+    d.state=NativeCodecWorkspaceState::AllocatedFormatPending;
+    if(impl_->session->cancelled.load()) { out=d;return NativeCodecBackendStatus::Cancelled; }
+    d.native_policy_return=true;d.native_policy_result=0;out=d;return NativeCodecBackendStatus::Ok;
+#else
+    (void)key;(void)provider_input;(void)consumer_input;(void)out;return NativeCodecBackendStatus::Unsupported;
 #endif
 }
 NativeCodecBackendStatus WindowsCodecWorkspace::Allocate(const NativeCodecWorkspaceKey& key,uint32_t need,
@@ -189,7 +235,8 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Allocate(const NativeCodecWorksp
 #ifdef DOKODEMO_FFMPEG_ROOT
     if(!Ready() || !KeyValid(key)) return NativeCodecBackendStatus::Refused;
     auto& s=impl_->slots[key.record_index]; auto& d=s.data;
-    if(!(d.key==key) || d.state!=NativeCodecWorkspaceState::Prepared || !s.provisional || need!=d.envelope_bytes ||
+    if(!(d.key==key) || (d.state!=NativeCodecWorkspaceState::Prepared &&
+        d.state!=NativeCodecWorkspaceState::AllocatedFormatPending) || !s.provisional || need!=d.envelope_bytes ||
         d.allocation_attempted || s.block || s.object)
         return NativeCodecBackendStatus::Refused;
     if(impl_->session->cancelled.load()) return NativeCodecBackendStatus::Cancelled;
@@ -259,10 +306,28 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Retire(const NativeCodecWorkspac
                 span.host_address+offset!=d.host_address || d.host_address!=uint64_t(reinterpret_cast<uintptr_t>(s.object)) || d.host_address%64) {
                 out=d;return NativeCodecBackendStatus::CleanupFailure;
             }
+            if(d.windows_release_capability_applied) d.release_map_validated=true;
             s.object->~NativeCodecWorkspace();s.object=nullptr;++d.context_frees;
-            d.context_destroyed=true;d.state=NativeCodecWorkspaceState::DestroyedPendingFree;
+            d.context_destroyed=true;d.decoder_ready=false;d.state=NativeCodecWorkspaceState::DestroyedPendingFree;
+        } else if(s.block && d.context_transferred) {
+            // A failed Free has already destroyed the context and reset its
+            // borrow. Retry must validate the retained map again, without
+            // reconstructing/destroying the placement object a second time.
+            const auto head=impl_->backend->Head(s.block);
+            StartupHostStatus status;s.borrow=impl_->backend->Borrow(s.block,status);
+            StartupRawBorrowSpan span;const uint64_t offset=uint64_t(d.aligned_coordinate)-d.raw_coordinate;
+            if(!head.status || !head.live || !head.readable || !head.writable || !status || !s.borrow.Span(span) ||
+                head.handle.owner!=d.allocation_owner || head.handle.generation!=d.allocation_generation || head.handle.serial!=d.allocation_serial ||
+                head.source_base!=d.raw_coordinate || head.requested_bytes!=d.requested_bytes || head.committed_bytes!=d.committed_bytes ||
+                span.handle.owner!=head.handle.owner || span.handle.generation!=head.handle.generation || span.handle.serial!=head.handle.serial ||
+                span.source_base!=head.source_base || span.host_address!=head.host_address || span.size!=d.requested_bytes ||
+                offset>span.size || d.envelope_bytes>span.size-offset || span.host_address>UINT64_MAX-offset ||
+                span.host_address+offset!=d.host_address || !d.context_destroyed || d.host_address%64) {
+                out=d;return NativeCodecBackendStatus::CleanupFailure;
+            }
+            if(d.windows_release_capability_applied) d.release_map_validated=true;
         }
-        if(s.provisional) { s.api->free(&s.provisional); ++d.context_frees; d.provisional_live=false; d.context_destroyed=true; }
+        if(s.provisional) { s.api->free(&s.provisional); ++d.context_frees; d.provisional_live=false; d.context_destroyed=true;d.decoder_ready=false; }
         s.borrow.Reset();
         if(s.block) {
             const auto status=impl_->backend->Free(s.block); d.win32_error=status.win32_error;
@@ -274,6 +339,29 @@ NativeCodecBackendStatus WindowsCodecWorkspace::Retire(const NativeCodecWorkspac
     } catch(...) { out=d;return NativeCodecBackendStatus::CleanupFailure; }
 #else
     (void)key;(void)out;return NativeCodecBackendStatus::Unsupported;
+#endif
+}
+NativeCodecBackendStatus WindowsCodecWorkspace::Release(const NativeCodecWorkspaceKey& key,uint32_t aligned,
+        uint32_t need,uint32_t raw,NativeCodecWorkspaceSnapshot& out) noexcept {
+#ifdef DOKODEMO_FFMPEG_ROOT
+    if(!Ready() || !KeyValid(key)) return NativeCodecBackendStatus::Refused;
+    auto& s=impl_->slots[key.record_index];auto& d=s.data;
+    if(!(d.key==key) || (d.state!=NativeCodecWorkspaceState::WorkspaceLive &&
+        d.state!=NativeCodecWorkspaceState::DestroyedPendingFree) || !s.block || !d.context_transferred ||
+        !d.allocation_succeeded || raw!=d.raw_coordinate || aligned!=d.aligned_coordinate || need!=d.envelope_bytes ||
+        !raw || ((raw+63u)&~63u)!=aligned || d.release_native_attempts==UINT32_MAX)
+        return NativeCodecBackendStatus::Refused;
+    d.original_low29_guard_passed=(raw&0x1FFFFFFFu)<=0x001FFFFFu;
+    // Explicit Windows capability substitutes PSP physical-address admission.
+    // Do not move native coordinates to make the original low29 test pass.
+    d.windows_release_capability_applied=true;
+    ++d.release_native_attempts;
+    const auto result=Retire(key,out);
+    ++d.release_native_returns;d.release_native_code=static_cast<int32_t>(result);
+    d.release_native_completed=result==NativeCodecBackendStatus::Ok;
+    out=d;return result;
+#else
+    (void)key;(void)aligned;(void)need;(void)raw;(void)out;return NativeCodecBackendStatus::Unsupported;
 #endif
 }
 NativeCodecBackendStatus WindowsCodecWorkspace::Close() noexcept {
@@ -333,7 +421,7 @@ NativeCodecBackendStatus RetryDeferredNativeCodecCleanup() noexcept {
     batch=std::move(list.head);ReleaseSRWLockExclusive(&list.mutex);
     while(batch) {
         auto p=std::move(batch);batch=std::move(p->next_deferred);
-        { WindowsCodecWorkspace retry(std::move(p)); } // retries both slots; failures return to owned list
+        { WindowsCodecWorkspace retry(std::move(p)); } // retries all slots; failures return to owned list
     }
     return DeferredCount()?NativeCodecBackendStatus::CleanupFailure:NativeCodecBackendStatus::Ok;
 }

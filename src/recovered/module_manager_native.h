@@ -201,6 +201,9 @@ public:
     NativeModuleProviderResult RegisterCheckNeedMemProvider(NativeModuleToken);
     // Separate production domain; never upgrades the Stage18 prefix provider.
     NativeModuleCode ConfigurePreparedEnvelopeBackend(std::shared_ptr<NativeCodecWorkspaceBackend>);
+    // Distinct HOST cleanup after completed source Stop. Issued Failed slots
+    // can own input/API pins even when no native context/storage is live.
+    NativeModuleResult RetireStoppedCodecWorkspaces(NativeModuleToken);
     NativeModuleProviderResult RegisterPreparedEnvelopeProvider(NativeModuleToken);
     NativeModuleCode UnregisterProvider(NativeModuleProviderToken);
     NativeModuleCode BorrowImport(NativeModuleToken, uint32_t index, NativeModuleCallBorrow&);
