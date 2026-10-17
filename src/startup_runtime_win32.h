@@ -19,6 +19,7 @@ struct StartupRuntimeStatus {
 struct StartupRuntimeOptions {
     // Actual native directory bound to disc0:, e.g. <workspace>/assets/iso.
     std::wstring media_root;
+    bool prepared_codec_envelope = false; // explicit NEW domain, legacy finite prefix stays default
 };
 inline constexpr uint32_t StartupNoCurrentModule = UINT32_MAX;
 struct StartupRuntimeEvent {
@@ -140,6 +141,8 @@ public:
     StartupRuntimeStatus RequestExit();
     // Timeout retains the live owner. Do not destroy it until Close succeeds.
     StartupRuntimeStatus Close(uint32_t timeout_ms = 5000);
+    static uint32_t PendingDeferredCodecCleanup() noexcept;
+    static StartupRuntimeStatus RetryDeferredCodecCleanup(uint32_t timeout_ms = 5000);
 private:
     struct Impl;
     explicit StartupCoordinator(std::unique_ptr<Impl> impl) noexcept;

@@ -47,7 +47,8 @@ void Store(Atrac3plusInitializationSnapshot& state, uint32_t pc, uint32_t offset
     ++state.writes_count;
     for (uint32_t i = 0; i < width; ++i) {
         state.bytes[offset + i] = static_cast<uint8_t>(value >> (i * 8));
-        state.known[offset + i] = 1; ++state.known_bytes;
+        if (!state.known[offset + i]) ++state.known_bytes;
+        state.known[offset + i] = 1;
     }
 }
 } // namespace
@@ -78,12 +79,56 @@ bool RunAtrac3plusStartPrefix(Atrac3plusInitializationSnapshot& state) noexcept 
     return true; // host prefix completion, NEVER an entry/helper/service v0
 }
 bool AbortAtrac3plusInitialization(Atrac3plusInitializationSnapshot& state) noexcept {
+    if (state.prepared_envelope_policy) {
+        if (!state.prefix_entered || !state.dependency_blocked || state.aborted ||
+            state.writes_count > state.writes.size() || state.helper_calls_entered > 3 || state.loop_iterations_completed > 2)
+            return false;
+        std::array<uint8_t,0x520> mask{}, values{};
+        for (uint32_t n=0;n<state.writes_count;++n) {
+            const auto& w=state.writes[n];
+            if (w.ordinal!=n || (w.width!=1 && w.width!=4) || w.offset>mask.size() || w.width>mask.size()-w.offset) return false;
+            for(uint32_t j=0;j<w.width;++j) { mask[w.offset+j]=1; values[w.offset+j]=uint8_t(w.value>>(8*j)); }
+        }
+        uint32_t count=0;
+        for(uint32_t n=0;n<mask.size();++n) {
+            if(mask[n]!=state.known[n] || (mask[n] && values[n]!=state.bytes[n])) return false;
+            count+=mask[n];
+        }
+        if(count!=state.known_bytes) return false;
+        state.aborted=true;state.dependency_blocked=false;return true;
+    }
     if (!state.prefix_entered || !state.dependency_blocked || state.aborted ||
         state.external_resources_acquired ||
         (!Atrac3plusCheckNeedMemStateExact(state, false) &&
          !Atrac3plusCheckNeedMemStateExact(state, true))) return false;
     state.aborted = true; state.dependency_blocked = false;
     return true; // host abort retains exact partial effects; no source Stop121C
+}
+bool CommitAtrac3plusPreparedWrite(Atrac3plusInitializationSnapshot& s,uint32_t pc,uint32_t offset,
+                                  uint32_t value,Atrac3plusWriteSource origin) noexcept {
+    if(!s.prepared_envelope_policy || s.aborted || s.writes_count>=s.writes.size() || offset>s.bytes.size()-4) return false;
+    const auto ordinal=s.writes_count; Store(s,pc,offset,4,value); s.writes[ordinal].source_module=origin;return true;
+}
+bool ContinueAtrac3plusPreparedRecord(Atrac3plusInitializationSnapshot& s,bool allocated) noexcept {
+    if(!s.prepared_envelope_policy || s.aborted || !s.dependency_blocked || s.arg0_record_index>=2 ||
+        s.loop_iterations_completed!=s.arg0_record_index || s.writes_count>s.writes.size()-6) return false;
+    const uint32_t base=s.arg0_record_index*0x148;
+    if(allocated) {
+        Store(s,0x16A8,base+0xF0,4,0x1000);
+        Store(s,0x16AC,base,4,0);
+    }
+    ++s.loop_iterations_completed;
+    const uint32_t next=s.loop_iterations_completed, next_base=next*0x148;
+    ++s.helper_calls_entered;
+    Store(s,0x1678,next_base+0xAC,4,0x00200000);
+    Store(s,0x1680,next_base,4,1);
+    if(next<2) {
+        Store(s,0x16D4,next_base+0x6C,1,0x28);
+        Store(s,0x16E0,next_base+0x6D,1,0x5C);
+    }
+    s.arg0_record_index=next;s.arg0_record_offset=next_base+0x44;s.arg1=next<2?0x1000:0x1001;
+    s.frontier_source_pc=0x1684;s.frontier_delay_pc=0x1688;s.frontier_stub_va=0x3640;
+    s.frontier_import_index=2;s.frontier_nid=0x9D3F790C;s.frontier_arguments_prepared=true;return true;
 }
 bool Atrac3plusCheckNeedMemStateExact(const Atrac3plusInitializationSnapshot& state, bool after) noexcept {
     if (!state.present || !state.prefix_entered || !state.dependency_blocked || state.aborted ||

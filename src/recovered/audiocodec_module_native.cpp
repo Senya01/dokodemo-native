@@ -74,4 +74,22 @@ AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
     // result mapping, CheckNeedMem return and caller continuation are unreached.
     return AudiocodecCheckNeedMemCode::DependencyBlocked;
 }
+bool CompleteAudiocodecNativePrepareResult(AudiocodecCheckNeedMemSnapshot& s,int32_t result) noexcept {
+    if(!s.entered || !s.dependency_blocked || s.source_return || s.writes!=1) return false;
+    s.dependency_blocked=false;
+    // dependency_dispatched concerns original ME hardware, not the Windows API.
+    s.source_return=true;
+    const uint32_t bits=result==0?0u:result==-1?0x807F0001u:result==-2?0x80000002u:0x807F0002u;
+    s.source_result=static_cast<int32_t>(int64_t(bits)-(bits&0x80000000u?0x100000000LL:0));
+    s.frontier_source_pc=s.frontier_delay_pc=s.frontier_stub_va=s.frontier_nid=0;
+    return true;
+}
+bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer b,uint32_t& need,uint32_t& request) noexcept {
+    if(!b.bytes_ || !b.known_ || b.size_!=0x6C) return false;
+    for(uint32_t j=0;j<4;++j) if(b.known_[0x10+j]!=1) return false;
+    need=0;
+    for(uint32_t j=0;j<4;++j) need|=uint32_t(b.bytes_[0x10+j])<<(8*j);
+    request=(need+63u)|63u; // recovered67C/6A8/6B0; modulo32 arithmetic
+    return true;
+}
 } // namespace dokodemo::recovered

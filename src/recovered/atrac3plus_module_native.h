@@ -33,13 +33,14 @@ const Atrac3plusModuleDescriptor* FindAtrac3plusModuleDescriptor(std::string_vie
 bool Atrac3plusImportPolicyAllows(std::string_view library, uint16_t version,
     uint16_t attributes, uint8_t entry_words, uint8_t variables, uint16_t functions) noexcept;
 
-enum class Atrac3plusWriteSource { Atrac3plus, Audiocodec };
+enum class Atrac3plusWriteSource { Atrac3plus, Audiocodec, NativePlatform };
 struct Atrac3plusNativeWrite {
     uint32_t ordinal = 0, source_pc = 0, offset = 0, width = 0, value = 0;
     Atrac3plusWriteSource source_module = Atrac3plusWriteSource::Atrac3plus;
 };
 struct Atrac3plusInitializationSnapshot {
     bool present = false, prefix_entered = false, dependency_blocked = false, aborted = false;
+    bool prepared_envelope_policy = false;
     uint64_t owner = 0, generation = 0, serial = 0, native_state_address = 0;
     uint32_t source_segment = 1, source_segment_offset = 0xA0;
     uint32_t record_count = 4, record_stride = 0x148, record_bytes = 0x520;
@@ -47,7 +48,7 @@ struct Atrac3plusInitializationSnapshot {
     // Private AOT state, NOT a copy/mapping of input bytes. bytes[i] has source
     // meaning ONLY when known[i]==1. Host value-initialization proves no BSS byte.
     std::array<uint8_t, 0x520> bytes{}, known{};
-    std::array<Atrac3plusNativeWrite, 5> writes{};
+    std::array<Atrac3plusNativeWrite, 32> writes{};
     uint32_t frontier_source_pc = 0, frontier_delay_pc = 0, frontier_stub_va = 0;
     uint32_t frontier_import_index = 0, frontier_nid = 0;
     // a0 references this owned native state, record0+44, never a PSP/host integer ABI.
@@ -62,6 +63,11 @@ struct Atrac3plusInitializationSnapshot {
 // dispatching CheckNeedMem1684, after preparing the1688 delay-slot argument.
 // No source RA/stack/GP/mapping or source/entry/service return is manufactured.
 bool RunAtrac3plusStartPrefix(Atrac3plusInitializationSnapshot&) noexcept;
+// Separate finite Windows envelope domain. These execute only the next literal
+// helper prefix / continuation; the manager supplies actual service outcomes.
+bool ContinueAtrac3plusPreparedRecord(Atrac3plusInitializationSnapshot&, bool allocation_succeeded) noexcept;
+bool CommitAtrac3plusPreparedWrite(Atrac3plusInitializationSnapshot&, uint32_t source_pc,
+    uint32_t offset, uint32_t value, Atrac3plusWriteSource) noexcept;
 // Fixed no-preimage-read admission/abort shapes: four ATRAC writes, optionally
 // followed by the single audiocodec CheckNeedMem write. Unknown bytes are unread.
 bool Atrac3plusCheckNeedMemStateExact(const Atrac3plusInitializationSnapshot&, bool after_write) noexcept;

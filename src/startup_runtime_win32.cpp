@@ -1,5 +1,6 @@
 #include "startup_runtime_win32.h"
 #include "startup_memory_backend_win32.h"
+#include "native_codec_workspace_win32.h"
 #include "recovered/startup_flow_native.h"
 #include "recovered/audiocodec_module_native.h"
 #include "recovered/module_manager_native.h"
@@ -59,6 +60,22 @@ struct WindowsModuleInputLease final : recovered::NativeModuleInputLease {
 }
 
 struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
+    std::unique_ptr<Impl> next_deferred_codec_cleanup;
+    struct JoinedCleanupOwners {
+        SRWLOCK lock=SRWLOCK_INIT;
+        std::unique_ptr<Impl> head;
+    };
+    static JoinedCleanupOwners& JoinedOwners() { static JoinedCleanupOwners owners;return owners; }
+    static void RetainJoined(std::unique_ptr<Impl> owner) noexcept {
+        auto& owners=JoinedOwners();AcquireSRWLockExclusive(&owners.lock);
+        owner->next_deferred_codec_cleanup=std::move(owners.head);owners.head=std::move(owner);
+        ReleaseSRWLockExclusive(&owners.lock);
+    }
+    static uint32_t PendingJoined() noexcept {
+        auto& owners=JoinedOwners();AcquireSRWLockExclusive(&owners.lock);uint32_t n=0;
+        for(auto* p=owners.head.get();p;p=p->next_deferred_codec_cleanup.get()) ++n;
+        ReleaseSRWLockExclusive(&owners.lock);return n;
+    }
     struct ThreadContext { Impl* runtime; bool worker; };
     struct CallbackRecord {
         uint64_t owner = 0;
@@ -76,7 +93,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     StartupRuntimeOptions options;
     StartupObservation state;
     std::deque<StartupRuntimeEvent> events;
-    std::unique_ptr<WindowsStartupBackend> backend;
+    std::shared_ptr<WindowsStartupBackend> backend;
+    std::shared_ptr<recovered::NativeCodecSessionState> codec_session=std::make_shared<recovered::NativeCodecSessionState>();
+    std::shared_ptr<recovered::NativeCodecWorkspaceBackend> codec_backend;
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -101,14 +120,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     // Prepare and insert each owner BEFORE acquiring its file/allocation. The
     // vector can move unique_ptrs; callbacks never retain vector references.
     std::vector<std::unique_ptr<PendingModuleRequest>> module_requests;
-    uint64_t next_staging_coordinate = HostStagingCoordinate;
     uint32_t event_module_index = StartupNoCurrentModule;
-    std::atomic<bool> cancelled{false};
 
     explicit Impl(const StartupRuntimeOptions& input) : options(input) {
         state.owner = next_runtime_owner.fetch_add(1);
         state.module_manager_owner = modules.Owner();
         state.module_generation = modules.Generation();
+        codec_session->next_coordinate.store(HostStagingCoordinate);
     }
     void EmitLocked(const char* operation, const char* origin, uint32_t pc = 0,
                     int64_t value = 0, bool returned = false, uint64_t object = 0,
@@ -426,7 +444,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     }
     void ExitGame() override {
         if (!IsCurrent(true)) throw NativeFailure{};
-        cancelled.store(true);
+        codec_session->cancelled.store(true);
         const BOOL signaled = SetEvent(cancel);
         const DWORD error = signaled ? 0 : GetLastError();
         std::lock_guard<std::mutex> lock(metadata);
@@ -626,17 +644,19 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         SYSTEM_INFO system{}; GetSystemInfo(&system);
         const uint64_t page = system.dwPageSize;
         const uint64_t committed = page ? ((uint64_t(request->input_bytes) + page - 1) / page) * page : 0;
-        if (!page || next_staging_coordinate % page || !committed ||
-            next_staging_coordinate + committed > (uint64_t(1) << 32))
+        uint64_t coordinate=codec_session->next_coordinate.load();
+        if (!page || coordinate % page || !committed || coordinate>UINT32_MAX ||
+            committed>(uint64_t(1)<<32) || coordinate>(uint64_t(1)<<32)-committed)
             return ModuleStopResult(Stop::HostFailure, "Host staging coordinate/page geometry exceeds32-bit range");
+        if(!codec_session->next_coordinate.compare_exchange_strong(coordinate,coordinate+committed))
+            return ModuleStopResult(Stop::HostFailure,"Native source-coordinate reservation raced");
         StartupPartitionRequest allocation_request;
         allocation_request.bytes = request->input_bytes;
-        allocation_request.source_base = static_cast<uint32_t>(next_staging_coordinate);
+        allocation_request.source_base = static_cast<uint32_t>(coordinate);
         const auto allocation = backend->Allocate(allocation_request);
         if (!allocation.status)
             return ModuleStopResult(Stop::HostFailure, "Module staging allocation failed", allocation.status.win32_error);
         request->staging = allocation.handle; // primitive owner BEFORE mutex/telemetry/text
-        next_staging_coordinate += committed;
         {
             std::lock_guard<std::mutex> lock(metadata);
             data.staging_live = true; data.staging_owner = allocation.handle.owner;
@@ -771,13 +791,15 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             data.module_initialization_blocked = data.record.initialization.prefix_entered &&
                 data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
             modules.CheckNeedMemSnapshot(data.token, data.record.check_need_mem); // nonallocating outcome/effects
+            modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
             entry_frontier = started_module.frontier_source_pc; // primitive outcome; independent of allocating Snapshot
             if (data.module_initialization_blocked) {
                 data.record.state = recovered::NativeModuleState::EntryBlocked;
                 modules.InitializationSnapshot(data.token, data.record.initialization); // fixed-size exact effects survive telemetry OOM
             }
             if (started_module.entry_return && started_module.source_return && started_module.entry_source_pc == 0xAD8) {
-                const auto registered = modules.RegisterCheckNeedMemProvider(data.token);
+                const auto registered = options.prepared_codec_envelope ?
+                    modules.RegisterPreparedEnvelopeProvider(data.token) : modules.RegisterCheckNeedMemProvider(data.token);
                 request->check_need_mem_provider = registered.token; // member-owned BEFORE telemetry
                 provider_failed = registered.code != recovered::NativeModuleCode::Ok;
                 EmitLocked("CheckNeedMemProviderRegistered", "HostPartialCapability", 0, registered.token.serial,
@@ -788,18 +810,32 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 const auto& initialization = data.record.initialization;
                 if (initialization.prefix_entered) for (uint32_t i = 0; i < initialization.writes_count; ++i) {
                     const auto& write = initialization.writes[i];
-                    const auto write_module = write.source_module == recovered::Atrac3plusWriteSource::Audiocodec ?
+                    const auto write_module = write.source_module == recovered::Atrac3plusWriteSource::NativePlatform ?
+                        recovered::NativeModuleToken{} : write.source_module == recovered::Atrac3plusWriteSource::Audiocodec ?
                         data.record.check_need_mem.provider_module : data.token;
-                    EmitLocked("ModuleInitializationWrite", "RecoveredNativePrefix", write.source_pc, write.value,
+                    EmitLocked("ModuleInitializationWrite", write.source_module==recovered::Atrac3plusWriteSource::NativePlatform ?
+                               "WindowsNativeQueryOutput" : "RecoveredNativePrefix", write.source_pc, write.value,
                                false, initialization.native_state_address, 0, 0,
                                "actual private masked AOT record state;input PRX unchanged;ordered write in record snapshot",
-                               0, 0, true, write_module);
+                               0, 0, write.source_module!=recovered::Atrac3plusWriteSource::NativePlatform, write_module);
                 }
             } catch (...) { ++state.dropped_events; }
+            if(data.record.prepared_envelope.present) for(const auto& native:data.record.prepared_envelope.records) {
+                if(native.native_open_entered)
+                    EmitLocked("NativeCodecOpen2", "WindowsPreparedEnvelopePolicy", 0, native.native_api_result,
+                               false,native.record_index,0,0,"actual open2 return meaningful only when native_open_returned;original equivalence UNKNOWN");
+                if(native.query_source_return)
+                    EmitLocked("NativePreparedCheckNeedMem-return","WindowsPolicySourceMapping",0x8C,native.query_source_result,true,
+                               native.record_index,0,0,"actual native result mapped by recovered8C..D0;not original firmware proof",0,0,true,data.record.check_need_mem.provider_module);
+                if(native.get_edram_source_return)
+                    EmitLocked("NativeEnvelopeGetEDRAM-return","WindowsPolicyRecoveredWrapper",0x688,native.get_edram_source_result,true,
+                               native.host_address,native.win32_error,0,"real mapped placement ownership;108B span;no source Init/decode",0,0,true,data.record.check_need_mem.provider_module);
+            }
             if (data.module_initialization_blocked)
                 EmitLocked("ModuleEntryDependency", "UnsupportedEntry", started_module.frontier_source_pc,
                            started_module.frontier_nid, false, data.token.serial, 0, 0,
-                           started_module.check_need_mem_blocked ?
+                           data.record.prepared_envelope.present ?
+                           "finite Windows prepared-envelope ABI;actual query/resources in per-record snapshot;1001 remains unsupported;originalME unresolved" : started_module.check_need_mem_blocked ?
                            "ATRAC caller1684->audiocodec CheckNeedMem;callee84->ME stubAF8/C00D873B;codec1000,same owned record0+44;NO ME dispatch/result" :
                            "ATRAC1684->stub3640;a0=owned record0+44,a1=1000;NO CheckNeedMem dispatch/result",
                            0, 0, true, started_module.dependency_module);
@@ -852,7 +888,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
             "Following source wrapper sequence is outside the validated native contract", 0, 0);
     }
-    bool HostCancelled() const override { return cancelled.load(); }
+    bool HostCancelled() const override { return codec_session->cancelled.load(); }
     void BarrierPump() {
         HANDLE notification = nullptr;
         { std::lock_guard<std::mutex> lock(metadata); if (callback) notification = callback->notification; }
@@ -866,7 +902,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                 (void)Dispatch(recovered::StartupDispatchOrigin::HostBarrierPump);
                 if (HostCancelled()) return;
                 if (!notification) { //no registered callback; an exit request still cancels host lifetime.
-                    cancelled.store(true); (void)SetEvent(cancel); return;
+                    codec_session->cancelled.store(true); (void)SetEvent(cancel); return;
                 }
             } else if (wait == WAIT_OBJECT_0 + 1) return;
             else throw NativeFailure{};
@@ -920,7 +956,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             Impl& self;
             ~Admission() { std::lock_guard<std::mutex> lock(self.metadata); self.close_in_progress = false; }
         } admission{*this};
-        cancelled.store(true);
+        codec_session->cancelled.store(true);
         if (cancel) {
             const BOOL signaled = SetEvent(cancel); const DWORD error = signaled ? 0 : GetLastError();
             Emit("SetEvent-cancel", "HostLifecycle", 0, signaled, false, Address(cancel), error);
@@ -1005,8 +1041,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     data.module_initialization_aborted = true;
                     data.record.state = recovered::NativeModuleState::InitializationAborted;
                     modules.InitializationSnapshot(data.token, data.record.initialization);
+                    modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
                     EmitLocked("HostModuleInitializationAborted", "HostModulePolicy", 0, data.token.uid, false,
-                               data.token.serial, 0, 0, "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
+                               data.token.serial, 0, 0, data.record.prepared_envelope.present ?
+                               "after BOTH joins;reverse native context destruction/borrowReset/Free completed;NO sourceStop121C" :
+                               "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
                 }
                 try { modules.Snapshot(data.token, data.record); } catch (...) { ++state.dropped_events; }
                 const auto unloaded = modules.Unload(data.token);
@@ -1077,6 +1116,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             if (freed) tls_index = TLS_OUT_OF_INDEXES; else ok = false;
         }
         if (backend) {
+            if(codec_backend) {
+                const auto closed=codec_backend->Close();
+                Emit("CloseNativeCodecBackend","WindowsPreparedEnvelopePolicy",0,closed==recovered::NativeCodecBackendStatus::Ok?1:0);
+                if(closed!=recovered::NativeCodecBackendStatus::Ok) return CleanupFailure();
+            }
             const auto closed = backend->Close();
             Emit("CloseAcceptedBackend", "HostLifecycle", 0, closed ? 1 : 0, false, 0, closed.win32_error);
             if (!closed) ok = false;
@@ -1094,6 +1138,9 @@ StartupCoordinator::StartupCoordinator(std::unique_ptr<Impl> impl) noexcept : im
 StartupCoordinator::~StartupCoordinator() {
     if (!impl_) return;
     try { if (impl_->Close(INFINITE)) return; } catch (...) {}
+    if(impl_->options.prepared_codec_envelope && impl_->state.caller_joined && impl_->state.worker_joined) {
+        Impl::RetainJoined(std::move(impl_));return;
+    }
     // Hard OS wait/resume/cleanup failure cannot authorize freeing a live context.
     // Retain the outstanding owner. Normal timeout destruction cooperatively joins.
     (void)impl_.release();
@@ -1108,6 +1155,22 @@ std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRunt
     StartupHostStatus backend_status;
     impl->backend = WindowsStartupBackend::Create(backend_status);
     if (!impl->backend) { status = Failure(StartupRuntimeCode::HostFailure, backend_status.win32_error); return {}; }
+    if(options.prepared_codec_envelope) {
+        std::wstring dependency_root;
+#ifdef DOKODEMO_FFMPEG_ROOT
+        const std::string configured=DOKODEMO_FFMPEG_ROOT;
+        for(const unsigned char c:configured) if(c>=0x80) { status=Failure(StartupRuntimeCode::HostFailure);return {}; }
+        dependency_root.assign(configured.begin(),configured.end());
+#endif
+        recovered::NativeCodecBackendStatus codec_status;
+        impl->codec_backend=CreateWindowsNativeCodecWorkspaceBackend(impl->backend,impl->codec_session,dependency_root,codec_status);
+        if(!impl->codec_backend || codec_status!=recovered::NativeCodecBackendStatus::Ok ||
+            impl->modules.ConfigurePreparedEnvelopeBackend(impl->codec_backend)!=recovered::NativeModuleCode::Ok) {
+            status=Failure(StartupRuntimeCode::HostFailure);return {};
+        }
+        impl->Emit("PreparedEnvelopeBackendReady","WindowsPreparedEnvelopePolicy",0,1,false,0,0,0,
+                   recovered::NativePreparedEnvelopeAbi);
+    }
     impl->tls_index = TlsAlloc();
     const DWORD tls_error = impl->tls_index == TLS_OUT_OF_INDEXES ? GetLastError() : 0;
     impl->Emit("TlsAlloc", "HostTLS", 0, impl->tls_index != TLS_OUT_OF_INDEXES, false, impl->tls_index,
@@ -1194,6 +1257,18 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
 }
 StartupRuntimeStatus StartupCoordinator::RequestExit() { return impl_->RequestExit(); }
 StartupRuntimeStatus StartupCoordinator::Close(uint32_t timeout_ms) { return impl_->Close(timeout_ms); }
+uint32_t StartupCoordinator::PendingDeferredCodecCleanup() noexcept { return Impl::PendingJoined(); }
+StartupRuntimeStatus StartupCoordinator::RetryDeferredCodecCleanup(uint32_t timeout_ms) {
+    std::unique_ptr<Impl> batch;
+    auto& owners=Impl::JoinedOwners();AcquireSRWLockExclusive(&owners.lock);
+    batch=std::move(owners.head);ReleaseSRWLockExclusive(&owners.lock);
+    while(batch) {
+        auto current=std::move(batch);batch=std::move(current->next_deferred_codec_cleanup);
+        bool done=false;try { done=bool(current->Close(timeout_ms)); } catch(...) {}
+        if(!done) Impl::RetainJoined(std::move(current));
+    }
+    return Impl::PendingJoined()?Failure(StartupRuntimeCode::HostFailure):StartupRuntimeStatus{};
+}
 const char* StartupRuntimeCodeName(StartupRuntimeCode code) {
     switch (code) {
     case StartupRuntimeCode::Ok: return "Ok";

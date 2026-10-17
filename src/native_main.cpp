@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <chrono>
 #include <iostream>
 #include <memory>
@@ -1082,6 +1083,90 @@ void WriteCheckNeedMemValue(std::ostream& out,
         << ",\"frontier_source_pc\":" << body.frontier_source_pc << ",\"frontier_delay_pc\":" << body.frontier_delay_pc
         << ",\"frontier_stub_va\":" << body.frontier_stub_va << ",\"frontier_nid\":" << body.frontier_nid << "}}";
 }
+void WritePreparedEnvelopeValue(std::ostream& out,
+    const dokodemo::recovered::NativePreparedEnvelopeSnapshot& value) {
+    using dokodemo::recovered::NativeCodecWorkspaceState;
+    const auto boolean = [](bool item) { return item ? "true" : "false"; };
+    const auto tuple = [&out](const auto& items) {
+        out << '[';
+        for (size_t i = 0; i < items.size(); ++i) { if (i) out << ','; out << items[i]; }
+        out << ']';
+    };
+    const auto stateName = [](NativeCodecWorkspaceState state) {
+        switch (state) {
+        case NativeCodecWorkspaceState::Unissued: return "Unissued";
+        case NativeCodecWorkspaceState::Preparing: return "Preparing";
+        case NativeCodecWorkspaceState::Prepared: return "Prepared";
+        case NativeCodecWorkspaceState::WorkspaceLive: return "WorkspaceLive";
+        case NativeCodecWorkspaceState::Failed: return "Failed";
+        case NativeCodecWorkspaceState::DestroyedPendingFree: return "DestroyedPendingFree";
+        case NativeCodecWorkspaceState::Retired: return "Retired";
+        }
+        return "Unknown";
+    };
+    out << "{\"present\":" << boolean(value.present);
+    if (!value.present) { out << '}'; return; }
+    out << ",\"native1001_blocked\":" << boolean(value.native1001_blocked)
+        << ",\"source_init_returned\":" << boolean(value.source_init_returned)
+        << ",\"source_decode_returned\":" << boolean(value.source_decode_returned) << ",\"records\":[";
+    for (size_t i = 0; i < value.records.size(); ++i) {
+        const auto& item = value.records[i];
+        if (i) out << ',';
+        out << "{\"key\":{\"provider_module\":"; tuple(item.key.provider_module);
+        out << ",\"consumer_module\":"; tuple(item.key.consumer_module);
+        out << ",\"provider\":"; tuple(item.key.provider);
+        out << ",\"provider_input\":"; tuple(item.key.provider_input);
+        out << ",\"consumer_input\":"; tuple(item.key.consumer_input);
+        out << ",\"state\":"; tuple(item.key.state);
+        out << ",\"record_index\":" << item.key.record_index << '}'
+            << ",\"state\":" << JsonString(stateName(item.state))
+            << ",\"policy_abi\":" << JsonString(item.policy_abi ? item.policy_abi : "")
+            << ",\"original_equivalence_known\":" << boolean(item.original_equivalence_known)
+            << ",\"record_index\":" << item.record_index << ",\"codec\":" << item.codec
+            << ",\"format_b1\":" << item.format_b1 << ",\"format_b2\":" << item.format_b2
+            << ",\"channels\":" << item.channels << ",\"max_input_bytes\":" << item.max_input_bytes
+            << ",\"api_codec_version\":" << item.api_codec_version << ",\"api_util_version\":" << item.api_util_version
+            << ",\"native_prepare_entered\":" << boolean(item.native_prepare_entered)
+            << ",\"native_prepare_returned\":" << boolean(item.native_prepare_returned)
+            << ",\"native_alloc_entered\":" << boolean(item.native_alloc_entered)
+            << ",\"native_alloc_returned\":" << boolean(item.native_alloc_returned)
+            << ",\"native_open_entered\":" << boolean(item.native_open_entered)
+            << ",\"native_open_returned\":" << boolean(item.native_open_returned)
+            << ",\"native_api_result\":";
+        if (item.native_open_returned) out << item.native_api_result; else out << "null";
+        out << ",\"native_error_class\":" << item.native_error_class
+            << ",\"native_policy_return\":" << boolean(item.native_policy_return) << ",\"native_policy_result\":";
+        if (item.native_policy_return) out << item.native_policy_result; else out << "null";
+        out << ",\"envelope_bytes\":" << item.envelope_bytes << ",\"envelope_alignment\":" << item.envelope_alignment
+            << ",\"provisional_live\":" << boolean(item.provisional_live)
+            << ",\"allocation_attempted\":" << boolean(item.allocation_attempted)
+            << ",\"backend_allocate_entered\":" << boolean(item.backend_allocate_entered)
+            << ",\"backend_allocate_returned\":" << boolean(item.backend_allocate_returned)
+            << ",\"backend_allocate_code\":";
+        if (item.backend_allocate_returned) out << item.backend_allocate_code; else out << "null";
+        out
+            << ",\"allocation_returned\":" << boolean(item.allocation_returned)
+            << ",\"allocation_succeeded\":" << boolean(item.allocation_succeeded)
+            << ",\"allocation_owner\":" << item.allocation_owner
+            << ",\"allocation_generation\":" << item.allocation_generation
+            << ",\"allocation_serial\":" << item.allocation_serial
+            << ",\"requested_bytes\":" << item.requested_bytes << ",\"committed_bytes\":" << item.committed_bytes
+            << ",\"raw_coordinate\":" << item.raw_coordinate << ",\"aligned_coordinate\":" << item.aligned_coordinate
+            << ",\"host_address\":" << item.host_address
+            << ",\"placement_constructed\":" << boolean(item.placement_constructed)
+            << ",\"context_transferred\":" << boolean(item.context_transferred)
+            << ",\"context_destroyed\":" << boolean(item.context_destroyed)
+            << ",\"storage_freed\":" << boolean(item.storage_freed)
+            << ",\"context_allocations\":" << item.context_allocations << ",\"context_frees\":" << item.context_frees
+            << ",\"win32_error\":" << item.win32_error
+            << ",\"query_source_return\":" << boolean(item.query_source_return) << ",\"query_source_result\":";
+        if (item.query_source_return) out << item.query_source_result; else out << "null";
+        out << ",\"get_edram_source_return\":" << boolean(item.get_edram_source_return) << ",\"get_edram_source_result\":";
+        if (item.get_edram_source_return) out << item.get_edram_source_result; else out << "null";
+        out << '}';
+    }
+    out << "]}";
+}
 void WriteModuleInitializationValue(std::ostream& out,
     const dokodemo::recovered::Atrac3plusInitializationSnapshot& value) {
     const auto boolean = [](bool item) { return item ? "true" : "false"; };
@@ -1090,6 +1175,7 @@ void WriteModuleInitializationValue(std::ostream& out,
     out << ",\"prefix_entered\":" << boolean(value.prefix_entered)
         << ",\"dependency_blocked\":" << boolean(value.dependency_blocked)
         << ",\"aborted\":" << boolean(value.aborted)
+        << ",\"prepared_envelope_policy\":" << boolean(value.prepared_envelope_policy)
         << ",\"owner\":" << value.owner << ",\"generation\":" << value.generation
         << ",\"serial\":" << value.serial << ",\"native_state_address\":" << value.native_state_address
         << ",\"source_segment\":" << value.source_segment << ",\"source_segment_offset\":" << value.source_segment_offset
@@ -1112,7 +1198,8 @@ void WriteModuleInitializationValue(std::ostream& out,
         if (!first) out << ',';
         first = false;
         out << "{\"ordinal\":" << item.ordinal << ",\"source_pc\":" << item.source_pc
-            << ",\"source_module\":" << JsonString(item.source_module == dokodemo::recovered::Atrac3plusWriteSource::Audiocodec ? "Audiocodec" : "Atrac3plus")
+            << ",\"source_module\":" << JsonString(item.source_module == dokodemo::recovered::Atrac3plusWriteSource::Audiocodec ? "Audiocodec"
+                : item.source_module == dokodemo::recovered::Atrac3plusWriteSource::NativePlatform ? "NativePlatform" : "Atrac3plus")
             << ",\"offset\":" << item.offset << ",\"width\":" << item.width << ",\"value\":" << item.value << '}';
     }
     out << "]}";
@@ -1128,6 +1215,7 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
         << ",\"policy\":" << JsonString(record.policy)
         << ",\"encoded_bytes\":" << record.encoded_bytes << ",\"plaintext_bytes\":" << record.plaintext_bytes
         << ",\"input_live\":" << boolean(record.input_live) << ",\"active_calls\":" << record.active_calls
+        << ",\"owned_native_codec_resources\":" << record.owned_native_codec_resources
         << ",\"owned_providers\":" << record.owned_providers << ",\"incoming_bindings\":" << record.incoming_bindings
         << ",\"start_source_va\":" << record.start_source_va << ",\"stop_source_va\":" << record.stop_source_va
         << ",\"entry_frontier_source_pc\":" << record.entry_frontier_source_pc
@@ -1164,6 +1252,7 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
     out << "],\"initialization\":";
     WriteModuleInitializationValue(out, record.initialization);
     out << ",\"check_need_mem\":"; WriteCheckNeedMemValue(out, record.check_need_mem);
+    out << ",\"prepared_envelope\":"; WritePreparedEnvelopeValue(out, record.prepared_envelope);
     out << '}';
 }
 void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
@@ -1237,6 +1326,7 @@ void WriteModuleObservation(std::ostream& out, const dokodemo::StartupObservatio
             << ",\"abi\":" << JsonString(item.abi) << ",\"version\":" << item.version
             << ",\"nid\":" << item.nid << ",\"synthetic_only\":" << boolean(item.synthetic_only)
             << ",\"partial_callable\":" << boolean(item.partial_callable)
+            << ",\"prepared_envelope_callable\":" << boolean(item.prepared_envelope_callable)
             << ",\"module\":"; WriteModuleTokenValue(out, item.module); out << '}';
     }
     out << ']';
@@ -1251,6 +1341,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         pendingOptions += hex[byte >> 4]; pendingOptions += hex[byte & 15];
     }
     out << "{\"domain\":" << JsonString(observation.domain)
+        << ",\"pending_deferred_codec_cleanup\":" << dokodemo::StartupCoordinator::PendingDeferredCodecCleanup()
         << ",\"caller_state\":" << JsonString(observation.caller_state)
         << ",\"worker_state\":" << JsonString(observation.worker_state)
         << ",\"barrier\":" << JsonString(observation.barrier)
@@ -1362,6 +1453,8 @@ bool SameNativeModuleToken(const dokodemo::recovered::NativeModuleToken& a,
 }
 bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) {
     const auto& module = observation.module_record;
+    const bool prepared = observation.module_providers.size() == 1
+        && observation.module_providers[0].prepared_envelope_callable;
     return observation.domain == "WindowsNativeEntry1184"
         && observation.caller_state == "SourceSleeping" && observation.worker_state == "Blocked"
         && observation.uid_slot_written && observation.stored_thread_uid > 0
@@ -1397,7 +1490,8 @@ bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) 
         && module.input_live && module.active_calls == 0 && observation.module_providers.size() == 1
         && observation.module_providers[0].partial_callable && !observation.module_providers[0].synthetic_only
         && observation.module_providers[0].library == "sceAudiocodec"
-        && observation.module_providers[0].abi == "windows-owned-masked-checkneedmem-prefix-v1"
+        && observation.module_providers[0].abi == (prepared ? dokodemo::recovered::NativePreparedEnvelopeAbi
+            : "windows-owned-masked-checkneedmem-prefix-v1")
         && observation.module_providers[0].version == 0 && observation.module_providers[0].nid == 0x9D3F790C
         && observation.module_providers[0].token.owner == module.token.owner
         && observation.module_providers[0].token.generation == module.token.generation
@@ -1411,7 +1505,7 @@ bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) 
         && std::all_of(module.imports.begin(), module.imports.end(), [](const auto& item) {
             return item.attributes == 9 && !item.resolved && !item.partial_callable && item.provider_serial == 0;
         })
-        && std::count_if(module.exports.begin(), module.exports.end(), [](const auto& item) { return item.partial_callable; }) == 1
+        && std::count_if(module.exports.begin(), module.exports.end(), [](const auto& item) { return item.partial_callable; }) == (prepared ? 2 : 1)
         && std::any_of(module.exports.begin(), module.exports.end(), [](const auto& item) {
             return item.nid == 0x9D3F790C && item.relative_va == 0 && item.partial_callable && !item.lifecycle_callable;
         })
@@ -1444,7 +1538,7 @@ bool AtracPrefixAtDependency(const dokodemo::recovered::Atrac3plusInitialization
     constexpr std::array<uint32_t, 5> offsets{0xAC,0,0x6C,0x6D,0x44};
     constexpr std::array<uint32_t, 5> widths{4,4,1,1,4};
     constexpr std::array<uint32_t, 5> values{0x00200000,1,0x28,0x5C,0x04090701};
-    for (size_t i = 0; i < value.writes.size(); ++i) {
+    for (size_t i = 0; i < value.writes_count; ++i) {
         const auto& item = value.writes[i];
         if (item.ordinal != i || item.source_pc != pcs[i] || item.offset != offsets[i]
             || item.width != widths[i] || item.value != values[i]
@@ -1453,7 +1547,7 @@ bool AtracPrefixAtDependency(const dokodemo::recovered::Atrac3plusInitialization
     }
     return true;
 }
-bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
+[[maybe_unused]] bool AtLegacyNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
     if (!FirstNativeModuleRetained(observation) || observation.module_observations.size() != 2
         || observation.module_records.size() != 2 || observation.current_module_index != 1
         || !observation.barrier_module_relative || !observation.current_frontier_module_relative
@@ -1524,18 +1618,179 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
     }
     return std::none_of(record.exports.begin(), record.exports.end(), [](const auto& item) { return item.lifecycle_callable; });
 }
+[[maybe_unused]] bool AtPreparedEnvelopeBoundary(const dokodemo::StartupObservation& observation) {
+    using namespace dokodemo::recovered;
+    if (!FirstNativeModuleRetained(observation) || observation.module_observations.size() != 2
+        || observation.module_records.size() != 2 || observation.current_module_index != 1
+        || observation.module_providers.size() != 1 || !observation.module_providers[0].prepared_envelope_callable
+        || !observation.barrier_module_relative || !observation.current_frontier_module_relative
+        || observation.barrier_source_pc != 0x84 || observation.current_frontier_source_pc != 0x84) return false;
+    const auto& first = observation.module_observations[0];
+    const auto& second = observation.module_observations[1];
+    const auto& record = second.record;
+    const auto& init = record.initialization;
+    const auto& envelope = record.prepared_envelope;
+    const auto& provider = observation.module_providers[0];
+    const auto& call = record.check_need_mem;
+    const auto& body = call.body;
+    if (first.request_index != 0 || second.request_index != 1 || second.wrapper_callsite != 0x4F640
+        || first.token.uid <= 0 || second.token.uid <= 0 || first.token.uid == second.token.uid
+        || first.token.owner != second.token.owner || first.token.generation != second.token.generation
+        || first.token.serial == second.token.serial || !first.record_live || !second.record_live
+        || !first.module_input_live || !first.source_close_called || !first.source_close_returned || first.file_live
+        || first.record.state != NativeModuleState::Started || first.record.owned_native_codec_resources != 2
+        || second.path != "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx" || second.flags
+        || second.options != std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || second.request_owner != observation.owner || second.source_fd < 0 || !second.file_live
+        || !second.module_uid_assigned || !second.module_load_returned || second.module_load_result != second.token.uid
+        || !second.module_start_called || second.module_start_returned || second.module_start_entry_returned
+        || !second.module_initialization_blocked || second.module_initialization_aborted || second.module_stop_called
+        || second.source_close_called || second.source_close_returned || !second.module_input_live
+        || record.state != NativeModuleState::EntryBlocked || !record.input_live || record.active_calls
+        || record.owned_native_codec_resources != 2 || !record.partial_start_supported
+        || record.imports.size() != 7 || record.exports.size() != 28
+        || !SameNativeModuleToken(record.token, second.token)
+        || !SameNativeModuleToken(observation.barrier_source_module, first.token)
+        || !SameNativeModuleToken(observation.current_frontier_source_module, first.token)
+        || !SameNativeModuleToken(second.frontier_source_module, first.token) || second.frontier_source_pc != 0x84
+        || second.encoded_file_bytes != 19524 || second.staging_requested != 19524 || second.staging_transferred != 19524
+        || second.staging_known_bytes != 19524 || second.staging_file_position || second.staging_read_error
+        || !second.staging_live || !second.staging_borrow_live || !second.staging_host_read
+        || !second.staging_full_read || !second.staging_hash_matches
+        || second.staging_sha256 != "edfc95810a5881f7f752eee255693e75ba1ade6862b557126c5236c2b47bbca4"
+        || record.input.size != 19524 || record.input.host_address != second.staging_host_address
+        || record.input.owner != second.staging_owner || record.input.generation != second.staging_generation
+        || record.input.serial != second.staging_serial || record.input.source_coordinate != second.staging_source_coordinate
+        || first.staging_owner != second.staging_owner || first.staging_generation != second.staging_generation
+        || first.staging_serial == second.staging_serial || first.staging_host_address == second.staging_host_address
+        || uint64_t(first.staging_source_coordinate) + first.staging_committed_bytes > second.staging_source_coordinate) return false;
+    if (!envelope.present || !envelope.native1001_blocked || envelope.source_init_returned || envelope.source_decode_returned
+        || !init.present || !init.prefix_entered || !init.prepared_envelope_policy || !init.dependency_blocked || init.aborted
+        || !init.owner || !init.generation || !init.serial || !init.native_state_address
+        || init.source_segment != 1 || init.source_segment_offset != 0xA0 || init.record_count != 4
+        || init.record_stride != 0x148 || init.record_bytes != 1312 || init.initial_source_known_bytes
+        || init.known_bytes != 64 || init.writes_count != 23 || init.helper_calls_entered != 3
+        || init.loop_iterations_completed != 2 || init.external_resources_acquired != 2 || init.external_services_dispatched != 3
+        || init.arg0_record_index != 2 || init.arg0_record_offset != 0x2D4 || init.arg1 != 0x1001
+        || !init.frontier_arguments_prepared || init.frontier_source_pc != 0x1684 || init.frontier_delay_pc != 0x1688
+        || init.frontier_stub_va != 0x3640 || init.frontier_import_index != 2 || init.frontier_nid != 0x9D3F790C) return false;
+    if (!call.present || !call.partial_callable || !SameNativeModuleToken(call.provider_module, first.token)
+        || !SameNativeModuleToken(call.consumer_module, second.token)
+        || call.provider.owner != provider.token.owner || call.provider.generation != provider.token.generation
+        || call.provider.serial != provider.token.serial || call.buffer_record_offset != 0x2D4 || call.buffer_bytes != 0x68
+        || call.window_known_before || call.window_known_after != 4
+        || call.buffer_native_address != init.native_state_address + offsetof(Atrac3plusInitializationSnapshot, bytes) + 0x2D4
+        || !body.entered || !body.host_policy_applied || body.source_null || !body.dependency_blocked
+        || body.dependency_dispatched || body.source_return || body.codec != 0x1001 || body.buffer_reads || body.writes != 1
+        || body.entry_source_pc || body.write_source_pc != 0x80 || body.frontier_source_pc != 0x84
+        || body.frontier_delay_pc != 0x88 || body.frontier_stub_va != 0xAF8 || body.frontier_nid != 0xC00D873B) return false;
+    std::array<Atrac3plusNativeWrite, 32> expected{};
+    size_t count = 0;
+    const auto append = [&](uint32_t pc, uint32_t offset, uint32_t width, uint32_t value, Atrac3plusWriteSource source) {
+        expected[count] = {static_cast<uint32_t>(count), pc, offset, width, value, source}; ++count;
+    };
+    for (size_t i = 0; i < 3; ++i) {
+        const uint32_t base = static_cast<uint32_t>(i) * 0x148;
+        append(0x1678, base + 0xAC, 4, 0x00200000, Atrac3plusWriteSource::Atrac3plus);
+        append(0x1680, base, 4, 1, Atrac3plusWriteSource::Atrac3plus);
+        if (i < 2) {
+            append(0x16D4, base + 0x6C, 1, 0x28, Atrac3plusWriteSource::Atrac3plus);
+            append(0x16E0, base + 0x6D, 1, 0x5C, Atrac3plusWriteSource::Atrac3plus);
+        }
+        append(0x80, base + 0x44, 4, 0x04090701, Atrac3plusWriteSource::Audiocodec);
+        if (i == 2) break;
+        const auto& native = envelope.records[i];
+        if (native.state != NativeCodecWorkspaceState::WorkspaceLive || native.original_equivalence_known
+            || !native.policy_abi || std::string_view(native.policy_abi) != NativePreparedEnvelopeAbi
+            || native.record_index != i || native.key.record_index != i || native.codec != 0x1000
+            || native.format_b1 != 0x28 || native.format_b2 != 0x5C || native.channels != 2 || native.max_input_bytes != 744
+            || native.api_codec_version != ((61u << 16) | (19u << 8) | 101u)
+            || native.api_util_version != ((59u << 16) | (39u << 8) | 100u)
+            || !native.native_prepare_entered || !native.native_prepare_returned || native.native_api_result
+            || !native.native_alloc_entered || !native.native_alloc_returned || !native.native_open_entered || !native.native_open_returned
+            || native.native_error_class || !native.native_policy_return || native.native_policy_result
+            || !native.query_source_return || native.query_source_result || !native.get_edram_source_return || native.get_edram_source_result
+            || !native.envelope_bytes || !native.envelope_alignment || native.envelope_alignment > 64
+            || native.provisional_live || !native.allocation_attempted || !native.allocation_returned || !native.allocation_succeeded
+            || !native.backend_allocate_entered || !native.backend_allocate_returned || native.backend_allocate_code
+            || native.allocation_owner != second.staging_owner || native.allocation_generation != second.staging_generation
+            || !native.allocation_serial || native.allocation_serial == second.staging_serial
+            || native.requested_bytes != ((native.envelope_bytes + 63u) | 63u) || native.committed_bytes < native.requested_bytes
+            || !native.raw_coordinate || native.raw_coordinate == 0x00200000 || !native.aligned_coordinate
+            || ((uint64_t(native.raw_coordinate) + 63u) & ~uint64_t(63u)) != native.aligned_coordinate
+            || native.aligned_coordinate % 64 || !native.host_address || native.host_address % 64
+            || !native.placement_constructed || !native.context_transferred || native.context_destroyed || native.storage_freed
+            || native.context_allocations != 1 || native.context_frees || native.win32_error
+            || native.key.provider_module != std::array<uint64_t,4>{first.token.owner,first.token.generation,first.token.serial,uint64_t(first.token.uid)}
+            || native.key.consumer_module != std::array<uint64_t,4>{second.token.owner,second.token.generation,second.token.serial,uint64_t(second.token.uid)}
+            || native.key.provider != std::array<uint64_t,3>{provider.token.owner,provider.token.generation,provider.token.serial}
+            || native.key.provider_input != std::array<uint64_t,3>{first.staging_owner,first.staging_generation,first.staging_serial}
+            || native.key.consumer_input != std::array<uint64_t,3>{second.staging_owner,second.staging_generation,second.staging_serial}
+            || native.key.state != std::array<uint64_t,3>{init.owner,init.generation,init.serial}
+            || uint64_t(second.staging_source_coordinate) + second.staging_committed_bytes > native.raw_coordinate
+            || uint64_t(native.raw_coordinate) + native.committed_bytes > (uint64_t(1) << 32)) return false;
+        if (i && (envelope.records[0].allocation_serial == native.allocation_serial
+            || envelope.records[0].host_address == native.host_address
+            || uint64_t(envelope.records[0].raw_coordinate) + envelope.records[0].committed_bytes > native.raw_coordinate)) return false;
+        append(0, base + 0x54, 4, native.envelope_bytes, Atrac3plusWriteSource::NativePlatform);
+        append(0x6C0, base + 0x50, 4, native.aligned_coordinate, Atrac3plusWriteSource::Audiocodec);
+        append(0x6C8, base + 0xAC, 4, native.raw_coordinate, Atrac3plusWriteSource::Audiocodec);
+        append(0x16A8, base + 0xF0, 4, 0x1000, Atrac3plusWriteSource::Atrac3plus);
+        append(0x16AC, base, 4, 0, Atrac3plusWriteSource::Atrac3plus);
+    }
+    std::array<uint8_t, 1312> known{}, bytes{};
+    if (count != init.writes_count) return false;
+    for (size_t i = 0; i < count; ++i) {
+        const auto& got = init.writes[i]; const auto& want = expected[i];
+        if (got.ordinal != want.ordinal || got.source_pc != want.source_pc || got.offset != want.offset
+            || got.width != want.width || got.value != want.value || got.source_module != want.source_module) return false;
+        for (uint32_t j = 0; j < want.width; ++j) {
+            known[want.offset+j] = 1; bytes[want.offset+j] = static_cast<uint8_t>(want.value >> (j*8));
+        }
+    }
+    for (size_t i = 0; i < known.size(); ++i)
+        if (init.known[i] != known[i] || (known[i] && init.bytes[i] != bytes[i])) return false;
+    for (size_t i = 0; i < record.imports.size(); ++i) {
+        const auto& item = record.imports[i];
+        if (item.version || item.attributes != (i < 2 ? 1 : 0x4001) || item.resolved) return false;
+        if (i == 2 || i == 5) {
+            if (!item.partial_callable || item.abi != NativePreparedEnvelopeAbi || item.provider_serial != provider.token.serial
+                || item.provider_owner != provider.token.owner || item.provider_generation != provider.token.generation
+                || !SameNativeModuleToken(item.provider_module, first.token)) return false;
+        } else if (item.partial_callable || item.provider_serial) return false;
+    }
+    return std::none_of(record.exports.begin(), record.exports.end(), [](const auto& item) { return item.lifecycle_callable; });
+}
+bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
+#ifdef DOKODEMO_FFMPEG_ROOT
+    return AtPreparedEnvelopeBoundary(observation);
+#else
+    return AtLegacyNativeModuleSequenceBoundary(observation);
+#endif
+}
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
     if (observation.module_observations.size() != 2 || !observation.module_records.empty()
         || !observation.caller_joined || !observation.worker_joined || !observation.resources_closed
         || observation.callback_dispatch_count != 1 || observation.callback_dispatch_thread != observation.worker_thread_id
         || observation.dropped_events || observation.module_input_live || observation.staging_live || observation.staging_borrow_live
-        || !observation.module_providers.empty()) return false;
+        || !observation.module_providers.empty() || dokodemo::StartupCoordinator::PendingDeferredCodecCleanup()) return false;
     for (const auto& item : observation.module_observations) {
         if (item.record_live || item.file_live || item.staging_live || item.staging_borrow_live || item.module_input_live
             || !item.module_unloaded || !item.module_input_released || !item.staging_freed_after_joins) return false;
     }
     const auto& first = observation.module_observations[0];
     const auto& second = observation.module_observations[1];
+    if (second.record.prepared_envelope.present) {
+        const auto& envelope = second.record.prepared_envelope;
+        if (!envelope.native1001_blocked || envelope.source_init_returned || envelope.source_decode_returned
+            || second.record.owned_native_codec_resources || first.record.owned_native_codec_resources
+            || second.record.initialization.external_resources_acquired != 2
+            || second.record.initialization.known_bytes != 64 || second.record.initialization.writes_count != 23) return false;
+        for (const auto& native : envelope.records)
+            if (native.state != dokodemo::recovered::NativeCodecWorkspaceState::Retired
+                || native.provisional_live || !native.context_destroyed || !native.storage_freed
+                || native.context_allocations != 1 || native.context_frees != 1) return false;
+    }
     return first.module_stop_called && first.module_stop_returned && first.module_stop_result == 0
         && !first.module_initialization_abort_called && second.module_initialization_abort_called
         && second.module_initialization_aborted && !second.module_stop_called && !second.module_stop_returned
@@ -1546,7 +1801,11 @@ bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation)
 int ConnectedStartupTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     dokodemo::StartupRuntimeStatus createStatus;
-    auto startup = dokodemo::StartupCoordinator::Create({options.startupMedia.wstring()}, createStatus);
+    dokodemo::StartupRuntimeOptions startupOptions{options.startupMedia.wstring()};
+#ifdef DOKODEMO_FFMPEG_ROOT
+    startupOptions.prepared_codec_envelope = true;
+#endif
+    auto startup = dokodemo::StartupCoordinator::Create(startupOptions, createStatus);
     if (!startup || !createStatus) throw std::runtime_error("Cannot create native startup coordinator");
     const auto started = startup->Start();
     const auto duplicate = startup->Start();
@@ -1582,6 +1841,14 @@ int ConnectedStartupTest(const Options& options) {
     std::ofstream summary(options.evidence / L"connected-startup-test.json", std::ios::binary);
     const auto* call = boundary.module_observations.size() > 1
         ? &boundary.module_observations[1].record.check_need_mem : nullptr;
+    const auto* envelope = boundary.module_observations.size() > 1
+        ? &boundary.module_observations[1].record.prepared_envelope : nullptr;
+    uint32_t contextsPrepared = 0, queriesReturned = 0, allocationsReturned = 0;
+    if (envelope && envelope->present) for (const auto& native : envelope->records) {
+        if (native.native_open_returned && native.native_api_result == 0) ++contextsPrepared;
+        if (native.query_source_return) ++queriesReturned;
+        if (native.get_edram_source_return) ++allocationsReturned;
+    }
     summary << "{\"same_application_coordinator\":true,\"passed\":" << (ok ? "true" : "false")
         << ",\"multi_module_boundary\":" << (reached ? "true" : "false")
         << ",\"actual_encoded_staging\":" << (boundary.staging_full_read && boundary.staging_hash_matches ? "true" : "false")
@@ -1590,6 +1857,11 @@ int ConnectedStartupTest(const Options& options) {
         << ",\"check_need_mem_partial_provider\":" << (reached ? "true" : "false")
         << ",\"check_need_mem_returned\":" << (call && call->present ? (call->body.source_return ? "true" : "false") : "null")
         << ",\"ME_service_dispatched\":" << (call && call->present ? (call->body.dependency_dispatched ? "true" : "false") : "null")
+        << ",\"native_prepared_envelope_policy\":" << (envelope && envelope->present ? "true" : "false")
+        << ",\"native_codec_contexts_prepared\":" << contextsPrepared
+        << ",\"source_queries_returned\":" << queriesReturned
+        << ",\"source_GetEDRAM_returned\":" << allocationsReturned
+        << ",\"original_ME_equivalence_known\":false,\"source_decode_returned\":false"
         << ",\"owned_modules\":" << boundary.module_records.size()
         << ",\"second_partial_start_without_return\":" << (reached ? "true" : "false")
         << ",\"partial_init_aborted_after_joins\":" << (NativeModuleSequenceClosed(after) ? "true" : "false")
@@ -1651,7 +1923,11 @@ struct Application {
     }
     void BeginNativeStartup() {
         dokodemo::StartupRuntimeStatus created;
-        nativeStartup = dokodemo::StartupCoordinator::Create({options.startupMedia.wstring()}, created);
+        dokodemo::StartupRuntimeOptions startupOptions{options.startupMedia.wstring()};
+#ifdef DOKODEMO_FFMPEG_ROOT
+        startupOptions.prepared_codec_envelope = true;
+#endif
+        nativeStartup = dokodemo::StartupCoordinator::Create(startupOptions, created);
         if (!nativeStartup || !created) {
             startupStatus = L"Нативный запуск: не удалось создать владельца Windows-сервисов.";
             return;

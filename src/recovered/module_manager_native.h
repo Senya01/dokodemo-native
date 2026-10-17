@@ -1,6 +1,7 @@
 #pragma once
 #include "audiocodec_module_native.h"
 #include "atrac3plus_module_native.h"
+#include "native_codec_workspace.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -94,6 +95,7 @@ struct NativeModuleSnapshot {
     NativeModuleInputView input;
     bool input_live = false;
     uint32_t active_calls = 0;
+    uint32_t owned_native_codec_resources = 0;
     uint32_t owned_providers = 0, incoming_bindings = 0;
     uint32_t start_source_va = 0, stop_source_va = 0;
     uint32_t entry_frontier_source_pc = 0;
@@ -101,6 +103,7 @@ struct NativeModuleSnapshot {
     bool partial_start_supported = false;
     Atrac3plusInitializationSnapshot initialization;
     NativeCheckNeedMemSnapshot check_need_mem;
+    NativePreparedEnvelopeSnapshot prepared_envelope;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -136,6 +139,7 @@ struct NativeModuleProviderSnapshot {
     bool synthetic_only = false;
     NativeModuleToken module;
     bool partial_callable = false;
+    bool prepared_envelope_callable = false;
 };
 struct NativeCheckNeedMemCallResult {
     NativeModuleCode code = NativeModuleCode::HostCapabilityRefused;
@@ -195,6 +199,9 @@ public:
     NativeModuleProviderResult RegisterProvider(NativeModuleProvider);
     // Built-in exact partial body only, from a genuine Started audiocodec owner.
     NativeModuleProviderResult RegisterCheckNeedMemProvider(NativeModuleToken);
+    // Separate production domain; never upgrades the Stage18 prefix provider.
+    NativeModuleCode ConfigurePreparedEnvelopeBackend(std::shared_ptr<NativeCodecWorkspaceBackend>);
+    NativeModuleProviderResult RegisterPreparedEnvelopeProvider(NativeModuleToken);
     NativeModuleCode UnregisterProvider(NativeModuleProviderToken);
     NativeModuleCode BorrowImport(NativeModuleToken, uint32_t index, NativeModuleCallBorrow&);
     NativeModuleCode BorrowCheckNeedMem(NativeModuleToken, uint32_t index, NativeCheckNeedMemBorrow&);
@@ -202,6 +209,7 @@ public:
     bool Snapshot(NativeModuleToken, NativeModuleSnapshot&) const;
     bool InitializationSnapshot(NativeModuleToken, Atrac3plusInitializationSnapshot&) const noexcept;
     bool CheckNeedMemSnapshot(NativeModuleToken, NativeCheckNeedMemSnapshot&) const noexcept;
+    bool PreparedEnvelopeSnapshot(NativeModuleToken, NativePreparedEnvelopeSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;

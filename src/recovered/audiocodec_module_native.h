@@ -63,6 +63,7 @@ private:
     uint8_t* known_ = nullptr;
     uint32_t size_ = 0;
     friend class NativeCheckNeedMemBorrow;
+    friend class NativeModuleManager;
     friend AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
         AudiocodecCheckNeedMemBuffer, uint32_t, AudiocodecCheckNeedMemSnapshot&) noexcept;
 };
@@ -71,4 +72,17 @@ private:
 // No PSP k1/pointer value or ME result is supplied by this native body.
 AudiocodecCheckNeedMemCode RunAudiocodecCheckNeedMemPrefix(
     AudiocodecCheckNeedMemBuffer, uint32_t codec, AudiocodecCheckNeedMemSnapshot&) noexcept;
+// Applies recovered8C..D0 ONLY after the distinct native provider produced an
+// actual classified service outcome. No buffer access or firmware claim.
+bool CompleteAudiocodecNativePrepareResult(AudiocodecCheckNeedMemSnapshot&, int32_t) noexcept;
+// Deliberately DISTINCT108B record capability, including the raw-allocation
+// field beyond the104B CheckNeedMem window. Only the manager can mint it.
+class AudiocodecGetEDRAMBuffer final {
+    const uint8_t* bytes_ = nullptr;
+    const uint8_t* known_ = nullptr;
+    uint32_t size_ = 0;
+    friend class NativeModuleManager;
+    friend bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer,uint32_t&,uint32_t&) noexcept;
+};
+bool ReadAudiocodecGetEDRAMNeed(AudiocodecGetEDRAMBuffer,uint32_t& need,uint32_t& request) noexcept;
 } // namespace dokodemo::recovered

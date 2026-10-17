@@ -54,6 +54,7 @@ struct ProviderRecord {
     NativeModuleProvider definition;
     bool registered = true;
     bool check_need_mem = false;
+    bool prepared_envelope = false;
     std::shared_ptr<struct ModuleRecord> module;
 };
 struct CallGate { bool executing = false; };
@@ -90,6 +91,7 @@ struct NativeModuleManager::Impl {
     std::shared_ptr<CallGate> gate = std::make_shared<CallGate>();
     std::vector<std::shared_ptr<ModuleRecord>> modules;
     std::vector<std::shared_ptr<ProviderRecord>> providers;
+    std::shared_ptr<NativeCodecWorkspaceBackend> codec_backend;
     explicit Impl(NativeModuleDomain selected) : domain(selected) {
         owner = TakeMonotonic(next_manager_owner, (std::numeric_limits<uint64_t>::max)() - 1);
     }
@@ -117,11 +119,12 @@ struct NativeModuleManager::Impl {
             for (const auto& provider : providers) {
                 const auto& definition = provider->definition;
                 if (definition.library == entry.library && definition.version == entry.version &&
-                    definition.nid == entry.nid && definition.abi == entry.abi) {
+                    (definition.nid == entry.nid || (provider->prepared_envelope && entry.nid == 0x3A20A200)) &&
+                    definition.abi == entry.abi) {
                     binding = provider; break;
                 }
             }
-            entry.partial_callable = binding && binding->check_need_mem;
+            entry.partial_callable = binding && (binding->check_need_mem || binding->prepared_envelope);
             entry.resolved = binding && !entry.partial_callable;
             entry.provider_serial = binding ? binding->token.serial : 0;
             entry.provider_owner = binding ? binding->token.owner : 0;
@@ -372,6 +375,7 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
                 NativeModuleImportSnapshot entry;
                 entry.library = library.name; entry.version = library.version; entry.attributes = library.attributes;
                 entry.abi = self.domain == NativeModuleDomain::SyntheticControls ? SyntheticAbi :
+                    self.codec_backend && (function.nid == 0x9D3F790C || function.nid == 0x3A20A200) ? NativePreparedEnvelopeAbi :
                     function.nid == 0x9D3F790C ? CheckNeedMemAbi : AtracImportAbi;
                 entry.nid = function.nid; entry.source_stub_va = function.source_stub_va;
                 record->data.imports.push_back(std::move(entry));
@@ -395,7 +399,8 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     for (auto& entry : record->data.exports) entry.module = record->data.token;
     if (descriptor && self.domain == NativeModuleDomain::Production)
         for (auto& entry : record->data.exports)
-            if (entry.library == "sceAudiocodec" && entry.nid == 0x9D3F790C) entry.partial_callable = true;
+            if (entry.library == "sceAudiocodec" && (entry.nid == 0x9D3F790C ||
+                (self.codec_backend && entry.nid == 0x3A20A200))) entry.partial_callable = true;
     const auto token = record->data.token;
     self.modules.push_back(std::move(record)); // capacity reserved; noexcept ownership publication
     self.Bind(); // exact per-module policies; original firmware UNKNOWN
@@ -413,6 +418,137 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
     self.gate->executing = true; // admission begins BEFORE virtual consumer View/hash validation
     struct StartExit { CallGate& gate; ~StartExit() { gate.executing = false; } } admission{*self.gate};
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
+    if (record.data.partial_start_supported && self.codec_backend && record.bindings[2] &&
+        record.bindings[2]->prepared_envelope) {
+        const auto provider=record.bindings[2];
+        if(!provider->registered || !provider->module || provider->module->data.state!=NativeModuleState::Started ||
+            !InputLive(*provider->module) || record.bindings[5]!=provider || !self.codec_backend->Ready())
+            return Result(NativeModuleCode::HostCapabilityRefused,token);
+        if(record.data.active_calls==UINT32_MAX || provider->module->data.active_calls==UINT32_MAX)
+            return Result(NativeModuleCode::Exhausted,token);
+        // All call bookkeeping is allocated before EVERY source-private write.
+        auto call=std::make_shared<NativeCheckNeedMemBorrow::Impl>();
+        call->consumer=owned;call->provider=provider;call->gate=self.gate;
+        ++record.data.active_calls;++provider->module->data.active_calls;
+        auto& state=record.data.initialization;
+        auto& envelope=record.data.prepared_envelope;
+        if(!RunAtrac3plusStartPrefix(state)) return Result(NativeModuleCode::InvalidInput,token);
+        state.prepared_envelope_policy=true;envelope.present=true;
+        record.data.state=NativeModuleState::EntryBlocked;
+        auto blocked=Result(NativeModuleCode::UnsupportedEntry,token);
+        blocked.dependency_module=provider->module->data.token;blocked.frontier_source_pc=0x84;
+        blocked.frontier_import_index=0;blocked.frontier_nid=0xC00D873B;blocked.frontier_stub_va=0xAF8;
+        blocked.check_need_mem_blocked=true;
+        const auto resources=[&]() noexcept {
+            uint32_t n=0;
+            for(const auto& r:envelope.records) if(r.provisional_live || (r.context_transferred && !r.context_destroyed) ||
+                (r.allocation_owner && !r.storage_freed)) ++n;
+            record.data.owned_native_codec_resources=n;provider->module->data.owned_native_codec_resources=n;
+        };
+        for(uint32_t index=0;index<3;++index) {
+            record.data.entry_frontier_source_pc=0x1684;
+            blocked.dependency_module=provider->module->data.token;blocked.frontier_source_pc=0x84;
+            blocked.frontier_import_index=0;blocked.frontier_nid=0xC00D873B;blocked.frontier_stub_va=0xAF8;
+            blocked.check_need_mem_blocked=true;
+            const uint32_t base=index*0x148,offset=base+0x44;
+            if(state.arg0_record_index!=index || state.arg0_record_offset!=offset ||
+                state.arg1!=(index<2?0x1000u:0x1001u) || offset>state.bytes.size()-0x6C ||
+                state.writes_count>=state.writes.size() || !InputLive(record) || !InputLive(*provider->module)) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            for(uint32_t j=0;j<4;++j) if(state.known[offset+j]) { blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked; }
+            NativeCheckNeedMemSnapshot snapshot;
+            snapshot.present=true;snapshot.partial_callable=true;
+            snapshot.provider_module=provider->module->data.token;snapshot.consumer_module=token;snapshot.provider=provider->token;
+            const auto& pi=provider->module->data.input;const auto& ci=record.data.input;
+            snapshot.provider_input_owner=pi.owner;snapshot.provider_input_generation=pi.generation;snapshot.provider_input_serial=pi.serial;
+            snapshot.consumer_input_owner=ci.owner;snapshot.consumer_input_generation=ci.generation;snapshot.consumer_input_serial=ci.serial;
+            snapshot.buffer_record_offset=offset;snapshot.buffer_bytes=0x68;
+            AudiocodecCheckNeedMemBuffer buffer;
+            buffer.bytes_=state.bytes.data()+offset;buffer.known_=state.known.data()+offset;buffer.size_=0x68;
+            snapshot.buffer_native_address=uint64_t(reinterpret_cast<uintptr_t>(buffer.bytes_));
+            for(uint32_t j=0;j<0x68;++j) snapshot.window_known_before+=buffer.known_[j]==1;
+            const auto entered=RunAudiocodecCheckNeedMemPrefix(buffer,state.arg1,snapshot.body);
+            if(entered!=AudiocodecCheckNeedMemCode::DependencyBlocked || snapshot.body.writes!=1) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            // Body already committed the exact magic bytes/mask. Nonallocating journal.
+            const uint32_t ordinal=state.writes_count++;
+            state.writes[ordinal]={ordinal,0x80,offset,4,0x04090701,Atrac3plusWriteSource::Audiocodec};
+            state.known_bytes+=4;++state.external_services_dispatched;
+            snapshot.window_known_after=snapshot.window_known_before+4;
+            record.data.check_need_mem=snapshot;
+            if(index==2) { envelope.native1001_blocked=true;resources();return blocked; }
+            // Do not extend these two known bytes to an unknown u32 at+28.
+            if(state.known[base+0x6C]!=1 || state.known[base+0x6D]!=1) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            NativeCodecWorkspaceKey key;
+            const auto tuple=[](NativeModuleToken t) { return std::array<uint64_t,4>{{t.owner,t.generation,t.serial,uint64_t(t.uid)}}; };
+            key.provider_module=tuple(provider->module->data.token);key.consumer_module=tuple(token);
+            key.provider={{provider->token.owner,provider->token.generation,provider->token.serial}};
+            key.provider_input={{pi.owner,pi.generation,pi.serial}};key.consumer_input={{ci.owner,ci.generation,ci.serial}};
+            key.state={{state.owner,state.generation,state.serial}};key.record_index=index;
+            auto& native=envelope.records[index];
+            const auto prepared=self.codec_backend->Prepare(key,state.bytes[base+0x6C],state.bytes[base+0x6D],
+                                                          provider->module->input,record.input,native);
+            resources();
+            if((prepared!=NativeCodecBackendStatus::Ok && prepared!=NativeCodecBackendStatus::NativeFailure) ||
+                !native.native_policy_return) {
+                blocked.code=prepared==NativeCodecBackendStatus::Cancelled?NativeModuleCode::DependencyBlocked:NativeModuleCode::HostCapabilityRefused;
+                return blocked;
+            }
+            if(native.native_policy_result==0 && (!native.provisional_live || !native.native_prepare_returned ||
+                native.native_api_result!=0 || !CommitAtrac3plusPreparedWrite(state,0,base+0x54,native.envelope_bytes,Atrac3plusWriteSource::NativePlatform))) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            if(native.native_policy_result==0) snapshot.window_known_after+=4; // actual E producer inside104B
+            if(!CompleteAudiocodecNativePrepareResult(snapshot.body,native.native_policy_result)) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            native.query_source_return=true;native.query_source_result=snapshot.body.source_result;
+            record.data.check_need_mem=snapshot;
+            if(snapshot.body.source_result<0) {
+                if(!ContinueAtrac3plusPreparedRecord(state,false)) { blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked; }
+                continue; // actual source Start ignores the failed helper's v0
+            }
+            // A separate108B capability is minted only for the exact live plan.
+            AudiocodecGetEDRAMBuffer allocation_buffer;
+            record.data.entry_frontier_source_pc=0x1698;
+            state.frontier_source_pc=0x1698;state.frontier_delay_pc=0x169C;
+            state.frontier_stub_va=0x3658;state.frontier_import_index=5;state.frontier_nid=0x3A20A200;
+            blocked.frontier_source_pc=0x67C;blocked.frontier_nid=0;blocked.frontier_stub_va=0;
+            blocked.check_need_mem_blocked=false;
+            allocation_buffer.bytes_=state.bytes.data()+offset;allocation_buffer.known_=state.known.data()+offset;
+            allocation_buffer.size_=0x6C;
+            uint32_t need=0,request=0;
+            if(!ReadAudiocodecGetEDRAMNeed(allocation_buffer,need,request) || need!=native.envelope_bytes ||
+                request!=((need+63u)|63u) || !(native.key==key) || !native.provisional_live ||
+                !InputLive(record) || !InputLive(*provider->module) || !provider->registered) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            const int32_t query_result=native.query_source_result;
+            blocked.frontier_source_pc=0x6AC;blocked.frontier_import_index=4;blocked.frontier_nid=0xA177798D;blocked.frontier_stub_va=0xB18;
+            const auto allocated=self.codec_backend->Allocate(key,need,native);
+            native.query_source_return=true;native.query_source_result=query_result;resources();
+            if((allocated!=NativeCodecBackendStatus::Ok && allocated!=NativeCodecBackendStatus::AllocationFailed) || !native.allocation_returned) {
+                blocked.code=allocated==NativeCodecBackendStatus::Cancelled?NativeModuleCode::DependencyBlocked:NativeModuleCode::HostCapabilityRefused;
+                return blocked;
+            }
+            const bool acquired=allocated==NativeCodecBackendStatus::Ok && native.allocation_succeeded && native.context_transferred;
+            const uint32_t raw=acquired?native.raw_coordinate:0,aligned=acquired?native.aligned_coordinate:0;
+            if((acquired && (!raw || !aligned || ((raw+63u)&~63u)!=aligned)) ||
+                !CommitAtrac3plusPreparedWrite(state,0x6C0,base+0x50,aligned,Atrac3plusWriteSource::Audiocodec) ||
+                !CommitAtrac3plusPreparedWrite(state,0x6C8,base+0xAC,raw,Atrac3plusWriteSource::Audiocodec)) {
+                blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked;
+            }
+            native.get_edram_source_return=true;
+            native.get_edram_source_result=acquired?0:static_cast<int32_t>(int64_t(0x807F0003u)-0x100000000LL);
+            if(acquired) ++state.external_resources_acquired;
+            if(!ContinueAtrac3plusPreparedRecord(state,acquired)) { blocked.code=NativeModuleCode::HostCapabilityRefused;return blocked; }
+        }
+        return blocked; // finite1001 cut; never a module entry/service return
+    }
     if (record.data.partial_start_supported) {
         NativeCheckNeedMemBorrow borrow;
         const auto provider = self.domain == NativeModuleDomain::Production ? record.bindings[2] : nullptr;
@@ -474,7 +610,7 @@ NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     const auto owned = self.Find(token);
     if (!owned) return Result(NativeModuleCode::InvalidToken);
     auto& record = *owned;
-    if (record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings)
+    if (record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings || record.data.owned_native_codec_resources)
         return Result(NativeModuleCode::Busy, token);
     if (record.data.state != NativeModuleState::Started) return Result(NativeModuleCode::WrongState, token);
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
@@ -494,6 +630,32 @@ NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken to
     if (data.active_calls || data.owned_providers || data.incoming_bindings) return Result(NativeModuleCode::Busy, token);
     if (data.state != NativeModuleState::EntryBlocked || !data.partial_start_supported)
         return Result(NativeModuleCode::WrongState, token);
+    if(data.prepared_envelope.present) {
+        self.gate->executing=true;
+        struct Exit { CallGate& gate;~Exit(){gate.executing=false;} } guard{*self.gate};
+        if(!self.codec_backend) return Result(NativeModuleCode::HostCapabilityRefused,token);
+        for(size_t n=2;n;--n) {
+            auto& s=data.prepared_envelope.records[n-1];
+            if(s.state==NativeCodecWorkspaceState::Unissued) continue;
+            const bool qr=s.query_source_return,gr=s.get_edram_source_return;
+            const int32_t qv=s.query_source_result,gv=s.get_edram_source_result;
+            const auto code=self.codec_backend->Retire(s.key,s);
+            s.query_source_return=qr;s.query_source_result=qv;s.get_edram_source_return=gr;s.get_edram_source_result=gv;
+            uint32_t remaining=0;
+            for(const auto& r:data.prepared_envelope.records)
+                if(r.provisional_live || (r.context_transferred && !r.context_destroyed) ||
+                    (r.allocation_owner && !r.storage_freed)) ++remaining;
+            data.owned_native_codec_resources=remaining;
+            if(owned->bindings[2] && owned->bindings[2]->module)
+                owned->bindings[2]->module->data.owned_native_codec_resources=remaining;
+            if(code!=NativeCodecBackendStatus::Ok) return Result(NativeModuleCode::Busy,token);
+        }
+        if(data.owned_native_codec_resources || self.codec_backend->HasResources()) return Result(NativeModuleCode::Busy,token);
+        for(const auto& s:data.prepared_envelope.records) if(s.state!=NativeCodecWorkspaceState::Unissued &&
+            (s.state!=NativeCodecWorkspaceState::Retired || s.provisional_live || s.context_allocations!=s.context_frees ||
+             (s.allocation_owner && !s.storage_freed))) return Result(NativeModuleCode::Busy,token);
+        // Acquisition history is cumulative. Host cleanup is not a source Free.
+    }
     if (!AbortAtrac3plusInitialization(data.initialization)) return Result(NativeModuleCode::WrongState, token);
     data.state = NativeModuleState::InitializationAborted;
     return Result(NativeModuleCode::Ok, token); // host operation, NO source Stop/entry/service result
@@ -578,12 +740,39 @@ NativeModuleProviderResult NativeModuleManager::RegisterCheckNeedMemProvider(Nat
     self.providers.push_back(provider); // if this throws, there was no publication
     ++self.serial; self.Bind(); return {NativeModuleCode::Ok, provider->token};
 }
+NativeModuleCode NativeModuleManager::ConfigurePreparedEnvelopeBackend(std::shared_ptr<NativeCodecWorkspaceBackend> backend) {
+    auto& s=*impl_;
+    if(s.gate->executing) return NativeModuleCode::Busy;
+    if(s.domain!=NativeModuleDomain::Production || !s.modules.empty() || !s.providers.empty() || s.codec_backend)
+        return NativeModuleCode::WrongState;
+    if(!backend || !backend->Ready()) return NativeModuleCode::HostCapabilityRefused;
+    s.codec_backend=std::move(backend);return NativeModuleCode::Ok;
+}
+NativeModuleProviderResult NativeModuleManager::RegisterPreparedEnvelopeProvider(NativeModuleToken token) {
+    auto& s=*impl_;
+    if(s.gate->executing) return {NativeModuleCode::Busy,{}};
+    if(s.domain!=NativeModuleDomain::Production || !s.codec_backend || !s.codec_backend->Ready())
+        return {NativeModuleCode::IncompatibleProvider,{}};
+    const auto module=s.Find(token);
+    if(!module || module->data.state!=NativeModuleState::Started) return {NativeModuleCode::WrongState,{}};
+    s.gate->executing=true;
+    struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*s.gate};
+    if(module->data.name!="sceAudiocodec_Driver" || !InputLive(*module)) return {NativeModuleCode::InvalidInput,{}};
+    for(const auto& p:s.providers) if(p->definition.library=="sceAudiocodec" &&
+        (p->definition.nid==0x9D3F790C || p->definition.nid==0x3A20A200)) return {NativeModuleCode::DuplicateProvider,{}};
+    if(!s.owner || s.serial==UINT64_MAX) return {NativeModuleCode::Exhausted,{}};
+    auto p=std::make_shared<ProviderRecord>();p->module=module;p->prepared_envelope=true;
+    p->definition.library="sceAudiocodec";p->definition.abi=NativePreparedEnvelopeAbi;
+    p->definition.nid=0x9D3F790C;p->definition.module=token;p->token={s.owner,s.generation,s.serial+1};
+    s.providers.push_back(p);++s.serial;s.Bind();return {NativeModuleCode::Ok,p->token};
+}
 NativeModuleCode NativeModuleManager::UnregisterProvider(NativeModuleProviderToken token) {
     auto& self = *impl_;
     if (self.gate->executing) return NativeModuleCode::Busy;
     if (token.owner != self.owner || token.generation != self.generation || !token.serial) return NativeModuleCode::InvalidToken;
     for (auto at = self.providers.begin(); at != self.providers.end(); ++at) {
         if (!Same(token, (*at)->token)) continue;
+        if((*at)->prepared_envelope && self.codec_backend && self.codec_backend->HasResources()) return NativeModuleCode::Busy;
         if (self.serial == (std::numeric_limits<uint64_t>::max)()) return NativeModuleCode::Exhausted;
         ++self.serial; // one monotonic binding mutation identity, never wrap
         (*at)->registered = false; // revoke unentered call tokens before edge removal
@@ -605,7 +794,7 @@ NativeModuleCode NativeModuleManager::BorrowImport(NativeModuleToken token, uint
     if (!InputLive(*module)) return NativeModuleCode::InvalidInput;
     const auto provider = module->bindings[index];
     if (!provider) return NativeModuleCode::NotLinked;
-    if (provider->check_need_mem) return NativeModuleCode::IncompatibleProvider; // dedicated typed ABI only
+    if (provider->check_need_mem || provider->prepared_envelope) return NativeModuleCode::IncompatibleProvider; // dedicated typed ABI only
     if (module->data.active_calls == (std::numeric_limits<uint32_t>::max)() ||
         (provider->module && provider->module != module &&
          provider->module->data.active_calls == (std::numeric_limits<uint32_t>::max)()))
@@ -676,6 +865,11 @@ bool NativeModuleManager::CheckNeedMemSnapshot(NativeModuleToken token, NativeCh
     if (!module || !module->data.check_need_mem.present) return false;
     out = module->data.check_need_mem; return true;
 }
+bool NativeModuleManager::PreparedEnvelopeSnapshot(NativeModuleToken token,NativePreparedEnvelopeSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);
+    if(!module || !module->data.prepared_envelope.present) return false;
+    out=module->data.prepared_envelope;return true;
+}
 std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
     std::vector<NativeModuleSnapshot> out; out.reserve(impl_->modules.size());
     for (const auto& module : impl_->modules) {
@@ -690,7 +884,8 @@ std::vector<NativeModuleProviderSnapshot> NativeModuleManager::Providers() const
     for (const auto& provider : impl_->providers) {
         const auto& definition = provider->definition;
         out.push_back({provider->token, definition.library, definition.abi, definition.version,
-                       definition.nid, definition.synthetic_only, definition.module, provider->check_need_mem});
+                       definition.nid, definition.synthetic_only, definition.module,
+                       provider->check_need_mem || provider->prepared_envelope, provider->prepared_envelope});
     }
     return out;
 }
