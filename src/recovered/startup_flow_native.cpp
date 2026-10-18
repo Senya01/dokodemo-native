@@ -102,6 +102,19 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         }
     }
     if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
+    // Retained4F678/delay67C -> call4F680, same kind1 options. Only the
+    // supported third wrapper's real return makes this next Open reachable.
+    services.BeginModuleRequest(0x4F680, "disc0:/PSP_GAME/USRDIR/prx/ifhandle.prx", kind1);
+    module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/ifhandle.prx", kind1);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
+    }
+    if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
     services.UnsupportedFollowingModule(); // no subsequent dependency assumed
     return StartupFlowStop::Unsupported;
 }

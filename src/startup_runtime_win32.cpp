@@ -1,6 +1,7 @@
 #include "startup_runtime_win32.h"
 #include "startup_memory_backend_win32.h"
 #include "native_codec_workspace_win32.h"
+#include "sascore_runtime_win32.h"
 #include "recovered/startup_flow_native.h"
 #include "recovered/audiocodec_module_native.h"
 #include "recovered/module_manager_native.h"
@@ -96,6 +97,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     std::shared_ptr<WindowsStartupBackend> backend;
     std::shared_ptr<recovered::NativeCodecSessionState> codec_session=std::make_shared<recovered::NativeCodecSessionState>();
     std::shared_ptr<recovered::NativeCodecWorkspaceBackend> codec_backend;
+    std::shared_ptr<recovered::NativeSascoreBackend> sascore_backend;
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -547,9 +549,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             relative = L"PSP_GAME\\USRDIR\\prx\\libatrac3plus.prx"; request->input_bytes = 19524;
         } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/sc_sascore.prx" && callsite == 0x4F660 &&
                    option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
-            // Connected metadata only. Exact body/descriptor is not recovered;
-            // actual Open is allowed, Load stops before staging/body ReadInto.
             relative = L"PSP_GAME\\USRDIR\\prx\\sc_sascore.prx";
+            request->input_bytes = 5920;
+        } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/ifhandle.prx" && callsite == 0x4F680 &&
+                   option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
+            // Actual next request only; no fourth descriptor/body is admitted.
+            relative = L"PSP_GAME\\USRDIR\\prx\\ifhandle.prx";
         } else throw NativeFailure{};
         request->native_path = options.media_root;
         if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
@@ -636,7 +641,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
           EmitLocked("LoadModuleByID-enter", "SourceCall", 0x4F53C, fd, false, data.file_native_object,
                      0, 0, "flags0;owned pending options20/path;no completed source Load result"); }
         if(!request->input_bytes)
-            return ModuleStopResult(Stop::Unsupported,"Connected sc_sascore Load has no recovered descriptor/body;actual Open retained;no ReadInto or UID");
+            return ModuleStopResult(Stop::Unsupported,"Connected next-module Load has no recovered descriptor/body;actual Open retained;no ReadInto or UID");
         if (data.encoded_file_bytes != request->input_bytes)
             return ModuleStopResult(Stop::Unsupported, "Module file extent differs from the validated exact input");
         const auto position = backend->Seek64(request->backend_file, 0, 1);
@@ -725,9 +730,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         { std::lock_guard<std::mutex> lock(metadata); data.staging_full_read = true; }
         if (HostCancelled()) return Stop::HostCancelled;
         const auto digest = core::sha256_hex(span.bytes, request->input_bytes); // same physical span; no payload mirror
-        const bool exact = request->input_bytes == 3232
-            ? digest == "cea81b33d4eab3607da188b0435a8582ffc7c208337c05f7e3139f0133bcb318"
-            : digest == "edfc95810a5881f7f752eee255693e75ba1ade6862b557126c5236c2b47bbca4";
+        const bool exact = recovered::FindAudiocodecModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindAtrac3plusModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindSascoreModuleDescriptor(digest, request->input_bytes);
         { std::lock_guard<std::mutex> lock(metadata);
           data.staging_hash_matches = exact; data.staging_sha256 = digest;
           EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, exact ? 1 : 0, false, span.host_address, 0, 0, digest); }
@@ -795,8 +800,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             data.module_start_entry_returned = started_module.entry_return;
             data.module_start_entry_result = started_module.entry_result;
             modules.InitializationSnapshot(data.token, data.record.initialization);
+            modules.SascoreSnapshot(data.token, data.record.sascore);
             data.module_initialization_blocked = data.record.initialization.prefix_entered &&
                 data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
+            data.module_initialization_blocked = data.module_initialization_blocked ||
+                (data.record.sascore.entry_entered && data.record.sascore.host_abort_required && !data.record.sascore.host_aborted);
             modules.CheckNeedMemSnapshot(data.token, data.record.check_need_mem); // nonallocating outcome/effects
             modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
             entry_frontier = started_module.frontier_source_pc; // primitive outcome; independent of allocating Snapshot
@@ -814,6 +822,20 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             }
             try {
                 modules.Snapshot(data.token, data.record);
+                if(data.record.sascore.present) {
+                    const auto& sas=data.record.sascore;
+                    for(uint32_t i=0;i<sas.writes_count;++i) {
+                        const auto& write=sas.writes[i];
+                        EmitLocked("SascoreGlobalWrite","RecoveredSourceStoreNativeValue",write.source_pc,write.value,false,
+                                   sas.native_state_address,0,0,"actual returned platform value;source store owner SAS;no BSS0",0,0,true,data.token);
+                    }
+                    if(sas.resources.allocation_returned)
+                        EmitLocked("SascoreNativeAllocation","WindowsSascorePolicy",0,sas.resources.memory_live?1:0,false,
+                                   sas.resources.memory_host_address,sas.resources.allocation_error,0,"accepted backend outcome;nullable source return separately;46644 host calloc zeros not module BSS");
+                    if(sas.resources.semaphore_create_returned)
+                        EmitLocked("SascoreNativeSemaphore","WindowsSascorePolicy",0,sas.resources.semaphore_live?1:0,false,
+                                   sas.resources.semaphore_handle,sas.resources.semaphore_create_error,0,"owned unnamed noninheritable1/1;source SceSas diagnostic name;UID separate from HANDLE");
+                }
                 const auto& initialization = data.record.initialization;
                 if (initialization.prefix_entered) for (uint32_t i = 0; i < initialization.writes_count; ++i) {
                     const auto& write = initialization.writes[i];
@@ -849,6 +871,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                            data.record.prepared_envelope.present ?
                            "finite Windows query-envelope-v2;actual phase/resources in per-record snapshot;originalME unresolved" : started_module.check_need_mem_blocked ?
                            "ATRAC caller1684->audiocodec CheckNeedMem;callee84->ME stubAF8/C00D873B;codec1000,same owned record0+44;NO ME dispatch/result" :
+                           data.record.sascore.present ? "SAS exact lifecycle platform boundary;actual effects/body result retained;NO fabricated Start service result" :
                            "ATRAC1684->stub3640;a0=owned record0+44,a1=1000;NO CheckNeedMem dispatch/result",
                            0, 0, true, started_module.dependency_module);
             if (started_module.entry_return)
@@ -1038,6 +1061,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     const auto stopped = modules.Stop(data.token);
                     modules.InitializationSnapshot(data.token,data.record.initialization);
                     modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
+                    modules.SascoreSnapshot(data.token,data.record.sascore);
                     for(uint32_t i=prior_writes;i<data.record.initialization.writes_count;++i) {
                         const auto& write=data.record.initialization.writes[i];
                         EmitLocked("ModuleStopReleaseWrite","RecoveredSourceAfterWindowsRelease",write.source_pc,write.value,false,
@@ -1073,10 +1097,23 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     data.record.state = recovered::NativeModuleState::InitializationAborted;
                     modules.InitializationSnapshot(data.token, data.record.initialization);
                     modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
+                    modules.SascoreSnapshot(data.token,data.record.sascore);
                     EmitLocked("HostModuleInitializationAborted", "HostModulePolicy", 0, data.token.uid, false,
                                data.token.serial, 0, 0, data.record.prepared_envelope.present ?
                                "after BOTH joins;reverse native context destruction/borrowReset/Free completed;NO sourceStop121C" :
+                               data.record.sascore.present ? "SAS reverse host abort completed;source globals/history retained;NO sourceStop1ACC" :
                                "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
+                }
+                if(data.module_stop_returned && data.record.sascore.present) {
+                    const auto retired=modules.RetireStoppedSascore(data.token);
+                    modules.SascoreSnapshot(data.token,data.record.sascore);
+                    if(!retired) {
+                        EmitLocked("HostStoppedSascoreRetirementPending","HostModulePolicy",0,0,false,data.token.serial,
+                                   0,0,"issued resource/input-pin slot must retire before Unload/input expiry");
+                        state.status=Failure(StartupRuntimeCode::HostFailure);return state.status;
+                    }
+                    EmitLocked("HostStoppedSascoreRetired","HostModulePolicy",0,1,false,data.token.serial,
+                               0,0,"after BOTH joins/sourceStop;input pins retired;no global zero stores/history rewrite");
                 }
                 if(data.module_stop_returned && data.record.prepared_envelope.present) {
                     const auto retired=modules.RetireStoppedCodecWorkspaces(data.token);
@@ -1158,6 +1195,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             if (freed) tls_index = TLS_OUT_OF_INDEXES; else ok = false;
         }
         if (backend) {
+            if(sascore_backend) {
+                const auto closed=sascore_backend->Close();
+                Emit("CloseSascoreBackend","WindowsSascorePolicy",0,closed==recovered::NativeSascoreCode::Ok?1:0);
+                if(closed!=recovered::NativeSascoreCode::Ok) return CleanupFailure();
+            }
             if(codec_backend) {
                 const auto closed=codec_backend->Close();
                 Emit("CloseNativeCodecBackend","WindowsPreparedEnvelopePolicy",0,closed==recovered::NativeCodecBackendStatus::Ok?1:0);
@@ -1212,6 +1254,13 @@ std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRunt
         }
         impl->Emit("PreparedEnvelopeBackendReady","WindowsPreparedEnvelopePolicy",0,1,false,0,0,0,
                    recovered::NativePreparedEnvelopeAbi);
+        recovered::NativeSascoreCode sascore_status;
+        impl->sascore_backend=CreateWindowsSascoreBackend(impl->backend,impl->codec_session,sascore_status);
+        if(!impl->sascore_backend || sascore_status!=recovered::NativeSascoreCode::Ok ||
+            impl->modules.ConfigureSascoreBackend(impl->sascore_backend)!=recovered::NativeModuleCode::Ok) {
+            status=Failure(StartupRuntimeCode::HostFailure);return {};
+        }
+        impl->Emit("SascoreBackendReady","WindowsSascorePolicy",0,1,false,0,0,0,recovered::NativeSascoreAbi);
     }
     impl->tls_index = TlsAlloc();
     const DWORD tls_error = impl->tls_index == TLS_OUT_OF_INDEXES ? GetLastError() : 0;

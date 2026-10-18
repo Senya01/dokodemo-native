@@ -2,6 +2,7 @@
 #include "audiocodec_module_native.h"
 #include "atrac3plus_module_native.h"
 #include "native_codec_workspace.h"
+#include "sascore_module_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -104,6 +105,7 @@ struct NativeModuleSnapshot {
     Atrac3plusInitializationSnapshot initialization;
     NativeCheckNeedMemSnapshot check_need_mem;
     NativePreparedEnvelopeSnapshot prepared_envelope;
+    SascoreInitializationSnapshot sascore;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -201,6 +203,8 @@ public:
     NativeModuleProviderResult RegisterCheckNeedMemProvider(NativeModuleToken);
     // Separate production domain; never upgrades the Stage18 prefix provider.
     NativeModuleCode ConfigurePreparedEnvelopeBackend(std::shared_ptr<NativeCodecWorkspaceBackend>);
+    NativeModuleCode ConfigureSascoreBackend(std::shared_ptr<NativeSascoreBackend>);
+    NativeModuleResult RetireStoppedSascore(NativeModuleToken);
     // Distinct HOST cleanup after completed source Stop. Issued Failed slots
     // can own input/API pins even when no native context/storage is live.
     NativeModuleResult RetireStoppedCodecWorkspaces(NativeModuleToken);
@@ -213,6 +217,7 @@ public:
     bool InitializationSnapshot(NativeModuleToken, Atrac3plusInitializationSnapshot&) const noexcept;
     bool CheckNeedMemSnapshot(NativeModuleToken, NativeCheckNeedMemSnapshot&) const noexcept;
     bool PreparedEnvelopeSnapshot(NativeModuleToken, NativePreparedEnvelopeSnapshot&) const noexcept;
+    bool SascoreSnapshot(NativeModuleToken, SascoreInitializationSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;

@@ -37,6 +37,7 @@ add_library(dokodemo-core STATIC
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
     src/recovered/atrac3plus_module_native.cpp
+    src/recovered/sascore_module_native.cpp
     src/model_formats.cpp
     src/recovered/game_primitives.cpp
     src/recovered/menu_primitives.cpp
@@ -74,7 +75,7 @@ if(DOKODEMO_MODULE_CONTROLS_SOURCE)
     endif()
     add_executable(dokodemo-module-controls EXCLUDE_FROM_ALL "${module_controls_source}")
     if(WIN32)
-        target_sources(dokodemo-module-controls PRIVATE src/native_codec_workspace_win32.cpp src/startup_memory_backend_win32.cpp)
+        target_sources(dokodemo-module-controls PRIVATE src/native_codec_workspace_win32.cpp src/startup_memory_backend_win32.cpp src/sascore_runtime_win32.cpp)
         target_compile_definitions(dokodemo-module-controls PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
         dokodemo_configure_prepared_codec(dokodemo-module-controls)
     endif()

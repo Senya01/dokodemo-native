@@ -10,6 +10,7 @@ namespace {
 // partial CheckNeedMem ABI is separate from the isolated synthetic test ABI.
 constexpr const char* ImportAbi = "unrecovered-psp32-audiocodec-import-v1";
 constexpr const char* AtracImportAbi = "unrecovered-psp32-atrac3plus-import-v1";
+constexpr const char* SascoreImportAbi = "unrecovered-psp32-sascore-import-v1";
 constexpr const char* SyntheticAbi = "synthetic-stage16-u32x4-v1";
 constexpr const char* CheckNeedMemAbi = "windows-owned-masked-checkneedmem-prefix-v1";
 // This namespace is a Windows registry namespace, not PSP kernel UID state.
@@ -35,7 +36,7 @@ bool SameInput(const NativeModuleInputView& a, const NativeModuleInputView& b) n
 }
 bool KnownInput(const NativeModuleInputView& view) noexcept {
     if (!view.bytes || !view.initialized || !view.owner || !view.generation || !view.serial ||
-        !view.host_address || (view.size != 3232 && view.size != 19524) ||
+        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920) ||
         view.host_address != uint64_t(reinterpret_cast<uintptr_t>(view.bytes)) ||
         view.host_address > (std::numeric_limits<uint64_t>::max)() - view.size ||
         uint64_t(view.source_coordinate) + view.size > (uint64_t(1) << 32)) return false;
@@ -92,6 +93,7 @@ struct NativeModuleManager::Impl {
     std::vector<std::shared_ptr<ModuleRecord>> modules;
     std::vector<std::shared_ptr<ProviderRecord>> providers;
     std::shared_ptr<NativeCodecWorkspaceBackend> codec_backend;
+    std::shared_ptr<NativeSascoreBackend> sascore_backend;
     explicit Impl(NativeModuleDomain selected) : domain(selected) {
         owner = TakeMonotonic(next_manager_owner, (std::numeric_limits<uint64_t>::max)() - 1);
     }
@@ -288,8 +290,9 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     const auto digest = core::hex_digest(hash.digest());
     const auto* descriptor = FindAudiocodecModuleDescriptor(digest, view.size);
     const auto* atrac = FindAtrac3plusModuleDescriptor(digest, view.size);
-    if (!descriptor && !atrac) return Result(NativeModuleCode::IdentityMismatch);
-    const char* name = descriptor ? descriptor->name : atrac->name;
+    const auto* sas = FindSascoreModuleDescriptor(digest, view.size);
+    if (!descriptor && !atrac && !sas) return Result(NativeModuleCode::IdentityMismatch);
+    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas->name;
     for (const auto& live : self.modules) {
         if (live->data.name == name) return Result(NativeModuleCode::AlreadyLoaded);
         const auto& old = live->data.input;
@@ -351,7 +354,7 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     }};
     for (const auto& entry : audio) Export(*record, "sceAudiocodec", "function", 0x4001, entry[0], entry[1], false);
     Export(*record, "sceAudiocodec_driver", "function", 0x0001, 0x62518B7E, 0xAD8, false);
-    } else {
+    } else if (atrac) {
         // This exact unencoded ELF has its OWN Windows metadata/partial-init
         // policy. Exact0009V1 has not been broadened to0001/4001.
         if (atrac->attributes != 0x0006 || atrac->version != 0x0101 ||
@@ -388,6 +391,34 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
         for (const auto& entry : atrac->exports)
             Export(*record, entry.library, entry.variable ? "variable" : "function", entry.attributes,
                    entry.nid, entry.source_va, false); // NO fully callable new export; aliases metadata-only
+    } else {
+        // Separate exact SAS policy; uncalled services are still unresolved.
+        if(sas->attributes!=0x1006 || sas->version!=0x0101) return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=sas->plaintext_sha256;
+        record->data.encoded_bytes=sas->encoded_bytes;record->data.plaintext_bytes=sas->plaintext_bytes;
+        record->data.policy="WindowsSascoreExact0009_0001LifecycleV1";
+        record->data.implementation="aot-sas-1A68-owned-calloc-semaphore/1ACC-ordered-release-v1";
+        record->data.start_source_va=0x1A68;record->data.stop_source_va=0x1ACC;
+        record->data.partial_start_supported=true;
+        InitializeSascoreState(record->data.sascore);
+        record->data.sascore.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.sascore));
+        record->data.imports.reserve(10);record->data.exports.reserve(25);
+        for(const auto& library:sas->imports) {
+            if(!SascoreImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>sas->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=sas->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=SascoreImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=10) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:sas->exports) {
+            const bool lifecycle=!entry.library[0] && (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
     }
     record->bindings.resize(record->data.imports.size());
     self.modules.reserve(self.modules.size() + 1); // final fallible registry allocation BEFORE UID publication
@@ -397,6 +428,13 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     if (atrac) {
         auto& initialization = record->data.initialization;
         initialization.owner = self.owner; initialization.generation = self.generation; initialization.serial = self.serial;
+    }
+    if(sas) {
+        auto& state=record->data.sascore;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
+        state.resources.key.module={{self.owner,self.generation,self.serial,uid}};
+        state.resources.key.input={{view.owner,view.generation,view.serial}};
+        state.resources.key.state={{state.owner,state.generation,state.serial}};
     }
     for (auto& entry : record->data.imports) entry.module = record->data.token;
     for (auto& entry : record->data.exports) entry.module = record->data.token;
@@ -421,6 +459,20 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
     self.gate->executing = true; // admission begins BEFORE virtual consumer View/hash validation
     struct StartExit { CallGate& gate; ~StartExit() { gate.executing = false; } } admission{*self.gate};
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
+    if(record.data.sascore.present) {
+        const auto outcome=RunSascoreStart(record.data.sascore,self.sascore_backend.get(),record.input);
+        const auto& state=record.data.sascore;
+        if(outcome==NativeSascoreCode::Ok && state.entry_returned && state.entry_result==0) {
+            record.data.state=NativeModuleState::Started;record.data.entry_frontier_source_pc=0;
+            auto result=Returned(token,0);result.entry_return=true;result.entry_result=0;result.entry_source_pc=0x1A68;return result;
+        }
+        record.data.state=NativeModuleState::EntryBlocked;record.data.entry_frontier_source_pc=state.frontier_source_pc;
+        auto result=Result(outcome==NativeSascoreCode::DependencyBlocked?NativeModuleCode::UnsupportedEntry:NativeModuleCode::HostCapabilityRefused,token);
+        result.entry_return=state.entry_returned;result.entry_result=state.entry_result;result.entry_source_pc=0x1A68;
+        result.dependency_module=token;result.frontier_source_pc=state.frontier_source_pc;
+        result.frontier_stub_va=state.frontier_stub_va;result.frontier_nid=state.frontier_nid;result.frontier_import_index=state.frontier_import_index;
+        return result; // true failed entry result retained; NO fabricated Windows Start return
+    }
     if (record.data.partial_start_supported && self.codec_backend && record.bindings[2] &&
         record.bindings[2]->prepared_envelope) {
         const auto provider=record.bindings[2];
@@ -626,6 +678,23 @@ NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     const auto owned = self.Find(token);
     if (!owned) return Result(NativeModuleCode::InvalidToken);
     auto& record = *owned;
+    if(record.data.sascore.present) {
+        if(record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings) return Result(NativeModuleCode::Busy,token);
+        if(record.data.state!=NativeModuleState::Started) return Result(NativeModuleCode::WrongState,token);
+        self.gate->executing=true;
+        struct Exit { CallGate& gate;~Exit(){gate.executing=false;} } guard{*self.gate};
+        if(!InputLive(record)) return Result(NativeModuleCode::InvalidInput,token);
+        const auto stopped=RunSascoreStop(record.data.sascore,self.sascore_backend.get());
+        if(stopped!=NativeSascoreCode::Ok || !record.data.sascore.source_stop_returned) {
+            auto result=Result(NativeModuleCode::HostCapabilityRefused,token);
+            const auto& state=record.data.sascore;result.dependency_module=token;
+            record.data.entry_frontier_source_pc=state.frontier_source_pc;
+            result.frontier_source_pc=state.frontier_source_pc;result.frontier_stub_va=state.frontier_stub_va;
+            result.frontier_nid=state.frontier_nid;result.frontier_import_index=state.frontier_import_index;return result;
+        }
+        record.data.state=NativeModuleState::Stopped;record.data.entry_frontier_source_pc=0;
+        auto result=Returned(token,0);result.entry_return=true;result.entry_result=0;result.entry_source_pc=0x1ACC;return result;
+    }
     if(record.data.state==NativeModuleState::Started && record.data.prepared_envelope.present &&
         record.data.prepared_envelope.source_start_returned) {
         if(record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings)
@@ -697,6 +766,8 @@ NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     if (record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings || record.data.owned_native_codec_resources)
         return Result(NativeModuleCode::Busy, token);
     if (record.data.state != NativeModuleState::Started) return Result(NativeModuleCode::WrongState, token);
+    self.gate->executing=true;
+    struct GenericStopExit { CallGate& gate;~GenericStopExit(){gate.executing=false;} } admission{*self.gate};
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
     if (!record.stop) return Result(NativeModuleCode::UnsupportedEntry, token);
     const int32_t entry_result = record.stop();
@@ -714,6 +785,13 @@ NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken to
     if (data.active_calls || data.owned_providers || data.incoming_bindings) return Result(NativeModuleCode::Busy, token);
     if (data.state != NativeModuleState::EntryBlocked || !data.partial_start_supported)
         return Result(NativeModuleCode::WrongState, token);
+    if(data.sascore.present) {
+        self.gate->executing=true;
+        struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*self.gate};
+        const auto aborted=AbortSascoreInitialization(data.sascore,self.sascore_backend.get());
+        if(aborted!=NativeSascoreCode::Ok) return Result(NativeModuleCode::Busy,token);
+        data.state=NativeModuleState::InitializationAborted;return Result(NativeModuleCode::Ok,token);
+    }
     if(data.prepared_envelope.present) {
         self.gate->executing=true;
         struct Exit { CallGate& gate;~Exit(){gate.executing=false;} } guard{*self.gate};
@@ -776,6 +854,7 @@ NativeModuleResult NativeModuleManager::Unload(NativeModuleToken token) {
         return Result(NativeModuleCode::Busy, token);
     if (owned->data.state == NativeModuleState::Started || owned->data.state == NativeModuleState::EntryBlocked)
         return Result(NativeModuleCode::WrongState, token);
+    if(owned->data.sascore.resources.issued && !owned->data.sascore.resources.retired) return Result(NativeModuleCode::Busy,token);
     for(const auto& native:owned->data.prepared_envelope.records)
         if(native.state!=NativeCodecWorkspaceState::Unissued && native.state!=NativeCodecWorkspaceState::Retired)
             return Result(NativeModuleCode::Busy,token);
@@ -857,6 +936,24 @@ NativeModuleCode NativeModuleManager::ConfigurePreparedEnvelopeBackend(std::shar
         return NativeModuleCode::WrongState;
     if(!backend || !backend->Ready()) return NativeModuleCode::HostCapabilityRefused;
     s.codec_backend=std::move(backend);return NativeModuleCode::Ok;
+}
+NativeModuleCode NativeModuleManager::ConfigureSascoreBackend(std::shared_ptr<NativeSascoreBackend> backend) {
+    auto& self=*impl_;if(self.gate->executing) return NativeModuleCode::Busy;
+    if(self.domain!=NativeModuleDomain::Production || !self.modules.empty() || self.sascore_backend) return NativeModuleCode::WrongState;
+    if(!backend || !backend->Ready()) return NativeModuleCode::HostCapabilityRefused;
+    self.sascore_backend=std::move(backend);return NativeModuleCode::Ok;
+}
+NativeModuleResult NativeModuleManager::RetireStoppedSascore(NativeModuleToken token) {
+    auto& self=*impl_;if(self.gate->executing) return Result(NativeModuleCode::Busy,token);
+    const auto module=self.Find(token);if(!module) return Result(NativeModuleCode::InvalidToken,token);
+    auto& state=module->data.sascore;
+    if(module->data.state!=NativeModuleState::Stopped || !state.source_stop_returned || !self.sascore_backend)
+        return Result(NativeModuleCode::WrongState,token);
+    if(state.resources.retired) return Result(NativeModuleCode::Ok,token);
+    self.gate->executing=true;
+    struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*self.gate};
+    const auto result=self.sascore_backend->Retire(state.resources.key,state.resources);
+    return Result(result==NativeSascoreCode::Ok?NativeModuleCode::Ok:NativeModuleCode::Busy,token);
 }
 NativeModuleProviderResult NativeModuleManager::RegisterPreparedEnvelopeProvider(NativeModuleToken token) {
     auto& s=*impl_;
@@ -979,6 +1076,10 @@ bool NativeModuleManager::PreparedEnvelopeSnapshot(NativeModuleToken token,Nativ
     const auto module=impl_->Find(token);
     if(!module || !module->data.prepared_envelope.present) return false;
     out=module->data.prepared_envelope;return true;
+}
+bool NativeModuleManager::SascoreSnapshot(NativeModuleToken token,SascoreInitializationSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);if(!module || !module->data.sascore.present) return false;
+    out=module->data.sascore;return true;
 }
 std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
     std::vector<NativeModuleSnapshot> out; out.reserve(impl_->modules.size());
