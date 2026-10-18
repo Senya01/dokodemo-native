@@ -1,5 +1,6 @@
 #pragma once
 #include "recovered/module_manager_native.h"
+#include "recovered/startup_flow_native.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -39,6 +40,7 @@ struct StartupModuleObservation {
     // Zero-based host request ordinal, NOT a PSP module index. Retired entries
     // remain diagnostics; only StartupObservation::module_records is live registry.
     uint32_t request_index = StartupNoCurrentModule, wrapper_callsite = 0;
+    uint32_t repeated_record_index = StartupNoCurrentModule;
     std::string path, frontier;
     uint32_t frontier_source_pc = 0, flags = 0;
     bool frontier_module_relative = false;
@@ -120,6 +122,7 @@ struct StartupObservation {
     std::string staging_sha256, module_binding_frontier;
     // All legacy single-module fields explicitly alias request 0, never last.
     std::vector<StartupModuleObservation> module_observations;
+    recovered::StartupRepeatedModuleSnapshot repeated_modules;
     std::vector<recovered::NativeModuleSnapshot> module_records; //live manager only
     uint32_t current_module_index = StartupNoCurrentModule;
     std::string current_frontier;

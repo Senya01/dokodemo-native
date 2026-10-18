@@ -16,6 +16,7 @@
 #include "startup_probe.h"
 #include "startup_runtime_win32.h"
 #include "sascore_runtime_win32.h"
+#include "memab_runtime_win32.h"
 #include "recovered/menu_primitives.h"
 #include "recovered/calendar_native.h"
 #include "recovered/service47_native.h"
@@ -1350,6 +1351,106 @@ void WritePspnetValue(std::ostream& out,
         << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
         << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
 }
+void WriteMemabValue(std::ostream& out,
+    const dokodemo::recovered::MemabInitializationSnapshot& s) {
+    const auto boolean=[](bool v){return v?"true":"false";};
+    out << "{\"present\":" << boolean(s.present);
+    if(!s.present) {out << '}';return;}
+    const auto number=[&](const char* name,auto value){out << ',' << JsonString(name) << ':' << value;};
+    const auto flag=[&](const char* name,bool value){out << ',' << JsonString(name) << ':' << boolean(value);};
+    const auto nullable=[&](const char* name,bool present,auto value){
+        out << ',' << JsonString(name) << ':';if(present) out << value;else out << "null";
+    };
+    flag("entry_entered",s.entry_entered);flag("entry_returned",s.entry_returned);
+    nullable("entry_result",s.entry_returned,s.entry_result);
+    flag("host_abort_required",s.host_abort_required);flag("host_abort_entered",s.host_abort_entered);
+    flag("host_aborted",s.host_aborted);flag("stop_domain_ready",s.stop_domain_ready);
+    flag("source_stop_entered",s.source_stop_entered);flag("source_stop_returned",s.source_stop_returned);
+    number("owner",s.owner);number("generation",s.generation);number("serial",s.serial);
+    number("native_state_address",s.native_state_address);number("source_segment",s.source_segment);
+    number("source_segment_va",s.source_segment_va);number("private_bytes",s.private_bytes);
+    number("initial_source_known_bytes",s.initial_source_known_bytes);number("known_bytes",s.known_bytes);
+    number("writes_count",s.writes_count);
+    out << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(),s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(),s.known.size()))
+        << ",\"bytes_meaning_requires_known_one\":true,\"encoded_file_literal_hex\":"
+        << JsonString(StartupHexBytes(s.encoded_file_literal.data(),s.encoded_file_literal.size()))
+        << ",\"file_pointer_addends\":[" << s.file_pointer_addends[0] << ',' << s.file_pointer_addends[1]
+        << "],\"file_pointer_values_relocated\":false,\"writes\":[";
+    for(size_t i=0;i<(std::min)(size_t(s.writes_count),s.writes.size());++i) {
+        if(i) out << ',';const auto& w=s.writes[i];
+        out << "{\"ordinal\":" << w.ordinal << ",\"source_pc\":" << w.source_pc
+            << ",\"offset\":" << w.offset << ",\"width\":4,\"value\":" << w.value
+            << ",\"value_origin\":\"NativePlatform\"}";
+    }
+    out << ']';
+    number("frontier_source_pc",s.frontier_source_pc);number("frontier_stub_va",s.frontier_stub_va);
+    number("frontier_nid",s.frontier_nid);number("frontier_import_index",s.frontier_import_index);
+    const auto& r=s.resources;
+    out << ",\"resources\":{\"policy_abi\":" << JsonString(r.policy_abi?r.policy_abi:"")
+        << ",\"original_firmware_equivalence_known\":false,\"key\":{\"module\":[";
+    for(size_t i=0;i<r.key.module.size();++i){if(i)out << ',';out << r.key.module[i];}
+    out << "],\"input\":[";
+    for(size_t i=0;i<r.key.input.size();++i){if(i)out << ',';out << r.key.input[i];}
+    out << "],\"state\":[";
+    for(size_t i=0;i<r.key.state.size();++i){if(i)out << ',';out << r.key.state[i];}
+    out << "]}";
+    number("backend_owner",r.backend_owner);number("backend_generation",r.backend_generation);
+    number("backend_serial",r.backend_serial);flag("issued",r.issued);flag("retired",r.retired);
+    flag("input_pinned",r.input_pinned);flag("create_entered",r.create_entered);flag("create_returned",r.create_returned);
+    flag("create_source_returned",r.create_source_returned);
+    nullable("create_source_result",r.create_source_returned,r.create_source_result);
+    nullable("create_error",r.create_returned,r.create_error);
+    nullable("create_native_succeeded",r.create_returned,boolean(r.semaphore_handle!=0));
+    nullable("semaphore_uid",r.create_returned,r.semaphore_uid);
+    nullable("semaphore_handle",r.create_returned,r.semaphore_handle);
+    flag("semaphore_live",r.semaphore_live);flag("semaphore_closed",r.semaphore_closed);
+    number("create_attempts",r.create_attempts);number("create_returns",r.create_returns);
+    number("semaphore_closes",r.semaphore_closes);number("delete_attempts",r.delete_attempts);
+    number("delete_returns",r.delete_returns);
+    // These are persistent SOURCE Delete observations; host-only Close attempts
+    // deliberately never overwrite them and do not make absent values numeric.
+    nullable("delete_error",r.delete_source_returned,r.delete_error);
+    nullable("delete_native_succeeded",r.delete_source_returned,boolean(r.delete_native_succeeded));
+    flag("delete_source_returned",r.delete_source_returned);
+    nullable("delete_source_result",r.delete_source_returned,r.delete_source_result);
+    flag("retirement_entered",r.retirement_entered);flag("retirement_returned",r.retirement_returned);
+    number("host_retire_attempts",r.host_retire_attempts);
+    const uint32_t sourceDeletes=r.delete_source_returned?1u:0u;
+    nullable("host_retire_error",r.delete_returns>sourceDeletes,r.host_retire_error);
+    out << "}}";
+}
+void WriteRepeatedModulesValue(std::ostream& out,
+    const dokodemo::recovered::StartupRepeatedModuleSnapshot& s) {
+    const auto boolean=[](bool v){return v?"true":"false";};
+    out << "{\"present\":" << boolean(s.present) << ",\"counter_known\":" << boolean(s.counter_known)
+        << ",\"counter\":";
+    if(s.counter_known) out << s.counter;else out << "null";
+    out << ",\"current_record_index\":";
+    if(s.present) out << s.current_record_index;else out << "null";
+    out << ",\"source_gate_returned\":" << boolean(s.source_gate_returned) << ",\"source_gate_result\":";
+    if(s.source_gate_returned) out << s.source_gate_result;else out << "null";
+    out << ",\"storage_domain\":\"WindowsSymbolicRepeatedModuleTableV1\""
+        << ",\"source_memory_placement_known\":false,\"path_pointer_relocations_applied\":false"
+        << ",\"uid_value_origin_policy\":\"RetainedRawSentinelOrActualWindowsBackedWrapperReturn\""
+        << ",\"wrapper_success_origin\":\"RetainedLoadUid\",\"wrapper_minus_one_origin\":\"NegativeLoadOrStart\""
+        << ",\"symbolic_path_references\":[{\"table_offset\":8,\"referenced_segment\":0,\"addend\":" << 0xDD530
+        << "},{\"table_offset\":20,\"referenced_segment\":0,\"addend\":" << 0xDD558 << "}]"
+        << ",\"source_segment\":" << s.source_segment << ",\"source_table_offset\":" << s.source_table_offset
+        << ",\"source_table_va\":" << s.source_table_va << ",\"table_bytes\":" << s.table_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(),s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(),s.known.size()))
+        << ",\"bytes_meaning_requires_known_one\":true,\"writes\":[";
+    for(size_t i=0;i<(std::min)(size_t(s.writes_count),s.writes.size());++i){
+        if(i)out << ',';const auto& w=s.writes[i];
+        out << "{\"ordinal\":" << w.ordinal << ",\"source_pc\":" << w.source_pc
+            << ",\"record_index\":" << w.record_index << ",\"table_offset\":" << w.table_offset
+            << ",\"width\":4,\"value\":" << w.value << ",\"value_origin\":\"ActualWindowsBackedWrapperReturn\"}";
+    }
+    out << "]}";
+}
+
 void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::NativeModuleSnapshot& record) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
     out << "{\"token\":"; WriteModuleTokenValue(out, record.token);
@@ -1402,11 +1503,13 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
     out << ",\"sascore\":"; WriteSascoreValue(out, record.sascore);
     out << ",\"ifhandle\":"; WriteIfhandleValue(out, record.ifhandle);
     out << ",\"pspnet\":"; WritePspnetValue(out, record.pspnet);
+    out << ",\"memab\":"; WriteMemabValue(out, record.memab);
     out << '}';
 }
 void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
     out << "{\"request_index\":" << item.request_index << ",\"wrapper_callsite\":" << item.wrapper_callsite
+        << ",\"repeated_record_index\":" << (item.repeated_record_index==dokodemo::StartupNoCurrentModule ? "null" : std::to_string(item.repeated_record_index))
         << ",\"path\":" << JsonString(item.path) << ",\"flags\":" << item.flags
         << ",\"options_hex\":" << JsonString(StartupHexBytes(item.options.data(), item.options.size()))
         << ",\"request_owner\":" << item.request_owner << ",\"pending\":" << boolean(item.pending)
@@ -1491,6 +1594,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
     }
     out << "{\"domain\":" << JsonString(observation.domain)
         << ",\"pending_deferred_codec_cleanup\":" << dokodemo::StartupCoordinator::PendingDeferredCodecCleanup()
+        << ",\"pending_deferred_memab_cleanup\":" << dokodemo::PendingWindowsMemabCleanup()
         << ",\"caller_state\":" << JsonString(observation.caller_state)
         << ",\"worker_state\":" << JsonString(observation.worker_state)
         << ",\"barrier\":" << JsonString(observation.barrier)
@@ -1552,6 +1656,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"module_uid\":" << observation.module_uid
         << ",\"module_binding_frontier\":" << JsonString(observation.module_binding_frontier);
     WriteModuleObservation(out, observation);
+    out << ",\"repeated_modules\":"; WriteRepeatedModulesValue(out, observation.repeated_modules);
     out << ",\"current_module_index\":" << observation.current_module_index
         << ",\"no_current_module_sentinel\":" << dokodemo::StartupNoCurrentModule
         << ",\"current_frontier\":" << JsonString(observation.current_frontier)
@@ -2298,7 +2403,7 @@ bool PspnetRequestExact(const dokodemo::StartupModuleObservation& item, bool clo
     }
     return true;
 }
-bool AtPspnetBoundary(const dokodemo::StartupObservation& o) {
+[[maybe_unused]] bool AtPspnetBoundary(const dokodemo::StartupObservation& o) {
     if(o.module_observations.size()!=6 || o.module_records.size()!=5 || o.current_module_index!=5
         || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
         || o.barrier_module_relative || o.current_frontier_module_relative
@@ -2338,14 +2443,156 @@ bool PspnetSequenceClosed(const dokodemo::StartupObservation& o) {
         && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
         && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
 }
+bool MemabRequestExact(const dokodemo::StartupModuleObservation& item,bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record;const auto& s=record.memab;const auto& r=s.resources;
+    if(item.request_index!=5 || item.repeated_record_index!=0 || item.wrapper_callsite!=0x4F71C
+        || item.path!="disc0:/PSP_GAME/USRDIR/prx/memab.prx" || item.flags || item.pending
+        || item.options!=std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation
+        || !item.file_backend_serial || item.file_live || item.encoded_file_bytes!=15216
+        || !item.module_uid_assigned || !item.module_load_returned || item.token.uid<=0
+        || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result
+        || !item.module_file_closed_while_input_live || item.module_initialization_blocked
+        || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed
+        || item.staging_borrow_live==closed || !item.staging_host_read || !item.staging_full_read
+        || !item.staging_hash_matches || item.staging_read_error || item.staging_file_position
+        || item.staging_requested!=15216 || item.staging_transferred!=15216 || item.staging_known_bytes!=15216
+        || item.staging_sha256!="07f07637b64268df841892adf9e21ccc418c5c8641e60e44447ba74b1c31a1a8"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<15216 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed || (closed && item.module_stop_result)
+        || item.module_unloaded!=closed || item.module_input_released!=closed || item.staging_freed_after_joins!=closed
+        || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceMemab" || record.encoded_bytes!=15216 || record.plaintext_bytes!=14880
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="a471025d3e3ecfd5a2ba4bcd3157fe54e5d620174e4bfa63d3d3de50c035b7c8"
+        || record.policy!="WindowsMemabExact0001PrivateSemaphoreV1" || record.start_source_va!=0x9F4 || record.stop_source_va!=0xA34
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || !record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation
+        || record.input.serial!=item.staging_serial || record.input.host_address!=item.staging_host_address
+        || record.input.source_coordinate!=item.staging_source_coordinate || record.input.size!=15216
+        || record.imports.size()!=6 || record.exports.size()!=14 || !s.present
+        || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address
+        || s.source_segment!=1 || s.source_segment_va!=0x2870 || s.private_bytes!=3152
+        || s.initial_source_known_bytes || s.known_bytes!=4 || s.writes_count!=1
+        || !s.entry_entered || !s.entry_returned || s.entry_result || !s.stop_domain_ready
+        || s.host_abort_required || s.host_abort_entered || s.host_aborted
+        || s.source_stop_entered!=closed || s.source_stop_returned!=closed
+        || s.frontier_source_pc || s.frontier_stub_va || s.frontier_nid || s.frontier_import_index
+        || !r.issued || !r.backend_owner || !r.backend_generation || !r.backend_serial
+        || r.retired!=closed || r.input_pinned==closed || !r.create_entered || !r.create_returned
+        || !r.create_source_returned || r.create_source_result<=0 || r.create_source_result!=r.semaphore_uid
+        || r.semaphore_uid==item.token.uid || !r.semaphore_handle || r.create_error
+        || r.create_attempts!=1 || r.create_returns!=1 || r.semaphore_live==closed || r.semaphore_closed!=closed
+        || r.delete_source_returned!=closed || r.retirement_entered!=closed || r.retirement_returned!=closed) return false;
+    if(r.key.module!=std::array<uint64_t,4>{{item.token.owner,item.token.generation,item.token.serial,uint64_t(item.token.uid)}}
+        || r.key.input!=std::array<uint64_t,3>{{record.input.owner,record.input.generation,record.input.serial}}
+        || r.key.state!=std::array<uint64_t,3>{{s.owner,s.generation,s.serial}}) return false;
+    if(closed) {
+        if(!r.delete_attempts || r.delete_attempts!=r.delete_returns || r.semaphore_closes!=1 || !r.host_retire_attempts
+            || r.delete_source_result!=(r.delete_native_succeeded?0:-1)
+            || (r.delete_native_succeeded && r.delete_error)) return false;
+    } else if(r.delete_attempts || r.delete_returns || r.semaphore_closes || r.host_retire_attempts) return false;
+    const auto value=static_cast<uint32_t>(r.create_source_result);
+    for(size_t i=0;i<s.known.size();++i) {
+        const bool known=i>=0x70 && i<0x74;
+        if(s.known[i]!=(known?1:0) || (known && s.bytes[i]!=uint8_t(value>>(8*(i-0x70))))) return false;
+    }
+    if(s.encoded_file_literal!=std::array<uint8_t,8>{{0x90,1,0,0,0x10,3,0,0}}
+        || s.file_pointer_addends!=std::array<uint32_t,2>{{0x190,0x310}}
+        || s.writes[0].ordinal || s.writes[0].source_pc!=0xA24 || s.writes[0].offset!=0x70 || s.writes[0].value!=value) return false;
+    constexpr std::array<uint32_t,6> nids{{0xD6DA4BA1,0x28B6489C,0x3F53E640,0x4E3A1105,0x6FE062D1,0x4C537C72}};
+    for(size_t i=0;i<nids.size();++i) {
+        const auto& x=record.imports[i];const char* library=i<4?"ThreadManForKernel":i==4?"sceIdStorage_driver":"semaphore";
+        if(!SameNativeModuleToken(x.module,item.token) || x.library!=library || x.version || x.attributes!=1
+            || x.nid!=nids[i] || x.source_stub_va!=0x26C0+8*i || x.abi!="unrecovered-psp32-memab-import-v1"
+            || x.resolved || x.partial_callable || x.provider_serial || x.provider_owner || x.provider_generation) return false;
+    }
+    for(const auto& x:record.exports) {
+        const bool lifecycle=x.library.empty() && x.kind=="function" &&
+            ((x.nid==0xD632ACDB && x.relative_va==0x9F4) || (x.nid==0xCEE8593C && x.relative_va==0xA34));
+        if(!SameNativeModuleToken(x.module,item.token) || x.lifecycle_callable!=lifecycle || x.partial_callable || x.version) return false;
+    }
+    return std::count_if(record.exports.begin(),record.exports.end(),[](const auto& x){return x.lifecycle_callable;})==2;
+}
+bool RepeatedMemabContinuationExact(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=7) return false;
+    const auto& s=o.repeated_modules;
+    if(!s.present || !s.counter_known || s.counter!=1 || s.current_record_index!=1 || s.source_gate_returned
+        || s.source_segment!=1 || s.source_table_offset!=0x6950 || s.source_table_va!=0xEA4D0
+        || s.table_bytes!=48 || s.known_bytes!=24 || s.writes_count!=1) return false;
+    std::array<uint8_t,24> expected{{255,255,255,255,1,0,0,0,0x30,0xD5,0x0D,0,255,255,255,255,1,0,0,0,0x58,0xD5,0x0D,0}};
+    const auto uid=static_cast<uint32_t>(o.module_observations[5].module_load_result);
+    for(uint32_t i=0;i<4;++i) expected[i]=uint8_t(uid>>(8*i));
+    for(size_t i=0;i<s.bytes.size();++i)
+        if(s.known[i]!=(i<24?1:0) || (i<24 && s.bytes[i]!=expected[i])) return false;
+    const auto& w=s.writes[0];
+    if(w.ordinal || w.source_pc!=0x4F728 || w.record_index || w.table_offset || w.value!=uid) return false;
+    for(size_t i=0;i<5;++i)
+        if(o.module_observations[i].repeated_record_index!=dokodemo::StartupNoCurrentModule) return false;
+    return o.module_observations[5].repeated_record_index==0 && o.module_observations[6].repeated_record_index==1;
+}
+bool AtMemabBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=7 || o.module_records.size()!=6 || o.current_module_index!=6
+        || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
+        || !MemabRequestExact(o.module_observations[5],false) || !RepeatedMemabContinuationExact(o)
+        || dokodemo::PendingWindowsSascoreCleanup() || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[6];
+    if(next.request_owner!=o.owner || next.request_index!=6 || next.wrapper_callsite!=0x4F71C
+        || next.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc_auth.prx" || next.flags
+        || next.options!=std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        || !next.pending || next.source_fd<0 || !next.file_live || !next.file_native_object
+        || !next.file_backend_owner || !next.file_backend_generation || !next.file_backend_serial
+        || next.frontier_source_pc!=0x4F53C || next.frontier_module_relative || next.module_uid_assigned
+        || next.module_load_returned || next.module_start_called || next.source_close_called || next.record_live
+        || next.module_input_live || next.staging_host_read || next.staging_live || next.staging_borrow_live
+        || next.staging_transferred || next.staging_known_bytes) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<6;++i) {
+        const auto& x=o.module_observations[i];
+        if(x.request_owner!=o.owner || !SameNativeModuleToken(x.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<6;++j) {
+            const auto& y=o.module_observations[j];
+            if(x.token.uid==y.token.uid || x.token.serial==y.token.serial || x.token.owner!=y.token.owner
+                || x.token.generation!=y.token.generation
+                || uint64_t(x.staging_source_coordinate)+x.staging_committed_bytes>y.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool MemabSequenceClosed(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=7 || !QueryEnvelopeModulesClosed(o)
+        || !SascoreRequestExact(o.module_observations[2],true) || !IfhandleRequestExact(o.module_observations[3],true)
+        || !PspnetRequestExact(o.module_observations[4],true) || !MemabRequestExact(o.module_observations[5],true)
+        || !RepeatedMemabContinuationExact(o) || dokodemo::PendingWindowsSascoreCleanup()
+        || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[6];
+    return next.host_file_closed && !next.file_live && !next.pending && !next.record_live
+        && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
+        && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
+}
+
 bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
 #ifdef DOKODEMO_FFMPEG_ROOT
-    return AtPspnetBoundary(observation);
+    return AtMemabBoundary(observation);
 #else
     return AtLegacyNativeModuleSequenceBoundary(observation);
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.module_observations.size() == 7) return MemabSequenceClosed(observation);
     if (observation.module_observations.size() == 6) return PspnetSequenceClosed(observation);
     if (observation.module_observations.size() == 5) return IfhandleSequenceClosed(observation);
     if (observation.module_observations.size() == 4) return SascoreSequenceClosed(observation);
@@ -2459,6 +2706,14 @@ int ConnectedStartupTest(const Options& options) {
         << ",\"fifth_module_stop_returned\":" << (after.module_observations.size()>4 && after.module_observations[4].module_stop_returned ? "true" : "false")
         << ",\"sixth_module_open_returned\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].source_fd>=0 ? "true" : "false")
         << ",\"sixth_module_body_read\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].staging_host_read ? "true" : "false")
+        << ",\"sixth_module_load_returned\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].module_load_returned ? "true" : "false")
+        << ",\"sixth_module_start_returned\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].module_start_returned ? "true" : "false")
+        << ",\"sixth_module_stop_returned\":" << (after.module_observations.size()>5 && after.module_observations[5].module_stop_returned ? "true" : "false")
+        << ",\"seventh_module_open_returned\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].source_fd>=0 ? "true" : "false")
+        << ",\"seventh_module_body_read\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].staging_host_read ? "true" : "false")
+        << ",\"repeated_counter\":" << (boundary.repeated_modules.counter_known ? std::to_string(boundary.repeated_modules.counter) : "null")
+        << ",\"repeated_uid_writes\":" << boundary.repeated_modules.writes_count
+        << ",\"repeated_gate_returned\":" << (boundary.repeated_modules.source_gate_returned ? "true" : "false")
         << ",\"source_queries_returned\":" << queriesReturned
         << ",\"source_GetEDRAM_returned\":" << allocationsReturned
         << ",\"original_ME_equivalence_known\":false,\"source_decode_returned\":false"

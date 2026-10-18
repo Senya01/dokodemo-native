@@ -5,6 +5,7 @@
 #include "sascore_module_native.h"
 #include "ifhandle_module_native.h"
 #include "pspnet_module_native.h"
+#include "memab_module_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -110,6 +111,7 @@ struct NativeModuleSnapshot {
     SascoreInitializationSnapshot sascore;
     IfhandlePrivateDataSnapshot ifhandle;
     PspnetPrivateDataSnapshot pspnet;
+    MemabInitializationSnapshot memab;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -208,6 +210,8 @@ public:
     // Separate production domain; never upgrades the Stage18 prefix provider.
     NativeModuleCode ConfigurePreparedEnvelopeBackend(std::shared_ptr<NativeCodecWorkspaceBackend>);
     NativeModuleCode ConfigureSascoreBackend(std::shared_ptr<NativeSascoreBackend>);
+    NativeModuleCode ConfigureMemabBackend(std::shared_ptr<NativeMemabBackend>);
+    NativeModuleResult RetireStoppedMemab(NativeModuleToken);
     NativeModuleResult RetireStoppedSascore(NativeModuleToken);
     // Distinct HOST cleanup after completed source Stop. Issued Failed slots
     // can own input/API pins even when no native context/storage is live.
@@ -224,6 +228,7 @@ public:
     bool SascoreSnapshot(NativeModuleToken, SascoreInitializationSnapshot&) const noexcept;
     bool IfhandleSnapshot(NativeModuleToken, IfhandlePrivateDataSnapshot&) const noexcept;
     bool PspnetSnapshot(NativeModuleToken, PspnetPrivateDataSnapshot&) const noexcept;
+    bool MemabSnapshot(NativeModuleToken, MemabInitializationSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;

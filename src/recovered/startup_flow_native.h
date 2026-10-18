@@ -26,6 +26,18 @@ struct StartupModuleReturned {
 enum class StartupModuleStop { Unsupported, HostCancelled, HostFailure };
 // No default result: only the Returned alternative owns a source service v0.
 using StartupModuleOutcome = std::variant<StartupModuleReturned, StartupModuleStop>;
+struct StartupRepeatedModuleWrite {
+    uint32_t ordinal = 0, source_pc = 0, record_index = 0, table_offset = 0, value = 0;
+};
+struct StartupRepeatedModuleSnapshot {
+    bool present = false, counter_known = false, source_gate_returned = false;
+    uint32_t counter = 0, current_record_index = 0;
+    uint32_t source_segment = 1, source_table_offset = 0x6950, source_table_va = 0xEA4D0;
+    uint32_t table_bytes = 48, known_bytes = 0, writes_count = 0;
+    int32_t source_gate_result = 0;
+    std::array<uint8_t, 48> bytes{}, known{};
+    std::array<StartupRepeatedModuleWrite, 4> writes{};
+};
 class StartupFlowServices {
 public:
     virtual ~StartupFlowServices() = default;
@@ -49,6 +61,7 @@ public:
     // Native ownership/diagnostic boundary before a source wrapper invocation.
     // This is not a PSP import and has no source return value.
     virtual void BeginModuleRequest(uint32_t, const char*, const StartupModuleOptions&) {}
+    virtual void ObserveRepeatedModules(const StartupRepeatedModuleSnapshot&, uint32_t) noexcept {}
     virtual void UnsupportedFollowingModule() = 0;
     virtual bool HostCancelled() const = 0;
 };

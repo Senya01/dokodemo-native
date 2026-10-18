@@ -2,6 +2,7 @@
 #include "startup_memory_backend_win32.h"
 #include "native_codec_workspace_win32.h"
 #include "sascore_runtime_win32.h"
+#include "memab_runtime_win32.h"
 #include "recovered/startup_flow_native.h"
 #include "recovered/audiocodec_module_native.h"
 #include "recovered/module_manager_native.h"
@@ -18,6 +19,7 @@
 #include <new>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace dokodemo {
@@ -98,6 +100,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     std::shared_ptr<recovered::NativeCodecSessionState> codec_session=std::make_shared<recovered::NativeCodecSessionState>();
     std::shared_ptr<recovered::NativeCodecWorkspaceBackend> codec_backend;
     std::shared_ptr<recovered::NativeSascoreBackend> sascore_backend;
+    std::shared_ptr<recovered::NativeMemabBackend> memab_backend;
+    mutable SRWLOCK repeated_lock=SRWLOCK_INIT;
+    recovered::StartupRepeatedModuleSnapshot repeated_state;
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -527,6 +532,40 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             request.backend_file.generation == data.file_backend_generation &&
             request.backend_file.serial == data.file_backend_serial;
     }
+    recovered::StartupRepeatedModuleSnapshot RepeatedSnapshot() const noexcept {
+        static_assert(std::is_nothrow_copy_constructible_v<recovered::StartupRepeatedModuleSnapshot>);
+        AcquireSRWLockShared(&repeated_lock);
+        auto copy=repeated_state;
+        ReleaseSRWLockShared(&repeated_lock);return copy;
+    }
+    void ObserveRepeatedModules(const recovered::StartupRepeatedModuleSnapshot& value,uint32_t pc) noexcept override {
+        static_assert(std::is_nothrow_copy_assignable_v<recovered::StartupRepeatedModuleSnapshot>);
+        AcquireSRWLockExclusive(&repeated_lock);
+        repeated_state=value; // authoritative fixed state BEFORE optional telemetry; no loss on contention
+        ReleaseSRWLockExclusive(&repeated_lock);
+        try {
+            std::lock_guard<std::mutex> lock(metadata); // no dedicated lock held; no lock-order cycle
+            const char* operation="RepeatedModuleSourceStep";int64_t observed=0;bool returned=false;
+            switch(pc) {
+            case 0x4F700:operation="RepeatedModuleTableBound";observed=value.known_bytes;break;
+            case 0x4F704:case 0x4F740: {
+                operation="RepeatedModuleKindRead";const auto offset=value.current_record_index*12+4;
+                if(offset<value.bytes.size()) observed=value.bytes[offset];break;
+            }
+            case 0x4F708:operation="RepeatedModulePathRead";observed=value.current_record_index;break;
+            case 0x4F724:operation="RepeatedModuleCounterIncrement";observed=value.counter;break;
+            case 0x4F728:operation="RepeatedModuleUidStore";if(value.writes_count) observed=value.writes[value.writes_count-1].value;break;
+            case 0x4F72C:operation="RepeatedModuleLimitCompare";observed=int32_t(value.counter)<4?1:0;break;
+            case 0x4F730:operation="RepeatedModulePointerAdvance";observed=value.current_record_index;break;
+            case 0x4F734:operation="RepeatedModuleFailureBranch";observed=value.writes_count && value.writes[value.writes_count-1].value==0xFFFFFFFFu?1:0;break;
+            case 0x4F738:operation="RepeatedModuleFailureDelayClear";break;
+            case 0x4F73C:operation="RepeatedModuleLoopBranchLikely";observed=int32_t(value.counter)<4?1:0;break;
+            case 0x4F758:operation="RepeatedModuleGateReturn";observed=value.source_gate_result;returned=value.source_gate_returned;break;
+            }
+            EmitLocked(operation,"RecoveredGameCaller",pc,observed,returned,0,0,0,
+                       "fixed source state retained separately;register counter distinct from table UID store;symbolic source coordinates");
+        } catch(...) {} // telemetry cannot erase the persistent counter/table effects
+    }
     void BeginModuleRequest(uint32_t callsite, const char* path,
                             const recovered::StartupModuleOptions& option) override {
         if (!IsCurrent(true) || !path) throw NativeFailure{};
@@ -562,8 +601,18 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             request->input_bytes = 60256;
         } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/memab.prx" && callsite == 0x4F71C &&
                    option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
-            // Actual first table request only. No sixth body/descriptor is admitted.
+            const auto repeated=RepeatedSnapshot();
+            if(!repeated.present || !repeated.counter_known || repeated.counter || repeated.current_record_index || repeated.writes_count)
+                throw NativeFailure{};
             relative = L"PSP_GAME\\USRDIR\\prx\\memab.prx";
+            request->input_bytes=15216;request->data.repeated_record_index=0;
+        } else if(source_path=="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc_auth.prx" && callsite==0x4F71C &&
+                  option==recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
+            const auto repeated=RepeatedSnapshot();
+            if(!repeated.present || !repeated.counter_known || repeated.counter!=1 || repeated.current_record_index!=1 ||
+                repeated.writes_count!=1 || repeated.source_gate_returned) throw NativeFailure{};
+            relative=L"PSP_GAME\\USRDIR\\prx\\pspnet_adhoc_auth.prx";
+            request->data.repeated_record_index=1; // actual Open allowed; no next body/size admission
         } else throw NativeFailure{};
         request->native_path = options.media_root;
         if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
@@ -743,7 +792,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             recovered::FindAtrac3plusModuleDescriptor(digest, request->input_bytes) ||
             recovered::FindSascoreModuleDescriptor(digest, request->input_bytes) ||
             recovered::FindIfhandleModuleDescriptor(digest, request->input_bytes) ||
-            recovered::FindPspnetModuleDescriptor(digest, request->input_bytes);
+            recovered::FindPspnetModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindMemabModuleDescriptor(digest, request->input_bytes);
         { std::lock_guard<std::mutex> lock(metadata);
           data.staging_hash_matches = exact; data.staging_sha256 = digest;
           EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, exact ? 1 : 0, false, span.host_address, 0, 0, digest); }
@@ -814,10 +864,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             modules.SascoreSnapshot(data.token, data.record.sascore);
             modules.IfhandleSnapshot(data.token, data.record.ifhandle);
             modules.PspnetSnapshot(data.token, data.record.pspnet);
+            modules.MemabSnapshot(data.token, data.record.memab);
             data.module_initialization_blocked = data.record.initialization.prefix_entered &&
                 data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
             data.module_initialization_blocked = data.module_initialization_blocked ||
                 (data.record.sascore.entry_entered && data.record.sascore.host_abort_required && !data.record.sascore.host_aborted);
+            data.module_initialization_blocked=data.module_initialization_blocked ||
+                (data.record.memab.entry_entered && data.record.memab.host_abort_required && !data.record.memab.host_aborted);
             modules.CheckNeedMemSnapshot(data.token, data.record.check_need_mem); // nonallocating outcome/effects
             modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
             entry_frontier = started_module.frontier_source_pc; // primitive outcome; independent of allocating Snapshot
@@ -835,6 +888,18 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             }
             try {
                 modules.Snapshot(data.token, data.record);
+                if(data.record.memab.present) {
+                    const auto& memab=data.record.memab;
+                    for(uint32_t i=0;i<memab.writes_count;++i) {
+                        const auto& write=memab.writes[i];
+                        EmitLocked("MemabGlobalWrite","RecoveredSourceStoreNativeServiceResult",write.source_pc,write.value,false,
+                                   memab.native_state_address,0,0,"actual Create service bits;only private+70..74 known;no relocated pointers/BSS0",0,0,true,data.token);
+                    }
+                    if(memab.resources.create_returned)
+                        EmitLocked("MemabNativeSemaphore","WindowsMemabPolicy",0,memab.resources.semaphore_live?1:0,false,
+                                   memab.resources.semaphore_handle,memab.resources.create_error,0,
+                                   "actual native Create returned;separate nullable typed source service UID;unnamed noninheritable1/1");
+                }
                 if(data.record.sascore.present) {
                     const auto& sas=data.record.sascore;
                     for(uint32_t i=0;i<sas.writes_count;++i) {
@@ -885,6 +950,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                            "finite Windows query-envelope-v2;actual phase/resources in per-record snapshot;originalME unresolved" : started_module.check_need_mem_blocked ?
                            "ATRAC caller1684->audiocodec CheckNeedMem;callee84->ME stubAF8/C00D873B;codec1000,same owned record0+44;NO ME dispatch/result" :
                            data.record.sascore.present ? "SAS exact lifecycle platform boundary;actual effects/body result retained;NO fabricated Start service result" :
+                           data.record.memab.present ? (data.record.memab.entry_returned ?
+                           "memab actual nonpositive Create service result;A24 store/body1 retained;NO Windows Start completion;host abort required,NO sourceStopA34" :
+                           "memab A10/CreateSema incomplete;NO source service result/A24 store/body result;any issued HANDLE/input pins retained for host abort,NO sourceStopA34") :
                            "ATRAC1684->stub3640;a0=owned record0+44,a1=1000;NO CheckNeedMem dispatch/result",
                            0, 0, true, started_module.dependency_module);
             if (started_module.entry_return)
@@ -933,8 +1001,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         return recovered::StartupModuleReturned{closed ? 0 : AdapterError};
     }
     void UnsupportedFollowingModule() override {
+        const auto repeated=RepeatedSnapshot();
         (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
-            "Returned first table wrapper requires the unimplemented persistent counter/UID-store producer;no table effect or worker source return", 0, 0x4F724);
+            "Repeated caller reached first unadmitted table kind/main continuation;no unknown read or fabricated source result",0,
+            repeated.current_record_index>=4?0x100C:0x4F740);
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
     void BarrierPump() {
@@ -1077,6 +1147,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     modules.SascoreSnapshot(data.token,data.record.sascore);
                     modules.IfhandleSnapshot(data.token,data.record.ifhandle);
                     modules.PspnetSnapshot(data.token, data.record.pspnet);
+                    modules.MemabSnapshot(data.token, data.record.memab);
                     for(uint32_t i=prior_writes;i<data.record.initialization.writes_count;++i) {
                         const auto& write=data.record.initialization.writes[i];
                         EmitLocked("ModuleStopReleaseWrite","RecoveredSourceAfterWindowsRelease",write.source_pc,write.value,false,
@@ -1090,6 +1161,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                         state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
                     }
                     data.module_stop_returned = true; data.module_stop_result = stopped.entry_result;
+                    if(data.record.memab.present && data.record.memab.resources.delete_source_returned) {
+                        const auto& resource=data.record.memab.resources;
+                        EmitLocked("MemabDeleteSema-return","WindowsMemabPolicySourceMapping",0xA40,resource.delete_source_result,true,
+                                   resource.semaphore_handle,resource.delete_error,0,
+                                   "actual native Close mapped0/-1;source A4C ignores number;live host obligation retained",0,0,true,data.token);
+                    }
                     if(data.record.prepared_envelope.source_stop_returned) for(const auto& native:data.record.prepared_envelope.records) {
                         if(native.release_source_return)
                             EmitLocked("NativeOwnedReleaseEDRAM-return","WindowsOwnedReleaseCapabilityV2",0x77C,native.release_source_result,true,
@@ -1113,10 +1190,14 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     modules.InitializationSnapshot(data.token, data.record.initialization);
                     modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
                     modules.SascoreSnapshot(data.token,data.record.sascore);
+                    modules.MemabSnapshot(data.token,data.record.memab);
                     EmitLocked("HostModuleInitializationAborted", "HostModulePolicy", 0, data.token.uid, false,
                                data.token.serial, 0, 0, data.record.prepared_envelope.present ?
                                "after BOTH joins;reverse native context destruction/borrowReset/Free completed;NO sourceStop121C" :
                                data.record.sascore.present ? "SAS reverse host abort completed;source globals/history retained;NO sourceStop1ACC" :
+                               data.record.memab.present ? (data.record.memab.entry_returned ?
+                               "memab host abort after BOTH joins;issued semaphore/input pins retired;actual A24 store/body1/history retained;NO sourceStopA34" :
+                               "memab host abort after BOTH joins;any issued semaphore/input pins retired;incomplete Create produced no A24/body result;NO sourceStopA34") :
                                "libatrac partial init and optional CheckNeedMem write;no external ME resource;NO sourceStop121C");
                 }
                 if(data.module_stop_returned && data.record.sascore.present) {
@@ -1129,6 +1210,17 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     }
                     EmitLocked("HostStoppedSascoreRetired","HostModulePolicy",0,1,false,data.token.serial,
                                0,0,"after BOTH joins/sourceStop;input pins retired;no global zero stores/history rewrite");
+                }
+                if(data.module_stop_returned && data.record.memab.present) {
+                    const auto retired=modules.RetireStoppedMemab(data.token);
+                    modules.MemabSnapshot(data.token,data.record.memab);
+                    if(!retired) {
+                        EmitLocked("HostStoppedMemabRetirementPending","HostModulePolicy",0,0,false,data.token.serial,
+                                   0,0,"issued slot/input pin/live HANDLE must retire before Unload;no source replay");
+                        state.status=Failure(StartupRuntimeCode::HostFailure);return state.status;
+                    }
+                    EmitLocked("HostStoppedMemabRetired","HostModulePolicy",0,1,false,data.token.serial,
+                               0,0,"after BOTH joins/sourceStop;all issued obligations retired;source UID/mask/history retained");
                 }
                 if(data.module_stop_returned && data.record.prepared_envelope.present) {
                     const auto retired=modules.RetireStoppedCodecWorkspaces(data.token);
@@ -1210,6 +1302,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             if (freed) tls_index = TLS_OUT_OF_INDEXES; else ok = false;
         }
         if (backend) {
+            if(memab_backend) {
+                const auto closed=memab_backend->Close();
+                Emit("CloseMemabBackend","WindowsMemabPolicy",0,closed==recovered::NativeMemabCode::Ok?1:0);
+                if(closed!=recovered::NativeMemabCode::Ok) return CleanupFailure();
+            }
             if(sascore_backend) {
                 const auto closed=sascore_backend->Close();
                 Emit("CloseSascoreBackend","WindowsSascorePolicy",0,closed==recovered::NativeSascoreCode::Ok?1:0);
@@ -1276,6 +1373,14 @@ std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRunt
             status=Failure(StartupRuntimeCode::HostFailure);return {};
         }
         impl->Emit("SascoreBackendReady","WindowsSascorePolicy",0,1,false,0,0,0,recovered::NativeSascoreAbi);
+        recovered::NativeMemabCode memab_status;
+        auto cancellation=std::shared_ptr<std::atomic<bool>>(impl->codec_session,&impl->codec_session->cancelled);
+        impl->memab_backend=CreateWindowsMemabBackend(std::move(cancellation),memab_status);
+        if(!impl->memab_backend || memab_status!=recovered::NativeMemabCode::Ok ||
+            impl->modules.ConfigureMemabBackend(impl->memab_backend)!=recovered::NativeModuleCode::Ok) {
+            status=Failure(StartupRuntimeCode::HostFailure);return {};
+        }
+        impl->Emit("MemabBackendReady","WindowsMemabPolicy",0,1,false,0,0,0,recovered::NativeMemabAbi);
     }
     impl->tls_index = TlsAlloc();
     const DWORD tls_error = impl->tls_index == TLS_OUT_OF_INDEXES ? GetLastError() : 0;
@@ -1315,6 +1420,7 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     const auto& self = *impl_;
     std::lock_guard<std::mutex> lock(self.metadata);
     auto out = self.state;
+    out.repeated_modules=self.RepeatedSnapshot();
     out.module_records = self.modules.Snapshots();
     out.module_providers = self.modules.Providers();
     out.module_observations.reserve(self.module_requests.size());

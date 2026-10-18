@@ -13,6 +13,7 @@ constexpr const char* AtracImportAbi = "unrecovered-psp32-atrac3plus-import-v1";
 constexpr const char* SascoreImportAbi = "unrecovered-psp32-sascore-import-v1";
 constexpr const char* IfhandleImportAbi = "unrecovered-psp32-ifhandle-import-v1";
 constexpr const char* PspnetImportAbi = "unrecovered-psp32-pspnet-import-v1";
+constexpr const char* MemabImportAbi = "unrecovered-psp32-memab-import-v1";
 constexpr const char* SyntheticAbi = "synthetic-stage16-u32x4-v1";
 constexpr const char* CheckNeedMemAbi = "windows-owned-masked-checkneedmem-prefix-v1";
 // This namespace is a Windows registry namespace, not PSP kernel UID state.
@@ -38,7 +39,7 @@ bool SameInput(const NativeModuleInputView& a, const NativeModuleInputView& b) n
 }
 bool KnownInput(const NativeModuleInputView& view) noexcept {
     if (!view.bytes || !view.initialized || !view.owner || !view.generation || !view.serial ||
-        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920 && view.size != 10832 && view.size != 60256) ||
+        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920 && view.size != 10832 && view.size != 60256 && view.size != 15216) ||
         view.host_address != uint64_t(reinterpret_cast<uintptr_t>(view.bytes)) ||
         view.host_address > (std::numeric_limits<uint64_t>::max)() - view.size ||
         uint64_t(view.source_coordinate) + view.size > (uint64_t(1) << 32)) return false;
@@ -96,6 +97,7 @@ struct NativeModuleManager::Impl {
     std::vector<std::shared_ptr<ProviderRecord>> providers;
     std::shared_ptr<NativeCodecWorkspaceBackend> codec_backend;
     std::shared_ptr<NativeSascoreBackend> sascore_backend;
+    std::shared_ptr<NativeMemabBackend> memab_backend;
     explicit Impl(NativeModuleDomain selected) : domain(selected) {
         owner = TakeMonotonic(next_manager_owner, (std::numeric_limits<uint64_t>::max)() - 1);
     }
@@ -305,8 +307,9 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
     const auto* sas = FindSascoreModuleDescriptor(digest, view.size);
     const auto* ifhandle = FindIfhandleModuleDescriptor(digest, view.size);
     const auto* pspnet = FindPspnetModuleDescriptor(digest, view.size);
-    if (!descriptor && !atrac && !sas && !ifhandle && !pspnet) return Result(NativeModuleCode::IdentityMismatch);
-    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas ? sas->name : ifhandle ? ifhandle->name : pspnet->name;
+    const auto* memab = FindMemabModuleDescriptor(digest, view.size);
+    if (!descriptor && !atrac && !sas && !ifhandle && !pspnet && !memab) return Result(NativeModuleCode::IdentityMismatch);
+    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas ? sas->name : ifhandle ? ifhandle->name : pspnet ? pspnet->name : memab->name;
     for (const auto& live : self.modules) {
         if (live->data.name == name) return Result(NativeModuleCode::AlreadyLoaded);
         const auto& old = live->data.input;
@@ -471,7 +474,7 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
                 (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
             Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
         }
-    } else {
+    } else if (pspnet) {
         // Fifth already-ELF identity has a separate exact4001/0001 policy.
         // Matching older public export metadata does not supply a provider.
         if(pspnet->attributes!=0x0006 || pspnet->version!=0x0101 ||
@@ -507,6 +510,37 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
             Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
         }
     }
+    if(memab) {
+        // Sixth exact encoded identity; offline source association only, no runtime crypto.
+        if(memab->attributes!=0x1006 || memab->version!=0x0101 || memab->source_elf_entry!=0x9F4 ||
+            memab->start_source_va!=0x9F4 || memab->stop_source_va!=0xA34)
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=memab->plaintext_sha256;
+        record->data.encoded_bytes=memab->encoded_bytes;record->data.plaintext_bytes=memab->plaintext_bytes;
+        record->data.policy="WindowsMemabExact0001PrivateSemaphoreV1";
+        record->data.implementation="aot-memab-9F4-owned-1-1-semaphore/A34-delete-result-ignored-v1;public-services-unimplemented";
+        record->data.start_source_va=0x9F4;record->data.stop_source_va=0xA34;record->data.partial_start_supported=true;
+        InitializeMemabState(record->data.memab);
+        record->data.memab.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.memab));
+        record->data.imports.reserve(6);record->data.exports.reserve(14);
+        for(const auto& library:memab->imports) {
+            if(!MemabImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>memab->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=memab->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=MemabImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=6) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:memab->exports) {
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
+    }
     record->bindings.resize(record->data.imports.size());
     self.modules.reserve(self.modules.size() + 1); // final fallible registry allocation BEFORE UID publication
     const auto uid = TakeMonotonic(next_module_uid, uint64_t((std::numeric_limits<int32_t>::max)()));
@@ -531,6 +565,13 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
         auto& state=record->data.pspnet;
         state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
     }
+    if(memab) {
+        auto& state=record->data.memab;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
+        state.resources.key.module={{self.owner,self.generation,self.serial,uid}};
+        state.resources.key.input={{view.owner,view.generation,view.serial}};
+        state.resources.key.state={{self.owner,self.generation,self.serial}};
+    }
     for (auto& entry : record->data.imports) entry.module = record->data.token;
     for (auto& entry : record->data.exports) entry.module = record->data.token;
     if (descriptor && self.domain == NativeModuleDomain::Production)
@@ -554,6 +595,20 @@ NativeModuleResult NativeModuleManager::Start(NativeModuleToken token, uint32_t 
     self.gate->executing = true; // admission begins BEFORE virtual consumer View/hash validation
     struct StartExit { CallGate& gate; ~StartExit() { gate.executing = false; } } admission{*self.gate};
     if (!InputLive(record)) return Result(NativeModuleCode::InvalidInput, token);
+    if(record.data.memab.present) {
+        const auto outcome=RunMemabStart(record.data.memab,self.memab_backend.get(),record.input);
+        const auto& state=record.data.memab;
+        if(outcome==NativeMemabCode::Ok && state.entry_returned && state.entry_result==0 && state.stop_domain_ready) {
+            record.data.state=NativeModuleState::Started;record.data.entry_frontier_source_pc=0;
+            auto result=Returned(token,0);result.entry_return=true;result.entry_result=0;result.entry_source_pc=0x9F4;return result;
+        }
+        record.data.state=NativeModuleState::EntryBlocked;record.data.entry_frontier_source_pc=state.frontier_source_pc;
+        auto result=Result(outcome==NativeMemabCode::Refused?NativeModuleCode::UnsupportedEntry:NativeModuleCode::HostCapabilityRefused,token);
+        result.entry_return=state.entry_returned;result.entry_result=state.entry_result;result.entry_source_pc=0x9F4;
+        result.dependency_module=token;result.frontier_source_pc=state.frontier_source_pc;
+        result.frontier_stub_va=state.frontier_stub_va;result.frontier_nid=state.frontier_nid;result.frontier_import_index=state.frontier_import_index;
+        return result; // completed body1 is retained; no Windows Start success or Stop domain
+    }
     if(record.data.sascore.present) {
         const auto outcome=RunSascoreStart(record.data.sascore,self.sascore_backend.get(),record.input);
         const auto& state=record.data.sascore;
@@ -773,6 +828,22 @@ NativeModuleResult NativeModuleManager::Stop(NativeModuleToken token) {
     const auto owned = self.Find(token);
     if (!owned) return Result(NativeModuleCode::InvalidToken);
     auto& record = *owned;
+    if(record.data.memab.present) {
+        if(record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings) return Result(NativeModuleCode::Busy,token);
+        if(record.data.state!=NativeModuleState::Started) return Result(NativeModuleCode::WrongState,token);
+        self.gate->executing=true;
+        struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} admission{*self.gate};
+        if(!InputLive(record)) return Result(NativeModuleCode::InvalidInput,token);
+        const auto code=RunMemabStop(record.data.memab,self.memab_backend.get());
+        if(code!=NativeMemabCode::Ok || !record.data.memab.source_stop_returned) {
+            const auto& state=record.data.memab;record.data.entry_frontier_source_pc=state.frontier_source_pc;
+            auto result=Result(NativeModuleCode::HostCapabilityRefused,token);result.dependency_module=token;
+            result.frontier_source_pc=state.frontier_source_pc;result.frontier_stub_va=state.frontier_stub_va;
+            result.frontier_nid=state.frontier_nid;result.frontier_import_index=state.frontier_import_index;return result;
+        }
+        record.data.state=NativeModuleState::Stopped;record.data.entry_frontier_source_pc=0;
+        auto result=Returned(token,0);result.entry_return=true;result.entry_result=0;result.entry_source_pc=0xA34;return result;
+    }
     if(record.data.sascore.present) {
         if(record.data.active_calls || record.data.owned_providers || record.data.incoming_bindings) return Result(NativeModuleCode::Busy,token);
         if(record.data.state!=NativeModuleState::Started) return Result(NativeModuleCode::WrongState,token);
@@ -880,6 +951,13 @@ NativeModuleResult NativeModuleManager::AbortInitialization(NativeModuleToken to
     if (data.active_calls || data.owned_providers || data.incoming_bindings) return Result(NativeModuleCode::Busy, token);
     if (data.state != NativeModuleState::EntryBlocked || !data.partial_start_supported)
         return Result(NativeModuleCode::WrongState, token);
+    if(data.memab.present) {
+        self.gate->executing=true;
+        struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} admission{*self.gate};
+        const auto code=AbortMemabInitialization(data.memab,self.memab_backend.get());
+        if(code!=NativeMemabCode::Ok) return Result(NativeModuleCode::Busy,token);
+        data.state=NativeModuleState::InitializationAborted;return Result(NativeModuleCode::Ok,token);
+    }
     if(data.sascore.present) {
         self.gate->executing=true;
         struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*self.gate};
@@ -950,6 +1028,7 @@ NativeModuleResult NativeModuleManager::Unload(NativeModuleToken token) {
     if (owned->data.state == NativeModuleState::Started || owned->data.state == NativeModuleState::EntryBlocked)
         return Result(NativeModuleCode::WrongState, token);
     if(owned->data.sascore.resources.issued && !owned->data.sascore.resources.retired) return Result(NativeModuleCode::Busy,token);
+    if(owned->data.memab.resources.issued && !owned->data.memab.resources.retired) return Result(NativeModuleCode::Busy,token);
     for(const auto& native:owned->data.prepared_envelope.records)
         if(native.state!=NativeCodecWorkspaceState::Unissued && native.state!=NativeCodecWorkspaceState::Retired)
             return Result(NativeModuleCode::Busy,token);
@@ -1037,6 +1116,24 @@ NativeModuleCode NativeModuleManager::ConfigureSascoreBackend(std::shared_ptr<Na
     if(self.domain!=NativeModuleDomain::Production || !self.modules.empty() || self.sascore_backend) return NativeModuleCode::WrongState;
     if(!backend || !backend->Ready()) return NativeModuleCode::HostCapabilityRefused;
     self.sascore_backend=std::move(backend);return NativeModuleCode::Ok;
+}
+NativeModuleCode NativeModuleManager::ConfigureMemabBackend(std::shared_ptr<NativeMemabBackend> backend) {
+    auto& self=*impl_;if(self.gate->executing) return NativeModuleCode::Busy;
+    if(self.domain!=NativeModuleDomain::Production || !self.modules.empty() || self.memab_backend) return NativeModuleCode::WrongState;
+    if(!backend || !backend->Ready()) return NativeModuleCode::HostCapabilityRefused;
+    self.memab_backend=std::move(backend);return NativeModuleCode::Ok;
+}
+NativeModuleResult NativeModuleManager::RetireStoppedMemab(NativeModuleToken token) {
+    auto& self=*impl_;if(self.gate->executing) return Result(NativeModuleCode::Busy,token);
+    const auto module=self.Find(token);if(!module) return Result(NativeModuleCode::InvalidToken,token);
+    auto& state=module->data.memab;
+    if(module->data.state!=NativeModuleState::Stopped || !state.present || !state.source_stop_returned || !self.memab_backend)
+        return Result(NativeModuleCode::WrongState,token);
+    if(state.resources.retired) return Result(NativeModuleCode::Ok,token);
+    self.gate->executing=true;
+    struct Exit {CallGate& gate;~Exit(){gate.executing=false;}} guard{*self.gate};
+    const auto result=self.memab_backend->Retire(state.resources.key,state.resources);
+    return Result(result==NativeMemabCode::Ok && state.resources.retired?NativeModuleCode::Ok:NativeModuleCode::Busy,token);
 }
 NativeModuleResult NativeModuleManager::RetireStoppedSascore(NativeModuleToken token) {
     auto& self=*impl_;if(self.gate->executing) return Result(NativeModuleCode::Busy,token);
@@ -1186,6 +1283,10 @@ bool NativeModuleManager::IfhandleSnapshot(NativeModuleToken token,IfhandlePriva
 bool NativeModuleManager::PspnetSnapshot(NativeModuleToken token,PspnetPrivateDataSnapshot& out) const noexcept {
     const auto module=impl_->Find(token);if(!module || !module->data.pspnet.present) return false;
     out=module->data.pspnet;return true;
+}
+bool NativeModuleManager::MemabSnapshot(NativeModuleToken token,MemabInitializationSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);if(!module || !module->data.memab.present) return false;
+    out=module->data.memab;return true;
 }
 std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
     if (impl_->gate->executing) return {};
