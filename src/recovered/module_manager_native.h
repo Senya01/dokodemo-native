@@ -3,6 +3,8 @@
 #include "atrac3plus_module_native.h"
 #include "native_codec_workspace.h"
 #include "sascore_module_native.h"
+#include "ifhandle_module_native.h"
+#include "pspnet_module_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -106,6 +108,8 @@ struct NativeModuleSnapshot {
     NativeCheckNeedMemSnapshot check_need_mem;
     NativePreparedEnvelopeSnapshot prepared_envelope;
     SascoreInitializationSnapshot sascore;
+    IfhandlePrivateDataSnapshot ifhandle;
+    PspnetPrivateDataSnapshot pspnet;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -218,12 +222,15 @@ public:
     bool CheckNeedMemSnapshot(NativeModuleToken, NativeCheckNeedMemSnapshot&) const noexcept;
     bool PreparedEnvelopeSnapshot(NativeModuleToken, NativePreparedEnvelopeSnapshot&) const noexcept;
     bool SascoreSnapshot(NativeModuleToken, SascoreInitializationSnapshot&) const noexcept;
+    bool IfhandleSnapshot(NativeModuleToken, IfhandlePrivateDataSnapshot&) const noexcept;
+    bool PspnetSnapshot(NativeModuleToken, PspnetPrivateDataSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;
     uint64_t Owner() const noexcept;
     uint64_t Generation() const noexcept;
 private:
+    NativeModuleResult LoadInput(std::shared_ptr<NativeModuleInputLease>, uint32_t required_bytes);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

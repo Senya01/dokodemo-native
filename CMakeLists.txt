@@ -38,6 +38,8 @@ add_library(dokodemo-core STATIC
     src/recovered/module_manager_native.cpp
     src/recovered/atrac3plus_module_native.cpp
     src/recovered/sascore_module_native.cpp
+    src/recovered/ifhandle_module_native.cpp
+    src/recovered/pspnet_module_native.cpp
     src/model_formats.cpp
     src/recovered/game_primitives.cpp
     src/recovered/menu_primitives.cpp

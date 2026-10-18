@@ -11,6 +11,8 @@ namespace {
 constexpr const char* ImportAbi = "unrecovered-psp32-audiocodec-import-v1";
 constexpr const char* AtracImportAbi = "unrecovered-psp32-atrac3plus-import-v1";
 constexpr const char* SascoreImportAbi = "unrecovered-psp32-sascore-import-v1";
+constexpr const char* IfhandleImportAbi = "unrecovered-psp32-ifhandle-import-v1";
+constexpr const char* PspnetImportAbi = "unrecovered-psp32-pspnet-import-v1";
 constexpr const char* SyntheticAbi = "synthetic-stage16-u32x4-v1";
 constexpr const char* CheckNeedMemAbi = "windows-owned-masked-checkneedmem-prefix-v1";
 // This namespace is a Windows registry namespace, not PSP kernel UID state.
@@ -36,7 +38,7 @@ bool SameInput(const NativeModuleInputView& a, const NativeModuleInputView& b) n
 }
 bool KnownInput(const NativeModuleInputView& view) noexcept {
     if (!view.bytes || !view.initialized || !view.owner || !view.generation || !view.serial ||
-        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920) ||
+        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920 && view.size != 10832 && view.size != 60256) ||
         view.host_address != uint64_t(reinterpret_cast<uintptr_t>(view.bytes)) ||
         view.host_address > (std::numeric_limits<uint64_t>::max)() - view.size ||
         uint64_t(view.source_coordinate) + view.size > (uint64_t(1) << 32)) return false;
@@ -275,24 +277,36 @@ NativeModuleManager::~NativeModuleManager() = default;
 uint64_t NativeModuleManager::Owner() const noexcept { return impl_->owner; }
 uint64_t NativeModuleManager::Generation() const noexcept { return impl_->generation; }
 NativeModuleResult NativeModuleManager::LoadAudiocodec(std::shared_ptr<NativeModuleInputLease> input) {
-    if (impl_->gate->executing) return Result(NativeModuleCode::Busy);
-    NativeModuleInputView view;
-    if (!input || !input->View(view) || view.size != 3232) return Result(NativeModuleCode::InvalidInput);
-    return Load(std::move(input));
+    auto& self = *impl_;
+    if (self.gate->executing) return Result(NativeModuleCode::Busy);
+    self.gate->executing = true;
+    struct Exit { CallGate& gate; ~Exit() { gate.executing = false; } } admission{*self.gate};
+    return LoadInput(std::move(input), 3232);
 }
 NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLease> input) {
     auto& self = *impl_;
     if (self.gate->executing) return Result(NativeModuleCode::Busy);
+    self.gate->executing = true;
+    struct Exit { CallGate& gate; ~Exit() { gate.executing = false; } } admission{*self.gate};
+    return LoadInput(std::move(input), 0);
+}
+NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleInputLease> input,
+                                                uint32_t required_bytes) {
+    auto& self = *impl_; // exclusively reached through either guarded public Load
     if (!self.owner || self.serial == (std::numeric_limits<uint64_t>::max)()) return Result(NativeModuleCode::Exhausted);
     NativeModuleInputView view;
-    if (!input || !input->View(view) || !KnownInput(view)) return Result(NativeModuleCode::InvalidInput);
+    if (!input || !input->View(view) || (required_bytes && view.size != required_bytes) || !KnownInput(view))
+        return Result(NativeModuleCode::InvalidInput);
     core::Sha256 hash; hash.update(view.bytes, view.size); // same physical span; no payload copy
-    const auto digest = core::hex_digest(hash.digest());
+    const auto input_digest = hash.digest();
+    const auto digest = core::hex_digest(input_digest);
     const auto* descriptor = FindAudiocodecModuleDescriptor(digest, view.size);
     const auto* atrac = FindAtrac3plusModuleDescriptor(digest, view.size);
     const auto* sas = FindSascoreModuleDescriptor(digest, view.size);
-    if (!descriptor && !atrac && !sas) return Result(NativeModuleCode::IdentityMismatch);
-    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas->name;
+    const auto* ifhandle = FindIfhandleModuleDescriptor(digest, view.size);
+    const auto* pspnet = FindPspnetModuleDescriptor(digest, view.size);
+    if (!descriptor && !atrac && !sas && !ifhandle && !pspnet) return Result(NativeModuleCode::IdentityMismatch);
+    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas ? sas->name : ifhandle ? ifhandle->name : pspnet->name;
     for (const auto& live : self.modules) {
         if (live->data.name == name) return Result(NativeModuleCode::AlreadyLoaded);
         const auto& old = live->data.input;
@@ -305,11 +319,15 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
     NativeModuleInputView confirmed;
     if (!input->View(confirmed) || !KnownInput(confirmed) || !SameInput(view, confirmed))
         return Result(NativeModuleCode::InvalidInput);
+    // A virtual confirmation may have changed bytes in the same physical span.
+    // Pin its final identity before metadata or any registry UID is published.
+    if (core::sha256(confirmed.bytes, confirmed.size) != input_digest)
+        return Result(NativeModuleCode::InvalidInput);
     // All allocations and metadata preparation precede UID publication. The
     // canonical descriptor binds this exact encoded identity to the accepted
     // offline plaintext/source contract, then to these compiled lifecycle bodies.
     auto record = std::make_shared<ModuleRecord>();
-    record->digest = hash.digest();
+    record->digest = input_digest;
     record->input = std::move(input);
     record->data.domain = self.domain;
     record->data.input = view;
@@ -391,7 +409,7 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
         for (const auto& entry : atrac->exports)
             Export(*record, entry.library, entry.variable ? "variable" : "function", entry.attributes,
                    entry.nid, entry.source_va, false); // NO fully callable new export; aliases metadata-only
-    } else {
+    } else if (sas) {
         // Separate exact SAS policy; uncalled services are still unresolved.
         if(sas->attributes!=0x1006 || sas->version!=0x0101) return Result(NativeModuleCode::UnsupportedPolicy);
         record->data.plaintext_sha256=sas->plaintext_sha256;
@@ -419,6 +437,75 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
             const bool lifecycle=!entry.library[0] && (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
             Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
         }
+    } else if (ifhandle) {
+        // Exact fourth-module policy. No public networking provider is minted.
+        if(ifhandle->attributes!=0x1006 || ifhandle->version!=0x0101 ||
+            ifhandle->source_elf_entry!=0x3454 || ifhandle->start_source_va!=0x3454 || ifhandle->stop_source_va!=0x345C ||
+            ifhandle->start_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}} ||
+            ifhandle->stop_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}})
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=ifhandle->plaintext_sha256;
+        record->data.encoded_bytes=ifhandle->encoded_bytes;record->data.plaintext_bytes=ifhandle->plaintext_bytes;
+        record->data.policy="WindowsIfhandleExact0001_0009LifecycleV1";
+        record->data.implementation="aot-ifhandle-bound-3454/345C-literal-zero-v1;public-networking-unimplemented";
+        record->data.start_source_va=0x3454;record->data.stop_source_va=0x345C;
+        record->start=IfhandleStart3454;record->stop=IfhandleStop345C;
+        InitializeIfhandlePrivateData(record->data.ifhandle);
+        record->data.ifhandle.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.ifhandle));
+        record->data.imports.reserve(20);record->data.exports.reserve(92);
+        for(const auto& library:ifhandle->imports) {
+            if(!IfhandleImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>ifhandle->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=ifhandle->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=IfhandleImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=20) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:ifhandle->exports) {
+            if(entry.version!=0) return Result(NativeModuleCode::UnsupportedPolicy);
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
+    } else {
+        // Fifth already-ELF identity has a separate exact4001/0001 policy.
+        // Matching older public export metadata does not supply a provider.
+        if(pspnet->attributes!=0x0006 || pspnet->version!=0x0101 ||
+            pspnet->source_elf_entry!=0x7B78 || pspnet->start_source_va!=0x7B78 || pspnet->stop_source_va!=0x7B80 ||
+            pspnet->start_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}} ||
+            pspnet->stop_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}})
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=pspnet->input_sha256;
+        record->data.encoded_bytes=pspnet->input_bytes;record->data.plaintext_bytes=pspnet->input_bytes;
+        record->data.policy="WindowsPspnetExact0001_4001LifecycleV1";
+        record->data.implementation="aot-pspnet-bound-7B78/7B80-literal-zero-v1;public-networking-unimplemented";
+        record->data.start_source_va=0x7B78;record->data.stop_source_va=0x7B80;
+        record->start=PspnetStart7B78;record->stop=PspnetStop7B80;
+        InitializePspnetPrivateData(record->data.pspnet);
+        record->data.pspnet.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.pspnet));
+        record->data.imports.reserve(42);record->data.exports.reserve(107);
+        for(const auto& library:pspnet->imports) {
+            if(!PspnetImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>pspnet->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=pspnet->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=PspnetImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=42) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:pspnet->exports) {
+            if(entry.version!=0) return Result(NativeModuleCode::UnsupportedPolicy);
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
     }
     record->bindings.resize(record->data.imports.size());
     self.modules.reserve(self.modules.size() + 1); // final fallible registry allocation BEFORE UID publication
@@ -435,6 +522,14 @@ NativeModuleResult NativeModuleManager::Load(std::shared_ptr<NativeModuleInputLe
         state.resources.key.module={{self.owner,self.generation,self.serial,uid}};
         state.resources.key.input={{view.owner,view.generation,view.serial}};
         state.resources.key.state={{state.owner,state.generation,state.serial}};
+    }
+    if(ifhandle) {
+        auto& state=record->data.ifhandle;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
+    }
+    if(pspnet) {
+        auto& state=record->data.pspnet;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
     }
     for (auto& entry : record->data.imports) entry.module = record->data.token;
     for (auto& entry : record->data.exports) entry.module = record->data.token;
@@ -1053,8 +1148,11 @@ NativeModuleCallResult NativeModuleManager::CallExport(NativeModuleToken token, 
     return {NativeModuleCode::UnimplementedExport, false, false, 0};
 }
 bool NativeModuleManager::Snapshot(NativeModuleToken token, NativeModuleSnapshot& out) const {
+    if (impl_->gate->executing) return false;
     const auto module = impl_->Find(token);
     if (!module) return false;
+    impl_->gate->executing = true;
+    struct Exit { CallGate& gate; ~Exit() { gate.executing = false; } } admission{*impl_->gate};
     auto snapshot = module->data; snapshot.input_live = InputLive(*module);
     // Diagnostics carry address identity, never a dereferenceable borrowed span.
     // A returned snapshot can outlive registry mutation without exposing a UAF.
@@ -1081,7 +1179,18 @@ bool NativeModuleManager::SascoreSnapshot(NativeModuleToken token,SascoreInitial
     const auto module=impl_->Find(token);if(!module || !module->data.sascore.present) return false;
     out=module->data.sascore;return true;
 }
+bool NativeModuleManager::IfhandleSnapshot(NativeModuleToken token,IfhandlePrivateDataSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);if(!module || !module->data.ifhandle.present) return false;
+    out=module->data.ifhandle;return true;
+}
+bool NativeModuleManager::PspnetSnapshot(NativeModuleToken token,PspnetPrivateDataSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);if(!module || !module->data.pspnet.present) return false;
+    out=module->data.pspnet;return true;
+}
 std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
+    if (impl_->gate->executing) return {};
+    impl_->gate->executing = true;
+    struct Exit { CallGate& gate; ~Exit() { gate.executing = false; } } admission{*impl_->gate};
     std::vector<NativeModuleSnapshot> out; out.reserve(impl_->modules.size());
     for (const auto& module : impl_->modules) {
         auto snapshot = module->data; snapshot.input_live = InputLive(*module);

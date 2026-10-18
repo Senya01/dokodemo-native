@@ -1325,6 +1325,31 @@ void WriteModuleInitializationValue(std::ostream& out,
     }
     out << "]}";
 }
+void WriteIfhandleValue(std::ostream& out,
+    const dokodemo::recovered::IfhandlePrivateDataSnapshot& s) {
+    out << "{\"present\":" << (s.present ? "true" : "false");
+    if (!s.present) { out << '}'; return; }
+    out << ",\"owner\":" << s.owner << ",\"generation\":" << s.generation
+        << ",\"serial\":" << s.serial << ",\"native_state_address\":" << s.native_state_address
+        << ",\"source_segment\":" << s.source_segment << ",\"source_segment_va\":" << s.source_segment_va
+        << ",\"private_bytes\":" << s.private_bytes << ",\"initial_source_known_bytes\":" << s.initial_source_known_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
+}
+
+void WritePspnetValue(std::ostream& out,
+    const dokodemo::recovered::PspnetPrivateDataSnapshot& s) {
+    out << "{\"present\":" << (s.present ? "true" : "false");
+    if (!s.present) { out << '}'; return; }
+    out << ",\"owner\":" << s.owner << ",\"generation\":" << s.generation
+        << ",\"serial\":" << s.serial << ",\"native_state_address\":" << s.native_state_address
+        << ",\"source_segment\":" << s.source_segment << ",\"source_segment_va\":" << s.source_segment_va
+        << ",\"private_bytes\":" << s.private_bytes << ",\"initial_source_known_bytes\":" << s.initial_source_known_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
+}
 void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::NativeModuleSnapshot& record) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
     out << "{\"token\":"; WriteModuleTokenValue(out, record.token);
@@ -1375,6 +1400,8 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
     out << ",\"check_need_mem\":"; WriteCheckNeedMemValue(out, record.check_need_mem);
     out << ",\"prepared_envelope\":"; WritePreparedEnvelopeValue(out, record.prepared_envelope);
     out << ",\"sascore\":"; WriteSascoreValue(out, record.sascore);
+    out << ",\"ifhandle\":"; WriteIfhandleValue(out, record.ifhandle);
+    out << ",\"pspnet\":"; WritePspnetValue(out, record.pspnet);
     out << '}';
 }
 void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
@@ -2040,7 +2067,7 @@ bool SascoreRequestExact(const dokodemo::StartupModuleObservation& item, bool cl
     }
     return true;
 }
-bool AtSascoreBoundary(const dokodemo::StartupObservation& observation) {
+[[maybe_unused]] bool AtSascoreBoundary(const dokodemo::StartupObservation& observation) {
     if(observation.module_observations.size()!=4 || observation.module_records.size()!=3 || observation.current_module_index!=3
         || observation.barrier_source_pc!=0x4F53C || observation.current_frontier_source_pc!=0x4F53C
         || observation.barrier_module_relative || observation.current_frontier_module_relative
@@ -2078,14 +2105,249 @@ bool SascoreSequenceClosed(const dokodemo::StartupObservation& observation) {
         && !fourth.staging_live && !fourth.staging_borrow_live && !fourth.staging_host_read;
 }
 
+bool IfhandleRequestExact(const dokodemo::StartupModuleObservation& item, bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record; const auto& s=record.ifhandle;
+    if(item.request_index!=3 || item.wrapper_callsite!=0x4F680 || item.path!="disc0:/PSP_GAME/USRDIR/prx/ifhandle.prx"
+        || item.flags || item.pending || item.options!=std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation || !item.file_backend_serial
+        || item.encoded_file_bytes!=10832 || item.file_live || !item.module_uid_assigned || !item.module_load_returned
+        || item.token.uid<=0 || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result || !item.module_file_closed_while_input_live
+        || item.module_initialization_blocked || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed || item.staging_borrow_live==closed
+        || !item.staging_host_read || !item.staging_full_read || !item.staging_hash_matches || item.staging_read_error
+        || item.staging_file_position || item.staging_requested!=10832 || item.staging_transferred!=10832 || item.staging_known_bytes!=10832
+        || item.staging_sha256!="c2803caab3ad288f91e03f5ac7cc5c5c05d8f945f92cfc55ca42da60d6fd916e"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<10832 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed
+        || (closed && item.module_stop_result) || item.module_unloaded!=closed || item.module_input_released!=closed
+        || item.staging_freed_after_joins!=closed || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceNetIfhandle_Service" || record.encoded_bytes!=10832 || record.plaintext_bytes!=21824
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="355458da4d29a98808ce3fb52423a0f6de5b8a450039220f885f3b1c2102f12b"
+        || record.policy!="WindowsIfhandleExact0001_0009LifecycleV1" || record.start_source_va!=0x3454 || record.stop_source_va!=0x345C
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation || record.input.serial!=item.staging_serial
+        || record.input.host_address!=item.staging_host_address || record.input.source_coordinate!=item.staging_source_coordinate
+        || record.input.size!=10832 || record.imports.size()!=20 || record.exports.size()!=92
+        || !s.present || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address || s.source_segment!=1 || s.source_segment_va!=0x3B20
+        || s.private_bytes!=2240 || s.initial_source_known_bytes!=16 || s.known_bytes!=16 || s.writes_count) return false;
+    constexpr std::array<uint8_t,16> file{255,255,255,255,255,255,0,0,255,255,255,255,255,255,255,255};
+    for(size_t i=0;i<s.known.size();++i) {
+        if(s.known[i]!=(i<16?1:0) || (i<16 && s.bytes[i]!=file[i])) return false;
+    }
+    constexpr std::array<uint32_t,20> nids{0xC0AB8932,0xB49A7697,0xAB7592FF,0x10F3BB61,0x81D0D1F7,
+        0xD6DA4BA1,0x28B6489C,0x3F53E640,0x4E3A1105,0x58B1F937,0x1FB15A32,0x56C039B5,0x89B3D48C,0xAF36D708,0xB736E9FF,0x39810265,0x369ED59D,
+        0x092968F4,0x5F10D406,0x84F370BC};
+    for(size_t i=0;i<nids.size();++i) {
+        const auto& imp=record.imports[i];
+        const char* lib=i<5?"SysclibForKernel":i<17?"ThreadManForKernel":i<19?"InterruptManagerForKernel":"KDebugForKernel";
+        const uint32_t stub=i<17?uint32_t(0x347C+8*i):i<19?uint32_t(0x3464+8*(i-17)):0x3474;
+        if(imp.library!=lib || imp.version || imp.attributes!=(i>=17&&i<19?9:1) || imp.nid!=nids[i] || imp.source_stub_va!=stub
+            || imp.resolved || imp.partial_callable || imp.provider_serial || imp.provider_owner || imp.provider_generation) return false;
+    }
+    if(std::count_if(record.exports.begin(),record.exports.end(),[](const auto& e){return e.lifecycle_callable;})!=2) return false;
+    for(const auto& e:record.exports) {
+        const bool callable=e.library.empty() && e.kind=="function" &&
+            ((e.nid==0xD632ACDB && e.relative_va==0x3454) || (e.nid==0xCEE8593C && e.relative_va==0x345C));
+        if(e.lifecycle_callable!=callable || e.partial_callable) return false;
+    }
+    return true;
+}
+[[maybe_unused]] bool AtIfhandleBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=5 || o.module_records.size()!=4 || o.current_module_index!=4
+        || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || dokodemo::PendingWindowsSascoreCleanup()) return false;
+    const auto& next=o.module_observations[4];
+    if(next.request_owner!=o.owner || next.request_index!=4 || next.wrapper_callsite!=0x4F6A0
+        || next.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet.prx" || next.flags
+        || next.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || !next.pending || next.source_fd<0 || !next.file_live || !next.file_native_object
+        || !next.file_backend_owner || !next.file_backend_generation || !next.file_backend_serial
+        || next.frontier_source_pc!=0x4F53C || next.frontier_module_relative || next.module_uid_assigned
+        || next.module_load_returned || next.module_start_called || next.source_close_called || next.record_live
+        || next.module_input_live || next.staging_host_read || next.staging_live || next.staging_borrow_live
+        || next.staging_transferred || next.staging_known_bytes) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<4;++i) {
+        const auto& item=o.module_observations[i];
+        if(item.request_owner!=o.owner || !SameNativeModuleToken(item.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<4;++j) {
+            const auto& later=o.module_observations[j];
+            if(item.token.uid==later.token.uid || item.token.serial==later.token.serial
+                || item.token.owner!=later.token.owner || item.token.generation!=later.token.generation
+                || uint64_t(item.staging_source_coordinate)+item.staging_committed_bytes>later.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool IfhandleSequenceClosed(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=5 || !QueryEnvelopeModulesClosed(o)
+        || !SascoreRequestExact(o.module_observations[2],true) || !IfhandleRequestExact(o.module_observations[3],true)
+        || dokodemo::PendingWindowsSascoreCleanup()) return false;
+    const auto& next=o.module_observations[4];
+    return next.host_file_closed && !next.file_live && !next.pending && !next.record_live
+        && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
+        && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
+}
+
+bool PspnetRequestExact(const dokodemo::StartupModuleObservation& item, bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record; const auto& s=record.pspnet;
+    if(item.request_index!=4 || item.wrapper_callsite!=0x4F6A0 || item.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet.prx"
+        || item.flags || item.pending || item.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation || !item.file_backend_serial
+        || item.encoded_file_bytes!=60256 || item.file_live || !item.module_uid_assigned || !item.module_load_returned
+        || item.token.uid<=0 || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result || !item.module_file_closed_while_input_live
+        || item.module_initialization_blocked || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed || item.staging_borrow_live==closed
+        || !item.staging_host_read || !item.staging_full_read || !item.staging_hash_matches || item.staging_read_error
+        || item.staging_file_position || item.staging_requested!=60256 || item.staging_transferred!=60256 || item.staging_known_bytes!=60256
+        || item.staging_sha256!="ab8b28e24f1d17c6bfffec47b6d9717665fab78b0de11d3d2711ad25b5c65404"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<60256 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed
+        || (closed && item.module_stop_result) || item.module_unloaded!=closed || item.module_input_released!=closed
+        || item.staging_freed_after_joins!=closed || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceNet_Library" || record.encoded_bytes!=60256 || record.plaintext_bytes!=60256
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="ab8b28e24f1d17c6bfffec47b6d9717665fab78b0de11d3d2711ad25b5c65404"
+        || record.policy!="WindowsPspnetExact0001_4001LifecycleV1" || record.start_source_va!=0x7B78 || record.stop_source_va!=0x7B80
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation || record.input.serial!=item.staging_serial
+        || record.input.host_address!=item.staging_host_address || record.input.source_coordinate!=item.staging_source_coordinate
+        || record.input.size!=60256 || record.imports.size()!=42 || record.exports.size()!=107
+        || !s.present || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address || s.source_segment!=1 || s.source_segment_va!=0xA090
+        || s.private_bytes!=6848 || s.initial_source_known_bytes!=192 || s.known_bytes!=192 || s.writes_count) return false;
+    constexpr std::array<uint8_t,192> file{255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,0,32,0,0,50,0,0,0,255,255,255,255,255,255,0,0,48,49,50,51,52,53,54,55,56,57,97,98,99,100,101,102,0,0,0,0,0,32,32,32,32,32,32,32,32,32,8,8,8,8,8,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,24,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,4,4,4,4,4,4,4,4,4,16,16,16,16,16,16,16,65,65,65,65,65,65,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,16,16,16,16,16,16,66,66,66,66,66,66,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,16,16,16,16,32,0,0,0};
+    for(size_t i=0;i<s.known.size();++i) {
+        if(s.known[i]!=(i<192?1:0) || (i<192 && s.bytes[i]!=file[i])) return false;
+    }
+    struct ExpectedImport { const char* library; uint16_t version,attributes; uint32_t nid,stub; };
+    constexpr std::array<ExpectedImport,42> imports{{
+        {"sceNetIfhandle_lib",0,0x4001,0x30F69334,0x93A4},
+        {"sceNetIfhandle_lib",0,0x4001,0xB9096E48,0x93AC},
+        {"sceNetIfhandle_lib",0,0x4001,0xB8188F96,0x93B4},
+        {"sceNetIfhandle_lib",0,0x4001,0x4FB43BCE,0x93BC},
+        {"sceNetIfhandle_lib",0,0x4001,0xB1F5BB87,0x93C4},
+        {"sceNetIfhandle_lib",0,0x4001,0x8FCB05A1,0x93CC},
+        {"sceNetIfhandle_lib",0,0x4001,0xEAD3A759,0x93D4},
+        {"sceNetIfhandle_lib",0,0x4001,0x0296C7D6,0x93DC},
+        {"sceNetIfhandle_lib",0,0x4001,0xE440A7D8,0x93E4},
+        {"sceNetIfhandle_lib",0,0x4001,0x30602CE9,0x93EC},
+        {"sceNetIfhandle_lib",0,0x4001,0xD5DA7B3C,0x93F4},
+        {"sceNetIfhandle_lib",0,0x4001,0x2162EE67,0x93FC},
+        {"sceNetIfhandle_lib",0,0x4001,0x0C391E9F,0x9404},
+        {"sceNetIfhandle_lib",0,0x4001,0x29ED84C5,0x940C},
+        {"sceNetIfhandle_lib",0,0x4001,0x15CFE3C0,0x9414},
+        {"sceNetIfhandle_lib",0,0x4001,0x76BAD213,0x941C},
+        {"sceNetIfhandle_lib",0,0x4001,0x4C2886CB,0x9424},
+        {"sceNetIfhandle_lib",0,0x4001,0x0FB8AE0D,0x942C},
+        {"sceNetIfhandle_lib",0,0x4001,0xBFF3CEA5,0x9434},
+        {"sceNetIfhandle_lib",0,0x4001,0xF56FAC82,0x943C},
+        {"Kernel_Library",0,0x0001,0x092968F4,0x92F4},
+        {"Kernel_Library",0,0x0001,0x5F10D406,0x92FC},
+        {"ThreadManForUser",0,0x4001,0x446D8DE6,0x9304},
+        {"ThreadManForUser",0,0x4001,0x9FA03CD3,0x930C},
+        {"ThreadManForUser",0,0x4001,0xF475845D,0x9314},
+        {"ThreadManForUser",0,0x4001,0x616403BA,0x931C},
+        {"ThreadManForUser",0,0x4001,0x293B45B8,0x9324},
+        {"ThreadManForUser",0,0x4001,0xCEADEB47,0x932C},
+        {"ThreadManForUser",0,0x4001,0xD6DA4BA1,0x9334},
+        {"ThreadManForUser",0,0x4001,0x28B6489C,0x933C},
+        {"ThreadManForUser",0,0x4001,0x3F53E640,0x9344},
+        {"ThreadManForUser",0,0x4001,0x4E3A1105,0x934C},
+        {"ThreadManForUser",0,0x4001,0x55C20A00,0x9354},
+        {"ThreadManForUser",0,0x4001,0xEF9E4C70,0x935C},
+        {"ThreadManForUser",0,0x4001,0x1FB15A32,0x9364},
+        {"ThreadManForUser",0,0x4001,0x402FCF22,0x936C},
+        {"ThreadManForUser",0,0x4001,0xBA6B92E2,0x9374},
+        {"ThreadManForUser",0,0x4001,0xDB738F35,0x937C},
+        {"ThreadManForUser",0,0x4001,0x82BC5777,0x9384},
+        {"ThreadManForUser",0,0x4001,0x369ED59D,0x938C},
+        {"ThreadManForUser",0,0x4001,0x6652B8CA,0x9394},
+        {"ThreadManForUser",0,0x4001,0x7E65B999,0x939C},
+    }};
+    for(size_t i=0;i<imports.size();++i) {
+        const auto& actual=record.imports[i]; const auto& expected=imports[i];
+        if(actual.library!=expected.library || actual.version!=expected.version || actual.attributes!=expected.attributes
+            || actual.nid!=expected.nid || actual.source_stub_va!=expected.stub || actual.resolved || actual.partial_callable
+            || actual.provider_serial || actual.provider_owner || actual.provider_generation) return false;
+    }
+    if(std::count_if(record.exports.begin(),record.exports.end(),[](const auto& e){return e.lifecycle_callable;})!=2) return false;
+    for(const auto& e:record.exports) {
+        const bool callable=e.library.empty() && e.kind=="function" &&
+            ((e.nid==0xD632ACDB && e.relative_va==0x7B78) || (e.nid==0xCEE8593C && e.relative_va==0x7B80));
+        if(e.lifecycle_callable!=callable || e.partial_callable) return false;
+    }
+    return true;
+}
+bool AtPspnetBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=6 || o.module_records.size()!=5 || o.current_module_index!=5
+        || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
+        || dokodemo::PendingWindowsSascoreCleanup()) return false;
+    const auto& next=o.module_observations[5];
+    if(next.request_owner!=o.owner || next.request_index!=5 || next.wrapper_callsite!=0x4F71C
+        || next.path!="disc0:/PSP_GAME/USRDIR/prx/memab.prx" || next.flags
+        || next.options!=std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        || !next.pending || next.source_fd<0 || !next.file_live || !next.file_native_object
+        || !next.file_backend_owner || !next.file_backend_generation || !next.file_backend_serial
+        || next.frontier_source_pc!=0x4F53C || next.frontier_module_relative || next.module_uid_assigned
+        || next.module_load_returned || next.module_start_called || next.source_close_called || next.record_live
+        || next.module_input_live || next.staging_host_read || next.staging_live || next.staging_borrow_live
+        || next.staging_transferred || next.staging_known_bytes) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<5;++i) {
+        const auto& item=o.module_observations[i];
+        if(item.request_owner!=o.owner || !SameNativeModuleToken(item.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<5;++j) {
+            const auto& later=o.module_observations[j];
+            if(item.token.uid==later.token.uid || item.token.serial==later.token.serial
+                || item.token.owner!=later.token.owner || item.token.generation!=later.token.generation
+                || uint64_t(item.staging_source_coordinate)+item.staging_committed_bytes>later.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool PspnetSequenceClosed(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=6 || !QueryEnvelopeModulesClosed(o)
+        || !SascoreRequestExact(o.module_observations[2],true) || !IfhandleRequestExact(o.module_observations[3],true)
+        || !PspnetRequestExact(o.module_observations[4],true) || dokodemo::PendingWindowsSascoreCleanup()) return false;
+    const auto& next=o.module_observations[5];
+    return next.host_file_closed && !next.file_live && !next.pending && !next.record_live
+        && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
+        && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
+}
 bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
 #ifdef DOKODEMO_FFMPEG_ROOT
-    return AtSascoreBoundary(observation);
+    return AtPspnetBoundary(observation);
 #else
     return AtLegacyNativeModuleSequenceBoundary(observation);
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.module_observations.size() == 6) return PspnetSequenceClosed(observation);
+    if (observation.module_observations.size() == 5) return IfhandleSequenceClosed(observation);
     if (observation.module_observations.size() == 4) return SascoreSequenceClosed(observation);
     if (observation.module_observations.size() == 3) return QueryEnvelopeSequenceClosed(observation);
     if (observation.module_observations.size() != 2 || !observation.module_records.empty()
@@ -2187,6 +2449,16 @@ int ConnectedStartupTest(const Options& options) {
         << ",\"third_module_open_returned\":" << (boundary.module_observations.size() > 2 && boundary.module_observations[2].source_fd >= 0 ? "true" : "false")
         << ",\"third_module_body_read\":" << (boundary.module_observations.size() > 2 && boundary.module_observations[2].staging_host_read ? "true" : "false")
         << ",\"third_module_load_returned\":" << (boundary.module_observations.size() > 2 && boundary.module_observations[2].module_load_returned ? "true" : "false")
+        << ",\"fourth_module_load_returned\":" << (boundary.module_observations.size()>3 && boundary.module_observations[3].module_load_returned ? "true" : "false")
+        << ",\"fourth_module_start_returned\":" << (boundary.module_observations.size()>3 && boundary.module_observations[3].module_start_returned ? "true" : "false")
+        << ",\"fourth_module_stop_returned\":" << (after.module_observations.size()>3 && after.module_observations[3].module_stop_returned ? "true" : "false")
+        << ",\"fifth_module_open_returned\":" << (boundary.module_observations.size()>4 && boundary.module_observations[4].source_fd>=0 ? "true" : "false")
+        << ",\"fifth_module_body_read\":" << (boundary.module_observations.size()>4 && boundary.module_observations[4].staging_host_read ? "true" : "false")
+        << ",\"fifth_module_load_returned\":" << (boundary.module_observations.size()>4 && boundary.module_observations[4].module_load_returned ? "true" : "false")
+        << ",\"fifth_module_start_returned\":" << (boundary.module_observations.size()>4 && boundary.module_observations[4].module_start_returned ? "true" : "false")
+        << ",\"fifth_module_stop_returned\":" << (after.module_observations.size()>4 && after.module_observations[4].module_stop_returned ? "true" : "false")
+        << ",\"sixth_module_open_returned\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].source_fd>=0 ? "true" : "false")
+        << ",\"sixth_module_body_read\":" << (boundary.module_observations.size()>5 && boundary.module_observations[5].staging_host_read ? "true" : "false")
         << ",\"source_queries_returned\":" << queriesReturned
         << ",\"source_GetEDRAM_returned\":" << allocationsReturned
         << ",\"original_ME_equivalence_known\":false,\"source_decode_returned\":false"

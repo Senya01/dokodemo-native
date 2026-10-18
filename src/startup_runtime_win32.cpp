@@ -151,7 +151,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         event.win32_error = error; event.wait_result = wait;
         if (!detail.empty()) event.detail.assign(detail.data(), detail.size());
         event.crt_errno = crt_error; event.dos_errno = dos_error;
-        if (events.size() == 256) { events.pop_front(); ++state.dropped_events; }
+        if (events.size() == 512) { events.pop_front(); ++state.dropped_events; }
         events.push_back(std::move(event));
         } catch (...) {
             // Telemetry must never change native ownership or control flow.
@@ -553,8 +553,17 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             request->input_bytes = 5920;
         } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/ifhandle.prx" && callsite == 0x4F680 &&
                    option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
-            // Actual next request only; no fourth descriptor/body is admitted.
             relative = L"PSP_GAME\\USRDIR\\prx\\ifhandle.prx";
+            request->input_bytes = 10832;
+        } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/pspnet.prx" && callsite == 0x4F6A0 &&
+                   option == recovered::StartupOptions4F59C(0) && options.prepared_codec_envelope) {
+            // Exact fifth input is already ELF; body association is manager-owned.
+            relative = L"PSP_GAME\\USRDIR\\prx\\pspnet.prx";
+            request->input_bytes = 60256;
+        } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/memab.prx" && callsite == 0x4F71C &&
+                   option == recovered::StartupOptions4F59C(1) && options.prepared_codec_envelope) {
+            // Actual first table request only. No sixth body/descriptor is admitted.
+            relative = L"PSP_GAME\\USRDIR\\prx\\memab.prx";
         } else throw NativeFailure{};
         request->native_path = options.media_root;
         if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
@@ -732,7 +741,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         const auto digest = core::sha256_hex(span.bytes, request->input_bytes); // same physical span; no payload mirror
         const bool exact = recovered::FindAudiocodecModuleDescriptor(digest, request->input_bytes) ||
             recovered::FindAtrac3plusModuleDescriptor(digest, request->input_bytes) ||
-            recovered::FindSascoreModuleDescriptor(digest, request->input_bytes);
+            recovered::FindSascoreModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindIfhandleModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindPspnetModuleDescriptor(digest, request->input_bytes);
         { std::lock_guard<std::mutex> lock(metadata);
           data.staging_hash_matches = exact; data.staging_sha256 = digest;
           EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, exact ? 1 : 0, false, span.host_address, 0, 0, digest); }
@@ -801,6 +812,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             data.module_start_entry_result = started_module.entry_result;
             modules.InitializationSnapshot(data.token, data.record.initialization);
             modules.SascoreSnapshot(data.token, data.record.sascore);
+            modules.IfhandleSnapshot(data.token, data.record.ifhandle);
+            modules.PspnetSnapshot(data.token, data.record.pspnet);
             data.module_initialization_blocked = data.record.initialization.prefix_entered &&
                 data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
             data.module_initialization_blocked = data.module_initialization_blocked ||
@@ -921,7 +934,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     }
     void UnsupportedFollowingModule() override {
         (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
-            "Following source wrapper sequence is outside the validated native contract", 0, 0);
+            "Returned first table wrapper requires the unimplemented persistent counter/UID-store producer;no table effect or worker source return", 0, 0x4F724);
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
     void BarrierPump() {
@@ -1062,6 +1075,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     modules.InitializationSnapshot(data.token,data.record.initialization);
                     modules.PreparedEnvelopeSnapshot(data.token,data.record.prepared_envelope);
                     modules.SascoreSnapshot(data.token,data.record.sascore);
+                    modules.IfhandleSnapshot(data.token,data.record.ifhandle);
+                    modules.PspnetSnapshot(data.token, data.record.pspnet);
                     for(uint32_t i=prior_writes;i<data.record.initialization.writes_count;++i) {
                         const auto& write=data.record.initialization.writes[i];
                         EmitLocked("ModuleStopReleaseWrite","RecoveredSourceAfterWindowsRelease",write.source_pc,write.value,false,

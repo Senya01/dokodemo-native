@@ -115,7 +115,41 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         }
     }
     if (std::get<StartupModuleReturned>(module).value == -1) return StartupFlowStop::SourceReturned;
-    services.UnsupportedFollowingModule(); // no subsequent dependency assumed
+    // Retained4F698/delay69C -> call4F6A0/pathDD698, kind0. Only the
+    // fourth wrapper's actual returned Load UID makes this fifth Open reachable.
+    services.BeginModuleRequest(0x4F6A0, "disc0:/PSP_GAME/USRDIR/prx/pspnet.prx", kind0);
+    module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/pspnet.prx", kind0);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
+    }
+    // 4F6A8 NOR / 4F6AC SLTU / 4F6BC: gate4F5E4 returns1 iff the
+    // actual fifth wrapper's returned bits differ from FFFFFFFF. Main FBC's
+    // taken branch (FC0 delay restore) then calls table gate4F6C8 at FF4.
+    const auto inverted_fifth_result = ~static_cast<uint32_t>(std::get<StartupModuleReturned>(module).value);
+    const uint32_t initial_module_gate_result = uint32_t(0) < inverted_fifth_result ? 1u : 0u;
+    if (!initial_module_gate_result) return StartupFlowStop::SourceReturned; //FC4..FF0
+    // Retained segment1+6950 first table record: UID FFFFFFFF,kind1,
+    // path segment0+DD530. JAL4F71C/delay720 selects the exact kind1
+    // options. These coordinates are metadata, never host/PSP pointers.
+    services.BeginModuleRequest(0x4F71C, "disc0:/PSP_GAME/USRDIR/prx/memab.prx", kind1);
+    module = RunStartupModule4F4E8(services,
+        "disc0:/PSP_GAME/USRDIR/prx/memab.prx", kind1);
+    if (const auto* stopped = std::get_if<StartupModuleStop>(&module)) {
+        switch (*stopped) {
+        case StartupModuleStop::Unsupported: return StartupFlowStop::Unsupported;
+        case StartupModuleStop::HostCancelled: return StartupFlowStop::HostCancelled;
+        case StartupModuleStop::HostFailure: return StartupFlowStop::HostFailure;
+        }
+    }
+    // Current coordinator refuses sixth Load before any wrapper result, so
+    // this fallback is outside its admitted route. Cut BEFORE persistent
+    // counter4F724/UID store4F728; no table effect or later iteration claimed.
+    services.UnsupportedFollowingModule();
     return StartupFlowStop::Unsupported;
 }
 } // namespace dokodemo::recovered
