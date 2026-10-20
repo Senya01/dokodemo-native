@@ -9,6 +9,7 @@
 #include "core_hash.h"
 #include "rng_backend_win32.h"
 #include "recovered/rng_native.h"
+#include "game_filesystem_win32.h"
 #include <windows.h>
 #include <process.h>
 #include <algorithm>
@@ -113,6 +114,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameGraphics game_graphics;
     recovered::GameRuntimeResetState game_runtime_reset;
     recovered::RngNativeOwner game_rng;
+    recovered::GameFilesystem game_filesystem;
+    recovered::GameScene9DC game_scene;
+    recovered::GameVmBoot game_vm;
+    uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -1187,6 +1192,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         game_rng.ApplyInitializerTimeT32(sample.conversion.local_civil_epoch_seconds, state.owner,
             "Actual native startup RTC101C..105C local civil time;C321C at1068");
         const auto rng = game_rng.Snapshot();
+        {
         std::lock_guard<std::mutex> lock(metadata);
         state.game_boot.rtc_initialized = true;
         state.game_boot.rng_seed_word = sample.conversion.local_civil_epoch_seconds;
@@ -1203,14 +1209,62 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             0, 0, 0, "253B8 primary192 bytes then258D4 secondary160 bytes;explicit zero producers;incidental pointer result unused");
         state.game_boot.filesystem_initialization_entered = true;
         EmitLocked("GameFilesystemInitialization-enter", "RecoveredGameCaller", 0x107C, 0, false,
-            0, 0, 0, "B0C entered;first callee3F0 not implemented;no B0C return");
-        state.barrier_source_pc = state.current_frontier_source_pc = 0xB14;
+            0, 0, 0, "B0C entered;native transactional3F0 filesystem owner;no B0C return");
+        }
+        const auto path = options.media_root + L"/PSP_GAME/USRDIR/data/DATA.BP";
+        const auto mounted = game_filesystem.Mount(CreateWindowsGameFileSource(backend, path));
+        {
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.filesystem = game_filesystem.Snapshot();
+        if (!mounted) {
+            EmitLocked("GameFilesystemMountFailed", "WindowsGameFilesystem", 0x64D20, 0, false,
+                0, mounted.native_error, 0, mounted.detail.c_str());
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, mounted.native_error ? mounted.native_error : ERROR_INVALID_DATA));
+            return StartupFlowStop::HostFailure;
+        }
+        EmitLocked("GameFilesystemMounted", "NonMatchingWindowsFilesystem", 0x3F0, 0, false,
+            0, 0, 0, "actual DATA.BP handle/extent/header+checked directory;128 native child owner slots;unused source scalar unclaimed");
+        }
+        if (!game_scene.InitializeWorkspaces(game_arenas[1], game_graphics) || !game_scene.BindFilesystem(game_filesystem)) throw NativeFailure{};
+        Emit("GameSceneWorkspacesReady", "NonMatchingNative9DC", 0xA4C, 0, false,
+            0, 0, 0, "two actual PPK-backed contexts/pool banks;27 descriptor groups;native batch/layout adapter;root reference+empty source prefix");
+        if (!game_scene.InitializeCamera(game_graphics)) throw NativeFailure{};
+        Emit("GameSceneInitialization-return", "NonMatchingNative9DC", 0xA7C, 0, false,
+            0, 0, 0, "live independent light/camera clones;actual defaults;host tan/look-at/projection adaptation;no game mesh or unused scalar claim");
+        if (!game_scene.InitializeResourceLookupA90() || !game_scene.InitializeSubsystemRegistryAC4()) throw NativeFailure{};
+        Emit("GameResourceLookupAndRegistryReady", "NonMatchingNativeSubsystems", 0xB04, 0, false,
+            0, 0, 0, "A90 actual root binding and proven noops;AC4 native live object registered via actual callback94E5C return1");
+        if (!game_vm.Initialize74EF4(game_arenas[0]) || !game_vm.InitializeManager93404()) throw NativeFailure{};
+        Emit("GameVmArenaTimerManagerReady", "NonMatchingNativeVmBoot", 0x93404, 0, false,
+            0, 0, 0, "actual256KiB KS:Varstr arena;KS::system monotonic stopwatch started;explicit singleton resets;native16-record manager/32 workspace;no scheduled timer thread");
+        stored_game_callback_source_pc = 0x15C4; //7C688 stores the descriptor; invocation remains unsupported
+        Emit("GameCallbackDescriptorStored", "NonMatchingNativeGameBoot", 0x7C688, stored_game_callback_source_pc, false,
+            0, 0, 0, "source descriptor retained;unrecovered15C4 body is not advertised as a callable native function");
+        const BOOL priority = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_NORMAL);
+        const DWORD priority_error = priority ? 0 : GetLastError();
+        Emit("GameThreadPriorityPolicy", "WindowsNativePriorityAdapter", 0xB5C, priority ? 0 : -1, false,
+            0, priority_error, 0, "source ChangeThreadPriority(0,17) maps explicitly to Windows NORMAL;source caller ignores result");
+        // Temporary functional policy: source SGX mixer/channel/thread services
+        // are unavailable. Return the honest failure value, not fake sound
+        // success. B0C really ignores4A518's numeric result and continues.
+        Emit("GameSoundInitializationUnavailable", "ExplicitDisabledNativeSgxPolicy", 0xB64, -1, false,
+            0, 0, 0, "SGX source mixer/channels/threads not implemented;no API failure fabricated,no sound owners;resource-viewer playback is separate");
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.scene = game_scene.Snapshot();
+        state.game_boot.vm = game_vm.Snapshot();
+        state.game_boot.source_callback_stored = stored_game_callback_source_pc == 0x15C4;
+        state.game_boot.source_callback_callable = false;
+        state.game_boot.source_audio_ready = false; state.game_boot.source_audio_initialization_result = -1;
+        state.game_boot.b0c_returned = true;
+        EmitLocked("GameB0CInitialization-return", "NonMatchingNativeGameBoot", 0xB70, 0, false,
+            0, 0, 0, "filesystem/scene/VM/manager live;source audio unavailable-1 ignored as caller specifies;unused scalar unclaimed");
+        state.barrier_source_pc = state.current_frontier_source_pc = 0x1084;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        state.barrier = state.current_frontier = "UnrecoveredFileSystem3F0";
+        state.barrier = state.current_frontier = "UnrecoveredGameInitBB8";
         state.worker_state = "Blocked";
-        EmitLocked("UnrecoveredFileSystem3F0", "RecoveredGameCaller", 0xB14, 0, false,
-            0, 0, 0, "real DATA.BP filesystem owner/open/parse pending;3F0 result absent;later9DC/title/gameplay unreached");
+        EmitLocked("UnrecoveredGameInitBB8", "RecoveredGameCaller", 0x1084, 0, false,
+            0, 0, 0, "next main BB8 constructors3AC4/177F8 unimplemented;no BB8 return/title/gameplay fabricated");
         return StartupFlowStop::Unsupported;
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
@@ -1316,6 +1370,32 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         }
         // Both contexts have ended. No thread can now access or wait on these objects.
         bool ok = true;
+        const bool vm_closed = game_vm.Close();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.vm = game_vm.Snapshot();
+            stored_game_callback_source_pc = 0;
+            state.game_boot.source_callback_stored = false;
+            EmitLocked("CloseGameVm", "HostLifecycle", 0, vm_closed ? 1 : 0, false,
+                0, 0, 0, "after both joins;manager/VM consumers retired,monotonic timer stopped,VM backing released before parent arena");
+        }
+        if (!vm_closed) return CleanupFailure(ERROR_BUSY);
+        const bool scene_closed = game_scene.Close();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.scene = game_scene.Snapshot();
+            EmitLocked("CloseGameScene", "HostLifecycle", 0, scene_closed ? 1 : 0, false,
+                0, 0, 0, "after both joins;release9DC consumers before filesystem/PPK arena");
+        }
+        if (!scene_closed) return CleanupFailure(ERROR_INVALID_DATA);
+        const auto filesystem_closed = game_filesystem.Close();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.filesystem = game_filesystem.Snapshot();
+            EmitLocked("CloseGameFilesystem", "HostLifecycle", 0, filesystem_closed ? 1 : 0, false,
+                0, filesystem_closed.native_error, 0, "after both joins;child/directory leases,allocations and DATA.BP file retired before game arenas");
+        }
+        if (!filesystem_closed) return CleanupFailure(filesystem_closed.native_error);
         game_graphics.Close();
         Emit("CloseGameGraphics", "HostLifecycle", 0, 1, false, 0, 0, 0,
             "after both joins;native color/depth owners retired before game arenas");

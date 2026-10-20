@@ -1438,7 +1438,52 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"runtime_reset_returned\":" << boolean(boot.runtime_reset_returned)
         << ",\"primary_reset_bytes\":" << boot.primary_reset_bytes
         << ",\"secondary_reset_bytes\":" << boot.secondary_reset_bytes
-        << ",\"filesystem_initialization_entered\":" << boolean(boot.filesystem_initialization_entered) << '}';
+        << ",\"filesystem_initialization_entered\":" << boolean(boot.filesystem_initialization_entered)
+        << ",\"filesystem\":{\"mounted\":" << boolean(boot.filesystem.mounted)
+        << ",\"closed\":" << boolean(boot.filesystem.closed)
+        << ",\"status\":" << JsonString(dokodemo::recovered::GameFsCodeName(boot.filesystem.status.code))
+        << ",\"native_error\":" << boot.filesystem.status.native_error
+        << ",\"detail\":" << JsonString(boot.filesystem.status.detail)
+        << ",\"file_live\":" << boolean(boot.filesystem.io.file_live)
+        << ",\"file_bytes\":" << boot.filesystem.io.file_bytes
+        << ",\"transferred_bytes\":" << boot.filesystem.io.transferred_bytes
+        << ",\"read_calls\":" << boot.filesystem.io.read_calls
+        << ",\"live_allocations\":" << boot.filesystem.io.live_allocations
+        << ",\"directory_bytes\":" << boot.filesystem.directory_bytes
+        << ",\"directory_slots\":" << boot.filesystem.directory_slots
+        << ",\"child_capacity\":" << boot.filesystem.child_capacity
+        << ",\"loaded_members\":" << boot.filesystem.loaded_members << '}'
+        << ",\"scene\":{\"workspaces_ready\":" << boolean(boot.scene.workspaces_ready)
+        << ",\"pools_ready\":" << boolean(boot.scene.pools_ready)
+        << ",\"filesystem_bound\":" << boolean(boot.scene.filesystem_bound)
+        << ",\"resource_prefix_empty\":" << boolean(boot.scene.resource_prefix_empty)
+        << ",\"resource_lookup_bound\":" << boolean(boot.scene.resource_lookup_bound)
+        << ",\"registry_ready\":" << boolean(boot.scene.registry_ready)
+        << ",\"registered_subsystems\":" << boot.scene.registered_subsystems
+        << ",\"camera_ready\":" << boolean(boot.scene.camera_ready)
+        << ",\"returned_9dc\":" << boolean(boot.scene.returned_9dc)
+        << ",\"group_count\":" << boot.scene.group_count << ",\"active_context\":" << boot.scene.active_context
+        << ",\"finished_contexts\":" << boot.scene.finished_contexts
+        << ",\"context_buffer_bytes\":" << boot.scene.context_buffer_bytes
+        << ",\"pool_bytes\":" << boot.scene.pool_bytes
+        << ",\"native_clear_count\":" << boot.scene.native_clear_count
+        << ",\"light_count\":" << boot.scene.light_count << ",\"scene_flags\":" << boot.scene.scene_flags
+        << ",\"camera_y\":" << boot.scene.camera_y << ",\"camera_near\":" << boot.scene.camera_near
+        << ",\"camera_far\":" << boot.scene.camera_far << ",\"camera_angle\":" << boot.scene.camera_angle
+        << ",\"math_policy\":\"NonMatchingStdTanLookAtProjection\",\"game_content\":false}"
+        << ",\"vm\":{\"initialized\":" << boolean(boot.vm.initialized)
+        << ",\"arena_live\":" << boolean(boot.vm.arena_live) << ",\"arena_bytes\":" << boot.vm.arena_bytes
+        << ",\"timer_live\":" << boolean(boot.vm.timer_live) << ",\"timer_started\":" << boolean(boot.vm.timer_started)
+        << ",\"timer_elapsed_us\":" << boot.vm.timer_elapsed_us
+        << ",\"timer_policy\":\"NativeMonotonicStopwatchNoScheduledHandler\""
+        << ",\"singletons_reset\":" << boolean(boot.vm.singletons_reset)
+        << ",\"manager_ready\":" << boolean(boot.vm.manager_ready) << ",\"manager_slots\":" << boot.vm.manager_slots
+        << ",\"workspace_capacity\":" << boot.vm.workspace_capacity << '}'
+        << ",\"source_callback_stored\":" << boolean(boot.source_callback_stored)
+        << ",\"source_callback_callable\":" << boolean(boot.source_callback_callable)
+        << ",\"source_audio_ready\":" << boolean(boot.source_audio_ready)
+        << ",\"source_audio_initialization_result\":" << boot.source_audio_initialization_result
+        << ",\"b0c_returned\":" << boolean(boot.b0c_returned) << '}';
 }
 
 void WriteAdhocValue(std::ostream& out,
@@ -3299,10 +3344,22 @@ bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
         || boot.calendar_words[0] || !boot.calendar_words[6]
         || !boot.runtime_reset_returned || boot.primary_reset_bytes != 192 || boot.secondary_reset_bytes != 160
         || !boot.filesystem_initialization_entered
-        || o.barrier_source_pc != 0xB14 || o.current_frontier_source_pc != 0xB14
+        || !boot.filesystem.mounted || !boot.filesystem.io.file_live || !boot.filesystem.directory_slots
+        || boot.filesystem.io.file_bytes < boot.filesystem.directory_bytes
+        || !boot.scene.workspaces_ready || !boot.scene.pools_ready || !boot.scene.filesystem_bound
+        || !boot.scene.resource_prefix_empty || boot.scene.group_count != 27 || boot.scene.active_context != 1
+        || !boot.scene.camera_ready || !boot.scene.returned_9dc || !boot.scene.resource_lookup_bound
+        || !boot.scene.registry_ready || boot.scene.registered_subsystems != 1
+        || boot.scene.scene_flags != 0x110 || boot.scene.light_count != 4 || boot.scene.native_clear_count != 2
+        || !boot.vm.initialized || !boot.vm.arena_live || boot.vm.arena_bytes != 0x40000
+        || !boot.vm.timer_live || !boot.vm.timer_started || !boot.vm.singletons_reset
+        || !boot.vm.manager_ready || boot.vm.manager_slots != 16 || boot.vm.workspace_capacity != 32
+        || !boot.source_callback_stored || boot.source_callback_callable
+        || boot.source_audio_ready || boot.source_audio_initialization_result != -1 || !boot.b0c_returned
+        || o.barrier_source_pc != 0x1084 || o.current_frontier_source_pc != 0x1084
         || o.barrier_module_relative || o.current_frontier_module_relative
         || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier != "UnrecoveredFileSystem3F0") return false;
+        || o.barrier != "UnrecoveredGameInitBB8") return false;
     constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
     for (size_t i = 0; i < sizes.size(); ++i) {
         const auto& arena = boot.arenas[i];
@@ -3329,6 +3386,12 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.game_boot.vm.arena_live || observation.game_boot.vm.arena_bytes
+        || observation.game_boot.vm.timer_live || observation.game_boot.vm.timer_started || observation.game_boot.vm.manager_ready) return false;
+    if (observation.game_boot.scene.workspaces_ready || observation.game_boot.scene.pools_ready
+        || observation.game_boot.scene.context_buffer_bytes || observation.game_boot.scene.pool_bytes) return false;
+    if (observation.game_boot.filesystem.mounted || observation.game_boot.filesystem.io.file_live
+        || observation.game_boot.filesystem.io.live_allocations) return false;
     if (observation.game_boot.graphics.live || observation.game_boot.graphics.color_bytes
         || observation.game_boot.graphics.depth_bytes || observation.game_boot.graphics.matrix_bytes) return false;
     for (const auto& arena : observation.game_boot.arenas) if (arena.live) return false;
@@ -3560,7 +3623,7 @@ struct Application {
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
         else if (AtGameBootBoundary(startupObservation))
-            startupStatus = L"Native framebuffer, RTC/RNG и reset готовы. Далее — DATA.BP filesystem3F0; title/gameplay ещё не запущены.";
+            startupStatus = L"DATA.BP, scene/camera и VM готовы; SGX sound недоступен. Следующий вызов — BB8; title/gameplay не запущены.";
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
                 startupObservation.module_records.begin(), startupObservation.module_records.end(),
@@ -3670,7 +3733,9 @@ struct Application {
         int y = bottom + 16;
         auto source = gameFrameReady ? L"C0C · native480×272 framebuffer · nonmatching Windows renderer" : messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
         Text(dc, L"Исходный ресурс: " + source, {24,y,width-24,y+28}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
-        Text(dc, status, {24,y+30,width-24,y+78}, RGB(211,219,223));
+        Text(dc, gameFrameReady && gameFrame.diagnostic
+            ? L"Диагностика native renderer: синтетические примитивы, не декодированный игровой ресурс." : status,
+            {24,y+30,width-24,y+78}, RGB(211,219,223));
         Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F10 clock  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
         std::wostringstream metrics; metrics << L"Win32 · " << frames << L" кадров · " << inputEvents << L" событий ввода · " << images.size() << L" ресурсов";
         Text(dc, metrics.str(), {24,height-31,width-24,height-8}, RGB(125,149,163));

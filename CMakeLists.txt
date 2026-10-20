@@ -36,6 +36,10 @@ add_library(dokodemo-core STATIC
     src/recovered/startup_flow_native.cpp
     src/recovered/game_boot_native.cpp
     src/recovered/game_graphics_native.cpp
+    src/recovered/game_filesystem_native.cpp
+    src/recovered/game_scene_native.cpp
+    src/recovered/game_vm_boot_native.cpp
+    src/recovered/package_storage_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
     src/recovered/atrac3plus_module_native.cpp
@@ -90,6 +94,16 @@ if(DOKODEMO_GAME_BOOT_TESTS)
         target_compile_options(dokodemo-game-graphics-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME game-graphics-tests COMMAND dokodemo-game-graphics-tests)
+    if(WIN32)
+        add_executable(dokodemo-game-filesystem-tests tools/game_filesystem_tests.cpp src/game_filesystem_win32.cpp src/startup_memory_backend_win32.cpp)
+        target_link_libraries(dokodemo-game-filesystem-tests PRIVATE dokodemo-core)
+        target_compile_definitions(dokodemo-game-filesystem-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        if(MSVC)
+            set_target_properties(dokodemo-game-filesystem-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+            target_compile_options(dokodemo-game-filesystem-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+        endif()
+        add_test(NAME game-filesystem-tests COMMAND dokodemo-game-filesystem-tests)
+    endif()
 endif()
 set(DOKODEMO_MODULE_CONTROLS_SOURCE "" CACHE FILEPATH "Optional focused native module-manager controls source inside the workspace")
 if(DOKODEMO_MODULE_CONTROLS_SOURCE)
