@@ -6,6 +6,9 @@
 #include "ifhandle_module_native.h"
 #include "pspnet_module_native.h"
 #include "memab_module_native.h"
+#include "adhoc_auth_module_native.h"
+#include "adhoc_module_native.h"
+#include "adhocctl_module_native.h"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -112,6 +115,9 @@ struct NativeModuleSnapshot {
     IfhandlePrivateDataSnapshot ifhandle;
     PspnetPrivateDataSnapshot pspnet;
     MemabInitializationSnapshot memab;
+    AdhocAuthPrivateDataSnapshot adhoc_auth;
+    AdhocPrivateDataSnapshot adhoc;
+    AdhocctlPrivateDataSnapshot adhocctl;
     std::vector<NativeModuleImportSnapshot> imports;
     std::vector<NativeModuleExportSnapshot> exports;
 };
@@ -229,6 +235,9 @@ public:
     bool IfhandleSnapshot(NativeModuleToken, IfhandlePrivateDataSnapshot&) const noexcept;
     bool PspnetSnapshot(NativeModuleToken, PspnetPrivateDataSnapshot&) const noexcept;
     bool MemabSnapshot(NativeModuleToken, MemabInitializationSnapshot&) const noexcept;
+    bool AdhocAuthSnapshot(NativeModuleToken, AdhocAuthPrivateDataSnapshot&) const noexcept;
+    bool AdhocSnapshot(NativeModuleToken, AdhocPrivateDataSnapshot&) const noexcept;
+    bool AdhocctlSnapshot(NativeModuleToken, AdhocctlPrivateDataSnapshot&) const noexcept;
     // Live records in publication order. All data/mask pointers are sanitized.
     std::vector<NativeModuleSnapshot> Snapshots() const;
     std::vector<NativeModuleProviderSnapshot> Providers() const;

@@ -1,0 +1,147 @@
+#include "adhocctl_module_native.h"
+
+namespace dokodemo::recovered {
+namespace {
+// Exact ordered ROOT-adopted source tables. Encoded VAs are not runtime pointers.
+const AdhocctlModuleDescriptor descriptor{
+    "sceNetAdhocctl_Library",0x0006,0x0101,36416,36416,
+    "3ac8e2211a9b66fe5161a3eac61ec09e258b474068d25bed4adefd5a24bc0f22",
+    "3ac8e2211a9b66fe5161a3eac61ec09e258b474068d25bed4adefd5a24bc0f22",
+    {{
+        {"sceUtility",0,0x4001,5,0,0,2},
+        {"sceNetAdhocAuth_lib",0,0x4001,5,0,2,8},
+        {"sceWlanDrv_lib",0,0x4001,5,0,10,5},
+        {"sceWlanDrv",0,0x4001,5,0,15,1},
+        {"sceNet",0,0x0001,5,0,16,1},
+        {"sceNet_lib",0,0x0001,5,0,17,13},
+        {"sceNetAdhoc",0,0x0001,5,0,30,8},
+        {"ThreadManForUser",0,0x4001,5,0,38,16}
+    }},
+    {{
+        {0xA5DA2406,0x00006328},
+        {0x34B78343,0x00006330},
+        {0x86004235,0x00006280},
+        {0x6074D8F1,0x00006288},
+        {0x89F2A732,0x00006290},
+        {0x2E6AA271,0x00006298},
+        {0x6CE209A3,0x000062A0},
+        {0xBD144DA6,0x000062A8},
+        {0x1F9A90B8,0x000062B0},
+        {0x76F26AB0,0x000062B8},
+        {0x482CAE9A,0x00006340},
+        {0xC9A8CAB7,0x00006348},
+        {0x5BAA1FE5,0x00006350},
+        {0x2D0FAE4E,0x00006358},
+        {0x56F467CA,0x00006360},
+        {0xD7763699,0x00006338},
+        {0x0BF0A3AE,0x00006238},
+        {0x5216CBF5,0x000062C0},
+        {0xD2422E4D,0x000062C8},
+        {0xD1BE2CE9,0x000062D0},
+        {0xAB7DD9A5,0x000062D8},
+        {0x7BA3ED91,0x000062E0},
+        {0x03164B12,0x000062E8},
+        {0x389728AB,0x000062F0},
+        {0xD5B64E37,0x000062F8},
+        {0xDA02F383,0x00006300},
+        {0xAFA11338,0x00006308},
+        {0xB20F84F8,0x00006310},
+        {0xA55C914F,0x00006318},
+        {0x0D633F53,0x00006320},
+        {0x877F6D66,0x00006240},
+        {0xFC6FC07B,0x00006248},
+        {0xE08BDAC1,0x00006250},
+        {0x9DF81198,0x00006258},
+        {0x4DA4C788,0x00006260},
+        {0x8BEA2B3E,0x00006268},
+        {0x9AC2EEAC,0x00006270},
+        {0x157E6225,0x00006278},
+        {0x446D8DE6,0x000061B8},
+        {0x9FA03CD3,0x000061C0},
+        {0xF475845D,0x000061C8},
+        {0x616403BA,0x000061D0},
+        {0xCEADEB47,0x000061D8},
+        {0xD6DA4BA1,0x000061E0},
+        {0x28B6489C,0x000061E8},
+        {0x3F53E640,0x000061F0},
+        {0x4E3A1105,0x000061F8},
+        {0x55C20A00,0x00006200},
+        {0xEF9E4C70,0x00006208},
+        {0x1FB15A32,0x00006210},
+        {0x812346E4,0x00006218},
+        {0x402FCF22,0x00006220},
+        {0x30FD48F0,0x00006228},
+        {0x82BC5777,0x00006230}
+    }},
+    {{
+        {"",false,0,0x8000,0xD632ACDB,0x00004D54},
+        {"",false,0,0x8000,0xCEE8593C,0x00004D5C},
+        {"",true,0,0x8000,0xF01D73A7,0x00006450},
+        {"sceNetAdhocctl",false,0,0x0001,0xE26F226E,0x00000000},
+        {"sceNetAdhocctl",false,0,0x0001,0x9D689E13,0x000001C0},
+        {"sceNetAdhocctl",false,0,0x0001,0x0AD043ED,0x00000208},
+        {"sceNetAdhocctl",false,0,0x0001,0xEC0635C1,0x0000028C},
+        {"sceNetAdhocctl",false,0,0x0001,0x5E7F79C9,0x00000310},
+        {"sceNetAdhocctl",false,0,0x0001,0x08FFF7A0,0x00000450},
+        {"sceNetAdhocctl",false,0,0x0001,0x34401D65,0x00000480},
+        {"sceNetAdhocctl",false,0,0x0001,0x20B317A0,0x000004E0},
+        {"sceNetAdhocctl",false,0,0x0001,0x6402490B,0x00000528},
+        {"sceNetAdhocctl",false,0,0x0001,0x75ECD386,0x00000558},
+        {"sceNetAdhocctl",false,0,0x0001,0x362CBE8F,0x00000594},
+        {"sceNetAdhocctl",false,0,0x0001,0xE162CB14,0x000005D0},
+        {"sceNetAdhocctl",false,0,0x0001,0x99560ABE,0x00000624},
+        {"sceNetAdhocctl",false,0,0x0001,0x8916C003,0x00000684},
+        {"sceNetAdhocctl",false,0,0x0001,0xDED9D28E,0x000006D4},
+        {"sceNetAdhocctl",false,0,0x0001,0x81AEE1BE,0x00000710},
+        {"sceNetAdhocctl",false,0,0x0001,0xA5C055CE,0x000000BC},
+        {"sceNetAdhocctl",false,0,0x0001,0x1FF89745,0x000003A8},
+        {"sceNetAdhocctl",false,0,0x0001,0xCF8E084D,0x000004B0},
+        {"sceNetAdhocctl",false,0,0x0001,0x5A014CE0,0x00000740},
+        {"sceNetAdhocctl_lib",false,0,0x0001,0xEFA6AEAF,0x0000077C},
+        {"sceNetAdhocctl_lib",false,0,0x0001,0x1593C05D,0x000007E8},
+        {"sceNetAdhocctl_lib",false,0,0x0001,0xF8BABD85,0x00000854},
+        {"sceNetAdhocctl_lib",false,0,0x0001,0x1C679240,0x00000890}
+    }},
+    0x4D54,0x4D54,0x4D5C,
+    {{0x03E00008,0x00001021}},{{0x03E00008,0x00001021}}
+};
+constexpr std::array<uint8_t,132> initial_file_bytes{{
+    0x00,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x08,0x08,
+    0x08,0x08,0x08,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,
+    0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x18,0x10,0x10,
+    0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,
+    0x10,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x04,0x10,
+    0x10,0x10,0x10,0x10,0x10,0x10,0x41,0x41,0x41,0x41,0x41,0x41,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+    0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x10,0x10,0x10,0x10,
+    0x10,0x10,0x42,0x42,0x42,0x42,0x42,0x42,0x02,0x02,0x02,0x02,
+    0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,
+    0x02,0x02,0x02,0x02,0x10,0x10,0x10,0x10,0x20,0x00,0x00,0x00
+}};
+}
+const AdhocctlModuleDescriptor* FindAdhocctlModuleDescriptor(std::string_view hash,uint32_t bytes) noexcept {
+    return bytes==descriptor.encoded_bytes && hash==descriptor.encoded_sha256?&descriptor:nullptr;
+}
+bool AdhocctlImportPolicyAllows(const AdhocctlImportLibrary& library) noexcept {
+    if(!library.name) return false;
+    for(const auto& expected:descriptor.imports)
+        if(std::string_view(library.name)==expected.name && library.version==expected.version &&
+            library.attributes==expected.attributes && library.words==expected.words && library.variables==expected.variables &&
+            library.first_function==expected.first_function && library.function_count==expected.function_count) return true;
+    return false;
+}
+void InitializeAdhocctlPrivateData(AdhocctlPrivateDataSnapshot& state) noexcept {
+    state={};state.present=true;
+    // File6890..6914 / PH1 relative0..132 has no relocation destination.
+    // The remaining5760 backing bytes have no numeric source producer.
+    // Host value initialization does not grant known-zero authority.
+    for(uint32_t i=0;i<initial_file_bytes.size();++i) {
+        state.bytes[i]=initial_file_bytes[i];state.known[i]=1;
+    }
+    state.known_bytes=132;
+}
+// Actual anonymous D632ACDB/CEE8593C bindings, complete JR RA + v0=0 delay.
+// No calls, private reads/stores, resource effect, or public networking behavior.
+int32_t AdhocctlStart4D54() noexcept {return 0;}
+int32_t AdhocctlStop4D5C() noexcept {return 0;}
+} // namespace dokodemo::recovered

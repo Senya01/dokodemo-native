@@ -14,6 +14,9 @@ constexpr const char* SascoreImportAbi = "unrecovered-psp32-sascore-import-v1";
 constexpr const char* IfhandleImportAbi = "unrecovered-psp32-ifhandle-import-v1";
 constexpr const char* PspnetImportAbi = "unrecovered-psp32-pspnet-import-v1";
 constexpr const char* MemabImportAbi = "unrecovered-psp32-memab-import-v1";
+constexpr const char* AdhocAuthImportAbi = "unrecovered-psp32-adhoc-auth-import-v1";
+constexpr const char* AdhocImportAbi = "unrecovered-psp32-adhoc-import-v1";
+constexpr const char* AdhocctlImportAbi = "unrecovered-psp32-adhocctl-import-v1";
 constexpr const char* SyntheticAbi = "synthetic-stage16-u32x4-v1";
 constexpr const char* CheckNeedMemAbi = "windows-owned-masked-checkneedmem-prefix-v1";
 // This namespace is a Windows registry namespace, not PSP kernel UID state.
@@ -39,7 +42,7 @@ bool SameInput(const NativeModuleInputView& a, const NativeModuleInputView& b) n
 }
 bool KnownInput(const NativeModuleInputView& view) noexcept {
     if (!view.bytes || !view.initialized || !view.owner || !view.generation || !view.serial ||
-        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920 && view.size != 10832 && view.size != 60256 && view.size != 15216) ||
+        !view.host_address || (view.size != 3232 && view.size != 19524 && view.size != 5920 && view.size != 10832 && view.size != 60256 && view.size != 15216 && view.size != 10816 && view.size != 40140 && view.size != 36416) ||
         view.host_address != uint64_t(reinterpret_cast<uintptr_t>(view.bytes)) ||
         view.host_address > (std::numeric_limits<uint64_t>::max)() - view.size ||
         uint64_t(view.source_coordinate) + view.size > (uint64_t(1) << 32)) return false;
@@ -308,8 +311,11 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
     const auto* ifhandle = FindIfhandleModuleDescriptor(digest, view.size);
     const auto* pspnet = FindPspnetModuleDescriptor(digest, view.size);
     const auto* memab = FindMemabModuleDescriptor(digest, view.size);
-    if (!descriptor && !atrac && !sas && !ifhandle && !pspnet && !memab) return Result(NativeModuleCode::IdentityMismatch);
-    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas ? sas->name : ifhandle ? ifhandle->name : pspnet ? pspnet->name : memab->name;
+    const auto* auth = FindAdhocAuthModuleDescriptor(digest, view.size);
+    const auto* adhoc = FindAdhocModuleDescriptor(digest, view.size);
+    const auto* adhocctl = FindAdhocctlModuleDescriptor(digest, view.size);
+    if (!descriptor && !atrac && !sas && !ifhandle && !pspnet && !memab && !auth && !adhoc && !adhocctl) return Result(NativeModuleCode::IdentityMismatch);
+    const char* name = descriptor ? descriptor->name : atrac ? atrac->name : sas ? sas->name : ifhandle ? ifhandle->name : pspnet ? pspnet->name : memab ? memab->name : auth ? auth->name : adhoc ? adhoc->name : adhocctl->name;
     for (const auto& live : self.modules) {
         if (live->data.name == name) return Result(NativeModuleCode::AlreadyLoaded);
         const auto& old = live->data.input;
@@ -541,6 +547,111 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
             Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
         }
     }
+    if(auth) {
+        // Seventh exact encoded identity; source-bound lifecycle, no runtime transform.
+        if(auth->attributes!=0x1006 || auth->version!=0x0101 || auth->source_elf_entry!=0x3A00 ||
+            auth->start_source_va!=0x3A00 || auth->stop_source_va!=0x3A08 ||
+            auth->start_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}} ||
+            auth->stop_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}})
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=auth->plaintext_sha256;
+        record->data.encoded_bytes=auth->encoded_bytes;record->data.plaintext_bytes=auth->plaintext_bytes;
+        record->data.policy="WindowsAdhocAuthExact0001_0009LifecycleV1";
+        record->data.implementation="aot-adhoc-auth-bound-3A00/3A08-literal-zero-v1;public-auth-networking-unimplemented";
+        record->data.start_source_va=0x3A00;record->data.stop_source_va=0x3A08;
+        record->start=AdhocAuthStart3A00;record->stop=AdhocAuthStop3A08;
+        InitializeAdhocAuthPrivateData(record->data.adhoc_auth);
+        record->data.adhoc_auth.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.adhoc_auth));
+        record->data.imports.reserve(42);record->data.exports.reserve(21);
+        for(const auto& library:auth->imports) {
+            if(!AdhocAuthImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>auth->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=auth->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=AdhocAuthImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=42) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:auth->exports) {
+            if(entry.version!=0) return Result(NativeModuleCode::UnsupportedPolicy);
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
+    }
+    if(adhoc) {
+        // Eighth retained raw ELF. Only the exact bound system bodies are callable.
+        if(adhoc->attributes!=0x0006 || adhoc->version!=0x0101 || adhoc->source_elf_entry!=0x6D5C ||
+            adhoc->start_source_va!=0x6D5C || adhoc->stop_source_va!=0x6D64 ||
+            adhoc->start_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}} ||
+            adhoc->stop_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}})
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=adhoc->plaintext_sha256;
+        record->data.encoded_bytes=adhoc->encoded_bytes;record->data.plaintext_bytes=adhoc->plaintext_bytes;
+        record->data.policy="WindowsAdhocExact0001_4001LifecycleV1";
+        record->data.implementation="aot-adhoc-bound-6D5C/6D64-literal-zero-v1;public-networking-unimplemented";
+        record->data.start_source_va=0x6D5C;record->data.stop_source_va=0x6D64;
+        record->start=AdhocStart6D5C;record->stop=AdhocStop6D64;
+        InitializeAdhocPrivateData(record->data.adhoc);
+        record->data.adhoc.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.adhoc));
+        record->data.imports.reserve(34);record->data.exports.reserve(32);
+        for(const auto& library:adhoc->imports) {
+            if(!AdhocImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>adhoc->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=adhoc->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=AdhocImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=34) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:adhoc->exports) {
+            if(entry.version!=0) return Result(NativeModuleCode::UnsupportedPolicy);
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
+    }
+    if(adhocctl) {
+        // Ninth exact retained raw ELF; no transform or source service producer.
+        if(adhocctl->attributes!=0x0006 || adhocctl->version!=0x0101 || adhocctl->source_elf_entry!=0x4D54 ||
+            adhocctl->start_source_va!=0x4D54 || adhocctl->stop_source_va!=0x4D5C ||
+            adhocctl->start_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}} ||
+            adhocctl->stop_words!=std::array<uint32_t,2>{{0x03E00008,0x00001021}})
+            return Result(NativeModuleCode::UnsupportedPolicy);
+        record->data.plaintext_sha256=adhocctl->plaintext_sha256;
+        record->data.encoded_bytes=adhocctl->encoded_bytes;record->data.plaintext_bytes=adhocctl->plaintext_bytes;
+        record->data.policy="WindowsAdhocctlExact0001_4001LifecycleV1";
+        record->data.implementation="aot-adhocctl-bound-4D54/4D5C-literal-zero-v1;public-networking-unimplemented";
+        record->data.start_source_va=0x4D54;record->data.stop_source_va=0x4D5C;
+        record->start=AdhocctlStart4D54;record->stop=AdhocctlStop4D5C;
+        InitializeAdhocctlPrivateData(record->data.adhocctl);
+        record->data.adhocctl.native_state_address=uint64_t(reinterpret_cast<uintptr_t>(&record->data.adhocctl));
+        record->data.imports.reserve(54);record->data.exports.reserve(27);
+        for(const auto& library:adhocctl->imports) {
+            if(!AdhocctlImportPolicyAllows(library) || uint32_t(library.first_function)+library.function_count>adhocctl->functions.size())
+                return Result(NativeModuleCode::UnsupportedPolicy);
+            for(uint16_t i=0;i<library.function_count;++i) {
+                const auto& function=adhocctl->functions[library.first_function+i];
+                NativeModuleImportSnapshot entry;
+                entry.library=library.name;entry.version=library.version;entry.attributes=library.attributes;
+                entry.abi=AdhocctlImportAbi;entry.nid=function.nid;entry.source_stub_va=function.stub_va;
+                record->data.imports.push_back(std::move(entry));
+            }
+        }
+        if(record->data.imports.size()!=54) return Result(NativeModuleCode::UnsupportedPolicy);
+        for(const auto& entry:adhocctl->exports) {
+            if(entry.version!=0) return Result(NativeModuleCode::UnsupportedPolicy);
+            const bool lifecycle=!entry.library[0] && !entry.variable &&
+                (entry.nid==0xD632ACDB || entry.nid==0xCEE8593C);
+            Export(*record,entry.library,entry.variable?"variable":"function",entry.attributes,entry.nid,entry.source_va,lifecycle);
+        }
+    }
     record->bindings.resize(record->data.imports.size());
     self.modules.reserve(self.modules.size() + 1); // final fallible registry allocation BEFORE UID publication
     const auto uid = TakeMonotonic(next_module_uid, uint64_t((std::numeric_limits<int32_t>::max)()));
@@ -571,6 +682,18 @@ NativeModuleResult NativeModuleManager::LoadInput(std::shared_ptr<NativeModuleIn
         state.resources.key.module={{self.owner,self.generation,self.serial,uid}};
         state.resources.key.input={{view.owner,view.generation,view.serial}};
         state.resources.key.state={{self.owner,self.generation,self.serial}};
+    }
+    if(auth) {
+        auto& state=record->data.adhoc_auth;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
+    }
+    if(adhoc) {
+        auto& state=record->data.adhoc;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
+    }
+    if(adhocctl) {
+        auto& state=record->data.adhocctl;
+        state.owner=self.owner;state.generation=self.generation;state.serial=self.serial;
     }
     for (auto& entry : record->data.imports) entry.module = record->data.token;
     for (auto& entry : record->data.exports) entry.module = record->data.token;
@@ -1287,6 +1410,21 @@ bool NativeModuleManager::PspnetSnapshot(NativeModuleToken token,PspnetPrivateDa
 bool NativeModuleManager::MemabSnapshot(NativeModuleToken token,MemabInitializationSnapshot& out) const noexcept {
     const auto module=impl_->Find(token);if(!module || !module->data.memab.present) return false;
     out=module->data.memab;return true;
+}
+bool NativeModuleManager::AdhocAuthSnapshot(NativeModuleToken token,AdhocAuthPrivateDataSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);
+    if(!module || !module->data.adhoc_auth.present) return false;
+    out=module->data.adhoc_auth;return true;
+}
+bool NativeModuleManager::AdhocSnapshot(NativeModuleToken token,AdhocPrivateDataSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);
+    if(!module || !module->data.adhoc.present) return false;
+    out=module->data.adhoc;return true;
+}
+bool NativeModuleManager::AdhocctlSnapshot(NativeModuleToken token,AdhocctlPrivateDataSnapshot& out) const noexcept {
+    const auto module=impl_->Find(token);
+    if(!module || !module->data.adhocctl.present) return false;
+    out=module->data.adhocctl;return true;
 }
 std::vector<NativeModuleSnapshot> NativeModuleManager::Snapshots() const {
     if (impl_->gate->executing) return {};

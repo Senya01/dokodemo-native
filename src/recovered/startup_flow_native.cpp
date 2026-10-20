@@ -157,13 +157,15 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
     for(;;) {
         const uint32_t index=repeated.current_record_index,base=index*12;
         uint32_t path_addend=0;
-        if(index>=2 || !read_word(base+8,path_addend) || kind>1 ||
-            path_addend!=(index==0?0xDD530u:0xDD558u)) {
+        if(index>=4 || !read_word(base+8,path_addend) || kind>1 ||
+            path_addend!=(index==0?0xDD530u:index==1?0xDD558u:index==2?0xDD58Cu:0xDD5B8u)) {
             services.UnsupportedFollowingModule();return StartupFlowStop::Unsupported;
         }
         services.ObserveRepeatedModules(repeated,0x4F708);
         const char* path=index==0?"disc0:/PSP_GAME/USRDIR/prx/memab.prx":
-            "disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc_auth.prx";
+            index==1?"disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc_auth.prx":
+            index==2?"disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc.prx":
+            "disc0:/PSP_GAME/USRDIR/prx/pspnet_adhocctl.prx";
         const auto& options=kind==1?kind1:kind0; //4F710..720:20*kind; a2=0
         services.BeginModuleRequest(0x4F71C,path,options);
         module=RunStartupModule4F4E8(services,path,options);
@@ -192,6 +194,22 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         services.ObserveRepeatedModules(repeated,0x4F73C);
         if(more) {
             // BNEL's taken delay reads the next kind. Unknown bytes stop BEFORE read.
+            if(repeated.current_record_index==2 && repeated.known_bytes==24) {
+                // Exact SUPPLEMENT_RAW row2, reached only after row1's true
+                // nonfailure wrapper return. R32 DD58C stays symbolic; this
+                // model admission is not an additional source UID store.
+                constexpr std::array<uint8_t,12> row2{{0xFF,0xFF,0xFF,0xFF,0,0,0,0,0x8C,0xD5,0x0D,0}};
+                for(uint32_t i=0;i<row2.size();++i) {repeated.bytes[24+i]=row2[i];repeated.known[24+i]=1;}
+                repeated.known_bytes=36;
+            }
+            if(repeated.current_record_index==3 && repeated.known_bytes==36) {
+                // ROOT-routed CALLER.v1 raw row3, only after row2's actual
+                // nonfailure wrapper return and taken BNEL. R32 DD5B8 is
+                // symbolic; the new raw sentinel is not a fourth UID store.
+                constexpr std::array<uint8_t,12> row3{{0xFF,0xFF,0xFF,0xFF,0,0,0,0,0xB8,0xD5,0x0D,0}};
+                for(uint32_t i=0;i<row3.size();++i) {repeated.bytes[36+i]=row3[i];repeated.known[36+i]=1;}
+                repeated.known_bytes=48;
+            }
             if(!read_word(repeated.current_record_index*12+4,kind)) {
                 services.UnsupportedFollowingModule();return StartupFlowStop::Unsupported;
             }
@@ -199,6 +217,7 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
             continue; //4F708; no second4F704 load
         }
         // Branch-likely not taken annuls4F740;4F744 sets a0=1.
+        services.ObserveRepeatedModules(repeated,0x4F744); //success flag before gate-return publication
         repeated.source_gate_returned=true;repeated.source_gate_result=1;
         services.ObserveRepeatedModules(repeated,0x4F758);
         services.UnsupportedFollowingModule();return StartupFlowStop::Unsupported;

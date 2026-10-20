@@ -41,6 +41,9 @@ add_library(dokodemo-core STATIC
     src/recovered/ifhandle_module_native.cpp
     src/recovered/pspnet_module_native.cpp
     src/recovered/memab_module_native.cpp
+    src/recovered/adhoc_auth_module_native.cpp
+    src/recovered/adhoc_module_native.cpp
+    src/recovered/adhocctl_module_native.cpp
     src/model_formats.cpp
     src/recovered/game_primitives.cpp
     src/recovered/menu_primitives.cpp

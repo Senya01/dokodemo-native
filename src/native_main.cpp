@@ -1351,6 +1351,64 @@ void WritePspnetValue(std::ostream& out,
         << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
         << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
 }
+void WriteAdhocctlValue(std::ostream& out,
+    const dokodemo::recovered::AdhocctlPrivateDataSnapshot& s) {
+    out << "{\"present\":" << (s.present ? "true" : "false");
+    if (!s.present) { out << '}'; return; }
+    out << ",\"owner\":" << s.owner << ",\"generation\":" << s.generation
+        << ",\"serial\":" << s.serial << ",\"native_state_address\":" << s.native_state_address
+        << ",\"source_segment\":" << s.source_segment << ",\"source_segment_va\":" << s.source_segment_va
+        << ",\"source_file_offset\":" << s.source_file_offset << ",\"source_file_bytes\":" << s.source_file_bytes
+        << ",\"private_bytes\":" << s.private_bytes << ",\"initial_source_known_bytes\":" << s.initial_source_known_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"initial_known_origin\":\"AdmittedUnrelocatedFileBytesCopiedByNativeInitializer\""
+        << ",\"bytes_meaning_requires_known_one\":true"
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
+}
+
+void WriteNextGameCallValue(std::ostream& out, const dokodemo::StartupObservation& o) {
+    const bool reached=o.barrier_source_pc==0x1004 && !o.barrier_module_relative
+        && o.repeated_modules.source_gate_returned && o.repeated_modules.source_gate_result==1;
+    out << "{\"present\":" << (reached ? "true" : "false");
+    if(!reached) { out << '}'; return; }
+    out << ",\"source_callsite\":" << 0x1004 << ",\"target\":" << 0x52D58
+        << ",\"delay_source_pc\":" << 0x1008 << ",\"delay_word_hex\":\"3C110001\""
+        << ",\"body_admitted\":false,\"result\":null,\"returned\":false,\"later_100C_reached\":false}";
+}
+
+void WriteAdhocValue(std::ostream& out,
+    const dokodemo::recovered::AdhocPrivateDataSnapshot& s) {
+    out << "{\"present\":" << (s.present ? "true" : "false");
+    if (!s.present) { out << '}'; return; }
+    out << ",\"owner\":" << s.owner << ",\"generation\":" << s.generation
+        << ",\"serial\":" << s.serial << ",\"native_state_address\":" << s.native_state_address
+        << ",\"source_segment\":" << s.source_segment << ",\"source_segment_va\":" << s.source_segment_va
+        << ",\"source_file_offset\":" << s.source_file_offset << ",\"source_file_bytes\":" << s.source_file_bytes
+        << ",\"private_bytes\":" << s.private_bytes << ",\"initial_source_known_bytes\":" << s.initial_source_known_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"initial_known_origin\":\"AdmittedUnrelocatedFileBytesCopiedByNativeInitializer\""
+        << ",\"bytes_meaning_requires_known_one\":true"
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
+}
+
+void WriteAdhocAuthValue(std::ostream& out,
+    const dokodemo::recovered::AdhocAuthPrivateDataSnapshot& s) {
+    out << "{\"present\":" << (s.present ? "true" : "false");
+    if (!s.present) { out << '}'; return; }
+    out << ",\"owner\":" << s.owner << ",\"generation\":" << s.generation
+        << ",\"serial\":" << s.serial << ",\"native_state_address\":" << s.native_state_address
+        << ",\"source_segment\":" << s.source_segment << ",\"source_segment_va\":" << s.source_segment_va
+        << ",\"source_file_offset\":" << s.source_file_offset << ",\"source_file_bytes\":" << s.source_file_bytes
+        << ",\"private_bytes\":" << s.private_bytes << ",\"initial_source_known_bytes\":" << s.initial_source_known_bytes
+        << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
+        << ",\"initial_known_origin\":\"AdmittedUnrelocatedFileBytesCopiedByNativeInitializer\""
+        << ",\"bytes_meaning_requires_known_one\":true"
+        << ",\"bytes_hex\":" << JsonString(StartupHexBytes(s.bytes.data(), s.bytes.size()))
+        << ",\"known_hex\":" << JsonString(StartupHexBytes(s.known.data(), s.known.size())) << '}';
+}
+
 void WriteMemabValue(std::ostream& out,
     const dokodemo::recovered::MemabInitializationSnapshot& s) {
     const auto boolean=[](bool v){return v?"true":"false";};
@@ -1435,7 +1493,12 @@ void WriteRepeatedModulesValue(std::ostream& out,
         << ",\"uid_value_origin_policy\":\"RetainedRawSentinelOrActualWindowsBackedWrapperReturn\""
         << ",\"wrapper_success_origin\":\"RetainedLoadUid\",\"wrapper_minus_one_origin\":\"NegativeLoadOrStart\""
         << ",\"symbolic_path_references\":[{\"table_offset\":8,\"referenced_segment\":0,\"addend\":" << 0xDD530
-        << "},{\"table_offset\":20,\"referenced_segment\":0,\"addend\":" << 0xDD558 << "}]"
+        << "},{\"table_offset\":20,\"referenced_segment\":0,\"addend\":" << 0xDD558 << '}';
+    if(s.known[32] && s.known[33] && s.known[34] && s.known[35])
+        out << ",{\"table_offset\":32,\"referenced_segment\":0,\"addend\":" << 0xDD58C << '}';
+    if(s.known[44] && s.known[45] && s.known[46] && s.known[47])
+        out << ",{\"table_offset\":44,\"referenced_segment\":0,\"addend\":" << 0xDD5B8 << '}';
+    out << "]"
         << ",\"source_segment\":" << s.source_segment << ",\"source_table_offset\":" << s.source_table_offset
         << ",\"source_table_va\":" << s.source_table_va << ",\"table_bytes\":" << s.table_bytes
         << ",\"known_bytes\":" << s.known_bytes << ",\"writes_count\":" << s.writes_count
@@ -1504,6 +1567,9 @@ void WriteModuleRecordValue(std::ostream& out, const dokodemo::recovered::Native
     out << ",\"ifhandle\":"; WriteIfhandleValue(out, record.ifhandle);
     out << ",\"pspnet\":"; WritePspnetValue(out, record.pspnet);
     out << ",\"memab\":"; WriteMemabValue(out, record.memab);
+    out << ",\"adhoc_auth\":"; WriteAdhocAuthValue(out, record.adhoc_auth);
+    out << ",\"adhoc\":"; WriteAdhocValue(out, record.adhoc);
+    out << ",\"adhocctl\":"; WriteAdhocctlValue(out, record.adhocctl);
     out << '}';
 }
 void WriteModuleRequestValue(std::ostream& out, const dokodemo::StartupModuleObservation& item) {
@@ -1657,6 +1723,7 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"module_binding_frontier\":" << JsonString(observation.module_binding_frontier);
     WriteModuleObservation(out, observation);
     out << ",\"repeated_modules\":"; WriteRepeatedModulesValue(out, observation.repeated_modules);
+    out << ",\"next_game_call\":"; WriteNextGameCallValue(out, observation);
     out << ",\"current_module_index\":" << observation.current_module_index
         << ",\"no_current_module_sentinel\":" << dokodemo::StartupNoCurrentModule
         << ",\"current_frontier\":" << JsonString(observation.current_frontier)
@@ -2540,7 +2607,7 @@ bool RepeatedMemabContinuationExact(const dokodemo::StartupObservation& o) {
         if(o.module_observations[i].repeated_record_index!=dokodemo::StartupNoCurrentModule) return false;
     return o.module_observations[5].repeated_record_index==0 && o.module_observations[6].repeated_record_index==1;
 }
-bool AtMemabBoundary(const dokodemo::StartupObservation& o) {
+[[maybe_unused]] bool AtMemabBoundary(const dokodemo::StartupObservation& o) {
     if(o.module_observations.size()!=7 || o.module_records.size()!=6 || o.current_module_index!=6
         || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
         || o.barrier_module_relative || o.current_frontier_module_relative
@@ -2584,14 +2651,600 @@ bool MemabSequenceClosed(const dokodemo::StartupObservation& o) {
         && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
 }
 
+bool AdhocAuthRequestExact(const dokodemo::StartupModuleObservation& item, bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record; const auto& s=record.adhoc_auth;
+    if(item.request_index!=6 || item.repeated_record_index!=1 || item.wrapper_callsite!=0x4F71C || item.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc_auth.prx"
+        || item.flags || item.pending || item.options!=std::vector<uint8_t>{20,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation || !item.file_backend_serial
+        || item.encoded_file_bytes!=10816 || item.file_live || !item.module_uid_assigned || !item.module_load_returned
+        || item.token.uid<=0 || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result || !item.module_file_closed_while_input_live
+        || item.module_initialization_blocked || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed || item.staging_borrow_live==closed
+        || !item.staging_host_read || !item.staging_full_read || !item.staging_hash_matches || item.staging_read_error
+        || item.staging_file_position || item.staging_requested!=10816 || item.staging_transferred!=10816 || item.staging_known_bytes!=10816
+        || item.staging_sha256!="c67770d8199bdd510fd932546285f1fe87674afd6426a5f9f2212b1901443f7f"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<10816 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed
+        || (closed && item.module_stop_result) || item.module_unloaded!=closed || item.module_input_released!=closed
+        || item.staging_freed_after_joins!=closed || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceNetAdhocAuth_Service" || record.encoded_bytes!=10816 || record.plaintext_bytes!=23448
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="06af9b2a1283ad09042fb09d342ebc546471955b856a434a39e42ca6e1f619b7"
+        || record.policy!="WindowsAdhocAuthExact0001_0009LifecycleV1" || record.start_source_va!=0x3A00 || record.stop_source_va!=0x3A08
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation || record.input.serial!=item.staging_serial
+        || record.input.host_address!=item.staging_host_address || record.input.source_coordinate!=item.staging_source_coordinate
+        || record.input.size!=10816 || record.imports.size()!=42 || record.exports.size()!=21
+        || !s.present || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address || s.source_segment!=1 || s.source_segment_va!=0x3ED0
+        || s.private_bytes!=412 || s.initial_source_known_bytes!=8 || s.known_bytes!=8 || s.writes_count) return false;
+    if(s.source_file_offset!=0x3F50 || s.source_file_bytes!=8) return false;
+    for(size_t i=0;i<s.known.size();++i)
+        if(s.known[i]!=(i<8?1:0) || (i<8 && s.bytes[i]!=255)) return false;
+    struct ExpectedImport { const char* library; uint16_t version,attributes; uint32_t nid,stub; };
+    constexpr std::array<ExpectedImport,42> imports{{
+        {"sceNetIfhandle_driver",0,0x0009,0x15CFE3C0,0x3B10},
+        {"sceNetIfhandle_driver",0,0x0009,0x76BAD213,0x3B18},
+        {"sceNetIfhandle_driver",0,0x0009,0x1560F143,0x3B20},
+        {"sceNetIfhandle_driver",0,0x0009,0x9A6261EC,0x3B28},
+        {"sceNetIfhandle_driver",0,0x0009,0xF8825DC4,0x3B30},
+        {"sceNetIfhandle_driver",0,0x0009,0xF56FAC82,0x3B38},
+        {"sceNetIfhandle_driver",0,0x0009,0x0542835F,0x3B40},
+        {"sceNetIfhandle_driver",0,0x0009,0x773FC77C,0x3B48},
+        {"sceNetIfhandle_driver",0,0x0009,0x9CBA24D4,0x3B50},
+        {"sceNetIfhandle_driver",0,0x0009,0xC5623112,0x3B58},
+        {"sceMemab_driver",0,0x0001,0x01FD1BA0,0x3AB8},
+        {"sceMemab_driver",0,0x0001,0x0C134D3F,0x3AC0},
+        {"sceMemab_driver",0,0x0001,0xA4720EED,0x3AC8},
+        {"sceMemab_driver",0,0x0001,0xDC598EF3,0x3AD0},
+        {"sceMemab_driver",0,0x0001,0x8DAC2343,0x3AD8},
+        {"sceMemab_driver",0,0x0001,0xDAE8A629,0x3AE0},
+        {"sceMemab_driver",0,0x0001,0xCF49BCBB,0x3AE8},
+        {"sceMemab_driver",0,0x0001,0xE6D3ACE2,0x3AF0},
+        {"sceMemab_driver",0,0x0001,0xB54E1AA7,0x3AF8},
+        {"sceMemab_driver",0,0x0001,0xF1D2B9B0,0x3B00},
+        {"sceMemab_driver",0,0x0001,0x4DF566D3,0x3B08},
+        {"SysclibForKernel",0,0x0001,0xAB7592FF,0x3A20},
+        {"SysclibForKernel",0,0x0001,0x10F3BB61,0x3A28},
+        {"SysclibForKernel",0,0x0001,0x81D0D1F7,0x3A30},
+        {"ThreadManForKernel",0,0x0001,0x278C0DF5,0x3A38},
+        {"ThreadManForKernel",0,0x0001,0xD6DA4BA1,0x3A40},
+        {"ThreadManForKernel",0,0x0001,0x28B6489C,0x3A48},
+        {"ThreadManForKernel",0,0x0001,0x3F53E640,0x3A50},
+        {"ThreadManForKernel",0,0x0001,0x4E3A1105,0x3A58},
+        {"ThreadManForKernel",0,0x0001,0x8125221D,0x3A60},
+        {"ThreadManForKernel",0,0x0001,0x86255ADA,0x3A68},
+        {"ThreadManForKernel",0,0x0001,0xE9B3061E,0x3A70},
+        {"ThreadManForKernel",0,0x0001,0x18260574,0x3A78},
+        {"ThreadManForKernel",0,0x0001,0x6652B8CA,0x3A80},
+        {"ThreadManForKernel",0,0x0001,0x7E65B999,0x3A88},
+        {"ThreadManForKernel",0,0x0001,0x446D8DE6,0x3A90},
+        {"ThreadManForKernel",0,0x0001,0x9FA03CD3,0x3A98},
+        {"ThreadManForKernel",0,0x0001,0xF475845D,0x3AA0},
+        {"ThreadManForKernel",0,0x0001,0x616403BA,0x3AA8},
+        {"ThreadManForKernel",0,0x0001,0x293B45B8,0x3AB0},
+        {"InterruptManagerForKernel",0,0x0009,0x092968F4,0x3A10},
+        {"InterruptManagerForKernel",0,0x0009,0x5F10D406,0x3A18},
+    }};
+    for(size_t i=0;i<imports.size();++i) {
+        const auto& actual=record.imports[i]; const auto& expected=imports[i];
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library
+            || actual.version!=expected.version || actual.attributes!=expected.attributes
+            || actual.nid!=expected.nid || actual.source_stub_va!=expected.stub
+            || actual.abi!="unrecovered-psp32-adhoc-auth-import-v1" || actual.resolved || actual.partial_callable
+            || actual.provider_serial || actual.provider_owner || actual.provider_generation) return false;
+    }
+    struct ExpectedExport { const char* library; const char* kind; uint16_t version,attributes; uint32_t nid,va; };
+    constexpr std::array<ExpectedExport,21> exports{{
+        {"","function",0,0x8000,0xD632ACDB,0x3A00},
+        {"","function",0,0x8000,0xCEE8593C,0x3A08},
+        {"","variable",0,0x8000,0xF01D73A7,0x3C04},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x86004235,0x164},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x6074D8F1,0x228},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x89F2A732,0x35C},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x2E6AA271,0x6E4},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x6CE209A3,0x870},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x2AD8C677,0x9D4},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0xBD144DA6,0xB94},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x1F9A90B8,0xD38},
+        {"sceNetAdhocAuth_lib","function",0,0x4001,0x76F26AB0,0xF48},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x86004235,0x164},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x6074D8F1,0x228},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x89F2A732,0x35C},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x2E6AA271,0x6E4},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x6CE209A3,0x870},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x2AD8C677,0x9D4},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0xBD144DA6,0xB94},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x1F9A90B8,0xD38},
+        {"sceNetAdhocAuth_driver","function",0,0x0001,0x76F26AB0,0xF48},
+    }};
+    for(size_t i=0;i<exports.size();++i) {
+        const auto& actual=record.exports[i];const auto& expected=exports[i];
+        const bool callable=expected.library[0]=='\0' && std::string_view(expected.kind)=="function"
+            && ((expected.nid==0xD632ACDB && expected.va==0x3A00) || (expected.nid==0xCEE8593C && expected.va==0x3A08));
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library || actual.kind!=expected.kind
+            || actual.version!=expected.version || actual.attributes!=expected.attributes || actual.nid!=expected.nid
+            || actual.relative_va!=expected.va || actual.lifecycle_callable!=callable || actual.partial_callable) return false;
+    }
+    return true;
+}
+bool RepeatedAuthContinuationExact(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=8) return false;
+    const auto& s=o.repeated_modules;
+    if(!s.present || !s.counter_known || s.counter!=2 || s.current_record_index!=2 || s.source_gate_returned
+        || s.source_segment!=1 || s.source_table_offset!=0x6950 || s.source_table_va!=0xEA4D0
+        || s.table_bytes!=48 || s.known_bytes!=36 || s.writes_count!=2) return false;
+    std::array<uint8_t,36> expected{{255,255,255,255,1,0,0,0,0x30,0xD5,0x0D,0,
+        255,255,255,255,1,0,0,0,0x58,0xD5,0x0D,0,255,255,255,255,0,0,0,0,0x8C,0xD5,0x0D,0}};
+    for(size_t row=0;row<2;++row) {
+        const auto uid=static_cast<uint32_t>(o.module_observations[5+row].module_load_result);
+        for(size_t i=0;i<4;++i) expected[12*row+i]=uint8_t(uid>>(8*i));
+        const auto& w=s.writes[row];
+        if(w.ordinal!=row || w.source_pc!=0x4F728 || w.record_index!=row || w.table_offset!=12*row || w.value!=uid) return false;
+    }
+    for(size_t i=0;i<s.bytes.size();++i)
+        if(s.known[i]!=(i<36?1:0) || (i<36 && s.bytes[i]!=expected[i])) return false;
+    for(size_t i=0;i<5;++i)
+        if(o.module_observations[i].repeated_record_index!=dokodemo::StartupNoCurrentModule) return false;
+    return o.module_observations[5].repeated_record_index==0 && o.module_observations[6].repeated_record_index==1
+        && o.module_observations[7].repeated_record_index==2;
+}
+[[maybe_unused]] bool AtAuthBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=8 || o.module_records.size()!=7 || o.current_module_index!=7
+        || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
+        || !MemabRequestExact(o.module_observations[5],false) || !AdhocAuthRequestExact(o.module_observations[6],false)
+        || !RepeatedAuthContinuationExact(o) || dokodemo::PendingWindowsSascoreCleanup()
+        || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[7];
+    if(next.request_owner!=o.owner || next.request_index!=7 || next.wrapper_callsite!=0x4F71C
+        || next.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc.prx" || next.flags
+        || next.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || !next.pending || next.source_fd<0 || !next.file_live || !next.file_native_object
+        || !next.file_backend_owner || !next.file_backend_generation || !next.file_backend_serial
+        || next.frontier_source_pc!=0x4F53C || next.frontier_module_relative || next.module_uid_assigned
+        || next.module_load_returned || next.module_start_called || next.source_close_called || next.record_live
+        || next.module_input_live || next.staging_host_read || next.staging_live || next.staging_borrow_live
+        || next.staging_transferred || next.staging_known_bytes) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<7;++i) {
+        const auto& x=o.module_observations[i];
+        if(x.request_owner!=o.owner || !SameNativeModuleToken(x.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<7;++j) {
+            const auto& y=o.module_observations[j];
+            if(x.token.uid==y.token.uid || x.token.serial==y.token.serial || x.token.owner!=y.token.owner
+                || x.token.generation!=y.token.generation
+                || uint64_t(x.staging_source_coordinate)+x.staging_committed_bytes>y.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool AuthSequenceClosed(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=8 || !QueryEnvelopeModulesClosed(o)
+        || !SascoreRequestExact(o.module_observations[2],true) || !IfhandleRequestExact(o.module_observations[3],true)
+        || !PspnetRequestExact(o.module_observations[4],true) || !MemabRequestExact(o.module_observations[5],true)
+        || !AdhocAuthRequestExact(o.module_observations[6],true) || !RepeatedAuthContinuationExact(o)
+        || dokodemo::PendingWindowsSascoreCleanup() || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[7];
+    return next.host_file_closed && !next.file_live && !next.pending && !next.record_live
+        && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
+        && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
+}
+
+bool AdhocRequestExact(const dokodemo::StartupModuleObservation& item, bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record; const auto& s=record.adhoc;
+    if(item.request_index!=7 || item.repeated_record_index!=2 || item.wrapper_callsite!=0x4F71C || item.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc.prx"
+        || item.flags || item.pending || item.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation || !item.file_backend_serial
+        || item.encoded_file_bytes!=40140 || item.file_live || !item.module_uid_assigned || !item.module_load_returned
+        || item.token.uid<=0 || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result || !item.module_file_closed_while_input_live
+        || item.module_initialization_blocked || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed || item.staging_borrow_live==closed
+        || !item.staging_host_read || !item.staging_full_read || !item.staging_hash_matches || item.staging_read_error
+        || item.staging_file_position || item.staging_requested!=40140 || item.staging_transferred!=40140 || item.staging_known_bytes!=40140
+        || item.staging_sha256!="47c98edb5d62e069bed77eb5afd69e3877ae3991a163876ea6012536a223826f"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<40140 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed
+        || (closed && item.module_stop_result) || item.module_unloaded!=closed || item.module_input_released!=closed
+        || item.staging_freed_after_joins!=closed || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceNetAdhoc_Library" || record.encoded_bytes!=40140 || record.plaintext_bytes!=40140
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="47c98edb5d62e069bed77eb5afd69e3877ae3991a163876ea6012536a223826f"
+        || record.policy!="WindowsAdhocExact0001_4001LifecycleV1" || record.start_source_va!=0x6D5C || record.stop_source_va!=0x6D64
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation || record.input.serial!=item.staging_serial
+        || record.input.host_address!=item.staging_host_address || record.input.source_coordinate!=item.staging_source_coordinate
+        || record.input.size!=40140 || record.imports.size()!=34 || record.exports.size()!=32
+        || !s.present || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address || s.source_segment!=1 || s.source_segment_va!=0x73F0
+        || s.private_bytes!=144 || s.initial_source_known_bytes!=4 || s.known_bytes!=4 || s.writes_count) return false;
+    if(s.source_file_offset!=0x7470 || s.source_file_bytes!=4) return false;
+    for(size_t i=0;i<s.known.size();++i)
+        if(s.known[i]!=(i<4?1:0) || (i<4 && s.bytes[i]!=255)) return false;
+    struct ExpectedImport { const char* library; uint16_t version,attributes; uint32_t nid,stub; };
+    constexpr std::array<ExpectedImport,34> imports{{
+        {"sceNetIfhandle_lib",0,0x4001,0x15CFE3C0,0x6F5C},
+        {"sceNetIfhandle_lib",0,0x4001,0x76BAD213,0x6F64},
+        {"sceNetIfhandle_lib",0,0x4001,0xBFF3CEA5,0x6F6C},
+        {"sceNetIfhandle_lib",0,0x4001,0x3E8DD3F8,0x6F74},
+        {"sceNetIfhandle_lib",0,0x4001,0x9A6261EC,0x6F7C},
+        {"sceNetIfhandle_lib",0,0x4001,0xF8825DC4,0x6F84},
+        {"sceNetIfhandle_lib",0,0x4001,0xF56FAC82,0x6F8C},
+        {"sceNetIfhandle_lib",0,0x4001,0x49EDBB18,0x6F94},
+        {"sceWlanDrv_lib",0,0x4001,0x5E7C8D94,0x7034},
+        {"sceWlanDrv_lib",0,0x4001,0x5ED4049A,0x703C},
+        {"sceWlanDrv_lib",0,0x4001,0xB4D7CB74,0x7044},
+        {"sceWlanDrv_lib",0,0x4001,0xA447103A,0x704C},
+        {"sceNet",0,0x0001,0x0BF0A3AE,0x6F54},
+        {"sceNet_lib",0,0x0001,0x1858883D,0x6F9C},
+        {"sceNet_lib",0,0x0001,0x25CC373A,0x6FA4},
+        {"sceNet_lib",0,0x0001,0xA8B6205A,0x6FAC},
+        {"sceNet_lib",0,0x0001,0xA93A93E9,0x6FB4},
+        {"sceNet_lib",0,0x0001,0x6B294EE4,0x6FBC},
+        {"sceNet_lib",0,0x0001,0xF6DB0A0B,0x6FC4},
+        {"sceNet_lib",0,0x0001,0x7574FDA1,0x6FCC},
+        {"sceNet_lib",0,0x0001,0xCA3CF5EB,0x6FD4},
+        {"sceNet_lib",0,0x0001,0x757085B0,0x6FDC},
+        {"sceNet_lib",0,0x0001,0x94B44F26,0x6FE4},
+        {"sceNet_lib",0,0x0001,0x515B2F33,0x6FEC},
+        {"sceNet_lib",0,0x0001,0x05D525E4,0x6FF4},
+        {"sceNet_lib",0,0x0001,0xD60225A3,0x6FFC},
+        {"sceNet_lib",0,0x0001,0x2E005032,0x7004},
+        {"sceNet_lib",0,0x0001,0x33B230BD,0x700C},
+        {"sceNet_lib",0,0x0001,0x1F94AFD9,0x7014},
+        {"sceNet_lib",0,0x0001,0x0A5A8751,0x701C},
+        {"sceNet_lib",0,0x0001,0xB3A48B7F,0x7024},
+        {"sceNet_lib",0,0x0001,0x949F1FBB,0x702C},
+        {"ThreadManForUser",0,0x4001,0x3F53E640,0x6F44},
+        {"ThreadManForUser",0,0x4001,0x82BC5777,0x6F4C},
+    }};
+    for(size_t i=0;i<imports.size();++i) {
+        const auto& actual=record.imports[i]; const auto& expected=imports[i];
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library
+            || actual.version!=expected.version || actual.attributes!=expected.attributes
+            || actual.nid!=expected.nid || actual.source_stub_va!=expected.stub
+            || actual.abi!="unrecovered-psp32-adhoc-import-v1" || actual.resolved || actual.partial_callable
+            || actual.provider_serial || actual.provider_owner || actual.provider_generation) return false;
+    }
+    struct ExpectedExport { const char* library; const char* kind; uint16_t version,attributes; uint32_t nid,va; };
+    constexpr std::array<ExpectedExport,32> exports{{
+        {"","function",0,0x8000,0xD632ACDB,0x6D5C},
+        {"","function",0,0x8000,0xCEE8593C,0x6D64},
+        {"","variable",0,0x8000,0xF01D73A7,0x7104},
+        {"sceNetAdhoc","function",0,0x0001,0xE1D621D7,0x0},
+        {"sceNetAdhoc","function",0,0x0001,0xA62C6F57,0x124},
+        {"sceNetAdhoc","function",0,0x0001,0x7A662D6B,0x460},
+        {"sceNetAdhoc","function",0,0x0001,0x73BFD52D,0x9E4},
+        {"sceNetAdhoc","function",0,0x0001,0x4D2CE199,0xBE4},
+        {"sceNetAdhoc","function",0,0x0001,0x6F92741B,0x10A8},
+        {"sceNetAdhoc","function",0,0x0001,0xABED3790,0x11D4},
+        {"sceNetAdhoc","function",0,0x0001,0xDFE53E03,0x1EA4},
+        {"sceNetAdhoc","function",0,0x0001,0x7F27BB5E,0x13C4},
+        {"sceNetAdhoc","function",0,0x0001,0xC7C1FC57,0x28A0},
+        {"sceNetAdhoc","function",0,0x0001,0x877F6D66,0x2CDC},
+        {"sceNetAdhoc","function",0,0x0001,0xFC6FC07B,0x2DF0},
+        {"sceNetAdhoc","function",0,0x0001,0xE08BDAC1,0x2F98},
+        {"sceNetAdhoc","function",0,0x0001,0x9DF81198,0x3094},
+        {"sceNetAdhoc","function",0,0x0001,0x4DA4C788,0x325C},
+        {"sceNetAdhoc","function",0,0x0001,0x8BEA2B3E,0x3448},
+        {"sceNetAdhoc","function",0,0x0001,0x9AC2EEAC,0x3640},
+        {"sceNetAdhoc","function",0,0x0001,0x157E6225,0x37FC},
+        {"sceNetAdhoc","function",0,0x0001,0xB9685118,0x5238},
+        {"sceNetAdhoc","function",0,0x0001,0x7F75C338,0x66FC},
+        {"sceNetAdhoc","function",0,0x0001,0x3278AB0C,0x68FC},
+        {"sceNetAdhoc","function",0,0x0001,0x98C204C8,0x67B8},
+        {"sceNetAdhoc","function",0,0x0001,0xFA324B4E,0x69AC},
+        {"sceNetAdhoc","function",0,0x0001,0xA0229362,0x69E4},
+        {"sceNetAdhoc","function",0,0x0001,0x0B2228E9,0x6A58},
+        {"sceNetAdhoc_lib","function",0,0x0001,0x67346A2A,0x1EDC},
+        {"sceNetAdhoc_lib","function",0,0x0001,0x62B875A8,0x47AC},
+        {"sceNetAdhoc_lib","function",0,0x0001,0x2CA12790,0x47E8},
+        {"sceNetAdhoc_lib","function",0,0x0001,0xAF6DFB15,0x69C8},
+    }};
+    for(size_t i=0;i<exports.size();++i) {
+        const auto& actual=record.exports[i];const auto& expected=exports[i];
+        const bool callable=expected.library[0]=='\0' && std::string_view(expected.kind)=="function"
+            && ((expected.nid==0xD632ACDB && expected.va==0x6D5C) || (expected.nid==0xCEE8593C && expected.va==0x6D64));
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library || actual.kind!=expected.kind
+            || actual.version!=expected.version || actual.attributes!=expected.attributes || actual.nid!=expected.nid
+            || actual.relative_va!=expected.va || actual.lifecycle_callable!=callable || actual.partial_callable) return false;
+    }
+    return true;
+}
+bool RepeatedAdhocContinuationExact(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=9) return false;
+    const auto& s=o.repeated_modules;
+    if(!s.present || !s.counter_known || s.counter!=3 || s.current_record_index!=3 || s.source_gate_returned
+        || s.source_segment!=1 || s.source_table_offset!=0x6950 || s.source_table_va!=0xEA4D0
+        || s.table_bytes!=48 || s.known_bytes!=48 || s.writes_count!=3) return false;
+    std::array<uint8_t,48> expected{{255,255,255,255,1,0,0,0,48,213,13,0,255,255,255,255,1,0,0,0,88,213,13,0,255,255,255,255,0,0,0,0,140,213,13,0,255,255,255,255,0,0,0,0,184,213,13,0}};
+    for(size_t row=0;row<3;++row) {
+        const auto uid=static_cast<uint32_t>(o.module_observations[5+row].module_load_result);
+        for(size_t i=0;i<4;++i) expected[12*row+i]=uint8_t(uid>>(8*i));
+        const auto& w=s.writes[row];
+        if(w.ordinal!=row || w.source_pc!=0x4F728 || w.record_index!=row || w.table_offset!=12*row || w.value!=uid) return false;
+    }
+    for(size_t i=0;i<s.bytes.size();++i)
+        if(s.known[i]!=1 || s.bytes[i]!=expected[i]) return false;
+    for(size_t i=0;i<5;++i)
+        if(o.module_observations[i].repeated_record_index!=dokodemo::StartupNoCurrentModule) return false;
+    for(size_t row=0;row<4;++row)
+        if(o.module_observations[5+row].repeated_record_index!=row) return false;
+    return true;
+}
+[[maybe_unused]] bool AtAdhocBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=9 || o.module_records.size()!=8 || o.current_module_index!=8
+        || o.barrier_source_pc!=0x4F53C || o.current_frontier_source_pc!=0x4F53C
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
+        || !MemabRequestExact(o.module_observations[5],false) || !AdhocAuthRequestExact(o.module_observations[6],false)
+        || !AdhocRequestExact(o.module_observations[7],false)
+        || !RepeatedAdhocContinuationExact(o) || dokodemo::PendingWindowsSascoreCleanup()
+        || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[8];
+    if(next.request_owner!=o.owner || next.request_index!=8 || next.wrapper_callsite!=0x4F71C
+        || next.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhocctl.prx" || next.flags
+        || next.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || !next.pending || next.source_fd<0 || !next.file_live || !next.file_native_object
+        || !next.file_backend_owner || !next.file_backend_generation || !next.file_backend_serial
+        || next.frontier_source_pc!=0x4F53C || next.frontier_module_relative || next.module_uid_assigned
+        || next.module_load_returned || next.module_start_called || next.source_close_called || next.record_live
+        || next.module_input_live || next.staging_host_read || next.staging_live || next.staging_borrow_live
+        || next.staging_transferred || next.staging_known_bytes) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<8;++i) {
+        const auto& x=o.module_observations[i];
+        if(x.request_owner!=o.owner || !SameNativeModuleToken(x.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<8;++j) {
+            const auto& y=o.module_observations[j];
+            if(x.token.uid==y.token.uid || x.token.serial==y.token.serial || x.token.owner!=y.token.owner
+                || x.token.generation!=y.token.generation
+                || uint64_t(x.staging_source_coordinate)+x.staging_committed_bytes>y.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool AdhocSequenceClosed(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=9 || !QueryEnvelopeModulesClosed(o)
+        || !SascoreRequestExact(o.module_observations[2],true) || !IfhandleRequestExact(o.module_observations[3],true)
+        || !PspnetRequestExact(o.module_observations[4],true) || !MemabRequestExact(o.module_observations[5],true)
+        || !AdhocAuthRequestExact(o.module_observations[6],true) || !AdhocRequestExact(o.module_observations[7],true) || !RepeatedAdhocContinuationExact(o)
+        || dokodemo::PendingWindowsSascoreCleanup() || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& next=o.module_observations[8];
+    return next.host_file_closed && !next.file_live && !next.pending && !next.record_live
+        && !next.module_uid_assigned && !next.module_load_returned && !next.module_start_called && !next.module_stop_called
+        && !next.source_close_called && !next.module_input_live && !next.staging_live && !next.staging_borrow_live && !next.staging_host_read;
+}
+
+bool AdhocctlRequestExact(const dokodemo::StartupModuleObservation& item, bool closed) {
+    using namespace dokodemo::recovered;
+    const auto& record=item.record; const auto& s=record.adhocctl;
+    if(item.request_index!=8 || item.repeated_record_index!=3 || item.wrapper_callsite!=0x4F71C || item.path!="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhocctl.prx"
+        || item.flags || item.pending || item.options!=std::vector<uint8_t>{20,0,0,0,2,0,0,0,2,0,0,0,0,0,0,0,0,1,0,0}
+        || item.source_fd<0 || !item.file_native_object || !item.file_backend_owner || !item.file_backend_generation || !item.file_backend_serial
+        || item.encoded_file_bytes!=36416 || item.file_live || !item.module_uid_assigned || !item.module_load_returned
+        || item.token.uid<=0 || item.module_load_result!=item.token.uid || !item.module_start_called || !item.module_start_returned
+        || item.module_start_result || !item.module_start_entry_returned || item.module_start_entry_result
+        || !item.source_close_called || !item.source_close_returned || item.source_close_result || !item.module_file_closed_while_input_live
+        || item.module_initialization_blocked || item.module_initialization_abort_called || item.module_initialization_aborted
+        || item.record_live==closed || item.module_input_live==closed || item.staging_live==closed || item.staging_borrow_live==closed
+        || !item.staging_host_read || !item.staging_full_read || !item.staging_hash_matches || item.staging_read_error
+        || item.staging_file_position || item.staging_requested!=36416 || item.staging_transferred!=36416 || item.staging_known_bytes!=36416
+        || item.staging_sha256!="3ac8e2211a9b66fe5161a3eac61ec09e258b474068d25bed4adefd5a24bc0f22"
+        || item.staging_owner!=item.file_backend_owner || item.staging_generation!=item.file_backend_generation
+        || !item.staging_serial || !item.staging_host_address || !item.staging_page_bytes
+        || item.staging_committed_bytes<36416 || item.staging_committed_bytes%item.staging_page_bytes
+        || item.module_stop_called!=closed || item.module_stop_returned!=closed
+        || (closed && item.module_stop_result) || item.module_unloaded!=closed || item.module_input_released!=closed
+        || item.staging_freed_after_joins!=closed || record.domain!=NativeModuleDomain::Production
+        || record.state!=(closed?NativeModuleState::Stopped:NativeModuleState::Started) || record.input_live==closed
+        || record.name!="sceNetAdhocctl_Library" || record.encoded_bytes!=36416 || record.plaintext_bytes!=36416
+        || record.encoded_sha256!=item.staging_sha256
+        || record.plaintext_sha256!="3ac8e2211a9b66fe5161a3eac61ec09e258b474068d25bed4adefd5a24bc0f22"
+        || record.policy!="WindowsAdhocctlExact0001_4001LifecycleV1" || record.start_source_va!=0x4D54 || record.stop_source_va!=0x4D5C
+        || !SameNativeModuleToken(record.token,item.token) || record.active_calls || record.owned_native_codec_resources
+        || record.owned_providers || record.incoming_bindings || record.partial_start_supported || record.entry_frontier_source_pc
+        || record.input.owner!=item.staging_owner || record.input.generation!=item.staging_generation || record.input.serial!=item.staging_serial
+        || record.input.host_address!=item.staging_host_address || record.input.source_coordinate!=item.staging_source_coordinate
+        || record.input.size!=36416 || record.imports.size()!=54 || record.exports.size()!=27
+        || !s.present || s.owner!=item.token.owner || s.generation!=item.token.generation || s.serial!=item.token.serial
+        || !s.native_state_address || s.native_state_address==record.input.host_address || s.source_segment!=1 || s.source_segment_va!=0x6810
+        || s.private_bytes!=5892 || s.initial_source_known_bytes!=132 || s.known_bytes!=132 || s.writes_count) return false;
+    if(s.source_file_offset!=0x6890 || s.source_file_bytes!=132) return false;
+    constexpr std::array<uint8_t,132> initial{{0,32,32,32,32,32,32,32,32,32,8,8,8,8,8,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,24,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,4,4,4,4,4,4,4,4,4,4,16,16,16,16,16,16,16,65,65,65,65,65,65,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,16,16,16,16,16,16,66,66,66,66,66,66,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,16,16,16,16,32,0,0,0}};
+    for(size_t i=0;i<s.known.size();++i)
+        if(s.known[i]!=(i<initial.size()?1:0) || (i<initial.size() && s.bytes[i]!=initial[i])) return false;
+    struct ExpectedImport { const char* library; uint16_t version,attributes; uint32_t nid,stub; };
+    constexpr std::array<ExpectedImport,54> imports{{
+        {"sceUtility",0,0x4001,0xA5DA2406,0x6328},
+        {"sceUtility",0,0x4001,0x34B78343,0x6330},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x86004235,0x6280},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x6074D8F1,0x6288},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x89F2A732,0x6290},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x2E6AA271,0x6298},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x6CE209A3,0x62A0},
+        {"sceNetAdhocAuth_lib",0,0x4001,0xBD144DA6,0x62A8},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x1F9A90B8,0x62B0},
+        {"sceNetAdhocAuth_lib",0,0x4001,0x76F26AB0,0x62B8},
+        {"sceWlanDrv_lib",0,0x4001,0x482CAE9A,0x6340},
+        {"sceWlanDrv_lib",0,0x4001,0xC9A8CAB7,0x6348},
+        {"sceWlanDrv_lib",0,0x4001,0x5BAA1FE5,0x6350},
+        {"sceWlanDrv_lib",0,0x4001,0x2D0FAE4E,0x6358},
+        {"sceWlanDrv_lib",0,0x4001,0x56F467CA,0x6360},
+        {"sceWlanDrv",0,0x4001,0xD7763699,0x6338},
+        {"sceNet",0,0x0001,0x0BF0A3AE,0x6238},
+        {"sceNet_lib",0,0x0001,0x5216CBF5,0x62C0},
+        {"sceNet_lib",0,0x0001,0xD2422E4D,0x62C8},
+        {"sceNet_lib",0,0x0001,0xD1BE2CE9,0x62D0},
+        {"sceNet_lib",0,0x0001,0xAB7DD9A5,0x62D8},
+        {"sceNet_lib",0,0x0001,0x7BA3ED91,0x62E0},
+        {"sceNet_lib",0,0x0001,0x03164B12,0x62E8},
+        {"sceNet_lib",0,0x0001,0x389728AB,0x62F0},
+        {"sceNet_lib",0,0x0001,0xD5B64E37,0x62F8},
+        {"sceNet_lib",0,0x0001,0xDA02F383,0x6300},
+        {"sceNet_lib",0,0x0001,0xAFA11338,0x6308},
+        {"sceNet_lib",0,0x0001,0xB20F84F8,0x6310},
+        {"sceNet_lib",0,0x0001,0xA55C914F,0x6318},
+        {"sceNet_lib",0,0x0001,0x0D633F53,0x6320},
+        {"sceNetAdhoc",0,0x0001,0x877F6D66,0x6240},
+        {"sceNetAdhoc",0,0x0001,0xFC6FC07B,0x6248},
+        {"sceNetAdhoc",0,0x0001,0xE08BDAC1,0x6250},
+        {"sceNetAdhoc",0,0x0001,0x9DF81198,0x6258},
+        {"sceNetAdhoc",0,0x0001,0x4DA4C788,0x6260},
+        {"sceNetAdhoc",0,0x0001,0x8BEA2B3E,0x6268},
+        {"sceNetAdhoc",0,0x0001,0x9AC2EEAC,0x6270},
+        {"sceNetAdhoc",0,0x0001,0x157E6225,0x6278},
+        {"ThreadManForUser",0,0x4001,0x446D8DE6,0x61B8},
+        {"ThreadManForUser",0,0x4001,0x9FA03CD3,0x61C0},
+        {"ThreadManForUser",0,0x4001,0xF475845D,0x61C8},
+        {"ThreadManForUser",0,0x4001,0x616403BA,0x61D0},
+        {"ThreadManForUser",0,0x4001,0xCEADEB47,0x61D8},
+        {"ThreadManForUser",0,0x4001,0xD6DA4BA1,0x61E0},
+        {"ThreadManForUser",0,0x4001,0x28B6489C,0x61E8},
+        {"ThreadManForUser",0,0x4001,0x3F53E640,0x61F0},
+        {"ThreadManForUser",0,0x4001,0x4E3A1105,0x61F8},
+        {"ThreadManForUser",0,0x4001,0x55C20A00,0x6200},
+        {"ThreadManForUser",0,0x4001,0xEF9E4C70,0x6208},
+        {"ThreadManForUser",0,0x4001,0x1FB15A32,0x6210},
+        {"ThreadManForUser",0,0x4001,0x812346E4,0x6218},
+        {"ThreadManForUser",0,0x4001,0x402FCF22,0x6220},
+        {"ThreadManForUser",0,0x4001,0x30FD48F0,0x6228},
+        {"ThreadManForUser",0,0x4001,0x82BC5777,0x6230},
+    }};
+    for(size_t i=0;i<imports.size();++i) {
+        const auto& actual=record.imports[i]; const auto& expected=imports[i];
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library
+            || actual.version!=expected.version || actual.attributes!=expected.attributes
+            || actual.nid!=expected.nid || actual.source_stub_va!=expected.stub
+            || actual.abi!="unrecovered-psp32-adhocctl-import-v1" || actual.resolved || actual.partial_callable
+            || actual.provider_serial || actual.provider_owner || actual.provider_generation) return false;
+    }
+    struct ExpectedExport { const char* library; const char* kind; uint16_t version,attributes; uint32_t nid,va; };
+    constexpr std::array<ExpectedExport,27> exports{{
+        {"","function",0,0x8000,0xD632ACDB,0x4D54},
+        {"","function",0,0x8000,0xCEE8593C,0x4D5C},
+        {"","variable",0,0x8000,0xF01D73A7,0x6450},
+        {"sceNetAdhocctl","function",0,0x0001,0xE26F226E,0x0},
+        {"sceNetAdhocctl","function",0,0x0001,0x9D689E13,0x1C0},
+        {"sceNetAdhocctl","function",0,0x0001,0x0AD043ED,0x208},
+        {"sceNetAdhocctl","function",0,0x0001,0xEC0635C1,0x28C},
+        {"sceNetAdhocctl","function",0,0x0001,0x5E7F79C9,0x310},
+        {"sceNetAdhocctl","function",0,0x0001,0x08FFF7A0,0x450},
+        {"sceNetAdhocctl","function",0,0x0001,0x34401D65,0x480},
+        {"sceNetAdhocctl","function",0,0x0001,0x20B317A0,0x4E0},
+        {"sceNetAdhocctl","function",0,0x0001,0x6402490B,0x528},
+        {"sceNetAdhocctl","function",0,0x0001,0x75ECD386,0x558},
+        {"sceNetAdhocctl","function",0,0x0001,0x362CBE8F,0x594},
+        {"sceNetAdhocctl","function",0,0x0001,0xE162CB14,0x5D0},
+        {"sceNetAdhocctl","function",0,0x0001,0x99560ABE,0x624},
+        {"sceNetAdhocctl","function",0,0x0001,0x8916C003,0x684},
+        {"sceNetAdhocctl","function",0,0x0001,0xDED9D28E,0x6D4},
+        {"sceNetAdhocctl","function",0,0x0001,0x81AEE1BE,0x710},
+        {"sceNetAdhocctl","function",0,0x0001,0xA5C055CE,0xBC},
+        {"sceNetAdhocctl","function",0,0x0001,0x1FF89745,0x3A8},
+        {"sceNetAdhocctl","function",0,0x0001,0xCF8E084D,0x4B0},
+        {"sceNetAdhocctl","function",0,0x0001,0x5A014CE0,0x740},
+        {"sceNetAdhocctl_lib","function",0,0x0001,0xEFA6AEAF,0x77C},
+        {"sceNetAdhocctl_lib","function",0,0x0001,0x1593C05D,0x7E8},
+        {"sceNetAdhocctl_lib","function",0,0x0001,0xF8BABD85,0x854},
+        {"sceNetAdhocctl_lib","function",0,0x0001,0x1C679240,0x890},
+    }};
+    for(size_t i=0;i<exports.size();++i) {
+        const auto& actual=record.exports[i];const auto& expected=exports[i];
+        const bool callable=expected.library[0]=='\0' && std::string_view(expected.kind)=="function"
+            && ((expected.nid==0xD632ACDB && expected.va==0x4D54) || (expected.nid==0xCEE8593C && expected.va==0x4D5C));
+        if(!SameNativeModuleToken(actual.module,item.token) || actual.library!=expected.library || actual.kind!=expected.kind
+            || actual.version!=expected.version || actual.attributes!=expected.attributes || actual.nid!=expected.nid
+            || actual.relative_va!=expected.va || actual.lifecycle_callable!=callable || actual.partial_callable) return false;
+    }
+    return true;
+}
+bool RepeatedAdhocctlContinuationExact(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=9) return false;
+    const auto& s=o.repeated_modules;
+    if(!s.present || !s.counter_known || s.counter!=4 || s.current_record_index!=4 || !s.source_gate_returned || s.source_gate_result!=1
+        || s.source_segment!=1 || s.source_table_offset!=0x6950 || s.source_table_va!=0xEA4D0
+        || s.table_bytes!=48 || s.known_bytes!=48 || s.writes_count!=4) return false;
+    std::array<uint8_t,48> expected{{255,255,255,255,1,0,0,0,48,213,13,0,255,255,255,255,1,0,0,0,88,213,13,0,255,255,255,255,0,0,0,0,140,213,13,0,255,255,255,255,0,0,0,0,184,213,13,0}};
+    for(size_t row=0;row<4;++row) {
+        const auto uid=static_cast<uint32_t>(o.module_observations[5+row].module_load_result);
+        for(size_t i=0;i<4;++i) expected[12*row+i]=uint8_t(uid>>(8*i));
+        const auto& w=s.writes[row];
+        if(w.ordinal!=row || w.source_pc!=0x4F728 || w.record_index!=row || w.table_offset!=12*row || w.value!=uid) return false;
+    }
+    for(size_t i=0;i<s.bytes.size();++i)
+        if(s.known[i]!=1 || s.bytes[i]!=expected[i]) return false;
+    for(size_t i=0;i<5;++i)
+        if(o.module_observations[i].repeated_record_index!=dokodemo::StartupNoCurrentModule) return false;
+    for(size_t row=0;row<4;++row)
+        if(o.module_observations[5+row].repeated_record_index!=row) return false;
+    return true;
+}
+bool AtAdhocctlBoundary(const dokodemo::StartupObservation& o) {
+    if(o.module_observations.size()!=9 || o.module_records.size()!=9 || o.current_module_index!=8
+        || o.barrier_source_pc!=0x1004 || o.current_frontier_source_pc!=0x1004
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || o.barrier_source_module.owner || o.current_frontier_source_module.owner
+        || o.barrier.find("UnrecoveredGameCall52D58")==std::string::npos
+        || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
+        || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
+        || !MemabRequestExact(o.module_observations[5],false) || !AdhocAuthRequestExact(o.module_observations[6],false)
+        || !AdhocRequestExact(o.module_observations[7],false) || !AdhocctlRequestExact(o.module_observations[8],false)
+        || !RepeatedAdhocctlContinuationExact(o) || dokodemo::PendingWindowsSascoreCleanup()
+        || dokodemo::PendingWindowsMemabCleanup()) return false;
+    const auto& sas=o.module_observations[2].record.sascore.resources;
+    if(uint64_t(sas.source_coordinate)+sas.committed_bytes>o.module_observations[3].staging_source_coordinate) return false;
+    for(size_t i=0;i<9;++i) {
+        const auto& x=o.module_observations[i];
+        if(x.request_owner!=o.owner || !SameNativeModuleToken(x.token,o.module_records[i].token)) return false;
+        for(size_t j=i+1;j<9;++j) {
+            const auto& y=o.module_observations[j];
+            if(x.token.uid==y.token.uid || x.token.serial==y.token.serial || x.token.owner!=y.token.owner
+                || x.token.generation!=y.token.generation
+                || uint64_t(x.staging_source_coordinate)+x.staging_committed_bytes>y.staging_source_coordinate) return false;
+        }
+    }
+    return true;
+}
+bool AdhocctlSequenceClosed(const dokodemo::StartupObservation& o) {
+    return o.module_observations.size()==9 && QueryEnvelopeModulesClosed(o)
+        && SascoreRequestExact(o.module_observations[2],true) && IfhandleRequestExact(o.module_observations[3],true)
+        && PspnetRequestExact(o.module_observations[4],true) && MemabRequestExact(o.module_observations[5],true)
+        && AdhocAuthRequestExact(o.module_observations[6],true) && AdhocRequestExact(o.module_observations[7],true)
+        && AdhocctlRequestExact(o.module_observations[8],true) && RepeatedAdhocctlContinuationExact(o)
+        && !dokodemo::PendingWindowsSascoreCleanup() && !dokodemo::PendingWindowsMemabCleanup();
+}
+
 bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
 #ifdef DOKODEMO_FFMPEG_ROOT
-    return AtMemabBoundary(observation);
+    return AtAdhocctlBoundary(observation);
 #else
     return AtLegacyNativeModuleSequenceBoundary(observation);
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.module_observations.size() == 9 && observation.module_observations[8].module_uid_assigned) return AdhocctlSequenceClosed(observation);
+    if (observation.module_observations.size() == 9) return AdhocSequenceClosed(observation);
+    if (observation.module_observations.size() == 8) return AuthSequenceClosed(observation);
     if (observation.module_observations.size() == 7) return MemabSequenceClosed(observation);
     if (observation.module_observations.size() == 6) return PspnetSequenceClosed(observation);
     if (observation.module_observations.size() == 5) return IfhandleSequenceClosed(observation);
@@ -2711,10 +3364,24 @@ int ConnectedStartupTest(const Options& options) {
         << ",\"sixth_module_stop_returned\":" << (after.module_observations.size()>5 && after.module_observations[5].module_stop_returned ? "true" : "false")
         << ",\"seventh_module_open_returned\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].source_fd>=0 ? "true" : "false")
         << ",\"seventh_module_body_read\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].staging_host_read ? "true" : "false")
+        << ",\"seventh_module_load_returned\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].module_load_returned ? "true" : "false")
+        << ",\"seventh_module_start_returned\":" << (boundary.module_observations.size()>6 && boundary.module_observations[6].module_start_returned ? "true" : "false")
+        << ",\"seventh_module_stop_returned\":" << (after.module_observations.size()>6 && after.module_observations[6].module_stop_returned ? "true" : "false")
+        << ",\"eighth_module_open_returned\":" << (boundary.module_observations.size()>7 && boundary.module_observations[7].source_fd>=0 ? "true" : "false")
+        << ",\"eighth_module_body_read\":" << (boundary.module_observations.size()>7 && boundary.module_observations[7].staging_host_read ? "true" : "false")
+        << ",\"eighth_module_load_returned\":" << (boundary.module_observations.size()>7 && boundary.module_observations[7].module_load_returned ? "true" : "false")
+        << ",\"eighth_module_start_returned\":" << (boundary.module_observations.size()>7 && boundary.module_observations[7].module_start_returned ? "true" : "false")
+        << ",\"eighth_module_stop_returned\":" << (after.module_observations.size()>7 && after.module_observations[7].module_stop_returned ? "true" : "false")
+        << ",\"ninth_module_open_returned\":" << (boundary.module_observations.size()>8 && boundary.module_observations[8].source_fd>=0 ? "true" : "false")
+        << ",\"ninth_module_body_read\":" << (boundary.module_observations.size()>8 && boundary.module_observations[8].staging_host_read ? "true" : "false")
+        << ",\"ninth_module_load_returned\":" << (boundary.module_observations.size()>8 && boundary.module_observations[8].module_load_returned ? "true" : "false")
+        << ",\"ninth_module_start_returned\":" << (boundary.module_observations.size()>8 && boundary.module_observations[8].module_start_returned ? "true" : "false")
+        << ",\"ninth_module_stop_returned\":" << (after.module_observations.size()>8 && after.module_observations[8].module_stop_returned ? "true" : "false")
         << ",\"repeated_counter\":" << (boundary.repeated_modules.counter_known ? std::to_string(boundary.repeated_modules.counter) : "null")
         << ",\"repeated_uid_writes\":" << boundary.repeated_modules.writes_count
         << ",\"repeated_gate_returned\":" << (boundary.repeated_modules.source_gate_returned ? "true" : "false")
-        << ",\"source_queries_returned\":" << queriesReturned
+        << ",\"next_game_call\":"; WriteNextGameCallValue(summary, boundary);
+    summary << ",\"source_queries_returned\":" << queriesReturned
         << ",\"source_GetEDRAM_returned\":" << allocationsReturned
         << ",\"original_ME_equivalence_known\":false,\"source_decode_returned\":false"
         << ",\"owned_modules\":" << boundary.module_records.size()

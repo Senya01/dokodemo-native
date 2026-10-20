@@ -156,7 +156,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         event.win32_error = error; event.wait_result = wait;
         if (!detail.empty()) event.detail.assign(detail.data(), detail.size());
         event.crt_errno = crt_error; event.dos_errno = dos_error;
-        if (events.size() == 512) { events.pop_front(); ++state.dropped_events; }
+        if (events.size() == 1024) { events.pop_front(); ++state.dropped_events; }
         events.push_back(std::move(event));
         } catch (...) {
             // Telemetry must never change native ownership or control flow.
@@ -560,6 +560,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             case 0x4F734:operation="RepeatedModuleFailureBranch";observed=value.writes_count && value.writes[value.writes_count-1].value==0xFFFFFFFFu?1:0;break;
             case 0x4F738:operation="RepeatedModuleFailureDelayClear";break;
             case 0x4F73C:operation="RepeatedModuleLoopBranchLikely";observed=int32_t(value.counter)<4?1:0;break;
+            case 0x4F744:operation="RepeatedModuleSuccessFlag";observed=1;break;
             case 0x4F758:operation="RepeatedModuleGateReturn";observed=value.source_gate_result;returned=value.source_gate_returned;break;
             }
             EmitLocked(operation,"RecoveredGameCaller",pc,observed,returned,0,0,0,
@@ -612,7 +613,21 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             if(!repeated.present || !repeated.counter_known || repeated.counter!=1 || repeated.current_record_index!=1 ||
                 repeated.writes_count!=1 || repeated.source_gate_returned) throw NativeFailure{};
             relative=L"PSP_GAME\\USRDIR\\prx\\pspnet_adhoc_auth.prx";
-            request->data.repeated_record_index=1; // actual Open allowed; no next body/size admission
+            request->input_bytes=10816;request->data.repeated_record_index=1;
+        } else if(source_path=="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhoc.prx" && callsite==0x4F71C &&
+                  option==recovered::StartupOptions4F59C(0) && options.prepared_codec_envelope) {
+            const auto repeated=RepeatedSnapshot();
+            if(!repeated.present || !repeated.counter_known || repeated.counter!=2 || repeated.current_record_index!=2 ||
+                repeated.writes_count!=2 || repeated.source_gate_returned || repeated.known_bytes!=36) throw NativeFailure{};
+            relative=L"PSP_GAME\\USRDIR\\prx\\pspnet_adhoc.prx";
+            request->input_bytes=40140;request->data.repeated_record_index=2;
+        } else if(source_path=="disc0:/PSP_GAME/USRDIR/prx/pspnet_adhocctl.prx" && callsite==0x4F71C &&
+                  option==recovered::StartupOptions4F59C(0) && options.prepared_codec_envelope) {
+            const auto repeated=RepeatedSnapshot();
+            if(!repeated.present || !repeated.counter_known || repeated.counter!=3 || repeated.current_record_index!=3 ||
+                repeated.writes_count!=3 || repeated.source_gate_returned || repeated.known_bytes!=48) throw NativeFailure{};
+            relative=L"PSP_GAME\\USRDIR\\prx\\pspnet_adhocctl.prx";
+            request->input_bytes=36416;request->data.repeated_record_index=3;
         } else throw NativeFailure{};
         request->native_path = options.media_root;
         if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
@@ -793,7 +808,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             recovered::FindSascoreModuleDescriptor(digest, request->input_bytes) ||
             recovered::FindIfhandleModuleDescriptor(digest, request->input_bytes) ||
             recovered::FindPspnetModuleDescriptor(digest, request->input_bytes) ||
-            recovered::FindMemabModuleDescriptor(digest, request->input_bytes);
+            recovered::FindMemabModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindAdhocAuthModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindAdhocModuleDescriptor(digest, request->input_bytes) ||
+            recovered::FindAdhocctlModuleDescriptor(digest, request->input_bytes);
         { std::lock_guard<std::mutex> lock(metadata);
           data.staging_hash_matches = exact; data.staging_sha256 = digest;
           EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, exact ? 1 : 0, false, span.host_address, 0, 0, digest); }
@@ -865,6 +883,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             modules.IfhandleSnapshot(data.token, data.record.ifhandle);
             modules.PspnetSnapshot(data.token, data.record.pspnet);
             modules.MemabSnapshot(data.token, data.record.memab);
+            modules.AdhocAuthSnapshot(data.token, data.record.adhoc_auth);
+            modules.AdhocSnapshot(data.token, data.record.adhoc);
+            modules.AdhocctlSnapshot(data.token, data.record.adhocctl);
             data.module_initialization_blocked = data.record.initialization.prefix_entered &&
                 data.record.initialization.dependency_blocked && !data.record.initialization.aborted;
             data.module_initialization_blocked = data.module_initialization_blocked ||
@@ -1002,6 +1023,24 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     }
     void UnsupportedFollowingModule() override {
         const auto repeated=RepeatedSnapshot();
+        if(repeated.source_gate_returned && repeated.source_gate_result==1 && repeated.counter==4 &&
+            repeated.current_record_index==4 && repeated.writes_count==4) {
+            // Gate1 returns to main FFC;1000 ordinary delay restores saved RA.
+            // Next is JAL52D58 at1004 with1008 LUI s1,1. No admitted callee
+            // body/signature/result: the historical loop counter is not live s1.
+            // This is a GAME frontier, not an incomplete ninth module call.
+            std::lock_guard<std::mutex> lock(metadata);
+            state.barrier_source_pc=0x1004;state.barrier_module_relative=false;state.barrier_source_module={};
+            state.current_frontier_source_pc=0x1004;state.current_frontier_module_relative=false;
+            state.current_frontier_source_module={};state.reached_100C=false;
+            try {
+                state.worker_state="Blocked";state.barrier="UnrecoveredGameCall52D58";
+                state.current_frontier="UnrecoveredGameCall52D58";
+            } catch(...) {++state.dropped_events;}
+            EmitLocked("UnrecoveredGameCall52D58","RecoveredGameCaller",0x1004,0,false,0,0,0,
+                "target52D58;delay1008 LUI s1,1;body/signature/sideeffects unknown;result absent;not returned;later100C/1234 unreached");
+            return; // completed request8 Load/Start/Close stays intact; no tenth request
+        }
         (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
             "Repeated caller reached first unadmitted table kind/main continuation;no unknown read or fabricated source result",0,
             repeated.current_record_index>=4?0x100C:0x4F740);
@@ -1148,6 +1187,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
                     modules.IfhandleSnapshot(data.token,data.record.ifhandle);
                     modules.PspnetSnapshot(data.token, data.record.pspnet);
                     modules.MemabSnapshot(data.token, data.record.memab);
+                    modules.AdhocAuthSnapshot(data.token, data.record.adhoc_auth);
+                    modules.AdhocSnapshot(data.token, data.record.adhoc);
+                    modules.AdhocctlSnapshot(data.token, data.record.adhocctl);
                     for(uint32_t i=prior_writes;i<data.record.initialization.writes_count;++i) {
                         const auto& write=data.record.initialization.writes[i];
                         EmitLocked("ModuleStopReleaseWrite","RecoveredSourceAfterWindowsRelease",write.source_pc,write.value,false,
