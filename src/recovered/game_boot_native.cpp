@@ -99,4 +99,12 @@ GameServiceResult InitializeGameMemory1234(GameMemoryServices& services) {
     if (!selected.returned) return {};
     return {true, 1}; //136C
 }
+std::array<uint32_t, 7> GameCalendarDE0(const std::array<uint8_t, 16>& date) noexcept {
+    const auto field = [&](size_t index) { return uint32_t(date[index * 2]) | (uint32_t(date[index * 2 + 1]) << 8); };
+    return {{0, field(5), field(4), field(3), field(2), field(1), field(0)}};
+}
+void ResetGameRuntime253B8(GameRuntimeResetState& state) noexcept {
+    state.primary.fill(0); //253CC -> C2FC0, length C0
+    state.secondary.fill(0); //253D4 ->258D4 -> C2FC0, length A0
+}
 } // namespace dokodemo::recovered

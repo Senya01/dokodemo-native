@@ -7,6 +7,8 @@
 #include "recovered/audiocodec_module_native.h"
 #include "recovered/module_manager_native.h"
 #include "core_hash.h"
+#include "rng_backend_win32.h"
+#include "recovered/rng_native.h"
 #include <windows.h>
 #include <process.h>
 #include <algorithm>
@@ -108,6 +110,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     std::array<StartupNativeBlock, 3> game_blocks{};
     std::array<StartupAllocationBorrow, 3> game_borrows{};
     std::array<recovered::GameArena, 3> game_arenas{};
+    recovered::GameGraphics game_graphics;
+    recovered::GameRuntimeResetState game_runtime_reset;
+    recovered::RngNativeOwner game_rng;
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -1129,23 +1134,83 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         Emit("GameMemoryInitialization-enter", "RecoveredGameCaller", 0x100C);
         const auto memory = recovered::InitializeGameMemory1234(*this);
         if (!memory.returned) return StartupFlowStop::HostCancelled;
-        std::lock_guard<std::mutex> lock(metadata);
-        state.game_boot.memory_initialization_returned = true;
-        state.game_boot.memory_initialization_succeeded = memory.value != 0;
-        EmitLocked("GameMemoryInitialization-return", "RecoveredNativeGame", 0x12D4, memory.value, true);
-        if (!memory.value) {
+        {
+          std::lock_guard<std::mutex> lock(metadata);
+          state.game_boot.memory_initialization_returned = true;
+          state.game_boot.memory_initialization_succeeded = memory.value != 0;
+          if (memory.value) EmitLocked("GameMemorySuccessFlag", "RecoveredNativeGame", 0x136C, 1);
+          //12D4 is the common JR; successful v1=1 originates at136C.
+          EmitLocked("GameMemoryInitialization-return", "RecoveredNativeGame", 0x12D4, memory.value, true);
+          if (!memory.value) {
             // The original main ignores the value. Native allocation failure
             // is a fatal host condition instead of running with null arenas.
             FailLocked(Failure(StartupRuntimeCode::HostFailure, ERROR_NOT_ENOUGH_MEMORY));
             return StartupFlowStop::HostFailure;
+          }
+          state.game_boot.graphics_setup_entered = true;
         }
-        state.barrier_source_pc = state.current_frontier_source_pc = 0x1014;
+        Emit("GameGraphicsInitialization-enter", "RecoveredGameCaller", 0x1014);
+        recovered::GameGraphicsConfig graphics_config;
+        if (!game_graphics.Initialize(graphics_config)) throw NativeFailure{};
+        // CPU rendering completes synchronously. Windows frame pacing replaces
+        // the PSP display wait; it does not pretend to observe a hardware vblank.
+        const auto paced = WaitForSingleObject(cancel, 16);
+        if (paced == WAIT_OBJECT_0) return StartupFlowStop::HostCancelled;
+        if (paced != WAIT_TIMEOUT) throw NativeFailure{};
+        // C0C swaps at DBC, then appends Clear(7) at DC4. Native execution
+        // applies that clear synchronously to the new draw buffer.
+        if (!game_graphics.SwapBuffers() || !game_graphics.Clear(0, 0)) throw NativeFailure{};
+        Emit("NativeInitialFramePacing", "WindowsRendererPolicy", 0, 16, false, 0, 0, paced,
+            "native frame interval;not PSP vblank timing");
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.graphics_setup_returned = true;
+            EmitLocked("GameGraphicsInitialization-return", "NonMatchingWindowsRenderer", 0xDD0, 0, false,
+                0, 0, 0, "real two-color/depth surfaces,state,initial frame;source scalar unused/unclaimed;GDI presentation occurs on window thread");
+        }
+        platform::WindowsRngInitializationSample sample;
+        if (!platform::CaptureWindowsRngInitialization(sample)) {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.rtc_error = sample.last_error;
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, sample.last_error));
+            return StartupFlowStop::HostFailure;
+        }
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.utc_tick_us = sample.conversion.utc_tick_us;
+            state.game_boot.local_tick_us = sample.conversion.local_tick_us;
+            state.game_boot.effective_offset_minutes = sample.effective_offset_minutes;
+            state.game_boot.calendar_words = recovered::GameCalendarDE0(sample.local_date_bytes);
+            EmitLocked("GameCalendarInitialized", "WindowsStartupRtcAdapter", 0x1050, 0, false,
+                0, 0, 0, "real UTC->Windows dynamic local civil time->DE0 words;not E08 fixed+9h clock cache");
+        }
+        game_rng.ApplyInitializerTimeT32(sample.conversion.local_civil_epoch_seconds, state.owner,
+            "Actual native startup RTC101C..105C local civil time;C321C at1068");
+        const auto rng = game_rng.Snapshot();
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.rtc_initialized = true;
+        state.game_boot.rng_seed_word = sample.conversion.local_civil_epoch_seconds;
+        state.game_boot.rng_seed = rng.seed;
+        state.game_boot.rng_seed_available = rng.seed_available;
+        EmitLocked("GameRngInitialized", "RecoveredC321CWindowsTimeInput", 0x1068,
+            sample.conversion.local_civil_epoch_seconds, false, 0, 0, 0,
+            "same live game RNG owner;seed is actual local civil epoch word,not image seed1 or fixed timezone");
+        recovered::ResetGameRuntime253B8(game_runtime_reset);
+        state.game_boot.runtime_reset_returned = true;
+        state.game_boot.primary_reset_bytes = uint32_t(game_runtime_reset.primary.size());
+        state.game_boot.secondary_reset_bytes = uint32_t(game_runtime_reset.secondary.size());
+        EmitLocked("GameRuntimeStateReset", "RecoveredNativeGame", 0x253E0, 0, false,
+            0, 0, 0, "253B8 primary192 bytes then258D4 secondary160 bytes;explicit zero producers;incidental pointer result unused");
+        state.game_boot.filesystem_initialization_entered = true;
+        EmitLocked("GameFilesystemInitialization-enter", "RecoveredGameCaller", 0x107C, 0, false,
+            0, 0, 0, "B0C entered;first callee3F0 not implemented;no B0C return");
+        state.barrier_source_pc = state.current_frontier_source_pc = 0xB14;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        state.barrier = state.current_frontier = "UnrecoveredGraphicsSetupC0C";
+        state.barrier = state.current_frontier = "UnrecoveredFileSystem3F0";
         state.worker_state = "Blocked";
-        EmitLocked("UnrecoveredGraphicsSetupC0C", "RecoveredGameCaller", 0x1014, 0, false,
-            0, 0, 0, "controller and native arenas ready;next actual game graphics initialization;no C0C return/title/gameplay fabricated");
+        EmitLocked("UnrecoveredFileSystem3F0", "RecoveredGameCaller", 0xB14, 0, false,
+            0, 0, 0, "real DATA.BP filesystem owner/open/parse pending;3F0 result absent;later9DC/title/gameplay unreached");
         return StartupFlowStop::Unsupported;
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
@@ -1251,6 +1316,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         }
         // Both contexts have ended. No thread can now access or wait on these objects.
         bool ok = true;
+        game_graphics.Close();
+        Emit("CloseGameGraphics", "HostLifecycle", 0, 1, false, 0, 0, 0,
+            "after both joins;native color/depth owners retired before game arenas");
         // Game allocations were acquired after the modules. Retain failed
         // releases in this owner for the existing joined cleanup retry.
         for (size_t remaining = game_blocks.size(); remaining; --remaining) {
@@ -1582,6 +1650,7 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     const auto& self = *impl_;
     std::lock_guard<std::mutex> lock(self.metadata);
     auto out = self.state;
+    out.game_boot.graphics = self.game_graphics.Snapshot();
     out.repeated_modules=self.RepeatedSnapshot();
     out.module_records = self.modules.Snapshots();
     out.module_providers = self.modules.Providers();
@@ -1648,6 +1717,15 @@ recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_
     const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
     const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
     return self.controller.Update(buttons, x, y, GetTickCount64() * 1000);
+}
+bool StartupCoordinator::CopyGameFrame(recovered::GameGraphicsFrame& out) const {
+    return impl_->game_graphics.CopyFront(out);
+}
+bool StartupCoordinator::RecordGameFramePresented(uint64_t generation, uint64_t sequence) {
+    return impl_->game_graphics.RecordPresented(generation, sequence);
+}
+bool StartupCoordinator::DrawGraphicsDiagnosticFrame() {
+    return impl_->game_graphics.DrawDiagnosticFrame();
 }
 StartupRuntimeStatus StartupCoordinator::RequestExit() { return impl_->RequestExit(); }
 StartupRuntimeStatus StartupCoordinator::Close(uint32_t timeout_ms) { return impl_->Close(timeout_ms); }

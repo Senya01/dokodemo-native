@@ -47,6 +47,7 @@ namespace {
 struct Options {
     bool selfTest = false, smoke = false, constructionSmoke = false;
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
+    bool graphicsSmoke = false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia;
 };
 Options ParseOptions() {
@@ -57,6 +58,7 @@ Options ParseOptions() {
         if (arg == L"--self-test") options.selfTest = true;
         else if (arg == L"--connected-startup-test") options.connectedStartupTest = true;
         else if (arg == L"--connected-startup-window-test") options.connectedStartupWindowTest = true;
+        else if (arg == L"--graphics-smoke-test") { options.graphicsSmoke = true; options.connectedStartupWindowTest = true; }
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
@@ -1397,7 +1399,46 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
             << ",\"source_coordinate\":" << arena.source_coordinate << ",\"host_address\":" << arena.host_address
             << ",\"committed_bytes\":" << arena.committed_bytes << '}';
     }
-    out << "]}";
+    out << "],\"graphics_setup_entered\":" << boolean(boot.graphics_setup_entered)
+        << ",\"graphics_setup_returned\":" << boolean(boot.graphics_setup_returned)
+        << ",\"renderer\":{\"backend\":\"NativeSoftwareDib\",\"live\":" << boolean(boot.graphics.live)
+        << ",\"initialized\":" << boolean(boot.graphics.initialized)
+        << ",\"diagnostic_frame\":" << boolean(boot.graphics.diagnostic_frame)
+        << ",\"generation\":" << boot.graphics.generation << ",\"frame_sequence\":" << boot.graphics.frame_sequence
+        << ",\"present_count\":" << boot.graphics.present_count
+        << ",\"last_presented_sequence\":" << boot.graphics.last_presented_sequence
+        << ",\"draw_calls\":" << boot.graphics.draw_calls << ",\"color_bytes\":" << boot.graphics.color_bytes
+        << ",\"depth_bytes\":" << boot.graphics.depth_bytes
+        << ",\"matrix_bytes\":" << boot.graphics.matrix_bytes << ",\"matrix_mode\":" << boot.graphics.matrix_mode
+        << ",\"matrix_capacities\":[" << boot.graphics.config.matrix_capacities[0] << ',' << boot.graphics.config.matrix_capacities[1]
+        << ',' << boot.graphics.config.matrix_capacities[2] << ',' << boot.graphics.config.matrix_capacities[3] << ']'
+        << ",\"width\":" << boot.graphics.config.width << ",\"height\":" << boot.graphics.config.height
+        << ",\"stride\":" << boot.graphics.config.stride
+        << ",\"source_pixel_format\":" << boot.graphics.config.source_pixel_format
+        << ",\"draw_buffer_index\":" << boot.graphics.draw_buffer_index
+        << ",\"display_buffer_index\":" << boot.graphics.display_buffer_index
+        << ",\"enabled_state_mask\":" << boot.graphics.config.enabled_state_mask
+        << ",\"depth_write\":" << boolean(boot.graphics.config.depth_write)
+        << ",\"cull_face\":" << boolean(boot.graphics.config.cull_face)
+        << ",\"front_face_ccw\":" << boolean(boot.graphics.config.front_face_counter_clockwise)
+        << ",\"smooth_shading\":" << boolean(boot.graphics.config.smooth_shading)
+        << ",\"viewport\":[" << boot.graphics.config.viewport_x << ',' << boot.graphics.config.viewport_y << ','
+        << boot.graphics.config.width << ',' << boot.graphics.config.height << ']'
+        << ",\"offset\":[" << boot.graphics.config.offset_x << ',' << boot.graphics.config.offset_y << ']'
+        << ",\"depth_range\":[" << boot.graphics.config.depth_near << ',' << boot.graphics.config.depth_far << ']'
+        << ",\"source_buffer_offsets\":[" << boot.graphics.config.source_buffer_offsets[0] << ','
+        << boot.graphics.config.source_buffer_offsets[1] << ',' << boot.graphics.config.source_buffer_offsets[2]
+        << "],\"source_offsets_are_host_pointers\":false,\"game_content\":false}"
+        << ",\"rtc_initialized\":" << boolean(boot.rtc_initialized) << ",\"rtc_error\":" << boot.rtc_error
+        << ",\"utc_tick_us\":" << boot.utc_tick_us << ",\"local_tick_us\":" << boot.local_tick_us
+        << ",\"effective_offset_minutes\":" << boot.effective_offset_minutes << ",\"calendar_words\":[";
+    for (size_t i = 0; i < boot.calendar_words.size(); ++i) { if (i) out << ','; out << boot.calendar_words[i]; }
+    out << "],\"rng_seed_available\":" << boolean(boot.rng_seed_available)
+        << ",\"rng_seed_word\":" << boot.rng_seed_word << ",\"rng_seed\":" << boot.rng_seed
+        << ",\"runtime_reset_returned\":" << boolean(boot.runtime_reset_returned)
+        << ",\"primary_reset_bytes\":" << boot.primary_reset_bytes
+        << ",\"secondary_reset_bytes\":" << boot.secondary_reset_bytes
+        << ",\"filesystem_initialization_entered\":" << boolean(boot.filesystem_initialization_entered) << '}';
 }
 
 void WriteAdhocValue(std::ostream& out,
@@ -3251,10 +3292,17 @@ bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
     if (!NineModuleOwnersReady(o) || !o.reached_100C || !boot.controller_setup_returned
         || boot.sampling_mode != 1 || boot.sampling_cycle != 0 || !boot.memory_initialization_returned
         || !boot.memory_initialization_succeeded || boot.default_arena != 1
-        || o.barrier_source_pc != 0x1014 || o.current_frontier_source_pc != 0x1014
+        || !boot.graphics_setup_returned || !boot.graphics.live || !boot.graphics.frame_sequence
+        || boot.graphics.config.width != 480 || boot.graphics.config.height != 272 || boot.graphics.config.stride != 512
+        || boot.graphics.matrix_mode != 2 || boot.graphics.matrix_bytes != 3072
+        || !boot.rtc_initialized || !boot.rng_seed_available || boot.rng_seed != boot.rng_seed_word
+        || boot.calendar_words[0] || !boot.calendar_words[6]
+        || !boot.runtime_reset_returned || boot.primary_reset_bytes != 192 || boot.secondary_reset_bytes != 160
+        || !boot.filesystem_initialization_entered
+        || o.barrier_source_pc != 0xB14 || o.current_frontier_source_pc != 0xB14
         || o.barrier_module_relative || o.current_frontier_module_relative
         || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier != "UnrecoveredGraphicsSetupC0C") return false;
+        || o.barrier != "UnrecoveredFileSystem3F0") return false;
     constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
     for (size_t i = 0; i < sizes.size(); ++i) {
         const auto& arena = boot.arenas[i];
@@ -3281,6 +3329,8 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.game_boot.graphics.live || observation.game_boot.graphics.color_bytes
+        || observation.game_boot.graphics.depth_bytes || observation.game_boot.graphics.matrix_bytes) return false;
     for (const auto& arena : observation.game_boot.arenas) if (arena.live) return false;
     if (observation.module_observations.size() == 9 && observation.module_observations[8].module_uid_assigned) return AdhocctlSequenceClosed(observation);
     if (observation.module_observations.size() == 9) return AdhocSequenceClosed(observation);
@@ -3439,6 +3489,10 @@ struct Application {
     std::unique_ptr<dokodemo::StartupCoordinator> nativeStartup;
     dokodemo::StartupObservation startupObservation;
     dokodemo::recovered::ControllerSample controllerInput;
+    uint64_t renderedFrameGeneration = 0, renderedFrameSequence = 0;
+    bool graphicsPatternDrawn = false;
+    bool graphicsSmokeResized = false;
+    uint64_t presentsBeforeResize = 0;
     std::wstring startupStatus = L"Нативный запуск ещё не начат.";
     bool startupWindowCloseSent = false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
@@ -3506,7 +3560,7 @@ struct Application {
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
         else if (AtGameBootBoundary(startupObservation))
-            startupStatus = L"Ввод и три игровые арены готовы. Далее — восстановление игровой графики C0C.";
+            startupStatus = L"Native framebuffer, RTC/RNG и reset готовы. Далее — DATA.BP filesystem3F0; title/gameplay ещё не запущены.";
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
                 startupObservation.module_records.begin(), startupObservation.module_records.end(),
@@ -3563,6 +3617,7 @@ struct Application {
     }
     void Fill(HDC dc, RECT rect, COLORREF color) { auto brush = CreateSolidBrush(color); FillRect(dc, &rect, brush); DeleteObject(brush); }
     void Render(HDC dc) {
+        renderedFrameGeneration = renderedFrameSequence = 0;
         Fill(dc, {0,0,width,height}, RGB(18,23,30));
         SelectObject(dc, titleFont);
         Text(dc, L"Doko Demo Issyo · native recovery", {24,18,width-24,58}, RGB(241,244,246));
@@ -3574,7 +3629,23 @@ struct Application {
         double scale = std::min(double(availableW) / 480.0, double(availableH) / 272.0);
         int vw = int(480 * scale), vh = int(272 * scale), vx = (width-vw)/2, vy = top+(availableH-vh)/2;
         Fill(dc, {vx,vy,vx+vw,vy+vh}, RGB(0,0,0));
-        if (messageVisible) {
+        dokodemo::recovered::GameGraphicsFrame gameFrame;
+        const bool gameFrameReady = nativeStartup && nativeStartup->CopyGameFrame(gameFrame);
+        if (gameFrameReady) {
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = static_cast<LONG>(gameFrame.stride);
+            info.bmiHeader.biHeight = -static_cast<LONG>(gameFrame.height);
+            info.bmiHeader.biPlanes = 1; info.bmiHeader.biBitCount = 32; info.bmiHeader.biCompression = BI_RGB;
+            SetStretchBltMode(dc, COLORONCOLOR);
+            const auto result = StretchDIBits(dc, vx, vy, vw, vh, 0, 0, static_cast<int>(gameFrame.width),
+                static_cast<int>(gameFrame.height), gameFrame.pixels.data(), &info, DIB_RGB_COLORS, SRCCOPY);
+            if (result && result != static_cast<int>(GDI_ERROR)) {
+                renderedFrameGeneration = gameFrame.generation; renderedFrameSequence = gameFrame.sequence;
+            }
+            Text(dc, gameFrame.diagnostic ? L"RENDERER TEST FRAME — не игровой контент" : L"Native game framebuffer — game draw producer ещё не подключён",
+                {vx + 12, vy + vh - 30, vx + vw - 12, vy + vh - 6}, RGB(255,255,255), DT_LEFT | DT_TOP | DT_SINGLELINE);
+        } else if (messageVisible) {
             // Isolated bytecode fixture on a neutral surface, with original XFT
             // pixels. It is never attached to an invented gameplay background.
             auto raster=messageImage.bgra;
@@ -3597,7 +3668,7 @@ struct Application {
             StretchDIBits(dc, vx+(vw-iw)/2, vy+(vh-ih)/2, iw, ih, 0,0,image.width,image.height,displayPixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
         } else Text(dc, status, {vx+20,vy+20,vx+vw-20,vy+vh-20}, RGB(239,239,239));
         int y = bottom + 16;
-        auto source = messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
+        auto source = gameFrameReady ? L"C0C · native480×272 framebuffer · nonmatching Windows renderer" : messageVisible ? L"NEKO.KSC · файл 0xC373 · изолированная функция · аргументы 10, 14" : imageLoaded ? std::filesystem::relative(image.path, options.assets).wstring() : L"нет ресурса";
         Text(dc, L"Исходный ресурс: " + source, {24,y,width-24,y+28}, RGB(181,205,221), DT_LEFT | DT_TOP | DT_END_ELLIPSIS | DT_SINGLELINE);
         Text(dc, status, {24,y+30,width-24,y+78}, RGB(211,219,223));
         Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F10 clock  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
@@ -3613,7 +3684,14 @@ struct Application {
         if (!buffer || !bufferDC) throw std::runtime_error("Cannot create native rendering buffer");
         oldBuffer = SelectObject(bufferDC, buffer);
     }
-    void Paint() { EnsureBuffer(); Render(bufferDC); PAINTSTRUCT paint{}; auto dc = BeginPaint(window, &paint); BitBlt(dc,0,0,width,height,bufferDC,0,0,SRCCOPY); EndPaint(window,&paint); }
+    void Paint() {
+        EnsureBuffer(); Render(bufferDC);
+        PAINTSTRUCT paint{}; auto dc = BeginPaint(window, &paint);
+        const auto shown = BitBlt(dc,0,0,width,height,bufferDC,0,0,SRCCOPY);
+        EndPaint(window,&paint);
+        if (shown && nativeStartup && renderedFrameSequence)
+            (void)nativeStartup->RecordGameFramePresented(renderedFrameGeneration, renderedFrameSequence);
+    }
     void Capture() {
         EnsureBuffer(); Render(bufferDC); std::wstring error;
         if (WriteBmp(options.evidence / L"native-window.bmp", width,height,pixels,error)) status = L"Снимок записан в " + options.evidence.wstring();
@@ -3890,6 +3968,16 @@ struct Application {
     void Tick() {
         RefreshNativeStartup();
         if (nativeStartup) controllerInput = nativeStartup->PollControllerInput(GetForegroundWindow() == window);
+        if (options.graphicsSmoke && !graphicsPatternDrawn && AtGameBootBoundary(startupObservation)) {
+            graphicsPatternDrawn = nativeStartup->DrawGraphicsDiagnosticFrame();
+            InvalidateRect(window, nullptr, FALSE);
+        }
+        if (options.graphicsSmoke && graphicsPatternDrawn && !graphicsSmokeResized
+            && startupObservation.game_boot.graphics.present_count) {
+            presentsBeforeResize = startupObservation.game_boot.graphics.present_count;
+            graphicsSmokeResized = SetWindowPos(window, nullptr, 0, 0, 1000, 720,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+        }
         LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
         elapsed = double(now.QuadPart-start.QuadPart)/frequency.QuadPart;
         auto reading = dokodemo::save::ReadSystemClock();
@@ -3901,7 +3989,9 @@ struct Application {
             ++frames; last = now; InvalidateRect(window,nullptr,FALSE);
         }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
-            && AtNativeModuleSequenceBoundary(startupObservation)) {
+            && AtNativeModuleSequenceBoundary(startupObservation)
+            && (!options.graphicsSmoke || (graphicsPatternDrawn && graphicsSmokeResized
+                && startupObservation.game_boot.graphics.present_count >= presentsBeforeResize + 3))) {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-boundary.json", startupObservation);
@@ -3988,7 +4078,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (options.connectedStartupWindowTest) {
             app.RefreshNativeStartup();
             WriteStartupObservation(options.evidence / L"window-startup-after-close.json", app.startupObservation);
-            const bool ok = NativeModuleSequenceClosed(app.startupObservation)
+            const auto& graphics = app.startupObservation.game_boot.graphics;
+            const bool graphicsOk = !options.graphicsSmoke || (app.graphicsPatternDrawn && app.graphicsSmokeResized
+                && graphics.initialized && graphics.diagnostic_frame && graphics.present_count >= 3
+                && graphics.present_count >= app.presentsBeforeResize + 3
+                && graphics.last_presented_sequence == graphics.frame_sequence
+                && !graphics.live && !graphics.color_bytes && !graphics.depth_bytes && !graphics.matrix_bytes);
+            const bool ok = graphicsOk && NativeModuleSequenceClosed(app.startupObservation)
                 && app.startupObservation.module_uid > 0
                 && app.startupObservation.module_load_returned && app.startupObservation.module_start_returned
                 && app.startupObservation.module_start_result == 0
@@ -4003,6 +4099,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && app.startupObservation.resources_closed && app.frames >= 6 && app.inputEvents == 0;
             std::ofstream report(options.evidence / L"connected-window-test.json", std::ios::binary);
             report << "{\"passed\":" << (ok ? "true" : "false") << ",\"frames\":" << app.frames
+                << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
+                << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
+                << ",\"actual_gdi_present_count\":" << graphics.present_count
+                << ",\"window_resized\":" << (app.graphicsSmokeResized ? "true" : "false")
+                << ",\"renderer_buffers_closed\":" << (!graphics.live && !graphics.color_bytes && !graphics.depth_bytes && !graphics.matrix_bytes ? "true" : "false")
                 << ",\"old_key_sequence_executed\":false,\"automatic_native_startup\":true"
                 << ",\"native_module_lifecycle\":true,\"full_audio_body\":false"
                 << ",\"multi_module_partial_init\":true,\"second_Start_returned\":"

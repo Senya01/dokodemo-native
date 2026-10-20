@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdint>
 #include <vector>
+#include "game_graphics_native.h"
 
 namespace dokodemo::recovered {
 // Readable non-matching game boot. Source PCs identify the recovered caller;
@@ -71,6 +72,17 @@ public:
 // Recovered1234 allocation order; native services own the backing/controller
 // objects. Final helper7CE28 must complete before the source return1 is present.
 GameServiceResult InitializeGameMemory1234(GameMemoryServices& services);
+// DE0 consumes the six little-endian u16 calendar fields in the RTC date.
+// No timezone offset is applied here; conversion already produced local time.
+std::array<uint32_t, 7> GameCalendarDE0(const std::array<uint8_t, 16>& local_date) noexcept;
+
+// Reached explicit writes at253B8/258D4, not inferred BSS initialization.
+// Raw source addends3B430/3B550 are metadata, not native pointers.
+struct GameRuntimeResetState {
+    std::array<uint8_t, 192> primary;
+    std::array<uint8_t, 160> secondary;
+};
+void ResetGameRuntime253B8(GameRuntimeResetState& state) noexcept;
 
 struct GameArenaObservation {
     bool live = false;
@@ -84,5 +96,14 @@ struct GameBootObservation {
     bool memory_initialization_succeeded = false;
     uint32_t default_arena = UINT32_MAX;
     std::array<GameArenaObservation, 3> arenas{};
+    bool graphics_setup_entered = false, graphics_setup_returned = false;
+    GameGraphicsSnapshot graphics;
+    bool rtc_initialized = false, rng_seed_available = false;
+    uint32_t rtc_error = 0, rng_seed_word = 0;
+    uint64_t utc_tick_us = 0, local_tick_us = 0, rng_seed = 0;
+    int32_t effective_offset_minutes = 0;
+    std::array<uint32_t, 7> calendar_words{};
+    bool runtime_reset_returned = false, filesystem_initialization_entered = false;
+    uint32_t primary_reset_bytes = 0, secondary_reset_bytes = 0;
 };
 } // namespace dokodemo::recovered

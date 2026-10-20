@@ -146,6 +146,9 @@ public:
     // Real keyboard polling for the native game input adapter. An unfocused
     // window releases buttons; no synthetic key events are sent to Windows.
     recovered::ControllerSample PollControllerInput(bool window_focused);
+    bool CopyGameFrame(recovered::GameGraphicsFrame& out) const;
+    bool RecordGameFramePresented(uint64_t generation, uint64_t sequence);
+    bool DrawGraphicsDiagnosticFrame(); // explicit window-smoke image, not gameplay
     StartupRuntimeStatus RequestExit();
     // Timeout retains the live owner. Do not destroy it until Close succeeds.
     StartupRuntimeStatus Close(uint32_t timeout_ms = 5000);

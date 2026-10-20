@@ -35,6 +35,7 @@ add_library(dokodemo-core STATIC
     src/startup_probe.cpp
     src/recovered/startup_flow_native.cpp
     src/recovered/game_boot_native.cpp
+    src/recovered/game_graphics_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
     src/recovered/atrac3plus_module_native.cpp
@@ -82,6 +83,13 @@ if(DOKODEMO_GAME_BOOT_TESTS)
         target_compile_options(dokodemo-game-boot-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME game-boot-tests COMMAND dokodemo-game-boot-tests)
+    add_executable(dokodemo-game-graphics-tests tools/game_graphics_tests.cpp)
+    target_link_libraries(dokodemo-game-graphics-tests PRIVATE dokodemo-core)
+    if(MSVC)
+        set_target_properties(dokodemo-game-graphics-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(dokodemo-game-graphics-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME game-graphics-tests COMMAND dokodemo-game-graphics-tests)
 endif()
 set(DOKODEMO_MODULE_CONTROLS_SOURCE "" CACHE FILEPATH "Optional focused native module-manager controls source inside the workspace")
 if(DOKODEMO_MODULE_CONTROLS_SOURCE)
