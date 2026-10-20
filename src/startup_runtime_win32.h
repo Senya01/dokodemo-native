@@ -1,6 +1,7 @@
 #pragma once
 #include "recovered/module_manager_native.h"
 #include "recovered/startup_flow_native.h"
+#include "recovered/game_boot_native.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -123,6 +124,7 @@ struct StartupObservation {
     // All legacy single-module fields explicitly alias request 0, never last.
     std::vector<StartupModuleObservation> module_observations;
     recovered::StartupRepeatedModuleSnapshot repeated_modules;
+    recovered::GameBootObservation game_boot;
     std::vector<recovered::NativeModuleSnapshot> module_records; //live manager only
     uint32_t current_module_index = StartupNoCurrentModule;
     std::string current_frontier;
@@ -141,6 +143,9 @@ public:
     StartupCoordinator& operator=(const StartupCoordinator&) = delete;
     StartupRuntimeStatus Start();
     StartupObservation Observe(uint64_t after_event = 0) const;
+    // Real keyboard polling for the native game input adapter. An unfocused
+    // window releases buttons; no synthetic key events are sent to Windows.
+    recovered::ControllerSample PollControllerInput(bool window_focused);
     StartupRuntimeStatus RequestExit();
     // Timeout retains the live owner. Do not destroy it until Close succeeds.
     StartupRuntimeStatus Close(uint32_t timeout_ms = 5000);

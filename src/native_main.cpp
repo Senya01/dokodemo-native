@@ -1368,13 +1368,36 @@ void WriteAdhocctlValue(std::ostream& out,
 }
 
 void WriteNextGameCallValue(std::ostream& out, const dokodemo::StartupObservation& o) {
-    const bool reached=o.barrier_source_pc==0x1004 && !o.barrier_module_relative
+    const bool reached=(o.game_boot.controller_setup_entered || o.barrier_source_pc==0x1004) && !o.barrier_module_relative
         && o.repeated_modules.source_gate_returned && o.repeated_modules.source_gate_result==1;
     out << "{\"present\":" << (reached ? "true" : "false");
     if(!reached) { out << '}'; return; }
     out << ",\"source_callsite\":" << 0x1004 << ",\"target\":" << 0x52D58
         << ",\"delay_source_pc\":" << 0x1008 << ",\"delay_word_hex\":\"3C110001\""
-        << ",\"body_admitted\":false,\"result\":null,\"returned\":false,\"later_100C_reached\":false}";
+        << ",\"body_admitted\":" << (o.game_boot.controller_setup_entered ? "true" : "false")
+        << ",\"result\":" << (o.game_boot.controller_setup_returned ? std::to_string(o.game_boot.controller_setup_result) : "null")
+        << ",\"returned\":" << (o.game_boot.controller_setup_returned ? "true" : "false")
+        << ",\"result_domain\":\"WindowsInputAdapter\",\"later_100C_reached\":" << (o.reached_100C ? "true" : "false") << '}';
+}
+void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootObservation& boot) {
+    const auto boolean = [](bool value) { return value ? "true" : "false"; };
+    out << "{\"controller_setup_entered\":" << boolean(boot.controller_setup_entered)
+        << ",\"controller_setup_returned\":" << boolean(boot.controller_setup_returned)
+        << ",\"sampling_mode\":" << boot.sampling_mode << ",\"sampling_cycle\":" << boot.sampling_cycle
+        << ",\"memory_initialization_entered\":" << boolean(boot.memory_initialization_entered)
+        << ",\"memory_initialization_returned\":" << boolean(boot.memory_initialization_returned)
+        << ",\"memory_initialization_succeeded\":" << boolean(boot.memory_initialization_succeeded)
+        << ",\"allocator_policy\":\"NonMatchingNativeFreeList\",\"default_arena\":";
+    if (boot.default_arena == UINT32_MAX) out << "null"; else out << boot.default_arena;
+    out << ",\"arenas\":[";
+    for (size_t i = 0; i < boot.arenas.size(); ++i) {
+        const auto& arena = boot.arenas[i];
+        if (i) out << ',';
+        out << "{\"live\":" << boolean(arena.live) << ",\"requested_bytes\":" << arena.requested_bytes
+            << ",\"source_coordinate\":" << arena.source_coordinate << ",\"host_address\":" << arena.host_address
+            << ",\"committed_bytes\":" << arena.committed_bytes << '}';
+    }
+    out << "]}";
 }
 
 void WriteAdhocValue(std::ostream& out,
@@ -1748,7 +1771,9 @@ void WriteStartupObservation(const std::filesystem::path& path, const dokodemo::
         << ",\"preceding_psp_history\":" << boolean(observation.preceding_psp_history)
         << ",\"constructors_established\":" << boolean(observation.constructors_established)
         << ",\"reached_100C\":" << boolean(observation.reached_100C)
-        << ",\"full_game\":" << boolean(observation.full_game) << ",\"events\":[";
+        << ",\"full_game\":" << boolean(observation.full_game) << ",\"game_boot\":";
+    WriteGameBootValue(out, observation.game_boot);
+    out << ",\"events\":[";
     bool first = true;
     for (const auto& event : observation.events) {
         if (!first) out << ',';
@@ -1833,7 +1858,7 @@ bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) 
         && observation.caller_thread_id && observation.worker_thread_id
         && observation.caller_thread_id != observation.worker_thread_id
         && !observation.preceding_psp_history && !observation.constructors_established
-        && !observation.reached_100C && !observation.full_game && observation.dropped_events == 0;
+        && !observation.full_game && observation.dropped_events == 0;
 }
 bool AtracPrefixAtDependency(const dokodemo::recovered::Atrac3plusInitializationSnapshot& value) {
     if (!value.present || !value.prefix_entered || !value.dependency_blocked || value.aborted
@@ -3199,12 +3224,8 @@ bool RepeatedAdhocctlContinuationExact(const dokodemo::StartupObservation& o) {
         if(o.module_observations[5+row].repeated_record_index!=row) return false;
     return true;
 }
-bool AtAdhocctlBoundary(const dokodemo::StartupObservation& o) {
+bool NineModuleOwnersReady(const dokodemo::StartupObservation& o) {
     if(o.module_observations.size()!=9 || o.module_records.size()!=9 || o.current_module_index!=8
-        || o.barrier_source_pc!=0x1004 || o.current_frontier_source_pc!=0x1004
-        || o.barrier_module_relative || o.current_frontier_module_relative
-        || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier.find("UnrecoveredGameCall52D58")==std::string::npos
         || !PreparedEnvelopeModulesReady(o) || !SascoreRequestExact(o.module_observations[2],false)
         || !IfhandleRequestExact(o.module_observations[3],false) || !PspnetRequestExact(o.module_observations[4],false)
         || !MemabRequestExact(o.module_observations[5],false) || !AdhocAuthRequestExact(o.module_observations[6],false)
@@ -3225,6 +3246,24 @@ bool AtAdhocctlBoundary(const dokodemo::StartupObservation& o) {
     }
     return true;
 }
+bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
+    const auto& boot = o.game_boot;
+    if (!NineModuleOwnersReady(o) || !o.reached_100C || !boot.controller_setup_returned
+        || boot.sampling_mode != 1 || boot.sampling_cycle != 0 || !boot.memory_initialization_returned
+        || !boot.memory_initialization_succeeded || boot.default_arena != 1
+        || o.barrier_source_pc != 0x1014 || o.current_frontier_source_pc != 0x1014
+        || o.barrier_module_relative || o.current_frontier_module_relative
+        || o.barrier_source_module.owner || o.current_frontier_source_module.owner
+        || o.barrier != "UnrecoveredGraphicsSetupC0C") return false;
+    constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
+    for (size_t i = 0; i < sizes.size(); ++i) {
+        const auto& arena = boot.arenas[i];
+        if (!arena.live || !arena.host_address || arena.requested_bytes != sizes[i]
+            || arena.committed_bytes < sizes[i] || arena.source_coordinate != 0x70000000 + i * 0x01000000)
+            return false;
+    }
+    return true;
+}
 bool AdhocctlSequenceClosed(const dokodemo::StartupObservation& o) {
     return o.module_observations.size()==9 && QueryEnvelopeModulesClosed(o)
         && SascoreRequestExact(o.module_observations[2],true) && IfhandleRequestExact(o.module_observations[3],true)
@@ -3236,12 +3275,13 @@ bool AdhocctlSequenceClosed(const dokodemo::StartupObservation& o) {
 
 bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observation) {
 #ifdef DOKODEMO_FFMPEG_ROOT
-    return AtAdhocctlBoundary(observation);
+    return AtGameBootBoundary(observation);
 #else
     return AtLegacyNativeModuleSequenceBoundary(observation);
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    for (const auto& arena : observation.game_boot.arenas) if (arena.live) return false;
     if (observation.module_observations.size() == 9 && observation.module_observations[8].module_uid_assigned) return AdhocctlSequenceClosed(observation);
     if (observation.module_observations.size() == 9) return AdhocSequenceClosed(observation);
     if (observation.module_observations.size() == 8) return AuthSequenceClosed(observation);
@@ -3381,6 +3421,7 @@ int ConnectedStartupTest(const Options& options) {
         << ",\"repeated_uid_writes\":" << boundary.repeated_modules.writes_count
         << ",\"repeated_gate_returned\":" << (boundary.repeated_modules.source_gate_returned ? "true" : "false")
         << ",\"next_game_call\":"; WriteNextGameCallValue(summary, boundary);
+    summary << ",\"game_boot\":"; WriteGameBootValue(summary, boundary.game_boot);
     summary << ",\"source_queries_returned\":" << queriesReturned
         << ",\"source_GetEDRAM_returned\":" << allocationsReturned
         << ",\"original_ME_equivalence_known\":false,\"source_decode_returned\":false"
@@ -3397,6 +3438,7 @@ struct Application {
     Options options; HWND window = nullptr; HFONT font = nullptr, titleFont = nullptr;
     std::unique_ptr<dokodemo::StartupCoordinator> nativeStartup;
     dokodemo::StartupObservation startupObservation;
+    dokodemo::recovered::ControllerSample controllerInput;
     std::wstring startupStatus = L"Нативный запуск ещё не начат.";
     bool startupWindowCloseSent = false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
@@ -3463,6 +3505,8 @@ struct Application {
         startupObservation = nativeStartup->Observe();
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
+        else if (AtGameBootBoundary(startupObservation))
+            startupStatus = L"Ввод и три игровые арены готовы. Далее — восстановление игровой графики C0C.";
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
                 startupObservation.module_records.begin(), startupObservation.module_records.end(),
@@ -3845,6 +3889,7 @@ struct Application {
     }
     void Tick() {
         RefreshNativeStartup();
+        if (nativeStartup) controllerInput = nativeStartup->PollControllerInput(GetForegroundWindow() == window);
         LARGE_INTEGER now{}; QueryPerformanceCounter(&now);
         elapsed = double(now.QuadPart-start.QuadPart)/frequency.QuadPart;
         auto reading = dokodemo::save::ReadSystemClock();

@@ -63,6 +63,12 @@ public:
     virtual void BeginModuleRequest(uint32_t, const char*, const StartupModuleOptions&) {}
     virtual void ObserveRepeatedModules(const StartupRepeatedModuleSnapshot&, uint32_t) noexcept {}
     virtual void UnsupportedFollowingModule() = 0;
+    // Complete module gate1 continues into game startup. Older component
+    // fixtures retain their explicit unsupported boundary by default.
+    virtual StartupFlowStop ContinueGameAfterModules() {
+        UnsupportedFollowingModule();
+        return StartupFlowStop::Unsupported;
+    }
     virtual bool HostCancelled() const = 0;
 };
 bool StartupStartResultSleeps1184(int32_t result);

@@ -62,7 +62,8 @@ struct WindowsModuleInputLease final : recovered::NativeModuleInputLease {
 };
 }
 
-struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
+struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
+    recovered::GameInputServices, recovered::GameMemoryServices {
     std::unique_ptr<Impl> next_deferred_codec_cleanup;
     struct JoinedCleanupOwners {
         SRWLOCK lock=SRWLOCK_INIT;
@@ -103,6 +104,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
     std::shared_ptr<recovered::NativeMemabBackend> memab_backend;
     mutable SRWLOCK repeated_lock=SRWLOCK_INIT;
     recovered::StartupRepeatedModuleSnapshot repeated_state;
+    recovered::ControllerState controller;
+    std::array<StartupNativeBlock, 3> game_blocks{};
+    std::array<StartupAllocationBorrow, 3> game_borrows{};
+    std::array<recovered::GameArena, 3> game_arenas{};
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
     ThreadContext caller_context{this, false}, worker_context{this, true};
@@ -1045,6 +1050,104 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             "Repeated caller reached first unadmitted table kind/main continuation;no unknown read or fabricated source result",0,
             repeated.current_record_index>=4?0x100C:0x4F740);
     }
+    recovered::GameServiceResult SetControllerSamplingMode(int32_t mode) override {
+        if (HostCancelled()) return {};
+        std::lock_guard<std::mutex> lock(metadata);
+        const auto previous = controller.SetSamplingMode(mode);
+        state.game_boot.sampling_mode = controller.SamplingMode();
+        EmitLocked("SetControllerSamplingMode", "WindowsInputAdapter", 0x52D60, previous, true,
+            0, 0, 0, "mode1;native input configuration;return previous mode;PSP hardware timing not emulated");
+        return {true, previous};
+    }
+    recovered::GameServiceResult SetControllerSamplingCycle(int32_t cycle) override {
+        if (HostCancelled()) return {};
+        std::lock_guard<std::mutex> lock(metadata);
+        const auto previous = controller.SetSamplingCycle(cycle);
+        state.game_boot.sampling_cycle = controller.SamplingCycle();
+        EmitLocked("SetControllerSamplingCycle", "WindowsInputAdapter", 0x52D68, previous, true,
+            0, 0, 0, "cycle0;sampled by native frame loop;no PSP polling-frequency claim");
+        return {true, previous};
+    }
+    recovered::GameServiceResult PrepareGameArena(uint32_t index, uint32_t bytes) override {
+        if (HostCancelled()) return {};
+        constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
+        if (index >= sizes.size() || bytes != sizes[index] || game_blocks[index]) throw NativeFailure{};
+        StartupPartitionRequest request;
+        request.bytes = bytes;
+        request.source_base = 0x70000000 + index * 0x01000000; // native logical coordinates, not PSP placement
+        const auto allocation = backend->Allocate(request);
+        if (!allocation.status) {
+            Emit("AllocateGameArenaFailed", "WindowsGameMemoryAdapter", index ? 0x132C : 0x1298,
+                0, true, 0, allocation.status.win32_error);
+            return {true, 0};
+        }
+        game_blocks[index] = allocation.handle; // retain ownership before any fallible work
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            auto& out = state.game_boot.arenas[index];
+            out.live = true; out.requested_bytes = bytes; out.source_coordinate = request.source_base;
+            out.host_address = allocation.host_address; out.committed_bytes = allocation.committed_bytes;
+        }
+        StartupHostStatus status;
+        game_borrows[index] = backend->Borrow(game_blocks[index], status);
+        StartupRawBorrowSpan span;
+        if (!status || !game_borrows[index].Span(span) || !span.writable || span.size != bytes
+            || !game_arenas[index].Initialize(span.bytes, bytes)) throw NativeFailure{};
+        Emit("GameArenaReady", "WindowsGameMemoryAdapter", index ? 0x134C : 0x12E8,
+            bytes, false, allocation.host_address, 0, 0,
+            "Main/PPK/KS source sizes;native C++ free-list/controller replaces PSP libc/639CC layout;payload BSS knowledge not inferred");
+        return {true, 1};
+    }
+    recovered::GameServiceResult SelectDefaultGameArena(uint32_t index) override {
+        if (HostCancelled()) return {};
+        if (index != 1 || !game_blocks[index] || !game_arenas[index].Capacity()) throw NativeFailure{};
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.default_arena = index;
+        EmitLocked("SelectDefaultGameArena", "RecoveredNativeGame", 0x7CE30, index, false,
+            state.game_boot.arenas[index].host_address, 0, 0,
+            "7CE28 setter stores the PPK controller;native typed reference,not a numeric PSP pointer");
+        return {true, 0}; // setter result unused by1234
+    }
+    recovered::StartupFlowStop ContinueGameAfterModules() override {
+        using recovered::StartupFlowStop;
+        event_module_index = StartupNoCurrentModule;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.controller_setup_entered = true;
+        }
+        Emit("GameControllerSetup-enter", "RecoveredGameCaller", 0x1004);
+        const auto input = recovered::InitializeGameInput52D58(*this);
+        if (!input.returned) return StartupFlowStop::HostCancelled;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.controller_setup_returned = true;
+            state.game_boot.controller_setup_result = input.value;
+            state.reached_100C = true;
+            state.game_boot.memory_initialization_entered = true;
+        }
+        Emit("GameControllerSetup-return", "RecoveredNativeGame", 0x52D74, input.value, true);
+        Emit("GameMemoryInitialization-enter", "RecoveredGameCaller", 0x100C);
+        const auto memory = recovered::InitializeGameMemory1234(*this);
+        if (!memory.returned) return StartupFlowStop::HostCancelled;
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.memory_initialization_returned = true;
+        state.game_boot.memory_initialization_succeeded = memory.value != 0;
+        EmitLocked("GameMemoryInitialization-return", "RecoveredNativeGame", 0x12D4, memory.value, true);
+        if (!memory.value) {
+            // The original main ignores the value. Native allocation failure
+            // is a fatal host condition instead of running with null arenas.
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, ERROR_NOT_ENOUGH_MEMORY));
+            return StartupFlowStop::HostFailure;
+        }
+        state.barrier_source_pc = state.current_frontier_source_pc = 0x1014;
+        state.barrier_module_relative = state.current_frontier_module_relative = false;
+        state.barrier_source_module = state.current_frontier_source_module = {};
+        state.barrier = state.current_frontier = "UnrecoveredGraphicsSetupC0C";
+        state.worker_state = "Blocked";
+        EmitLocked("UnrecoveredGraphicsSetupC0C", "RecoveredGameCaller", 0x1014, 0, false,
+            0, 0, 0, "controller and native arenas ready;next actual game graphics initialization;no C0C return/title/gameplay fabricated");
+        return StartupFlowStop::Unsupported;
+    }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
     void BarrierPump() {
         HANDLE notification = nullptr;
@@ -1148,6 +1251,23 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
         }
         // Both contexts have ended. No thread can now access or wait on these objects.
         bool ok = true;
+        // Game allocations were acquired after the modules. Retain failed
+        // releases in this owner for the existing joined cleanup retry.
+        for (size_t remaining = game_blocks.size(); remaining; --remaining) {
+            const auto index = remaining - 1;
+            if (!game_blocks[index]) continue;
+            game_arenas[index].Reset();
+            game_borrows[index].Reset();
+            const auto released = backend->Free(game_blocks[index]);
+            if (released) game_blocks[index] = {};
+            {
+                std::lock_guard<std::mutex> lock(metadata);
+                if (released) state.game_boot.arenas[index].live = false;
+                EmitLocked("FreeGameArena", "HostLifecycle", 0, released ? 1 : 0, false,
+                    state.game_boot.arenas[index].host_address, released.win32_error);
+            }
+            if (!released) return CleanupFailure(released.win32_error);
+        }
         // Reverse publication order; BOTH source contexts are joined. Failure
         // preserves this owner, earlier modules and backend for honest retry.
         for (size_t remaining = module_requests.size(); remaining; --remaining) {
@@ -1508,6 +1628,26 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     }
     for (const auto& event : self.events) if (event.ordinal > after_event) out.events.push_back(event);
     return out;
+}
+recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_focused) {
+    auto& self = *impl_;
+    std::lock_guard<std::mutex> lock(self.metadata);
+    if (!self.state.game_boot.controller_setup_returned || self.state.closing || self.state.resources_closed)
+        return {};
+    const auto down = [window_focused](int key) {
+        return window_focused && (GetAsyncKeyState(key) & 0x8000) != 0;
+    };
+    using namespace recovered;
+    uint32_t buttons = 0;
+    const std::pair<int, uint32_t> keys[] = {
+        {VK_UP, Up}, {VK_RIGHT, Right}, {VK_DOWN, Down}, {VK_LEFT, Left},
+        {VK_RETURN, recovered::Start}, {VK_BACK, Select}, {'Q', LTrigger}, {'E', RTrigger},
+        {'Z', Cross}, {'X', Circle}, {'A', Square}, {'S', Triangle}
+    };
+    for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
+    const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
+    const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
+    return self.controller.Update(buttons, x, y, GetTickCount64() * 1000);
 }
 StartupRuntimeStatus StartupCoordinator::RequestExit() { return impl_->RequestExit(); }
 StartupRuntimeStatus StartupCoordinator::Close(uint32_t timeout_ms) { return impl_->Close(timeout_ms); }

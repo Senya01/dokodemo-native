@@ -34,6 +34,7 @@ add_library(dokodemo-core STATIC
     src/script_vm.cpp
     src/startup_probe.cpp
     src/recovered/startup_flow_native.cpp
+    src/recovered/game_boot_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
     src/recovered/atrac3plus_module_native.cpp
@@ -72,6 +73,16 @@ else()
 endif()
 
 enable_testing()
+option(DOKODEMO_GAME_BOOT_TESTS "Build focused non-matching controller/arena tests" ON)
+if(DOKODEMO_GAME_BOOT_TESTS)
+    add_executable(dokodemo-game-boot-tests tools/game_boot_tests.cpp)
+    target_link_libraries(dokodemo-game-boot-tests PRIVATE dokodemo-core)
+    if(MSVC)
+        set_target_properties(dokodemo-game-boot-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(dokodemo-game-boot-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME game-boot-tests COMMAND dokodemo-game-boot-tests)
+endif()
 set(DOKODEMO_MODULE_CONTROLS_SOURCE "" CACHE FILEPATH "Optional focused native module-manager controls source inside the workspace")
 if(DOKODEMO_MODULE_CONTROLS_SOURCE)
     cmake_path(ABSOLUTE_PATH DOKODEMO_MODULE_CONTROLS_SOURCE BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE OUTPUT_VARIABLE module_controls_source)

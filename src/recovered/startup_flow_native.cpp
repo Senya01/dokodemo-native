@@ -220,7 +220,7 @@ StartupFlowStop RunStartupWorkerF7C(StartupFlowServices& services) {
         services.ObserveRepeatedModules(repeated,0x4F744); //success flag before gate-return publication
         repeated.source_gate_returned=true;repeated.source_gate_result=1;
         services.ObserveRepeatedModules(repeated,0x4F758);
-        services.UnsupportedFollowingModule();return StartupFlowStop::Unsupported;
+        return services.ContinueGameAfterModules();
     }
 }
 } // namespace dokodemo::recovered
