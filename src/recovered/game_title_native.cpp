@@ -498,7 +498,7 @@ GameFsStatus GameTitleScene::ProfileTick(GameTransition& fade){
         case GameProfileField::Day:mode=5;lo=1;hi=GameProfile::Days(p.year,p.month);
             initial=std::to_string(p.day>0?(std::min)(p.day,hi):1);label="BIRTH DAY / Esc:back to month";break;
         case GameProfileField::Blood:mode=2;lo=1;hi=4;initial=std::to_string(p.blood>=0?p.blood+1:1);label="BLOOD: 1=A 2=B 3=AB 4=O";cancel=p.present==7;break;
-        case GameProfileField::Comment:maximum=13;initial=p.comment;label="COMMENT / CP932 max13";break;
+        case GameProfileField::Comment:maximum=13;initial=p.comment;label="TELEPHONE / max13";break;
         default:return {GameFsCode::Unavailable,0,"Profile dispatcher field not implemented"};
     }
     profile_.Begin(field);state_.profile=profile_.Snapshot();

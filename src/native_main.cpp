@@ -52,7 +52,7 @@ struct Options {
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false;
     bool titleMenuWindowTest=false;
-    bool softkeyWindowTest=false;
+    bool softkeyWindowTest=false,actorWindowTest=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -69,6 +69,7 @@ Options ParseOptions() {
         else if(arg==L"--title-window-test"){options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--title-menu-window-test"){options.titleMenuWindowTest=options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--softkey-window-test"){options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--actor-window-test"){options.actorWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
         else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
@@ -1625,7 +1626,42 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"actor_dictionary_bytes\":"<<boot.content.actor_dictionary_bytes
         << ",\"actor_dictionary_path\":"<<JsonString(boot.content.actor_dictionary_path)
         << ",\"actor_dictionary_prefix_hex\":"<<JsonString(StartupHexBytes(boot.content.actor_dictionary_prefix.data(),16))
-        << ",\"title_material_resources\":[";
+        << ",\"actor_script\":{\"live\":"<<boolean(boot.content.actor_script.live)
+        <<",\"scene4_actor_geometry_implemented\":false,\"source182F4_complete\":false"
+        <<",\"started\":"<<boolean(boot.content.actor_script.started)<<",\"completed\":"<<boolean(boot.content.actor_script.completed)
+        <<",\"blocked\":"<<boolean(boot.content.actor_script.blocked)<<",\"awaiting_message\":"<<boolean(boot.content.actor_script.awaiting_message)
+        <<",\"bytes\":"<<boot.content.actor_script.bytes<<",\"path\":"<<JsonString(boot.content.actor_script.path)
+        <<",\"sha256\":"<<JsonString(boot.content.actor_script.sha256)<<",\"entry_pc\":"<<boot.content.actor_script.entry_pc
+        <<",\"pc\":"<<boot.content.actor_script.pc<<",\"last_opcode\":"<<boot.content.actor_script.last_opcode
+        <<",\"ticks\":"<<boot.content.actor_script.ticks<<",\"yields\":"<<boot.content.actor_script.yields
+        <<",\"instructions\":"<<boot.content.actor_script.instructions<<",\"messages\":"<<boot.content.actor_script.messages
+        <<",\"root_functions_returned\":"<<boot.content.actor_script.root_functions_returned
+        <<",\"random_selections\":"<<boot.content.actor_script.random_selections<<",\"selected_value_word\":"<<boot.content.actor_script.selected_value_word
+        <<",\"message_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.message.data()),boot.content.actor_script.message.size()))
+        <<",\"error\":"<<JsonString(boot.content.actor_script.error)
+        <<",\"builtin_calls\":"<<boot.content.actor_script.builtin_calls<<",\"game_service_calls\":"<<boot.content.actor_script.game_service_calls
+        <<",\"dictionary_game_reads\":"<<boot.content.actor_script.dictionary_game_reads<<",\"dictionary_game_writes\":"<<boot.content.actor_script.dictionary_game_writes
+        <<",\"array_query_calls\":"<<boot.content.actor_script.array_query_calls<<",\"array_query_matches\":"<<boot.content.actor_script.array_query_matches<<",\"array_actions\":"<<boot.content.actor_script.array_actions
+        <<",\"optional_fields_policy\":\"NativeNewProfileAbsent;OriginalProducersUnrecovered\""
+        <<",\"last_normalized_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.last_normalized.data()),boot.content.actor_script.last_normalized.size()))
+        <<",\"last_service\":"<<boot.content.actor_script.last_service<<",\"service_ids\":[";
+    for(size_t i=0;i<boot.content.actor_script.service_ids.size();++i){if(i)out<<',';out<<boot.content.actor_script.service_ids[i];}
+    const auto& dictionary=boot.content.actor_script.dictionary;
+    out<<"],\"last_query_indices\":[";
+    for(size_t i=0;i<boot.content.actor_script.last_query_indices.size();++i){if(i)out<<',';out<<boot.content.actor_script.last_query_indices[i];}
+    out<<"],\"dictionary\":{\"imported\":"<<boolean(dictionary.imported)<<",\"source_live\":"<<boolean(dictionary.source_live)
+        <<",\"closed\":"<<boolean(dictionary.closed)<<",\"records\":"<<dictionary.records<<",\"bytes\":"<<dictionary.bytes
+        <<",\"copied_values\":"<<dictionary.copied_values<<",\"copied_strings\":"<<dictionary.copied_strings
+        <<",\"destination_index\":"<<dictionary.destination_index<<",\"queries\":"<<dictionary.queries
+        <<",\"first_written_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(dictionary.first_written.data()),dictionary.first_written.size()))
+        <<",\"first_reading_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(dictionary.first_reading.data()),dictionary.first_reading.size()))<<",\"current_records\":[";
+    for(size_t i=0;i<dictionary.current_records.size();++i){
+        if(i)out<<',';const auto& row=dictionary.current_records[i];out<<"{\"index\":"<<row.index<<",\"numeric_fields0_5_6_7_8_17\":[";
+        for(size_t j=0;j<row.numeric.size();++j){if(j)out<<',';out<<row.numeric[j];}
+        out<<"],\"written_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(row.written.data()),row.written.size()))
+           <<",\"reading_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(row.reading.data()),row.reading.size()))<<'}';
+    }
+    out<<"]}},\"title_material_resources\":[";
     for(size_t i=0;i<boot.content.title_material_resources.size();++i) {
         if(i)out<<',';out<<JsonString(boot.content.title_material_resources[i]);
     }
@@ -3563,6 +3599,8 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if(observation.game_boot.content.actor_script.live||observation.game_boot.content.actor_dictionary_live
+       ||observation.game_boot.content.actor_script.dictionary.imported||observation.game_boot.content.actor_script.dictionary.source_live)return false;
     if (observation.game_boot.content.vsync_owner || observation.game_boot.content.loadman_owner
         || observation.game_boot.content.font_ready || observation.game_boot.content.package_mounted
         || observation.game_boot.content.registered_records || !observation.game_boot.content.closed
@@ -4190,9 +4228,14 @@ struct Application {
             &&birthdayBackObserved&&dayRejectedObserved&&title.scene3_completed&&title.state==3
             &&title.profile.present==7&&title.profile.applied&&title.profile.confirmed
             &&title.profile.gender==1&&title.profile.year==2000&&title.profile.month==2&&title.profile.day==29
-            &&title.profile.blood==2&&title.profile.comment.size()==26&&c.next_scene==4&&c.current_scene==4&&c.frontier_pc==0x1AF20
-            &&c.actor_dictionary_ready&&c.actor_dictionary_live&&c.actor_dictionary_bytes>0
-            &&c.blocked&&c.status.code==GameFsCode::Unavailable;
+            &&title.profile.blood==2&&title.profile.comment.size()==26&&c.next_scene==4&&c.current_scene==4
+            &&c.actor_dictionary_ready&&c.actor_dictionary_bytes>0
+            &&c.actor_script.started&&c.actor_script.dictionary.imported&&!c.actor_dictionary_live
+            &&!c.actor_script.dictionary.source_live&&c.actor_script.root_functions_returned==1
+            &&c.actor_script.array_query_calls>0&&c.actor_script.array_query_matches>0
+            &&c.actor_script.dictionary_game_reads>0&&c.actor_script.dictionary_game_writes>0
+            &&c.actor_script.random_selections>0&&c.actor_script.last_opcode==0x18&&c.actor_script.pc==0x8DDB7
+            &&c.frontier_pc==0x74C18&&c.blocked&&c.status.code==GameFsCode::Unavailable;
     }
     void StartupProbe() {
         messageVisible=false;
@@ -4679,6 +4722,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"storage_boundary_passed\":" << (app.storageBoundaryPassed?"true":"false")
                 << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
                 << ",\"softkey_window_test\":"<<(options.softkeyWindowTest?"true":"false")
+                << ",\"actor_window_test\":"<<(options.actorWindowTest?"true":"false")
                 << ",\"text_cancel_observed\":"<<(app.textCancelObserved?"true":"false")
                 << ",\"text_natural_close_observed\":"<<(app.textCloseObserved?"true":"false")
                 << ",\"stale_text_refused\":"<<(app.staleTextRefused?"true":"false")
@@ -4688,7 +4732,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.softkeyWindowTest?"SourceEditorResultsProfileNaturalCC3AndActorDictionaryRead;WindowsTextSelectAdapters;NotDictionaryEngineOrNJ":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

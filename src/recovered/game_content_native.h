@@ -3,6 +3,7 @@
 #include "game_scene_ui_native.h"
 #include "game_storage_native.h"
 #include "game_title_native.h"
+#include "game_actor_script_native.h"
 #include <array>
 #include <vector>
 
@@ -82,6 +83,7 @@ struct GameContentSnapshot {
     uint32_t actor_package_bytes=0,actor_dictionary_bytes=0;
     std::string actor_dictionary_path;
     std::array<uint8_t,16> actor_dictionary_prefix{};
+    GameActorScriptSnapshot actor_script;
     std::string next_resource;
     GameFsStatus status;
 };
@@ -115,6 +117,7 @@ class GameContentBoot final : public GameResourceSource {
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
     void SetTitleRng(RngNativeOwner& rng){title_rng_=&rng;}
     void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
+    void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
@@ -153,7 +156,10 @@ class GameContentBoot final : public GameResourceSource {
     GameTitleScene title_;
     PackageView actor_package_,actor_dictionary_;
     BpDirectory actor_directory_;
-    bool TickActorDictionary(GameFilesystem&);
+    GameActorScript actor_script_;
+    GameActorScript::ClockWord actor_clock_;
+    GameButtonGate actor_message_gate_;
+    bool TickActorDictionary(GameFilesystem&,GameGraphics&);
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;
     int32_t calendar_year_=0;

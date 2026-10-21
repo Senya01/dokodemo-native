@@ -10,6 +10,7 @@
 #include "core_hash.h"
 #include "rng_backend_win32.h"
 #include "recovered/rng_native.h"
+#include "recovered/clock_native.h"
 #include "game_filesystem_win32.h"
 #include <windows.h>
 #include <process.h>
@@ -1348,6 +1349,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         game_content.SetNativeTitleLayout(options.native_title_layout);
         game_content.SetTitleRng(game_rng);
         game_content.SetCalendar(state.game_boot.calendar_words);
+        game_content.SetActorClock([]{
+            platform::WindowsRngInitializationSample current;
+            if(!platform::CaptureWindowsRngInitialization(current))throw std::runtime_error("Native KSC Windows local RTC read failed");
+            // Named Windows local civil-clock adaptation. The source cache
+            // getter already receives shifted ticks;no second +9h is applied.
+            return recovered::ClockWord689B8(current.conversion.local_tick_us);
+        });
         const auto scene_status=game_content.InitializeSceneResources(*this);
         if(!scene_status) {
             Emit("GameSceneResourceFailure","NativeSceneResourceConsumers",0x18EE8,0,false,0,scene_status.native_error,0,scene_status.detail.c_str());
@@ -1427,7 +1435,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         state.barrier_source_pc = state.current_frontier_source_pc = content.frontier_pc;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        const char *frontier = content.title.scene3_completed ? "NativeProfileConfirmedScene4Pending"
+        const char *frontier = content.actor_script.started ? (content.actor_script.blocked?"NativeGameKscBoundary":content.actor_script.awaiting_message?"NativeGameKscMessage":"NativeGameKscRunning")
+                               : content.title.scene3_completed ? "NativeProfileConfirmedScene4Pending"
                                : content.title.softkey_requested&&!content.status ? "NativeTitleSoftkeyFailure"
                                : !content.status            ? "GameResourceFailure"
                                : content.title.frame_drawn ? "NativeTitleCharacterFrame"
@@ -1456,7 +1465,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
                 if (!game_inputs.Pop(frame))
                     break;
             }
-            if (game_content.ProcessDialogInput(frame))
+            const bool script_message=game_content.Snapshot().actor_script.started;
+            const bool accepted=game_content.ProcessDialogInput(frame);
+            if (accepted&&script_message)
+                Emit("GameKscMessageAdvance","NativeMessageInputAdapter",0,1,false,0,0,0,"explicit native fresh-Circle acknowledgement;not recovered PSP text timing");
+            else if(accepted)
                 Emit("GameCircleConfirmation", "NativeInputAdapter", 0x47E0C, 1, false, 0, 0, 0,
                      frame.test_injected ? "explicit test-injected native release/press,not physical hardware"
                                          : "focused native Circle release/press");
@@ -1472,6 +1485,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             game_input_live = false;
         }
         const auto after = game_content.Snapshot();
+        if(!before.actor_script.started&&after.actor_script.started)
+            Emit("GameKscStarted","Recovered230ECScriptRequest",0x67FD4,after.actor_script.bytes,false,0,0,0,"actual selected KSC and two integer arguments(new flag1,0);native game VM,no PSP CPU");
+        if(!before.actor_script.dictionary.imported&&after.actor_script.dictionary.imported)
+            Emit("GameActorDictionaryImported","RecoveredService48TypedCopy",0x1C9E4,after.actor_script.dictionary.records,false,0,0,0,"actual DIC imported into actual script destination aliases;owned strings,input handle dropped");
         if (!before.title_constructor_returned && after.title_constructor_returned)
             Emit("GameTitleResourceConsumer", "RecoveredGameCaller", 0x80384, after.title_model_bytes, false,
                  0, 0, 0,

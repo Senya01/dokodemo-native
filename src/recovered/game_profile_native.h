@@ -14,12 +14,14 @@ enum class GameProfileField : uint32_t {
     Month,
     Day,
     Blood,
-    Comment,
+    Comment, // historical native name: source type3 field labelled 電話番号 (telephone)
     Confirmation
 };
 struct GameProfileRecord {
     bool live = false;
     uint32_t actor = UINT32_MAX, gender = UINT32_MAX, date = UINT32_MAX, blood = UINT32_MAX;
+    // comment is the legacy member name for the source type3/telephone field.
+    // Its original repertoire/telephone validation is not recovered.
     std::string nickname, player, comment; // safe native strings,not an opaque PSP save
     std::array<uint8_t, 16> source_nickname{}, source_player{}, source_comment{};
     std::array<uint32_t, 7> calendar{};

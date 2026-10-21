@@ -1,6 +1,7 @@
 #include "script_vm.h"
 #include "core_hash.h"
 #include "core/cp932.h"
+#include "recovered/game_primitives.h"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -141,6 +142,13 @@ bool Program::load_original_bytes(std::vector<uint8_t> bytes, const std::filesys
         *this = Program{};
         return false;
     }
+}
+bool Program::load_test_fixture(std::vector<uint8_t> bytes, Diagnostic& error) {
+    *this=Program{};error={};
+    try {
+        source_={"ExplicitSyntheticNativeVmFixture",hash_bytes(bytes)};
+        bytes_=std::move(bytes);parse();return true;
+    } catch(const std::exception& e) {*this=Program{};error.reason=e.what();return false;}
 }
 recovered::CurrentTablesOwner Program::load_current_tables(recovered::CurrentTablesInput input) const {
     if (!loaded()) throw std::runtime_error("Current source loader requires a verified original Program");
@@ -305,7 +313,7 @@ Value Value::integer(int32_t integer) {
 }
 Value Value::string(std::string raw) {
     if (raw.find('\0') != std::string::npos) throw std::runtime_error("CP932 value must exclude the C-string terminator");
-    Value value; value.kind = Kind::String; value.cp932 = std::move(raw); return value;
+    Value value; value.kind = Kind::String; value.word=0x60000000; value.cp932 = std::move(raw); return value;
 }
 int32_t Value::signed_integer() const {
     if (kind != Kind::Scalar || (word >> 28) != 2) throw std::runtime_error("Expected tagged integer");
@@ -318,22 +326,65 @@ Value Vm::decode(uint32_t word) const {
     case 0: case 1: case 2: result.kind = Value::Kind::Scalar; break;
     case 5: result.kind = Value::Kind::String; result.cp932 = program_.pool_bytes(word & 0x0FFFFFFF); break;
     case 7: result.kind = Value::Kind::Code; break;
+    case 3: result.kind = Value::Kind::Timestamp; break;
+    case 9: result.kind = Value::Kind::ArrayHeader; break;
+    case 11: {
+        result.kind = Value::Kind::Reference;
+        const auto selector = (word & 0x0FFFFFFF) >> 16;
+        result.table = selector == 1 ? Table::Frame : selector == 2 ? Table::Local :
+                       selector == 3 ? Table::Ctx28 : Table::Global;
+        result.index = uint16_t(word);
+        if (result.table == Table::Frame) result.frame_owner = frame_;
+        break;
+    }
     default: result.kind = Value::Kind::Opaque; break;
     }
     return result;
 }
 std::vector<Value>& Vm::slots(Table table) {
     switch (table) {
-    case Table::Frame: return frame_;
+    case Table::Frame:
+        if (!frame_) throw std::runtime_error("No live native script frame");
+        return *frame_;
     case Table::Local: return local_;
     case Table::Global: return global_;
     default: return ctx28_;
     }
 }
 Value Vm::read_slot(Table table, uint16_t index) const {
-    const auto& values = table == Table::Frame ? frame_ : table == Table::Local ? local_ : table == Table::Global ? global_ : ctx28_;
+    if (table == Table::Frame && !frame_) throw std::runtime_error("No live native script frame");
+    const auto& values = table == Table::Frame ? *frame_ : table == Table::Local ? local_ : table == Table::Global ? global_ : ctx28_;
     if (index >= values.size()) throw std::runtime_error("Runtime slot index out of bounds");
     return values[index];
+}
+Value Vm::load_reference(const Value& ref) const {
+    auto value=peek_reference(ref);if(access_)access_(ref,false);return value;
+}
+Value Vm::peek_reference(const Value& ref) const {
+    if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script reference");
+    if (ref.table!=Table::Frame) return read_slot(ref.table,ref.index);
+    const auto owner=ref.frame_owner.lock();
+    if(!owner)throw std::runtime_error("Retired native script frame reference");
+    if (ref.index >= owner->size()) throw std::runtime_error("Frame reference out of bounds");
+    return (*owner)[ref.index];
+}
+void Vm::store_reference(const Value& ref, Value value) {
+    if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script destination");
+    const auto owner=ref.frame_owner.lock();
+    if(ref.table==Table::Frame&&!owner)throw std::runtime_error("Retired native script destination frame");
+    auto& values = ref.table==Table::Frame ? *owner : slots(ref.table);
+    if (ref.index >= values.size()) throw std::runtime_error("Script destination out of bounds");
+    values[ref.index] = std::move(value);
+    if(access_)access_(ref,true);
+}
+Value Vm::indexed_reference(const Value& reference, uint32_t index) const {
+    const auto header = load_reference(reference);
+    if (header.kind != Value::Kind::ArrayHeader || index >= (header.word & 0xFFF))
+        throw std::runtime_error("Script array index/header out of bounds");
+    const uint64_t at = uint64_t(reference.index) + 1 + index;
+    if (at > UINT16_MAX) throw std::runtime_error("Script array reference exceeds index domain");
+    Value out = reference; out.index = uint16_t(at);
+    (void)load_reference(out); return out;
 }
 Event Vm::stop(const Command* cmd, const std::string& reason) {
     stopped_ = true;
@@ -344,7 +395,11 @@ Event Vm::stop(const Command* cmd, const std::string& reason) {
 Event Vm::start(const std::vector<Value>& arguments) { return start_at(program_.header().entrypoint, arguments); }
 Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
-    stack_.clear(); frame_ = arguments; local_.clear(); global_.clear(); ctx28_.clear(); last_error_ = {};
+    stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
+    calls_.clear(); result_ = {}; executed_ = 0;
+    random_selections_=0;last_random_={};root_returns_=0;
+    timer_base_ = clock_tick_; wait_until_ = 0;
+    local_.clear(); global_.clear(); ctx28_.clear(); last_error_ = {};
     const auto* cmd = program_.command(pc_);
     if (!program_.loaded() || !cmd || cmd->opcode != 0x30) return stop(cmd, "Start must address a verified original frame prologue");
     try {
@@ -380,22 +435,60 @@ Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
     if (!cmd || cmd->opcode < 0) return stop(cmd, "PC is not an executable command boundary");
+    if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
     try {
         int op = cmd->opcode;
-        if (op == 0x30) {
+        const auto pop = [&]() {
+            if(stack_.empty())throw std::runtime_error("Script operand stack underflow");
+            auto value=std::move(stack_.back());stack_.pop_back();return value;
+        };
+        const auto boolean = [](bool truth) { Value v;v.kind=Value::Kind::Scalar;v.word=0x10000000u|uint32_t(truth);return v; };
+        const auto numeric = [](const Value& v) {
+            if(v.kind==Value::Kind::ArrayHeader)return int32_t(v.word&0xFFF);
+            if((v.kind!=Value::Kind::Scalar&&v.kind!=Value::Kind::Timestamp)||v.word>>28>3)throw std::runtime_error("Script numeric conversion outside scalar domain");
+            const auto p=v.word&0x0FFFFFFF;return int32_t(p&0x08000000?p|0xF0000000:p);
+        };
+        if (op == 0x03) { // common6B9B8 instruction-cost/no-op path
+        } else if (op == 0x30) {
             if (frame_reserved_) return stop(cmd, "Nested frame ABI unsupported");
             uint32_t count = program_.operand(*cmd, 1, 1);
-            if (frame_.size() > count) return stop(cmd, "Fixture argument count exceeds reserved frame");
-            frame_.resize(count); frame_reserved_ = true;
+            if (frame_->size() > count) return stop(cmd, "Caller argument count exceeds reserved frame");
+            frame_->resize(count); frame_reserved_ = true;
+        } else if(op==0x20||op==0x21) {
+            const auto argc=op==0x20?program_.operand(*cmd,1,1):0;
+            const auto target=program_.operand(*cmd,op==0x20?2:1,3);
+            const auto* callee=program_.command(target);
+            if(!callee||callee->opcode!=0x30||argc>stack_.size()||calls_.size()>=128)
+                return stop(cmd,"Invalid script call/frame/argument bound");
+            const auto begin=stack_.size()-argc;
+            auto arguments=std::make_shared<std::vector<Value>>(stack_.begin()+begin,stack_.end());
+            stack_.resize(begin);calls_.push_back({next,begin,frame_reserved_,frame_});
+            frame_=std::move(arguments);frame_reserved_=false;next=target;
+        } else if(op==0x31) {
+            if(calls_.empty()) { stopped_=true;event.status=Status::Complete; }
+            else {
+                if(calls_.size()==1)++root_returns_;
+                auto saved=std::move(calls_.back());calls_.pop_back();
+                stack_.resize(saved.stack_base);frame_=std::move(saved.values);
+                frame_reserved_=saved.reserved;next=saved.return_pc;
+            }
+        } else if(op==0x38) { stopped_=true;event.status=Status::Complete;
+        } else if(op==0x4E) {
+            const auto index=program_.operand(*cmd,1,2),count=program_.operand(*cmd,3,2);
+            if(index>=frame_->size()||uint64_t(index)+count+1>frame_->size())return stop(cmd,"Script frame array extent");
+            Value value;value.kind=Value::Kind::ArrayHeader;value.word=0x90000000u|count;(*frame_)[index]=value;
         } else if (op >= 0x80 && op <= 0x83) {
             uint8_t width = static_cast<uint8_t>(op - 0x7F);
             uint32_t raw = program_.operand(*cmd, 1, width);
             // BOOT 70BB0/70C18 sign-extend 80/81; 70C8C uses three LBU for unsigned 82.
             if (width < 3 && (raw & (1u << (width * 8 - 1)))) raw |= UINT32_MAX << (width * 8);
             stack_.push_back(Value::integer(static_cast<int32_t>(raw)));
-        } else if (op == 0x85) stack_.push_back(Value::integer(0));
+        } else if (op == 0x84) { Value nil;nil.kind=Value::Kind::Scalar;stack_.push_back(nil); }
+        else if (op == 0x85) stack_.push_back(Value::integer(0));
+        else if (op == 0x86||op==0x87) stack_.push_back(boolean(op==0x87));
+        else if(op==0x89) { stack_.push_back(result_);result_={};result_.kind=Value::Kind::Scalar; }
         else if (op == 0x88) stack_.push_back(Value::string(program_.pool_bytes(program_.operand(*cmd, 1, 3))));
         else if (op == 0x8A) {
             Value value; value.kind = Value::Kind::Code; value.word = 0x70000000 | program_.operand(*cmd, 1, 3); stack_.push_back(value);
@@ -406,18 +499,126 @@ Event Vm::step() {
             if (op & 1) {
                 if (index >= slots(table).size()) return stop(cmd, "Reference slot out of bounds");
                 value.kind = Value::Kind::Reference; value.table = table; value.index = index;
+                if (table == Table::Frame) value.frame_owner = frame_;
             } else {
                 value = read_slot(table, index);
                 if (!usable(value)) return stop(cmd, "Uninitialized/opaque runtime slot; caller argument or service required");
             }
             stack_.push_back(std::move(value));
-        } else if (op == 0x51) {
+        } else if (op == 0x50 || op == 0x51) {
             if (stack_.size() < 2) return stop(cmd, "Assignment stack underflow");
             Value value = stack_.back(), ref = stack_[stack_.size() - 2];
             if (ref.kind != Value::Kind::Reference || !usable(value)) return stop(cmd, "Unsupported assignment reference/value");
-            auto& target = slots(ref.table);
-            if (ref.index >= target.size()) return stop(cmd, "Assignment slot out of bounds");
-            target[ref.index] = value; stack_.resize(stack_.size() - 2);
+            store_reference(ref,value); stack_.resize(stack_.size() - 2);
+            if(op==0x50)stack_.push_back(value);
+        } else if(op==0x14) {
+            if(stack_.size()<2)throw std::runtime_error("Foreach needs two references");
+            const auto destination=stack_[stack_.size()-2],source=stack_.back();
+            store_reference(destination,load_reference(indexed_reference(source,0)));
+            stack_.push_back(Value::integer(1));
+        } else if(op==0x15) {
+            if(stack_.size()<3)throw std::runtime_error("Foreach-next stack underflow");
+            const auto source=stack_[stack_.size()-2];const auto index=numeric(stack_.back());
+            const auto count=numeric(load_reference(source));
+            if(index<count) {
+                if(index<0)throw std::runtime_error("Negative foreach index");
+                store_reference(stack_[stack_.size()-3],load_reference(indexed_reference(source,uint32_t(index))));
+                stack_.back()=Value::integer(index+1);next=program_.operand(*cmd,1,3);
+                if(!program_.command(next))throw std::runtime_error("Foreach target outside script");
+            } else stack_.resize(stack_.size()-3);
+        } else if(op==0x52||op==0x53) {
+            const auto ref=pop(),old=load_reference(ref);result_=ref;
+            if(op==0x52)stack_.push_back(old);
+            if((old.kind==Value::Kind::Scalar||old.kind==Value::Kind::Timestamp)&&(old.word>>28>=1&&old.word>>28<=3)) {
+                auto value=old;
+                value.word=recovered::increment_value(old.word);store_reference(ref,value);
+            }
+        } else if(op==0xF0) { stack_.push_back(load_reference(pop()));
+        } else if(op==0xF4||op==0xF5) {
+            const auto index=numeric(pop());const auto array=pop();
+            if(index<0)throw std::runtime_error("Negative script array index");
+            const auto ref=indexed_reference(array,uint32_t(index));
+            stack_.push_back(op==0xF5?ref:load_reference(ref));
+        } else if(op==0xF6) {
+            if(program_.operand(*cmd,1,1)!=0)throw std::runtime_error("F6 exclusion table producer not bound");
+            const auto input=pop();const auto count=numeric(load_reference(input));
+            if(count<=0||!random_)throw std::runtime_error("F6 needs live nonempty list and real RNG owner");
+            const auto index=random_()%uint32_t(count);
+            last_random_=load_reference(indexed_reference(input,index));++random_selections_;
+            stack_.push_back(last_random_);
+        } else if(op==0x70) { result_=pop();
+        } else if(op==0xB2||op==0xB3||op==0xB8||op==0xB9) {
+            const auto value=pop();if(value.kind==Value::Kind::Unknown)throw std::runtime_error("Uninitialized truth operand");
+            const bool nil=value.kind==Value::Kind::Scalar&&value.word>>28==0;
+            const bool zero=value.kind==Value::Kind::Scalar&&value.word==0x20000000;
+            stack_.push_back(boolean(op==0xB2?!nil:op==0xB3?nil:op==0xB8?zero:!zero));
+        } else if(op>=0xBA&&op<=0xBD) {
+            const auto n=numeric(pop());
+            stack_.push_back(boolean(op==0xBA?n>0:op==0xBB?n>=0:op==0xBC?n<0:n<=0));
+        } else if(op==0xC8||op==0xC9) {
+            const auto right=pop(),left=pop();
+            const auto truth=[](const Value& v){
+                if(v.kind!=Value::Kind::Scalar&&v.kind!=Value::Kind::Timestamp&&v.kind!=Value::Kind::ArrayHeader)
+                    throw std::runtime_error("Logical payload truth of native pointer/string not bound");
+                return (v.word&0x0FFFFFFF)!=0;
+            };
+            const bool a=truth(left),b=truth(right);stack_.push_back(boolean(op==0xC8?a&&b:a||b));
+        } else if(op==0x41) {
+            const auto delta=numeric(pop());
+            if(delta<0)throw std::runtime_error("Negative script timer-base offset");
+            timer_base_=clock_tick_+uint32_t(delta);wait_until_=timer_base_;event.status=Status::Yield;
+        } else if(op==0x8B) {
+            const auto id=uint8_t(program_.operand(*cmd,1,1));const auto argc=program_.operand(*cmd,2,1);
+            if(argc>stack_.size()||!service_)return stop(cmd,"Unbound builtin/argument count;id="+std::to_string(id));
+            std::vector<Value> arguments(stack_.end()-argc,stack_.end());stack_.resize(stack_.size()-argc);
+            result_=service_(id,arguments);
+        } else if(op==0x65||op==0x67||op==0x6D) {
+            const auto rhs=numeric(pop());const auto ref=pop();const auto lhs=numeric(load_reference(ref));
+            const auto word=op==0x65?uint32_t(lhs)&uint32_t(rhs):op==0x67?uint32_t(lhs)|uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
+            store_reference(ref,Value::integer(int32_t(word&0x0FFFFFFF)));
+        } else if(op==0x5A||op==0x5B) {
+            // Reached6FEAC tableE05FC[0] ->75874. Finite native scalar,
+            // minute-tag and string/string domains;no guessed conversion.
+            const auto right=pop(),ref=pop(),left=load_reference(ref);auto value=left;
+            const bool right_nil=right.kind==Value::Kind::Scalar&&right.word>>28==0;
+            if(!right_nil) {
+                if(left.kind==Value::Kind::String&&right.kind==Value::Kind::String)value=Value::string(left.cp932+right.cp932);
+                else if(left.kind==Value::Kind::Scalar&&left.word>>28==0)value=right;
+                else {
+                    const auto sum=uint32_t(numeric(left))+uint32_t(numeric(right));
+                    value=Value::integer(int32_t(sum&0x0FFFFFFF));
+                    if(left.kind==Value::Kind::Timestamp){value.kind=Value::Kind::Timestamp;value.word=(value.word&0x0FFFFFFF)|0x30000000;}
+                }
+                store_reference(ref,value);
+            }
+            if(op==0x5A)stack_.push_back(value);
+        } else if(op==0xC0||op==0xC1||op==0xC2||op==0xC4||op==0xC5) {
+            const auto right=pop(),left=pop();bool test=false;
+            if(op==0xC0||op==0xC1) {
+                const auto tag=left.word>>28;
+                if(left.kind==Value::Kind::String)test=right.kind==Value::Kind::String&&left.cp932==right.cp932;
+                else if(left.kind==Value::Kind::Scalar&&tag==0)test=right.kind==Value::Kind::Scalar&&right.word>>28==0;
+                else if(left.kind==Value::Kind::Scalar&&tag==1)test=right.kind==Value::Kind::Scalar&&right.word>>28==1&&(left.word&1)==(right.word&1);
+                else if(left.kind!=Value::Kind::Reference&&tag!=9&&tag<11)test=left.kind==right.kind&&left.word==right.word;
+                if(op==0xC1)test=!test;
+            } else test=op==0xC2?numeric(left)<numeric(right):op==0xC4?numeric(left)>numeric(right):numeric(left)>=numeric(right);
+            stack_.push_back(boolean(test));
+        } else if(op==0xD1||op==0xD2||op==0xD4||op==0xE3) {
+            const auto rhs=numeric(pop()),lhs=numeric(pop());int64_t n=0;
+            if(op==0xD1||op==0xD2) {if(!rhs)throw std::runtime_error("Script division by zero");n=op==0xD1?int64_t(lhs)/rhs:int64_t(lhs)%rhs;}
+            else n=op==0xD4?uint32_t(lhs)&uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
+            stack_.push_back(Value::integer(int32_t(uint32_t(n)&0x0FFFFFFF)));
+        } else if(op==0xE1) {
+            // Reached73BD0 ->75C18: binary subtraction. Tag3 minute values
+            // retain tag3;scalar-domain subtraction stores tag2. Source nil
+            // RHS leaves the left value unchanged.
+            const auto right=pop(),left=pop();auto value=left;
+            if(!(right.kind==Value::Kind::Scalar&&right.word>>28==0)){
+                const auto difference=uint32_t(numeric(left))-uint32_t(numeric(right));
+                value=Value::integer(int32_t(difference&0x0FFFFFFF));
+                if(left.kind==Value::Kind::Timestamp){value.kind=Value::Kind::Timestamp;value.word=(value.word&0x0FFFFFFF)|0x30000000;}
+            }
+            stack_.push_back(std::move(value));
         } else if (op == 0x10 || op == 0x11 || op == 0x12) {
             uint32_t target = program_.operand(*cmd, 1, 3);
             const Command* destination = program_.command(target);
@@ -443,13 +644,11 @@ Event Vm::step() {
             }
         } else {
             std::string reason = op == 0x8B ? "Unsupported builtin/host service; id=" + std::to_string(program_.operand(*cmd, 1, 1)) + ", argc=" + std::to_string(program_.operand(*cmd, 2, 1)) :
-                op == 0x20 || op == 0x21 ? "Call/frame return ABI not implemented" :
-                op == 0x31 ? "Return/frame unwind ABI not implemented" :
                 op == 0x44 ? "Delay scheduler not implemented (opcode 44 is not stack discard)" : "Unsupported opcode semantics";
             return stop(cmd, reason);
         }
         if (stack_.size() > 32767) return stop(cmd, "Native operand stack budget exceeded");
-        pc_ = next; event.next_pc = pc_; return event;
+        ++executed_; pc_ = next; event.next_pc = pc_; return event;
     } catch (const std::exception& ex) { return stop(cmd, ex.what()); }
 }
 Event Vm::run(uint32_t instruction_budget) {

@@ -2,6 +2,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include "recovered/current_tables_native.h"
@@ -50,6 +52,9 @@ public:
     bool load_original(const std::filesystem::path& path, Diagnostic& error);
     bool load_original_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
                              Diagnostic& error);
+    // Explicit synthetic format/VM fixture entrypoint for portable unit tests.
+    // Game resource callers use load_original_bytes with original identity.
+    bool load_test_fixture(std::vector<uint8_t> bytes, Diagnostic& error);
     const Header& header() const { return header_; }
     const Source& source() const { return source_; }
     const std::vector<uint8_t>& bytes() const { return bytes_; }
@@ -96,18 +101,21 @@ private:
 };
 
 struct Value {
-    enum class Kind { Unknown, Scalar, String, Code, Reference, Opaque };
+    enum class Kind { Unknown, Scalar, String, Code, Reference, ArrayHeader, Timestamp, Opaque };
     Kind kind = Kind::Unknown;
     uint32_t word = 0;          // preserve original tag/payload for scalar/opaque
     Table table = Table::Frame;
     uint16_t index = 0;
     std::string cp932;
+    // Native lifetime for references passed into a nested function. Global,
+    // local and image-table references use the VM's stable typed tables.
+    std::weak_ptr<std::vector<Value>> frame_owner;
     static Value integer(int32_t value);
     static Value string(std::string cp932);
     int32_t signed_integer() const;
 };
 
-enum class Status { Running, Message, Stopped };
+enum class Status { Running, Message, Yield, Complete, Stopped };
 struct Event {
     Status status = Status::Stopped;
     uint32_t pc = 0, next_pc = 0, file_offset = 0;
@@ -136,9 +144,42 @@ public:
     uint16_t display_count() const { return display_count_; }
     bool stopped() const { return stopped_; }
     Value read_slot(Table table, uint16_t index) const;
+    Value load_reference(const Value& reference) const;
+    Value peek_reference(const Value& reference) const; // diagnostic capture;not an executed read
+    void store_reference(const Value& reference, Value value);
+    Value indexed_reference(const Value& reference, uint32_t index) const;
+    // Native game services are explicit, checked callbacks. An unbound or
+    // unsupported service stops with its real id/arguments,never success.
+    using HostService = std::function<Value(uint8_t, const std::vector<Value>&)>;
+    void host_service(HostService callback) { service_ = std::move(callback); }
+    const Value& result() const noexcept { return result_; }
+    void access_observer(std::function<void(const Value&,bool)> callback) { access_ = std::move(callback); }
+    uint64_t executed() const noexcept { return executed_; }
+    void clock_tick(uint64_t value) noexcept { clock_tick_ = value; }
+    void random_source(std::function<uint32_t()> callback){random_=std::move(callback);}
+    uint64_t random_selections() const noexcept{return random_selections_;}
+    uint32_t root_functions_returned() const noexcept{return root_returns_;}
+    const Value& last_random_value() const noexcept{return last_random_;}
 private:
     const Program& program_; // program must outlive Vm and remain unchanged
-    std::vector<Value> stack_, frame_, local_, global_, ctx28_;
+    std::vector<Value> stack_, local_, global_, ctx28_;
+    std::shared_ptr<std::vector<Value>> frame_;
+    struct CallFrame {
+        uint32_t return_pc = 0;
+        size_t stack_base = 0;
+        bool reserved = false;
+        std::shared_ptr<std::vector<Value>> values;
+    };
+    std::vector<CallFrame> calls_;
+    HostService service_;
+    std::function<void(const Value&,bool)> access_;
+    std::function<uint32_t()> random_;
+    uint64_t random_selections_=0;
+    uint32_t root_returns_=0;
+    Value last_random_;
+    Value result_;
+    uint64_t executed_ = 0;
+    uint64_t clock_tick_ = 0, timer_base_ = 0, wait_until_ = 0;
     uint32_t pc_ = 0, display_state_ = 0;
     uint16_t display_count_ = 0;
     bool stopped_ = true, frame_reserved_ = false;

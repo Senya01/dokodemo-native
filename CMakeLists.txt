@@ -44,6 +44,9 @@ add_library(dokodemo-core STATIC
     src/recovered/game_ui_resource_native.cpp
     src/recovered/game_scene_ui_native.cpp
     src/recovered/game_dictionary_native.cpp
+    src/recovered/game_actor_dictionary_native.cpp
+    src/recovered/game_actor_script_native.cpp
+    src/recovered/game_value_array_native.cpp
     src/recovered/game_storage_native.cpp
     src/recovered/game_model_native.cpp
     src/recovered/game_title_native.cpp
@@ -135,6 +138,13 @@ if(DOKODEMO_GAME_BOOT_TESTS)
         target_compile_options(dokodemo-game-text-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME game-text-tests COMMAND dokodemo-game-text-tests)
+    add_executable(dokodemo-game-actor-tests tools/game_actor_tests.cpp)
+    target_link_libraries(dokodemo-game-actor-tests PRIVATE dokodemo-core)
+    if(MSVC)
+        set_target_properties(dokodemo-game-actor-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(dokodemo-game-actor-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME game-actor-tests COMMAND dokodemo-game-actor-tests)
     if(WIN32)
         add_executable(dokodemo-game-storage-tests tools/game_storage_tests.cpp src/game_storage_win32.cpp)
         target_link_libraries(dokodemo-game-storage-tests PRIVATE dokodemo-core)

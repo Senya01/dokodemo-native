@@ -464,6 +464,11 @@ bool GameContentBoot::DrawColdFrame(GameGraphics &graphics) {
 bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
+    if(state_.actor_script.started){
+        if(state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle))
+            return actor_script_.AcknowledgeMessage();
+        return false;
+    }
     if(state_.title_constructor_returned){
         if(scene_ui_.Snapshot().storage_dialog)return scene_ui_.HandleDialogInput(frame);
         if(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3)return false;
@@ -492,7 +497,7 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
     if (state_.closed || !state_.scene_ui.live)
         return false;
     if(state_.title_constructor_returned) {
-        if(state_.title.scene3_completed)return TickActorDictionary(filesystem);
+        if(state_.title.scene3_completed)return TickActorDictionary(filesystem,graphics);
         if(state_.load_state==2) {
             state_.previous_scene=state_.current_scene;state_.current_scene=state_.next_scene;
             //Native phase0 folds the no-mount-delta transition into the
@@ -671,6 +676,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    actor_script_.Close();actor_message_gate_.Stop();state_.actor_script=actor_script_.Snapshot();actor_clock_={};
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
     state_.title=title_.Snapshot();
@@ -718,8 +724,25 @@ bool GameContentBoot::Close() {
     state_.closed = true;
     return true;
 }
-bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem){
-    if(state_.actor_dictionary_requested)return false;
+bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
+    if(state_.actor_dictionary_requested){
+        if(!state_.actor_script.started)return false;
+        const auto before=state_.actor_script;
+        state_.status=actor_script_.Tick();state_.actor_script=actor_script_.Snapshot();
+        if(state_.actor_script.dictionary.imported){actor_dictionary_.Reset();state_.actor_dictionary_live=false;}
+        if(!before.awaiting_message&&state_.actor_script.awaiting_message)actor_message_gate_.Begin();
+        state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
+        // The native KSC message consumer uses the already-live original XFT.
+        // No stale TITLE scene is drawn as a stand-in for scene4 graphics.
+        if(state_.actor_script.awaiting_message){
+            GameFontBitmap text;const auto drawn=font_.RasterizeCp932({state_.actor_script.message},440,text);
+            if(!drawn){state_.status=drawn;state_.blocked=true;return false;}
+            if(!graphics.Clear(0xFF000000,0)||!graphics.DrawImage(text.pixels,text.width,text.height,20,30)||!graphics.SwapBuffers()){
+                state_.status={GameFsCode::Unavailable,0,"Native KSC message presentation failed"};state_.blocked=true;return false;
+            }
+        }
+        return bool(state_.status);
+    }
     state_.actor_dictionary_requested=true;
     const auto actor=state_.title.selected_actor;
     state_.frontier_pc=0x1AF20;
@@ -748,7 +771,17 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem){
         state_.actor_dictionary_ready=state_.actor_dictionary_live=true;++state_.opened_resources;
         state_.owned_bits=(state_.owned_bits&~(1u<<11))|(1u<<(actor+3));state_.completed_bits=state_.owned_bits;
         state_.load_state=6;
-        state_.status={GameFsCode::Unavailable,0,"Actual selected actor.dic borrowed after native scene4 mount/read;dictionary engine following1AF20 not implemented;no KSC execution"};
+        constexpr const char* scripts[]{"NEKO.KSC","ROBO.KSC","USAGI.KSC","INU.KSC","KAERU.KSC"};
+        state_.next_resource=std::string(mounts[actor])+"\\"+scripts[actor];
+        const auto script_image=actor_directory_.Open(scripts[actor]);
+        state_.frontier_pc=0x230EC;
+        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_);
+        state_.actor_script=actor_script_.Snapshot();
+        if(state_.status){
+            ++state_.opened_resources;state_.blocked=false;
+            if(!graphics.Clear(0xFF000000,0)||!graphics.SwapBuffers())throw std::runtime_error("Scene4 clear failed");
+            return true;
+        }
     }catch(const std::exception& e){state_.status={GameFsCode::MalformedDirectory,0,e.what()};}
     state_.blocked=true;return false;
 }
