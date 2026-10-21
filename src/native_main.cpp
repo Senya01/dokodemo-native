@@ -4214,6 +4214,9 @@ struct Application {
     bool activationBodySaved=false,activationFarewellSaved=false,activationPublished=false,activationPosted=false;
     bool activationHeldRefused=false;
     uint64_t activationWait=0;uint32_t activationChoicesAtPost=0;
+    dokodemo::script::VmStateWitness naturalLoopWait;
+    uint64_t naturalLoopGeneration=0;unsigned naturalLoopCycles=0;
+    bool naturalLoopPassed=false;
     bool post29ChoiceHeldRefused=false,post29ChoiceClosingObserved=false,post29NextHeldRefused=false;
     bool profileNoObserved=false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
@@ -4619,17 +4622,40 @@ struct Application {
                 }else if(post28AlternateStep==12&&c.returned_interaction.callback_returned){
                     save(L"activation-callback-return");post28AlternateStep=5;post28AlternateWait=phase+300;
                 }
-                // The next conversation is selected by the live game. Do not
-                // wait for the old V8 word-entry route or manufacture another
-                // input token from its later, unqualified farewell.
-                if(activationPosted&&a.choice_completions>activationChoicesAtPost
-                   &&a.farewell_return.sequence>domain.return_sequence
-                   &&!a.awaiting_message&&!a.awaiting_choice&&a.game28_queries>1
-                   &&a.last_service==28&&a.game28_result_word==0x10000000
-                   &&a.vm_current.code_entry==0x1383D&&a.vm_current.current_pc==0x13856){
-                    save(L"activation-source-producer-frontier");storageBoundaryPassed=false;
-                    PostMessageW(window,WM_CLOSE,0,0);return;
+                // Observe ordinary deadline expiry and re-entry, without a
+                // wake, event, game-state write or additional input token.
+                // last_service is historical and cannot diagnose a barrier.
+                const auto& v=a.vm_current;
+                const bool timedIdle=activationPosted&&c.returned_interaction.callback_returned
+                    &&a.choice_completions>activationChoicesAtPost
+                    &&a.farewell_return.sequence>domain.return_sequence
+                    &&!a.awaiting_message&&!a.awaiting_choice&&!a.awaiting_input
+                    &&!a.blocked&&!v.stopped&&!a.waiting_for_event
+                    &&v.valid&&v.context_registered&&!v.event_envelope_present
+                    &&v.code_entry==0x1383D&&v.current_pc==0x13856
+                    &&v.caller_entry==0x1387B&&v.caller_call_pc==0x138A5&&v.caller_return_pc==0x138A9
+                    &&v.relative_deadline23>0;
+                if(timedIdle){
+                    if(!naturalLoopWait.valid){
+                        naturalLoopWait=v;naturalLoopGeneration=a.generation;
+                        save(L"natural-wait-before");
+                    }else if(v.frame_id!=naturalLoopWait.frame_id&&v.executed>naturalLoopWait.executed
+                             &&v.clock_tick>=naturalLoopWait.deadline_tick){
+                        const bool sameOwner=a.generation==naturalLoopGeneration
+                            &&v.run_id==naturalLoopWait.run_id&&v.code_sha256==naturalLoopWait.code_sha256
+                            &&v.context_word==naturalLoopWait.context_word
+                            &&v.call_depth==naturalLoopWait.call_depth&&v.active_blocks==naturalLoopWait.active_blocks
+                            &&v.event_scope_depth==naturalLoopWait.event_scope_depth
+                            &&c.returned_interaction.event_posted&&c.returned_interaction.posted==1
+                            &&domain.consumed&&!c.returned_interaction.eligible&&!c.returned_interaction.armed;
+                        if(!sameOwner){save(L"natural-owner-mismatch");storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);return;}
+                        ++naturalLoopCycles;
+                        save(naturalLoopCycles==1?L"natural-loop-after":L"natural-idle");
+                        naturalLoopWait=v;post28AlternateWait=phase+300;
+                        if(naturalLoopCycles==2)naturalLoopPassed=true;
+                    }
                 }
+                if(naturalLoopPassed){storageBoundaryPassed=true;return;}
                 if(post28AlternateStep>=9){
                     if(phase>=activationWait+300){save(L"activation-next-frontier");storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);}
                     return;
@@ -5718,6 +5744,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"unfocused_ignored\":" << (app.unfocusedIgnored?"true":"false")
                 << ",\"natural_closing_observed\":" << (app.closingObserved?"true":"false")
                 << ",\"storage_boundary_passed\":" << (app.storageBoundaryPassed?"true":"false")
+                << ",\"natural_loop_cycles\":" << app.naturalLoopCycles
+                << ",\"natural_loop_passed\":" << (app.naturalLoopPassed?"true":"false")
                 << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
                 << ",\"softkey_window_test\":"<<(options.softkeyWindowTest?"true":"false")
                 << ",\"actor_window_test\":"<<(options.actorWindowTest?"true":"false")
@@ -5784,7 +5812,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;PreciseNextSourceProducerGap;NoOriginalCircleOrSceneClaim":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;NaturalDeadlineResumeAndRepeatedOwnedLoop;TimedIdle;NoSourceWakeOrTokenRearm;NotFullGame":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

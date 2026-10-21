@@ -8,6 +8,10 @@
 #include "game_post25_regressions.h"
 #include "game_returned_interaction_regressions.h"
 #include "game_conversation_activation_regressions.h"
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_natural_loop_regressions.h"
+#endif
 #include "game_input32_regressions.h"
 #include <algorithm>
 #include <fstream>
@@ -233,6 +237,11 @@ void Focused(){
     BitwiseOrAndWordObservationChecks();
     GameInput32RegressionChecks();
     GameConversationActivationRegressionChecks();
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameNaturalLoopRegressionChecks();
+#endif
+
     const std::array<int32_t,10> modes{{INT32_MIN,-1,0,1,2,3,4,5,6,INT32_MAX}};
     const std::array<int32_t,10> selectors{{0,0,0,1,2,3,3,2,0,0}};
     for(size_t n=0;n<modes.size();++n)
@@ -1043,5 +1052,8 @@ void Selected(const char* path,bool with_main_flow=false,bool after17=false,bool
 }
 }
 int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"||std::string(argv[1])=="--post17-data"||std::string(argv[1])=="--post19-data"))Selected(argv[2],std::string(argv[1])!="--selected-data",(std::string(argv[1])=="--post17-data"||std::string(argv[1])=="--post19-data"),std::string(argv[1])=="--post19-data");
+    #ifndef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+    std::cout<<"source-only build: original-byte fixture groups excluded; public synthetic cases executed\n";
+#endif
     std::cout<<"actor dictionary/native VM: trees,CP932,aliases,mutation,bounds,lifetime,frames/yield/errors PASS\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
