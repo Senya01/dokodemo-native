@@ -2,6 +2,7 @@
 #include "recovered/game_main_flow_native.h"
 #include "recovered/game_value_array_native.h"
 #include "game_choice_regressions.h"
+#include "game_message_scope_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -74,6 +75,32 @@ std::vector<uint8_t> Dictionary(){
 }
 void Focused(){
     GameChoiceRegressionChecks();
+    GameMessageScopeRegressionChecks();
+    {auto program=Fixture({0x30,1,0x90,0,0,0x70,0x38});script::Vm strict(program);strict.start();
+        Check(strict.run().status==script::Status::Stopped,"standalone probe keeps unspecified frame slot Unknown");
+        script::Vm owned(program);owned.native_reserved_local_nil(true);owned.start();
+        Check(owned.run().status==script::Status::Complete&&owned.result().word==0,"named owning reserved-local policy initializes optional accumulator to nil");
+        script::Vm missing_argument(program);missing_argument.native_reserved_local_nil(true);missing_argument.start({script::Value{}});
+        Check(missing_argument.run().status==script::Status::Stopped,"native local policy never rewrites provided Unknown arguments");
+    }
+    {std::vector<uint32_t> cells(22,0x20000000);cells[0]=0x90000001;cells[1]=0xB0000002;cells[2]=0x90000013;
+        auto program=Fixture({0x30,0,0x38},cells);script::Vm typed(program);typed.start();
+        auto bytes=Dictionary();bytes.resize(98,0);Word(bytes,8,0x90000013);
+        for(uint32_t field=0;field<19;++field)Word(bytes,12+4*field,0x20000000);
+        Word(bytes,16,0x60000058);Word(bytes,20,0x6000005D);
+        const uint8_t names[]{0x83,0x6C,0x83,0x52,0,0x82,0xCB,0x82,0xB1,0};
+        std::copy(std::begin(names),std::end(names),bytes.begin()+88);
+        Lease backing(std::move(bytes));GameActorDictionary records;script::Value root;root.kind=script::Value::Kind::Reference;root.table=script::Table::Global;
+        Check(bool(records.Attach(backing.View()))&&bool(records.Import(typed,root)),"19-field live record import owns its strings");
+        records.Capture(typed);const auto before=records.Snapshot().current_records.at(0);
+        const auto row=typed.load_reference(typed.indexed_reference(root,0));
+        typed.store_reference(typed.indexed_reference(row,14),script::Value::integer(8));
+        typed.store_reference(typed.indexed_reference(row,15),script::Value::integer(16));
+        backing.live=false;records.Capture(typed);const auto after=records.Snapshot().current_records.at(0);
+        Check(before.numeric==after.numeric&&before.fields14_15==std::array<uint32_t,2>{{0x20000000,0x20000000}}
+            &&after.fields14_15==std::array<uint32_t,2>{{0x20000008,0x20000010}}&&after.written==before.written,
+            "six diagnostic fields can be unchanged while two live bit fields change after source lease retirement");
+    }
     auto choice_program=Fixture({0x30,0,0x8E,'a',0,0x8E,'b',0,0x8B,0x21,2,0x31});
     script::Vm choice_vm(choice_program);Check(choice_vm.start().status==script::Status::Running,"choice fixture entry");
     const auto choice_event=choice_vm.run(20);
@@ -89,6 +116,27 @@ void Focused(){
     Check(choice_vm.run(20).status==script::Status::Complete,"caller resumes only after choice result");
     auto complement_program=Fixture({0x30,0,0x80,2,0xB4,0x70,0x31});script::Vm complement(complement_program);complement.start();
     Check(complement.run().status==script::Status::Complete&&complement.result().word==0x2FFFFFFD,"B4 source integer bitwise complement retains tag2,not truth");
+    for(const auto sample:std::array<std::array<int32_t,3>,6>{{{{8,1,4}},{{-8,1,-4}},{{-1,31,-1}},{{8,32,8}},{{16,-31,8}},{{-8,0,-8}}}}){
+        auto program=Fixture({0x30,2,0x80,9,0x70,0x90,0,0,0x90,1,0,0xE2,0x38});
+        script::Vm shifted(program);shifted.start({script::Value::integer(sample[0]),script::Value::integer(sample[1])});
+        const auto event=shifted.run();
+        Check(event.status==script::Status::Complete&&shifted.stack().size()==1&&shifted.stack().back().signed_integer()==sample[2]
+            &&shifted.result().word==0x20000009&&shifted.e2_calls()==1,"E2 signed SRAV/count low5/netSP-1/result30 unchanged");
+    }
+    {auto program=Fixture({0x30,0,0x8E,'x',0,0x80,1,0xE2,0x38});script::Vm refused(program);refused.start();
+        const auto stop=refused.run();Check(stop.status==script::Status::Stopped&&stop.opcode==0xE2&&refused.e2_calls()==0,"E2 unknown owned conversion refuses explicitly,not raw pointer/scalar fallback");}
+    for(const auto sample:std::array<std::array<int32_t,3>,4>{{{{7,6,42}},{{-7,6,-42}},{{-7,-6,42}},{{0x07FFFFFF,2,-2}}}}){
+        auto program=Fixture({0x30,2,0x80,9,0x70,0x90,0,0,0x90,1,0,0xD0,0x38});script::Vm multiplied(program);
+        multiplied.start({script::Value::integer(sample[0]),script::Value::integer(sample[1])});
+        Check(multiplied.run().status==script::Status::Complete&&multiplied.stack().size()==1&&multiplied.stack().back().signed_integer()==sample[2]
+            &&multiplied.result().word==0x20000009&&multiplied.d0_calls()==1,"D0 low28 signed product/netSP-1/result30 preserved without host overflow");
+    }
+    {auto program=Fixture({0x30,0,0x80,7,0x84,0xD0,0x38});script::Vm right_nil(program);right_nil.start();
+        Check(right_nil.run().status==script::Status::Complete&&right_nil.stack().back().word==0,"D0 RIGHT nil clears LEFT to nil,not integer0");}
+    {auto program=Fixture({0x30,0,0x84,0x80,7,0xD0,0x38});script::Vm left_nil(program);left_nil.start();
+        Check(left_nil.run().status==script::Status::Complete&&left_nil.stack().back().word==0x20000000,"D0 LEFT nil numeric multiplication produces integer0");}
+    {auto program=Fixture({0x30,0,0x8E,'x',0,0x80,1,0xD0,0x38});script::Vm refused(program);refused.start();
+        Check(refused.run().status==script::Status::Stopped&&refused.d0_calls()==0,"D0 unknown owned multiplication conversion remains explicit refusal");}
     auto indirect_args_program=Fixture({0x30,0,0x80,7,0x8A,18,0,0,0x80,2,0x80,3,0x22,2,0x89,0xE0,0x70,0x31,
         0x30,2,0x90,0,0,0x90,1,0,0xE0,0x70,0x31});
     script::Vm indirect_args(indirect_args_program);indirect_args.start();
@@ -437,13 +485,21 @@ void Focused(){
     auto raw_not=Fixture({0x30,0,0x80,0xFF,0xB1,0x70,0x38});script::Vm negate(raw_not);negate.start();
     Check(negate.run().status==script::Status::Complete&&negate.result().word==0x10000000,"B1 tests raw nonzero payload of negative integer");
 }
-void Selected(const char* path,bool with_main_flow=false,bool after17=false){
+void Selected(const char* path,bool with_main_flow=false,bool after17=false,bool after19=false){
     // Optional new-engine diagnostic,not connected-game proof. Exactly the
     // already source-selected package is read;no extraction or ISO bootstrap.
     std::ifstream f(path,std::ios::binary);Check(bool(f),"DATA.BP open");
     std::vector<uint8_t> package(1058560);f.seekg(34031616);f.read(reinterpret_cast<char*>(package.data()),package.size());
     Check(bool(f),"selected package full read");Lease lease(std::move(package));
     const auto directory=BpDirectory::Parse(lease.View(),lease.bytes.size());
+    if(after19){
+        const auto image=directory.Open("NEKO.KSC");
+        std::cout<<"ROOT_KSC_HEADER ";for(uint32_t i=0;i<28;++i){const auto byte=image.ReadU8(i);std::cout<<"0123456789abcdef"[byte>>4]<<"0123456789abcdef"[byte&15];}std::cout<<'\n';
+        for(const auto window:std::array<std::pair<uint32_t,uint32_t>,7>{{{0x1820,0x140},{0xA7D0,0x160},{0xABB0,0xC0},{0x84E80,0xC0},{0xAC6F,384},{0xAB00,176},{0x85F0,384}}}){
+            std::cout<<"ROOT_KSC_WINDOW pc="<<std::hex<<window.first<<std::dec<<" bytes="<<window.second<<" hex=";
+            for(uint32_t i=0;i<window.second;++i){const auto byte=image.ReadU8(28+window.first+i);std::cout<<"0123456789abcdef"[byte>>4]<<"0123456789abcdef"[byte&15];}std::cout<<'\n';
+        }
+    }
     GameProfileRecord profile;profile.live=true;profile.actor=0;profile.nickname="Toro";profile.player="Sen";
     profile.comment="test";profile.gender=1;profile.date=0x01261021;profile.blood=2;profile.calendar={3,0,0,12,21,10,2026};
     RngNativeOwner rng;rng.ApplyInitializerTimeT32(1,1,"Explicit diagnostic RNG fixture,not actual connected game seed");
@@ -722,6 +778,71 @@ void Selected(const char* path,bool with_main_flow=false,bool after17=false){
                         "fixed selected-data route must reach actual response19/actor51 through finite integer B4,not timeout/anotherchoice/quota");break;
                 }
             }
+            if(after19){
+                const auto target19=game.MessageTarget();GameMessageInput fresh19;fresh19.Begin(19,target19.generation);
+                Check(!fresh19.Observe({Circle,true,true,1,0,19,target19.generation}),"reply19 rejects held choice-confirm edge");
+                Check(!fresh19.Observe({0,true,true,2,0,18,target19.generation}),"old queued context cannot arm19");
+                Check(!fresh19.Observe({Circle,false,true,3,0,19,target19.generation})&&!fresh19.Observe({Circle,true,true,4,0,19,target19.generation}),"reply19 refocused-held refuses");
+                Check(!fresh19.Observe({0,true,true,5,0,19,target19.generation})&&fresh19.Observe({Circle,true,true,6,0,19,target19.generation})
+                    &&game.AcknowledgeMessage(&target19),"reply19 separate fresh edge bound to live owner");
+                for(unsigned phase=0;phase<5000;++phase){const auto status=tick_game();const auto next19=game.Snapshot();
+                    if(!status||next19.awaiting_message||next19.awaiting_choice||phase==4999){
+                        std::cout<<"AFTER19 pc="<<std::hex<<next19.pc<<std::dec<<" service="<<next19.last_service<<" messages="<<next19.messages<<" ack="<<next19.message_acknowledgements
+                            <<" command="<<next19.runtime.requested_command<<" callback="<<next19.callbacks_returned<<" depth="<<next19.call_depth<<" operands="<<next19.operand_count
+                            <<" wait="<<next19.waiting_for_event<<" deadline="<<next19.deadline_tick<<" detail="<<status.detail<<" text=";
+                        for(unsigned char b:next19.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+                        Check(bool(status)&&next19.awaiting_message&&next19.messages==20&&next19.message_acknowledgements==19&&next19.pc==0x84ED5&&next19.runtime.requested_command==39,
+                            "fixed post19 fixture must reach actual20/39,not old19/quota/unsupported success");break;
+                    }
+                }
+                for(unsigned expected_message=20;expected_message<=25&&game.Snapshot().awaiting_message;++expected_message){
+                    const auto current_target=game.MessageTarget();GameMessageInput edge;edge.Begin(expected_message,current_target.generation);
+                    Check(!edge.Observe({Circle,true,true,1,0,expected_message,current_target.generation})
+                        &&!edge.Observe({0,true,true,2,0,expected_message-1,current_target.generation}),"each following context rejects held and old queued input");
+                    Check(!edge.Observe({0,true,true,3,0,expected_message,current_target.generation})
+                        &&edge.Observe({Circle,true,true,4,0,expected_message,current_target.generation})&&game.AcknowledgeMessage(&current_target),"separate explicit fixture edge for current message");
+                    for(unsigned phase=0;phase<5000;++phase){const auto status=tick_game();const auto next_step=game.Snapshot();
+                        if(!status||next_step.awaiting_message||next_step.awaiting_choice||phase==4999){
+                            std::cout<<"FOLLOW"<<expected_message<<" pc="<<std::hex<<next_step.pc<<std::dec<<" service="<<next_step.last_service<<" messages="<<next_step.messages<<" ack="<<next_step.message_acknowledgements
+                                <<" command="<<next_step.runtime.requested_command<<" callback="<<next_step.callbacks_returned<<" depth="<<next_step.call_depth<<" options="<<next_step.choice_options.size()
+                                <<" wait="<<next_step.waiting_for_event<<" deadline="<<next_step.deadline_tick<<" detail="<<status.detail<<" text=";
+                            for(unsigned char b:next_step.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+                            Check(bool(status)&&(next_step.awaiting_message||next_step.awaiting_choice),"actual next consumer required,quota is failure");
+                            if(expected_message==20)Check(next_step.awaiting_message&&next_step.messages==21&&next_step.message_acknowledgements==20&&next_step.pc==0xABE9&&next_step.runtime.requested_command==41,"fixed second original question/actor41");
+                            if(expected_message==21)Check(next_step.awaiting_choice&&next_step.choice_requests==2&&next_step.messages==21&&next_step.message_acknowledgements==21,"fresh21 reaches second actual SELECT");break;
+                        }
+                    }
+                }
+                const auto observed_dictionary=game.Snapshot().dictionary;
+                constexpr uint32_t observed_fields[]{0,5,6,7,8,17};uint32_t net_changes=0;
+                for(size_t row=0;row<observed_dictionary.current_records.size();++row){
+                    const auto& before_row=choice_state.dictionary.current_records.at(row);const auto& after_row=observed_dictionary.current_records[row];
+                    for(size_t field=0;field<6;++field)if(before_row.numeric[field]!=after_row.numeric[field]){
+                        ++net_changes;std::cout<<"DIC_DELTA row="<<row<<" field="<<observed_fields[field]<<" before="<<std::hex<<before_row.numeric[field]<<" after="<<after_row.numeric[field]<<std::dec<<'\n';
+                    }
+                }
+                std::cout<<"DIC_NET captured6fields="<<net_changes<<" actualWrites="<<game.Snapshot().dictionary_game_writes-choice_state.dictionary_game_writes<<'\n';
+                uint32_t bit_changes=0;
+                for(size_t row=0;row<observed_dictionary.current_records.size();++row)for(size_t field=0;field<2;++field){
+                    const auto before=choice_state.dictionary.current_records.at(row).fields14_15[field],current_bits=observed_dictionary.current_records[row].fields14_15[field];
+                    if(before!=current_bits){++bit_changes;std::cout<<"DIC_BIT_DELTA row="<<row<<" field="<<14+field<<" before="<<std::hex<<before<<" after="<<current_bits<<std::dec<<'\n';}
+                }
+                Check(net_changes==0&&bit_changes==2,"fixed first response changes two captured bit fields,not the six historical fields");
+                if(game.Snapshot().awaiting_choice){
+                    const auto second_target=game.ChoiceTarget();const auto second_before=game.Snapshot();
+                    GameChoiceController second_choice;Check(second_choice.Begin(second_before.choice_options,40,second_target.generation),"second actual query owns a new SELECT context");
+                    second_choice.Tick(2);second_choice.Input({0,true,true,1,0,40,second_target.generation});second_choice.Tick(2);
+                    second_choice.Input({Circle,true,true,2,0,40,second_target.generation});second_choice.Tick(2);second_choice.Tick(2);
+                    Check(second_choice.Snapshot().state==3&&bool(game.CompleteChoice(second_target,second_choice.Snapshot().result)),"second query first answer publishes only after explicit close");
+                    for(unsigned phase=0;phase<5000;++phase){const auto status=tick_game();const auto returned=game.Snapshot();
+                        if(!status||returned.awaiting_message||returned.awaiting_choice||phase==4999){
+                            std::cout<<"SECOND_ANSWER pc="<<std::hex<<returned.pc<<std::dec<<" service="<<returned.last_service<<" messages="<<returned.messages<<" ack="<<returned.message_acknowledgements<<" command="<<returned.runtime.requested_command<<" detail="<<status.detail<<" text=";
+                            for(unsigned char b:returned.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+                            Check(bool(status)&&returned.awaiting_message&&returned.messages==22&&returned.message_acknowledgements==21&&returned.pc==0xA86A&&returned.runtime.requested_command==69&&returned.choice_result_word==0x20000001,"fixed second answer actual22/69/result1 required,quota fails");break;
+                        }
+                    }
+                }
+            }
         }
         route.Close();Check(!route.Input({0,true,false,109,generation})&&!route.Input({Circle,true,false,110,generation}),"retired native interaction rejects lateinput");
         main_flow.Close();
@@ -741,6 +862,6 @@ void Selected(const char* path,bool with_main_flow=false,bool after17=false){
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");
 }
 }
-int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"||std::string(argv[1])=="--post17-data"))Selected(argv[2],std::string(argv[1])!="--selected-data",std::string(argv[1])=="--post17-data");
+int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"||std::string(argv[1])=="--post17-data"||std::string(argv[1])=="--post19-data"))Selected(argv[2],std::string(argv[1])!="--selected-data",(std::string(argv[1])=="--post17-data"||std::string(argv[1])=="--post19-data"),std::string(argv[1])=="--post19-data");
     std::cout<<"actor dictionary/native VM: trees,CP932,aliases,mutation,bounds,lifetime,frames/yield/errors PASS\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -7,6 +7,9 @@ struct GameActorDictionaryRecordState {
     uint32_t index=0;
     // Field0/5/6/7/8/17: logical numeric tag words,not PSP pointers.
     std::array<uint32_t,6> numeric{};
+    // Reached A8A2 helpers mutate these bit fields. Retain exact tagged words;
+    // this is separate from the six historical numeric diagnostic fields.
+    std::array<uint32_t,2> fields14_15{};
     std::string written,reading;
 };
 struct GameActorDictionarySnapshot {

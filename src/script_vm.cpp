@@ -484,6 +484,8 @@ Event Vm::start(const std::vector<Value>& arguments) { return start_at(program_.
 Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     choice_arguments_.clear();choice_waiting_=choice_arguments_taken_=false;choice_count_=0;
     b4_calls_=b4_operand_word_=b4_result_word_=0;
+    e2_calls_=e2_left_word_=e2_right_word_=e2_result_word_=0;
+    d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
     calls_.clear(); result_ = {}; executed_ = 0;
@@ -585,7 +587,15 @@ Event Vm::step() {
             if (frame_reserved_) return stop(cmd, "Nested frame ABI unsupported");
             uint32_t count = program_.operand(*cmd, 1, 1);
             if (frame_->size() > count) return stop(cmd, "Caller argument count exceeds reserved frame");
-            frame_->resize(count); frame_reserved_ = true;
+            const auto arguments=frame_->size();frame_->resize(count);
+            if(native_reserved_local_nil_){
+                // NativeOwnedReservedLocalsNil: source30 reserves cells but
+                // does not initialize them in its body. KSC85D7 uses local4
+                // as an optional accumulator and can return it untouched.
+                // Original persistent-stack clear history remains unclosed.
+                for(size_t i=arguments;i<count;++i)(*frame_)[i].kind=Value::Kind::Scalar;
+            }
+            frame_reserved_ = true;
         } else if(op==0x20||op==0x21||op==0x22||op==0x23) {
             const auto argc=(op==0x20||op==0x22)?program_.operand(*cmd,1,1):0;
             uint32_t target=0;
@@ -698,7 +708,7 @@ Event Vm::step() {
                 if (table == Table::Frame) value.frame_owner = frame_;
             } else {
                 value = read_slot(table, index);
-                if (!usable(value)) return stop(cmd, "Uninitialized/opaque runtime slot; caller argument or service required");
+                if (!usable(value)) return stop(cmd, "Uninitialized/opaque runtime slot; table="+std::to_string(uint32_t(table))+"; index="+std::to_string(index)+"; frame_cells="+std::to_string(frame_->size())+"; caller_return="+std::to_string(calls_.empty()?0:calls_.back().return_pc)+"; caller argument or service required");
             }
             stack_.push_back(std::move(value));
         } else if (op == 0x50 || op == 0x51) {
@@ -877,6 +887,28 @@ Event Vm::step() {
             if(op==0xD1||op==0xD2) {if(!rhs)throw std::runtime_error("Script division by zero");n=op==0xD1?int64_t(lhs)/rhs:int64_t(lhs)%rhs;}
             else n=op==0xD4?uint32_t(lhs)&uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
             stack_.push_back(Value::integer(int32_t(uint32_t(n)&0x0FFFFFFF)));
+        } else if(op==0xD0) {
+            //72C24 ->75EC0: owned LEFT/RIGHT temporaries. Numeric signed
+            // MULT/MFLO at75F80/75F9C yields tag2 low28. A nil RIGHT clears
+            // LEFT to nil; a nil LEFT with numeric RIGHT multiplies as zero.
+            const auto right=pop(),left=pop();
+            const auto scalar=[](const Value& v){return (v.kind==Value::Kind::Scalar||v.kind==Value::Kind::Timestamp)&&v.word>>28<=3;};
+            if(!scalar(left)||!scalar(right))throw std::runtime_error("D0 multiplication conversion outside finite scalar domain");
+            Value answer;answer.kind=Value::Kind::Scalar;
+            if(right.word>>28)answer=Value::integer(int32_t(uint32_t(int64_t(numeric(left))*numeric(right))&0x0FFFFFFF));
+            d0_left_word_=left.word;d0_right_word_=right.word;d0_result_word_=answer.word;++d0_calls_;
+            stack_.push_back(answer);
+        } else if(op==0xE2) {
+            // E0540 ->73C74. Source73D5C SRAV: signed LEFT shifted by
+            // RIGHT&31, then low28 tagged as integer. Retain finite numeric
+            // conversions only; vector/string/opaque conversion stays refused.
+            const auto right=pop(),left=pop();
+            const auto shift=uint32_t(numeric(right))&31;const auto value=numeric(left);
+            uint32_t bits=uint32_t(value)>>shift;
+            if(value<0&&shift)bits|=UINT32_MAX<<(32-shift);
+            const auto answer=Value::integer(int32_t(bits&0x0FFFFFFF));
+            e2_left_word_=left.word;e2_right_word_=right.word;e2_result_word_=answer.word;++e2_calls_;
+            stack_.push_back(answer);
         } else if(op==0xE1) {
             // Reached73BD0 ->75C18: binary subtraction. Tag3 minute values
             // retain tag3;scalar-domain subtraction stores tag2. Source nil

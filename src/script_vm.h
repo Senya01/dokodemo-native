@@ -151,6 +151,11 @@ public:
     uint32_t display_state() const { return display_state_; }
     uint16_t display_count() const { return display_count_; }
     bool stopped() const { return stopped_; }
+    // Windows owning-frame policy, explicitly enabled by GameActorScript.
+    // Only additional RESERVED locals get canonical nil. Provided arguments,
+    // including Unknown/opaque values, are never rewritten. Probes stay strict.
+    void native_reserved_local_nil(bool enabled) noexcept { native_reserved_local_nil_=enabled; }
+    bool native_reserved_local_nil() const noexcept { return native_reserved_local_nil_; }
     Value read_slot(Table table, uint16_t index) const;
     Value load_reference(const Value& reference) const;
     Value peek_reference(const Value& reference) const; // diagnostic capture;not an executed read
@@ -182,6 +187,14 @@ public:
     uint32_t b4_calls()const noexcept{return b4_calls_;}
     uint32_t b4_operand_word()const noexcept{return b4_operand_word_;}
     uint32_t b4_result_word()const noexcept{return b4_result_word_;}
+    uint32_t e2_calls()const noexcept{return e2_calls_;}
+    uint32_t e2_left_word()const noexcept{return e2_left_word_;}
+    uint32_t e2_right_word()const noexcept{return e2_right_word_;}
+    uint32_t e2_result_word()const noexcept{return e2_result_word_;}
+    uint32_t d0_calls()const noexcept{return d0_calls_;}
+    uint32_t d0_left_word()const noexcept{return d0_left_word_;}
+    uint32_t d0_right_word()const noexcept{return d0_right_word_;}
+    uint32_t d0_result_word()const noexcept{return d0_result_word_;}
     // Named native modal scheduler adapter. Called only after actual GUI close,
     // poll completion and teardown;original byte38 wake producer is unclosed.
     void resume_modal_context();
@@ -256,11 +269,14 @@ private:
     bool choice_waiting_=false,choice_arguments_taken_=false;
     uint32_t choice_count_=0;
     uint32_t b4_calls_=0,b4_operand_word_=0,b4_result_word_=0;
+    uint32_t e2_calls_=0,e2_left_word_=0,e2_right_word_=0,e2_result_word_=0;
+    uint32_t d0_calls_=0,d0_left_word_=0,d0_right_word_=0,d0_result_word_=0;
     uint64_t executed_ = 0;
     uint64_t clock_tick_ = 0, timer_base_ = 0, wait_until_ = 0;
     uint32_t pc_ = 0, display_state_ = 0;
     uint16_t display_count_ = 0;
     bool stopped_ = true, frame_reserved_ = false;
+    bool native_reserved_local_nil_ = false;
     Diagnostic last_error_;
     Value decode(uint32_t word) const;
     std::vector<Value>& slots(Table table);

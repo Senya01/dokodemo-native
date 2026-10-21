@@ -48,6 +48,9 @@ struct GameActorScriptSnapshot {
     bool source_main_input_suppressed48=false;
     uint32_t choice_requests=0,choice_completions=0,choice_result_word=0;
     uint32_t b4_calls=0,b4_operand_word=0,b4_result_word=0;
+    uint32_t e2_calls=0,e2_left_word=0,e2_right_word=0,e2_result_word=0;
+    uint32_t d0_calls=0,d0_left_word=0,d0_right_word=0,d0_result_word=0;
+    bool native_reserved_local_nil=false;
     std::vector<std::string> choice_options;
     uint32_t string_replace_calls=0;
     std::string last_replacement;

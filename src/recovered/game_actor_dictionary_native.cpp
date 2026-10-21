@@ -128,6 +128,7 @@ void GameActorDictionary::Capture(script::Vm& vm) {
         const auto at=[&](uint32_t n){auto value=ref;value.index=uint16_t(uint32_t(value.index)+1+n);return vm.peek_reference(value);};
         constexpr uint32_t fields[]{0,5,6,7,8,17};
         for(uint32_t n=0;n<6;++n)row.numeric[n]=at(fields[n]).word;
+        row.fields14_15={{at(14).word,at(15).word}};
         row.written=at(1).cp932;row.reading=at(2).cp932;rows.push_back(std::move(row));
     }
     state_.current_records=std::move(rows);
