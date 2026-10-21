@@ -132,7 +132,8 @@ class Vm {
 public:
     explicit Vm(const Program& program) : program_(program) {}
     // No default argument values are invented. Unprovided slots are Unknown.
-    // Startup argument ABI/caller is not recovered; start is a restricted probe.
+    // GameActorScript supplies the recovered230EC/67FD4 argc2 caller. Other
+    // standalone probes must explicitly provide their own admitted arguments.
     Event start(const std::vector<Value>& arguments = {});
     // Isolated original function fixture, NOT a normal gameplay entry point.
     Event start_at(uint32_t code_pc, const std::vector<Value>& arguments);
@@ -155,6 +156,7 @@ public:
     const Value& result() const noexcept { return result_; }
     void access_observer(std::function<void(const Value&,bool)> callback) { access_ = std::move(callback); }
     uint64_t executed() const noexcept { return executed_; }
+    uint32_t call_depth() const noexcept { return uint32_t(calls_.size()); }
     void clock_tick(uint64_t value) noexcept { clock_tick_ = value; }
     void random_source(std::function<uint32_t()> callback){random_=std::move(callback);}
     uint64_t random_selections() const noexcept{return random_selections_;}

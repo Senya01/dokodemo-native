@@ -1349,12 +1349,16 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         game_content.SetNativeTitleLayout(options.native_title_layout);
         game_content.SetTitleRng(game_rng);
         game_content.SetCalendar(state.game_boot.calendar_words);
-        game_content.SetActorClock([]{
+        game_content.SetActorClock([this]{
             platform::WindowsRngInitializationSample current;
             if(!platform::CaptureWindowsRngInitialization(current))throw std::runtime_error("Native KSC Windows local RTC read failed");
             // Named Windows local civil-clock adaptation. The source cache
             // getter already receives shifted ticks;no second +9h is applied.
-            return recovered::ClockWord689B8(current.conversion.local_tick_us);
+            const auto word=recovered::ClockWord689B8(current.conversion.local_tick_us);
+            if(options.test_controller_input&&options.test_actor_calendar_step_minutes
+               &&game_content.Snapshot().actor_script.intro_clock_origin)
+                return (word&0xF0000000u)|((word+options.test_actor_calendar_step_minutes)&0x0FFFFFFFu);
+            return word;
         });
         const auto scene_status=game_content.InitializeSceneResources(*this);
         if(!scene_status) {
@@ -1917,6 +1921,10 @@ StartupCoordinator::~StartupCoordinator() {
 std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRuntimeOptions& options,
                                                              StartupRuntimeStatus& status) {
     status = {};
+    if(options.test_actor_calendar_step_minutes
+       &&(!options.test_controller_input||options.test_actor_calendar_step_minutes!=5)) {
+        status=Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_PARAMETER);return {};
+    }
     // Allocate the RAII coordinator BEFORE acquiring any native resources.
     auto owner = std::unique_ptr<StartupCoordinator>(
         new StartupCoordinator(std::make_unique<Impl>(options)));

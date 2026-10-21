@@ -6,6 +6,9 @@
 #include <map>
 
 namespace dokodemo::recovered {
+//6A350/7BF18 reached string-only ABI. Bytewise,nonoverlapping replacement;
+//empty needle is refused (original explicitly traps),result owns its bytes.
+script::Value GameStringReplace51(const std::vector<script::Value>&);
 struct GameActorScriptSnapshot {
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
     bool autoload_imported=false,profile_loaded_marker=false,manager_flag68=false;
@@ -24,10 +27,15 @@ struct GameActorScriptSnapshot {
     uint32_t game28_queries=0,game28_result_word=0;
     uint32_t camera_setter_returns=0,camera_setter_result_word=0;
     uint32_t local_config_writes=0,message_acknowledgements=0;
+    uint32_t string_replace_calls=0;
+    std::string last_replacement;
+    std::vector<std::string> replacement_results;
+    uint32_t call_depth=0;
     std::array<uint32_t,5> message_local_words{};
     std::array<uint32_t,3> intro_caller_words{};
     uint32_t clock_calls=0,last_clock_word=0,intro_clock_origin=0,intro_clock_expired=0;
     std::vector<std::string> message_history;
+    std::vector<uint32_t> message_pcs,message_actor_commands;
     int32_t scene_period=-1;
     uint32_t dictionary_game_reads=0,dictionary_game_writes=0;
     uint32_t array_query_calls=0,array_query_matches=0,array_actions=0;

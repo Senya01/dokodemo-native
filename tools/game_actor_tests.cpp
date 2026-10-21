@@ -70,6 +70,16 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    const auto replace=[](std::string source,std::string needle,std::string value){return GameStringReplace51({script::Value::string(source),script::Value::string(needle),script::Value::string(value)});};
+    Check(replace("aaaaa","aa","b").cp932=="bba","51 advances past nonoverlapping source match");
+    Check(replace("x/x","x","xx").cp932=="xx/xx","51 doesnot search newly inserted replacement");
+    Check(replace("no match","absent","ignored").cp932=="no match"&&replace("delete","delete","").cp932.empty(),"51 owned unchanged and deletion results");
+    const std::string cp932="\x83\x67\x83\x8D";
+    auto owned=replace("$_WORD/$_WORD","$_WORD",cp932);Check(owned.word>>28==6&&owned.cp932==cp932+"/"+cp932,"51 preserves raw multibyte replacement and owned tag");
+    bool empty_refused=false;try{(void)replace("text","","value");}catch(const std::exception&){empty_refused=true;}
+    Check(empty_refused,"51 explicit empty-needle trap refused,not identity success");
+    bool budget_refused=false;try{(void)replace(std::string(1024*1024,'x'),"x","xx");}catch(const std::exception&){budget_refused=true;}
+    Check(budget_refused&&owned.cp932==cp932+"/"+cp932,"51 allocation bound error preserves other owned result");
     // Actual relocation-backed scene clock row0 at VA E45C8. Assert each
     // boundary independently,including the early interval's special result5.
     const std::array<int16_t,12> clock_row0{{0,0,4,0,6,0,10,0,15,30,18,0}};
@@ -352,7 +362,32 @@ void Selected(const char* path){
     for(unsigned i=0;i<600;++i){Check(bool(game.Tick()),"actualcallback continues aftermessageack");if(game.Snapshot().messages==2)break;}
     const auto next=game.Snapshot();Check(next.messages==2&&next.awaiting_message&&next.message_acknowledgements==1&&!next.blocked,
         "actualKSC nextmessage/result afteroneack,not oldGAME44 failure oracle");
+    const std::vector<uint32_t> message_pcs{0x7BC93,0x7BCB0,0x7BCDE,0x7BCF3,0x7BD1D,0x7BD42,0x7BD69,0x7BD95,0x7BDBC,0x7BEF0,0x7BF0F,0x89297,0x892A7,0x892C1,0x892E3};
+    const std::vector<uint32_t> actor_commands{42,42,60,60,39,39,38,43,43,42,35,20,42,42,38};
+    const auto second_steps=next.instructions;
+    for(unsigned i=0;i<12;++i)Check(bool(game.Tick()),"second context pumps live owners without input");
+    Check(game.Snapshot().messages==2&&game.Snapshot().instructions==second_steps,"no hidden acknowledgement of second message");
+    //Exactly thirteen separately requested diagnostic edges,one per known
+    //actual context;this loop belongs to the test,never normal gameplay.
+    for(unsigned message=2;message<15;++message){
+        Check(game.Snapshot().awaiting_message&&game.Snapshot().messages==message,"separate actual message context");
+        Check(game.AcknowledgeMessage()&&!game.AcknowledgeMessage(),"one edge cannot acknowledge a second context before it exists");
+        for(unsigned i=0;i<2000;++i){const auto status=game.Tick();Check(bool(status),status.detail.c_str());if(game.Snapshot().awaiting_message)break;}
+        const auto current=game.Snapshot();
+        Check(current.awaiting_message&&current.messages==message+1&&current.message_acknowledgements==message,"bounded actual conversation continues after fresh edge");
+        Check(current.pc==message_pcs.at(message)&&current.runtime.requested_command==int32_t(actor_commands.at(message)),"actual callback branch and source-selected actor command");
+    }
+    const auto gift=game.Snapshot();
+    Check(gift.message_pcs==message_pcs&&gift.message_actor_commands==actor_commands,"all actual messages retain ordered PCs and actor consumers");
+    Check(gift.string_replace_calls==2&&gift.replacement_results.size()==2
+          &&gift.replacement_results[0]==std::string("Toro\x82\xCC\x83\x56\x81\x5B\x83\x8B")
+          &&gift.last_replacement.find("$_WORD")==std::string::npos&&gift.last_replacement.find("Toro")!=std::string::npos,
+          "real51 result is owned,dynamically expanded into item record,not a forced builtin return");
+    Check(!gift.blocked&&!gift.runtime.command_blocked&&gift.call_depth>0&&gift.message_acknowledgements==14,
+          "introduction callback returns into actual gift function with live frame and input wait");
+    std::cout<<"actual conversation15 messages14 acknowledgements,51results="<<gift.string_replace_calls<<" depth="<<gift.call_depth<<" PASS\n";
     game.Close();runtime.Close();transition.Retire();lease.live=false;
+    Check(!game.AcknowledgeMessage(),"retired script rejects stale message acknowledgement");
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");
 }

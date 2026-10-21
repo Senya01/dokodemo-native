@@ -17,6 +17,21 @@ int32_t Number(const Value& value) {
     const auto p=value.word&0x0FFFFFFF;return int32_t(p&0x08000000?p|0xF0000000:p);
 }
 }
+script::Value GameStringReplace51(const std::vector<script::Value>& args) {
+    Need(args.size()==3,"Builtin51 requires source,needle,replacement");
+    for(const auto& arg:args)Need(arg.kind==Value::Kind::String,"Builtin51 reached string-only conversion domain");
+    const auto& source=args[0].cp932;const auto& needle=args[1].cp932;const auto& replacement=args[2].cp932;
+    Need(!needle.empty(),"Builtin51 empty needle: original7BF78 traps");
+    constexpr size_t budget=1024*1024;
+    Need(source.size()<=budget&&replacement.size()<=budget,"Builtin51 native owned-string budget");
+    std::string result;size_t at=0;
+    const auto append=[&](std::string_view part){Need(part.size()<=budget-result.size(),"Builtin51 result budget");result.append(part);};
+    for(;;){const auto match=source.find(needle,at);
+        if(match==std::string::npos){append(std::string_view(source).substr(at));break;}
+        append(std::string_view(source).substr(at,match-at));append(replacement);at=match+needle.size();
+    }
+    return Value::string(std::move(result));
+}
 GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView image,std::string path,
                                         const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime) {
     Close();state_={};
@@ -204,6 +219,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
 Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     ++state_.builtin_calls;
     if(id==0xF0)return GameService(args);
+    if(id==0x51){auto value=GameStringReplace51(args);++state_.string_replace_calls;state_.last_replacement=value.cp932;state_.replacement_results.push_back(value.cp932);return value;}
     if(id==1){Need(args.size()==1&&args[0].kind!=Value::Kind::Unknown,"Builtin01 type query argc/value");return Value::integer(args[0].kind==Value::Kind::Reference?11:int32_t(args[0].word>>28));}
     if(id==0x22){
         Need(args.size()==2,"Builtin22 event request argc");
@@ -253,7 +269,10 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         return Value::integer(result.selected);
     }
     std::ostringstream unimplemented;unimplemented<<"Unimplemented reached KSC builtin id="<<unsigned(id)<<" argc="<<args.size()<<" args=";
-    for(const auto& arg:args)unimplemented<<int(arg.kind)<<':'<<std::hex<<arg.word<<',';
+    for(const auto& arg:args){unimplemented<<int(arg.kind)<<':'<<std::hex<<arg.word;
+        if(arg.kind==Value::Kind::String){unimplemented<<" cp932=";for(unsigned char b:arg.cp932)unimplemented<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];}
+        unimplemented<<',';
+    }
     throw std::runtime_error(unimplemented.str());
 }
 GameFsStatus GameActorScript::Tick() {
@@ -282,7 +301,12 @@ GameFsStatus GameActorScript::Tick() {
         if(event.status==script::Status::Stopped)throw std::runtime_error(event.diagnostic.text());
         if(event.status==script::Status::Yield)++state_.yields;
         if(event.status==script::Status::HostYield)++state_.native_budget_yields;
-        if(event.status==script::Status::Message) {++state_.messages;state_.message=event.message_cp932;state_.message_history.push_back(state_.message);state_.awaiting_message=true;}
+        if(event.status==script::Status::Message) {
+            ++state_.messages;state_.message=event.message_cp932;state_.message_history.push_back(state_.message);
+            state_.message_pcs.push_back(event.pc);
+            state_.message_actor_commands.push_back(runtime_?runtime_->Snapshot().requested_command:UINT32_MAX);
+            state_.awaiting_message=true;
+        }
         if(event.status==script::Status::Complete)state_.completed=true;
         return {};
     } catch(const std::exception& e) {state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
@@ -292,7 +316,7 @@ bool GameActorScript::AcknowledgeMessage() {
     state_.awaiting_message=false;++state_.message_acknowledgements;return true;
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.control_blocks_entered=vm_->control_blocks_entered();out.control_blocks_closed=vm_->control_blocks_closed();
         out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
         out.waiting_for_event=vm_->waiting_for_event();out.waiting_deadline=vm_->deadline_waiting();

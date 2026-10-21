@@ -23,6 +23,9 @@ struct StartupRuntimeOptions {
     std::wstring media_root;
     bool prepared_codec_envelope = false; // explicit NEW domain, legacy finite prefix stays default
     bool test_controller_input = false; // explicit injected-frame test domain, never physical-input credit
+    // Explicit window-fixture civil-clock step AFTER the intro's first clock
+    // read. Zero in normal play;not elapsed-time or real-RTC timing evidence.
+    uint32_t test_actor_calendar_step_minutes = 0;
     std::wstring native_save_root;
     bool storage_unavailable=false,storage_read_only=false;
     bool test_missing_device_prompt=false; // test-only negative IoDevctl path before real native autoload

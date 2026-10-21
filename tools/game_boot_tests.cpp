@@ -86,6 +86,14 @@ void ControllerTests() {
           "fresh edge consumes exactly one prompt");
     gate.Begin();
     Check(!gate.Observe({Circle, true, false, 7}, Circle), "held key cannot accept next prompt");
+    for(uint64_t context=0;context<15;++context){
+        gate.Begin();
+        Check(!gate.Observe({Circle,true,true,100+context*4},Circle),"conversation context refuses prior held edge");
+        Check(!gate.Observe({0,true,true,101+context*4},Circle),"each context needs its own focused release");
+        Check(gate.Observe({Circle,true,true,102+context*4},Circle),"fresh edge accepts current conversation context");
+        Check(!gate.Observe({0,true,true,103+context*4},Circle)&&!gate.Armed(),"consumed context cannot rearm before next message");
+    }
+    gate.Stop();Check(!gate.Observe({0,true,true,200},Circle)&&!gate.Observe({Circle,true,true,201},Circle),"retired conversation refuses queued frames");
     GameInputMailbox mailbox;
     for (uint64_t i = 0; i < 129; ++i)
         mailbox.Push({Circle, true, true, i});
