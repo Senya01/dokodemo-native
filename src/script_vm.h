@@ -176,8 +176,8 @@ public:
     const std::vector<Value>& stack() const { return stack_; }
     uint32_t pc() const { return pc_; }
     VmStateWitness current_witness() const noexcept;
-    void trace_normal_return_at(uint32_t pc, size_t slot=0) noexcept {
-        if(slot<normal_returns_.size()){return_probe_pcs_[slot]=pc;normal_returns_[slot]={};}
+    void trace_normal_return_at(uint32_t pc, size_t slot=0,uint32_t alternate_pc=UINT32_MAX) noexcept {
+        if(slot<normal_returns_.size()){return_probe_pcs_[slot]=pc;return_probe_alternate_pcs_[slot]=alternate_pc;normal_returns_[slot]={};}
     }
     const NormalReturnWitness& last_normal_return(size_t slot=0) const noexcept {
         return normal_returns_[slot<normal_returns_.size()?slot:0];
@@ -343,6 +343,7 @@ private:
     uint64_t next_frame_id_=0,frame_id_=0,run_id_=0,return_sequence_=0;
     uint32_t code_entry_=0;
     std::array<uint32_t,2> return_probe_pcs_{{UINT32_MAX,UINT32_MAX}};
+    std::array<uint32_t,2> return_probe_alternate_pcs_{{UINT32_MAX,UINT32_MAX}};
     std::array<NormalReturnWitness,2> normal_returns_{};
     uint32_t b3_calls_=0,b3_pc_=0,b3_operand_kind_=0,b3_operand_word_=0,b3_result_word_=0;
     Value decode(uint32_t word) const;

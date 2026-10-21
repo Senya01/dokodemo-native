@@ -6,6 +6,8 @@
 #include <functional>
 
 namespace dokodemo::recovered {
+// A690 receives actor+10, so its +44 source is the actor's field54.
+int32_t GameActorMotionSelectorA690(int32_t field54) noexcept;
 // 7398 compares five adjacent intervals from six signed16 (hour,minute)
 // endpoints. Native civil-clock validation is explicit; the source result
 // values are 5,0,1,2,3 and fallback4, not a success Boolean.

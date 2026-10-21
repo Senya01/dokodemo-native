@@ -42,6 +42,12 @@ constexpr std::array<const char *, 14> Scene0Names{
 constexpr std::array<int32_t, 14> Scene0Stops{
     {1, 0, 3, 2, 5, 4, 7, 6, 9, 10, 8, 12, 13, 11}};
 } // namespace
+int32_t GameActorMotionSelectorA690(int32_t field54) noexcept {
+  if(field54>=0&&field54<=3)return field54;
+  if(field54==4)return 3;
+  if(field54==5)return 2;
+  return 0;
+}
 GameActorLoopStep AdvanceActorLoop8021(std::vector<GameActorLoopFrame>& frames,uint32_t pc) {
   if(frames.empty())throw std::runtime_error("ASC8021 without live owning loop frame");
   auto& frame=frames.back();
@@ -542,8 +548,12 @@ GameFsStatus GameActorRuntime::BindActorMotion(int32_t motion, uint32_t blend) {
   if (motion < 0 || size_t(motion) >= actor_motion_names_.size())
     return {GameFsCode::Unavailable, 0,
             "Actor motion index outside actual ASC names"};
-  if(state_.source_field54!=0&&motion==LogicalMotion(9))
-    return {GameFsCode::Unavailable,0,"Directional neutral-motion aliases not yet admitted"};
+  // B834 compares the incoming actual motion with BA60(9). BA30 resolves
+  // ordinal9+A690(actor+10), then rejoins the remaining binder. Resolve once:
+  // ASC10 itself also names motion9, which is a valid source alias, not an
+  // invitation to recurse or replace the actor's requested command.
+  if(motion==LogicalMotion(9))
+    motion=LogicalMotion(9+uint32_t(GameActorMotionSelectorA690(state_.source_field54)));
   // D7DD4[0] and[1] both select B89C;the reached non-turn branch binds both channels. The
   // finite native full-pose channels replace PSP per-node weight lists.
   if (state_.source_field50 != 0 && state_.source_field50 != 1)

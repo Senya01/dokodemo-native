@@ -7,6 +7,7 @@
 #include "game_return_witness_regressions.h"
 #include "game_post25_regressions.h"
 #include "game_returned_interaction_regressions.h"
+#include "game_conversation_activation_regressions.h"
 #include "game_input32_regressions.h"
 #include <algorithm>
 #include <fstream>
@@ -231,6 +232,11 @@ void Focused(){
     StringLength53Checks();
     BitwiseOrAndWordObservationChecks();
     GameInput32RegressionChecks();
+    GameConversationActivationRegressionChecks();
+    const std::array<int32_t,10> modes{{INT32_MIN,-1,0,1,2,3,4,5,6,INT32_MAX}};
+    const std::array<int32_t,10> selectors{{0,0,0,1,2,3,3,2,0,0}};
+    for(size_t n=0;n<modes.size();++n)
+        Check(GameActorMotionSelectorA690(modes[n])==selectors[n],"source A690 directional motion selector");
     GameReturnedInteractionRegressionChecks();
     GameChoiceRegressionChecks();
     GameMessageScopeRegressionChecks();

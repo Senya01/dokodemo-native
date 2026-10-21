@@ -124,7 +124,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
         vm_->native_reserved_local_nil(true);
         if(profile.actor==0){ // finite passive NEKO return witnesses, independently retained
-            vm_->trace_normal_return_at(0x85438);vm_->trace_normal_return_at(0x7D628,1);
+            vm_->trace_normal_return_at(0x85438,0,0x2B483);vm_->trace_normal_return_at(0x7D628,1);
         }
         vm_->host_service([this](uint8_t id,const std::vector<Value>& args){return Service(id,args);});
         vm_->random_source([this]{Need(rng_&&rng_->Available(),"Current game RNG not live");return rng_->NextC3234();});

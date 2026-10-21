@@ -1,5 +1,6 @@
 #pragma once
 #include "game_main_flow_native.h"
+#include "game_conversation_activation_native.h"
 
 namespace dokodemo::recovered {
 struct GameReturnedInteractionGate {
@@ -17,6 +18,7 @@ struct GameReturnedInteractionSnapshot {
     uint32_t context_word=0,callback_word=0,posted=0,rejected=0,returned_callbacks=0;
     int32_t queue_result=-1;
     std::string code_sha256,error;
+    GameConversationActivationSnapshot activation;
 };
 // WindowsReturnedConversationInteraction is a Windows scheduling/input policy.
 // It does not clear source469, restore original post32 wake, or rearm the old
@@ -45,9 +47,8 @@ class GameReturnedConversationInteraction final {
     GameOwnerEventTarget target_;
     GameButtonGate input_;
     GameReturnedInteractionSnapshot state_;
-    script::VmStateWitness message_witness_;
-    script::NormalReturnWitness retained_witness_,accepted_return_;
-    uint32_t ack_baseline_=0,callback_baseline_=0;
-    uint64_t last_activation_frame_=0;
+    GameConversationActivation activation_;
+    uint64_t activation_id_=0;
+    uint32_t callback_baseline_=0;
 };
 }

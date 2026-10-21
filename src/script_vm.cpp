@@ -717,7 +717,7 @@ Event Vm::step() {
                 return stop(cmd,"Return through active block: source67548 unwind unresolved");
             if(calls_.empty()) { stopped_=true;event.status=Status::Complete; }
             else {
-                for(size_t i=0;i<normal_returns_.size();++i)if(cmd->pc==return_probe_pcs_[i]){
+                for(size_t i=0;i<normal_returns_.size();++i)if(cmd->pc==return_probe_pcs_[i]||cmd->pc==return_probe_alternate_pcs_[i]){
                     auto& trace=normal_returns_[i];trace={};trace.sequence=++return_sequence_;
                     trace.opcode_pc=cmd->pc;trace.before=current_witness();captured_normal_return=i;break;
                 }
