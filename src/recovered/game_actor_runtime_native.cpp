@@ -319,6 +319,10 @@ GameFsStatus GameActorRuntime::SetField54(int32_t value) {
   state_.source_field54 = value;
   return {};
 }
+GameFsStatus GameActorRuntime::RequestManager9(){
+  if(!Live())return {GameFsCode::Unavailable,0,"GAME3 manager owner/lease retired"};
+  state_.manager_request9=true;return {};
+}
 GameFsStatus GameActorRuntime::RequestManager() {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Game manager0 owner expired"};
@@ -336,13 +340,13 @@ GameFsStatus GameActorRuntime::UpdateCamera() {
   if(state_.manager_camera_request4C!=-1){
     const auto request=state_.manager_camera_request4C;
     //23488 consumes the manager cell BEFORE starting camera7844. Setter
-    //has already returned. The reached domain is request1,not forcedmode3.
-    if(request!=1)return {GameFsCode::Unavailable,0,"Unimplemented reached camera request consumer"};
+    //has already returned. Request0 takes234F8(out);1 takes2352C(in).
+    if(request!=1&&request!=0)return {GameFsCode::Unavailable,0,"Unimplemented reached camera request consumer"};
     if(!state_.camera_bindings||!state_.camera_follows_actor)
       return {GameFsCode::Unavailable,0,"Camera request has no live following target"};
     state_.manager_camera_request4C=-1;++state_.camera_requests_consumed;
-    state_.camera_manager_state28=4;state_.camera_transition_mode1C=1;
-    state_.camera_complete2C=false;state_.camera_ratio=0;
+    state_.camera_manager_state28=4;state_.camera_transition_mode1C=request==1?1:2;
+    state_.camera_complete2C=false;state_.camera_ratio=request==1?0.0f:1.0f;
     camera_from_fov_=state_.camera_fov_degrees;camera_from_x_=state_.camera_position[0];camera_from_z_=state_.camera_position[2];
     //79D8 relocation-backed scene curve. Named native direct piecewise
     //interpolation replaces sourceVFPU quantization. Actual y=-300 lies
@@ -353,9 +357,25 @@ GameFsStatus GameActorRuntime::UpdateCamera() {
     for(unsigned i=0;i<3;++i)if(y>=ys[i]&&y<ys[i+1]){
       state_.camera_target_fov=fs[i]+(fs[i+1]-fs[i])*(y-ys[i])/(ys[i+1]-ys[i]);break;
     }
+    if(request==0){
+      state_.camera_target_fov=30; //native semantic endpoint;7EE0 literalD3178
+      camera_out_target_x_=(std::clamp)(state_.actor_root[0],-950.0f,950.0f); //7844 captures7C3C once
+    }
   }else if(state_.camera_manager_state28==4&&state_.camera_complete2C)
     state_.camera_manager_state28=0; //23564 polls completed camera on laterphase
-  if(state_.camera_transition_mode1C==1&&!state_.camera_complete2C){
+  if(state_.camera_transition_mode1C==2&&!state_.camera_complete2C){
+    const float t=(std::clamp)(state_.camera_ratio,0.0f,1.0f),s=t*t*(3-2*t);
+    //7EEC/7F04/7F24 evaluate endpoint->captured point at decreasingratio.
+    //7C3C finite scene0/default clamp;B1/special scene policies unimplemented.
+    state_.camera_fov_degrees=30+(camera_from_fov_-30)*s;
+    camera_x_=camera_out_target_x_+(camera_from_x_-camera_out_target_x_)*s;
+    camera_z_=980+(camera_from_z_-980)*s;
+    //D98CC exactfloat5/6;NativeFixedGameTickScalar2,as for camera-in.
+    state_.camera_ratio-=1.0f/(0.8333333730697632f*30.0f);++state_.camera_transition_updates;
+    if(state_.camera_ratio<0&&state_.camera_fov_degrees>=30){
+      state_.camera_ratio=0;state_.camera_complete2C=true;state_.camera_transition_mode1C=0;++state_.camera_completions;
+    }
+  }else if(state_.camera_transition_mode1C==1&&!state_.camera_complete2C){
     const float t=(std::clamp)(state_.camera_ratio,0.0f,1.0f);
     const float s=t*t*(3-2*t); //4308 cubic Hermite,zero endpoint tangents
     state_.camera_fov_degrees=camera_from_fov_+(state_.camera_target_fov-camera_from_fov_)*s;
@@ -975,9 +995,11 @@ void GameActorRuntime::Close() {
   state_.active_command = -1;
   state_.pending_logical_motion = -1;
   state_.manager_request8 = false;
+  state_.manager_request9 = false;
   state_.manager_camera_request4C=-1;state_.camera_manager_state28=state_.camera_transition_mode1C=0;
   state_.camera_complete2C=false;
   camera_from_fov_=30;camera_from_z_=camera_z_=980;camera_from_x_=camera_x_=0;
+  camera_out_target_x_=0;
   state_.command_flag25A = false;
   for (auto &slot : models_) {
     slot.clone.Close();

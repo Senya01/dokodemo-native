@@ -39,7 +39,7 @@ script::Value GameStringReplace51(const std::vector<script::Value>& args) {
     return Value::string(std::move(result));
 }
 GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView image,std::string path,
-                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime) {
+                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime,GameRecordStore* records) {
     Close();state_={};
     try {
         Need(profile.live&&profile.actor<5,"KSC requires the actually confirmed native profile");
@@ -51,7 +51,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(program_.load_original_bytes(std::move(bytes),path,error),error.text().c_str());
         const auto attached=dictionary_.Attach(std::move(dictionary));
         Need(bool(attached),attached.detail.c_str());
-        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;state_.path=std::move(path);
+        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         vm_->host_service([this](uint8_t id,const std::vector<Value>& args){return Service(id,args);});
         vm_->random_source([this]{Need(rng_&&rng_->Available(),"Current game RNG not live");return rng_->NextC3234();});
@@ -78,6 +78,11 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     ++state_.game_service_calls;state_.last_service=uint32_t(id);state_.service_ids.push_back(uint32_t(id));
     const auto& arg=args[1];
     switch(id) {
+    case 3: {
+        Need(runtime_!=nullptr,"GAME3 needs live game manager owner");
+        const auto status=runtime_->RequestManager9();Need(bool(status),status.detail.c_str());
+        ++state_.game3_calls;state_.game3_result_word=False().word;return False();
+    }
     case 0: {
         Need(runtime_!=nullptr,"Game0 requires live zero-initialized manager owner");
         const auto requested=runtime_->RequestManager();Need(bool(requested),requested.detail.c_str());return False();
@@ -121,6 +126,36 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         state_.source_flag2A980=runtime_->Snapshot().source_flag2A980!=0;
         ++state_.scene_flag_queries;auto value=False();if(state_.source_flag2A980)value.word|=1;return value;
     }
+    case 71: {
+        Need(records_&&records_->Live()&&bool(clock_),"GAME71 needs live profile record-bank and civil clock owners");
+        state_.record_clock_word=clock_();const auto date=GameRecordDateFromClockWord(state_.record_clock_word);
+        const auto row=records_->Candidate71(date);GameRecordInput input;const GameRecordInput* source=nullptr;
+        Value first_ref,first;
+        //Negative-index protection precedes registration queries in39D64.
+        if(row>=0&&records_->At(0,uint32_t(row)).flag!=1){
+            const auto found=bindings_.find(29);
+            if(found!=bindings_.end()){
+                const auto header=vm_->load_reference(found->second);
+                Need(header.kind==Value::Kind::ArrayHeader,"GAME29 record registration needs typed array");
+                if((header.word&0xFFF)>=3){
+                    first_ref=vm_->indexed_reference(found->second,0);first=vm_->load_reference(first_ref);
+                    const auto second=vm_->load_reference(vm_->indexed_reference(found->second,1));
+                    const auto text=vm_->load_reference(vm_->indexed_reference(found->second,2));
+                    if(text.word>>28!=0){
+                        Need(first.kind==Value::Kind::Scalar&&first.word>>28<=3,"GAME71 cell0 byte store finite scalar domain");
+                        Need(text.kind==Value::Kind::String,"GAME71 reached owned CP932 record text domain");
+                        input.value=Number(second);input.text=text.cp932;source=&input;
+                    }
+                }
+            }
+        }
+        const auto captured=records_->Capture71(date,source);Need(bool(captured),captured.detail.c_str());
+        if(records_->Snapshot().last_copied){
+            state_.record_cell0_before=first.word;first.word&=0xFFFFFF00u;state_.record_cell0_after=first.word;
+            vm_->store_reference(first_ref,first);++state_.record_cell0_writes;state_.record_input_text=input.text;
+        }
+        ++state_.game71_calls;state_.game71_result_word=False().word;return False();
+    }
     case 41: {
         Need(Number(arg)==0,"Reached GAME41 inventory mode0 only");
         state_.inventory_mode=0;state_.inventory_requested=true;++state_.inventory_requests;
@@ -160,6 +195,9 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(runtime_&&runtime_->Snapshot().live,"GAME45 needs live actor command owner");
         ++state_.actor_flag_queries;auto value=False();if(runtime_->Snapshot().command_flag25A)value.word|=1;return value;
     }
+    case 24:
+        Need(runtime_&&runtime_->Snapshot().live,"GAME24 needs live actor field58 producer");
+        ++state_.actor_flag_queries;return Value::integer(runtime_->Snapshot().source_field58);
     case 23:
         Need(runtime_&&runtime_->Snapshot().live,"GAME23 needs live actor50 owner");
         return Value::integer(runtime_->Snapshot().source_field50);
@@ -363,7 +401,7 @@ GameFsStatus GameActorScript::CompleteInventory(const GameInventorySnapshot& gui
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
         out.control_blocks_entered=vm_->control_blocks_entered();out.control_blocks_closed=vm_->control_blocks_closed();
         out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
@@ -373,7 +411,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
 }
 void GameActorScript::Close() {
     state_=Snapshot();
-    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;
+    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;
     state_.live=false;state_.awaiting_message=false;
 }
 } // namespace dokodemo::recovered

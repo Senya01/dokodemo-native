@@ -2,6 +2,7 @@
 #include "game_actor_dictionary_native.h"
 #include "game_actor_runtime_native.h"
 #include "game_inventory_native.h"
+#include "game_record_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
 #include <map>
@@ -38,6 +39,11 @@ struct GameActorScriptSnapshot {
     bool context_enabled=true;
     uint32_t callbacks_posted=0,callbacks_returned=0;
     uint32_t inventory_completions=0;
+    uint32_t game71_calls=0,game71_result_word=0,record_clock_word=0,record_cell0_writes=0;
+    uint32_t game3_calls=0,game3_result_word=0;
+    uint32_t record_cell0_before=0,record_cell0_after=0;
+    std::string record_input_text;
+    GameRecordStoreSnapshot records;
     std::vector<GameInventoryItem> inventory_items;
     std::array<uint32_t,5> message_local_words{};
     std::array<uint32_t,3> intro_caller_words{};
@@ -71,7 +77,7 @@ class GameActorScript final {
     using ClockWord = std::function<uint32_t()>;
     GameFsStatus Initialize(PackageView dictionary,PackageView script,std::string path,
                             const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
-                            GameActorRuntime* runtime=nullptr);
+                            GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr);
     GameFsStatus Tick();
     bool AcknowledgeMessage();
     bool CanResumeInventory()const;
@@ -90,6 +96,7 @@ class GameActorScript final {
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
     GameActorRuntime* runtime_=nullptr;
+    GameRecordStore* records_=nullptr;
     std::map<uint32_t,script::Value> bindings_;
     GameActorScriptSnapshot state_;
 };

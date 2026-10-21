@@ -226,6 +226,7 @@ bool GameContentBoot::Reset24994() {
     if (!state_.bb8_returned || state_.loading_ticks)
         return false;
     reset_bytes_.fill(0); // explicit source reset, not BSS inference
+    records_.ResetCold249D0();
     const auto word = [this](uint32_t at, uint32_t value) {
         for (unsigned i = 0; i < 4; ++i)
             reset_bytes_[at + i] = uint8_t(value >> (i * 8));
@@ -576,6 +577,7 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
         zero(0x64, 64);
         zero(0xB0, 84);
         zero(0x114, 0x10A3C);
+        records_.ResetCold249D0();
         for (uint32_t slot = 0; slot < 11; ++slot) {
             const auto base = 276 + slot * 6196;
             for (uint32_t entry = 0; entry < 28; ++entry)
@@ -709,6 +711,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
 bool GameContentBoot::Close() {
     inventory_.Close();state_.inventory=inventory_.Snapshot();
     actor_script_.Close();actor_message_gate_.Stop();state_.actor_message_input_armed=false;state_.actor_script=actor_script_.Snapshot();actor_clock_={};
+    records_.Close();state_.actor_script.records=records_.Snapshot();
     actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
@@ -862,7 +865,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.status=actor_runtime_.InitializeScene0(calendar_);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
-        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_);
+        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_);
         state_.actor_script=actor_script_.Snapshot();
         if(state_.status){
             ++state_.opened_resources;state_.blocked=false;

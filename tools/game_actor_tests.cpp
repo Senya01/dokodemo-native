@@ -70,6 +70,33 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    GameRecordStore diary;GameRecordInput original_record{12,"\x83\x67\x83\x8D"};
+    const GameRecordDate record_date{{2026,10,24}};
+    Check(!diary.Capture71(record_date,&original_record),"uninitialized static-bank native owner is not invented");
+    diary.ResetCold249D0();
+    for(uint32_t bank=0;bank<11;++bank)for(uint32_t row=0;row<28;++row){const auto& slot=diary.At(bank,row);
+        Check(slot.flag==0&&slot.value==-1&&slot.date==GameRecordDate{{-1,-1,-1}}
+              &&std::all_of(slot.payload.begin(),slot.payload.end(),[](uint8_t b){return b==0;}),"39B80 exact cold bank producers");}
+    Check(GameRecordDateFromClockWord(0x30000000)==GameRecordDate{{2000,1,1}}
+          &&GameRecordDateFromClockWord(0x30D72E15)==record_date,"same-live-clock current date is not old profile date");
+    Check(bool(diary.Capture71(record_date,&original_record))&&diary.Snapshot().selected==0,"first empty record captures day");
+    const auto owned_record=diary.At(0,0);original_record.text="changed temporary";
+    Check(owned_record.payload==diary.At(0,0).payload&&owned_record.payload[0]==0x83&&owned_record.source_known_payload_bytes==5,"saved record owns CP932 prefix independent of input string");
+    diary.At(0,0).flag=1;const auto protected_record=diary.At(0,0);
+    Check(bool(diary.Capture71(record_date,&original_record))&&diary.Snapshot().last_protected
+        &&diary.At(0,0).payload==protected_record.payload&&diary.At(0,0).date==protected_record.date&&diary.At(0,0).value==12,"negative-index protected flag1 has no date/value/text mutation");
+    diary.At(0,0).flag=2;Check(bool(diary.Capture71(record_date,&original_record))&&diary.At(0,0).flag==0&&diary.Snapshot().selected==0,"only exactlyflag1 protects and same-day record is replaced");
+    Check(bool(diary.Capture71({{2026,10,25}},&original_record))&&diary.Snapshot().selected==1,"next date chooses next empty row");
+    diary.ResetCold249D0();diary.At(0,0).payload.fill(0xAB);
+    Check(bool(diary.Capture71(record_date,nullptr))&&diary.At(0,0).value==-1&&diary.At(0,0).date==record_date
+          &&diary.At(0,0).payload[199]==0xAB&&!diary.Snapshot().last_copied,"missing registry still stampsdate/ID but preserves old200B");
+    GameRecordInput long_record{17,std::string(199,'x')+"\x83\x67"};
+    Check(bool(diary.Capture71(record_date,&long_record))&&diary.At(0,0).payload[199]==0x83
+          &&diary.At(0,0).source_known_payload_bytes==200,"fixed200B copy can end on CP932 lead;no invented terminator or boundary trim");
+    for(uint32_t row=0;row<28;++row){diary.At(0,row).value=4;diary.At(0,row).date={{2001,1,1}};}
+    Check(!diary.Capture71(record_date,&original_record)&&diary.Snapshot().capacity_errors==1
+          &&diary.At(0,27).value==4&&diary.At(0,27).date==GameRecordDate{{2001,1,1}},"full source-OOB corner is explicit native capacity error,not replacement success");
+    diary.Close();Check(!diary.Capture71(record_date,&original_record),"retired record bank rejects late writes");
     {auto registry_program=Fixture({0x30,0,0x38});std::vector<std::unique_ptr<script::Vm>> owners;
         for(uint32_t i=0;i<8;++i){auto vm=std::make_unique<script::Vm>(registry_program);vm->start();Check(vm->context_value().word==0x80000000u+i,"eight distinct live source context identities");owners.push_back(std::move(vm));}
         script::Vm ninth(registry_program);ninth.start();bool refused=false;try{(void)ninth.context_value();}catch(const std::exception&){refused=true;}
@@ -263,6 +290,14 @@ void Focused(){
     Check(actor.Snapshot().camera_complete2C&&fov==18&&actor.Snapshot().camera_manager_state28==4
           &&actor.Snapshot().camera_completions==1&&actor.WaitReady(),"camera threshold completion is independent of BCFC cold ready");
     Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0,"manager observes camera completion on later phase");
+    Check(!actor.Snapshot().manager_request9&&bool(actor.RequestManager9())&&actor.Snapshot().manager_request9,"GAME3 sets separate source manager9 request,not transition completion");
+    Check(bool(actor.RequestCamera(0))&&actor.Snapshot().camera_fov_degrees==18&&actor.Snapshot().camera_completions==1,"camera-out setter returns before interpolation or completion");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_transition_mode1C==2&&actor.Snapshot().camera_ratio<1
+        &&actor.Snapshot().camera_fov_degrees==18&&!actor.Snapshot().camera_complete2C,"out samples ratio1 before decreasing,retains first FOV");
+    fov=18;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){Check(bool(actor.AdvanceActorFrame()),"real camera-out phase");
+        const auto now=actor.Snapshot();Check(now.camera_fov_degrees>=fov&&now.camera_fov_degrees<=30,"camera-out monotone literal30 endpoint");fov=now.camera_fov_degrees;}
+    Check(actor.Snapshot().camera_complete2C&&actor.Snapshot().camera_completions==2&&actor.Snapshot().camera_transition_mode1C==0&&fov==30,"out completes only ratio<0/currentFOV>=30");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0&&actor.Snapshot().manager_request9,"camera poll doesnot consume separate manager9 flag");
     Check(bool(actor.StartTransition())&&fade.Snapshot().group==5&&fade.Snapshot().state==1,
           "service6 starts real existing transition,not a returned success flag");
     int32_t absent_slot=3;
@@ -270,7 +305,7 @@ void Focused(){
           "service31 cannot allocate a successful slot without actual resource owner");
     Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
           "zeroed1B188 manager receives actualservice0 request,not completion");
-    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1),"retired target lease blocks camera/wait/setter");
+    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
     actor.Close();fade.Retire();Check(!actor.Snapshot().live,"typed actor/camera owners retired");
     Lease model_input(Dictionary());GameTransition model_fade;Check(model_fade.Initialize({{0,0}}),"model error test fade");
     MissingResources missing;GameActorRuntime model_owner;
@@ -339,7 +374,8 @@ void Selected(const char* path){
     GameActorRuntime runtime;Check(bool(runtime.Initialize(0,lease.View(),transition,&resources)),"source cold actor controls");
     const auto scene_open=runtime.InitializeScene0(profile.calendar);Check(bool(scene_open),scene_open.detail.c_str());
     uint32_t fixture_clock=0x30D72E10u;bool fixture_advanced=false;
-    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[&]{return fixture_clock;},&rng,&runtime); // explicit diagnostic clock fixture
+    GameRecordStore records;records.ResetCold249D0();
+    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[&]{return fixture_clock;},&rng,&runtime,&records); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
     for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto s=game.Snapshot();
         if(i>200&&!fixture_advanced&&s.runtime.intro_requests){fixture_clock+=5;fixture_advanced=true;std::cout<<"Explicit fixture advances calendar5minutes;NOT connected realclock evidence\n";}
@@ -454,10 +490,28 @@ void Selected(const char* path){
     Check(bool(game.CompleteInventory(inventory.Snapshot())),"native close-only modal wake");
     for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto after=game.Snapshot();
         if(!status||after.awaiting_message){std::cout<<"after inventory pc="<<std::hex<<after.pc<<std::dec<<" messages="<<after.messages<<" ack="<<after.message_acknowledgements<<" service="<<after.last_service<<" detail="<<status.detail<<'\n';break;}}
-    const auto after=game.Snapshot();Check(after.blocked&&after.context_enabled&&after.inventory_completions==1
-        &&after.pc==0xA1FE&&after.last_service==71&&!after.last_service_returned
-        &&after.string_replace_calls>gift.string_replace_calls&&after.error.find("id=71")!=std::string::npos,
-        "real post-inventory51 result reaches exact new GAME71 boundary,without forced return");
+    const auto after=game.Snapshot();Check(!after.blocked&&after.context_enabled&&after.inventory_completions==1
+        &&after.game71_calls==1&&after.game71_result_word==0x10000000&&after.awaiting_message&&after.messages==16,
+        "actual71 side effects then real frame return reaches new text consumer");
+    const auto saved=records.Snapshot();
+    Check(saved.live&&saved.writes==1&&saved.selected==0&&saved.bank0[0].value==12
+        &&saved.bank0[0].date==GameRecordDate{{2026,10,24}}&&saved.bank0[0].date!=GameRecordDate{{2026,10,21}}
+        &&after.record_cell0_writes==1&&after.record_cell0_before==after.record_cell0_after&&after.record_cell0_after==0,
+        "actualGAME29 record/currentclock date distinct from confirmed profile;cell0 is destination byte");
+    const auto& input_text=after.record_input_text;Check(input_text.size()==116&&std::equal(input_text.begin(),input_text.end(),saved.bank0[0].payload.begin(),[](char a,uint8_t b){return uint8_t(a)==b;}),"owned exact diary prefix survives temporary frame return");
+    const auto held_steps=after.instructions;for(unsigned i=0;i<15;++i)Check(bool(game.Tick()),"new message retains independent owners");
+    Check(game.Snapshot().messages==16&&game.Snapshot().instructions==held_steps,"new text cannot autoack after inventory close");
+    Check(game.AcknowledgeMessage(),"new message16 separate fresh acknowledgement");
+    for(unsigned i=0;i<2000;++i){const auto status=game.Tick();const auto state=game.Snapshot();
+        if(!status||state.awaiting_message||(state.game3_calls==1&&state.runtime.camera_completions==2&&state.last_service==28&&state.waiting_deadline)){std::cout<<"post71 next pc="<<std::hex<<state.pc<<std::dec<<" messages="<<state.messages<<" ack="<<state.message_acknowledgements<<" cmd="<<state.runtime.requested_command<<" text=";
+            for(unsigned char b:state.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<" detail="<<status.detail<<'\n';break;}}
+    {const auto tail=game.Snapshot();std::cout<<"post71 tail pc="<<std::hex<<tail.pc<<std::dec<<" service="<<tail.last_service<<" messages="<<tail.messages<<" complete="<<tail.completed<<" wait="<<tail.waiting_for_event<<" deadline="<<tail.waiting_deadline<<" field58="<<tail.runtime.source_field58<<" req9="<<tail.runtime.manager_request9<<" camera="<<tail.runtime.camera_completions<<" mode="<<tail.runtime.camera_transition_mode1C<<" command="<<tail.runtime.requested_command<<" commandComplete="<<tail.runtime.command_complete<<" steps="<<tail.instructions<<" detail="<<tail.error<<'\n';}
+    const auto goodbye=game.Snapshot();Check(!goodbye.blocked&&goodbye.messages==16&&!goodbye.awaiting_message
+        &&goodbye.message_acknowledgements==16&&goodbye.game3_calls==1&&goodbye.game3_result_word==0x10000000
+        &&goodbye.runtime.manager_request9&&goodbye.runtime.camera_completions==2&&goodbye.runtime.camera_transition_mode1C==0
+        &&goodbye.runtime.camera_fov_degrees==30&&goodbye.last_service==28&&!goodbye.completed,
+        "freshbye acknowledgement executes real manager9 setter,camera-out and live main loop;not forced session completion");
+    Check(records.At(0,0).payload==saved.bank0[0].payload&&records.At(0,0).date==saved.bank0[0].date&&records.Live(),"persistent record survives inventory and subsequent temporary script contexts");
     //Separate synthetic list fixture,not live-game item mutation evidence.
     std::vector<GameInventoryItem> sort_items(3);for(uint32_t i=0;i<3;++i){auto& item=sort_items[i];item.row=i;item.id=int32_t(i);item.valid=true;item.category=int32_t(i);item.date_word=(i==0?10:i==1?30:20);item.name="fixture";}
     Check(bool(inventory.Request(sort_items))&&bool(inventory.Tick(resources,transition)),"separate list source-domain fixture");
@@ -467,7 +521,7 @@ void Selected(const char* path){
     for(unsigned i=0;i<15;++i)input(Down);Check(inventory.Snapshot().selection==2,"held repeat stops at boundary");
     input(0);input(Down);Check(inventory.Snapshot().selection==0,"fresh first edge wraps at boundary");
     inventory.Close();Check(!inventory.Input({Circle,true,false,++sequence}),"synthetic owner retired");
-    game.Close();runtime.Close();transition.Retire();lease.live=false;
+    game.Close();records.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!game.AcknowledgeMessage(),"retired script rejects stale message acknowledgement");
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");

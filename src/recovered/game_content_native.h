@@ -161,6 +161,7 @@ class GameContentBoot final : public GameResourceSource {
     PackageView actor_package_,actor_dictionary_;
     BpDirectory actor_directory_;
     GameActorScript actor_script_;
+    GameRecordStore records_;
     GameActorRuntime actor_runtime_;
     GameInventory inventory_;
     PackageView inventory_package_;
