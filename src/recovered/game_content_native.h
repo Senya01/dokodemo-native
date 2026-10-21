@@ -4,6 +4,7 @@
 #include "game_storage_native.h"
 #include "game_title_native.h"
 #include "game_actor_script_native.h"
+#include "game_main_flow_native.h"
 #include <array>
 #include <vector>
 
@@ -84,6 +85,9 @@ struct GameContentSnapshot {
     std::string actor_dictionary_path;
     std::array<uint8_t,16> actor_dictionary_prefix{};
     GameActorScriptSnapshot actor_script;
+    GameMainFlowSnapshot main_flow;
+    GamePostModalSnapshot post_modal;
+    bool source_loader469=false; //17910 cold0;stable inventory poll1 persists
     GameInventorySnapshot inventory;
     uint32_t actor_message_contexts=0;
     bool actor_message_input_armed=false;
@@ -161,6 +165,8 @@ class GameContentBoot final : public GameResourceSource {
     PackageView actor_package_,actor_dictionary_;
     BpDirectory actor_directory_;
     GameActorScript actor_script_;
+    GameMainFlow main_flow_;
+    GamePostModalInteraction post_modal_;
     GameRecordStore records_;
     GameActorRuntime actor_runtime_;
     GameInventory inventory_;

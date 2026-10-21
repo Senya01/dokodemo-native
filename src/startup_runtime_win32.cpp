@@ -1145,7 +1145,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if(editor.live&&editor.source_state!=3)buttons=0; //typing X/Z/Enter is never Circle/Cross/Start
         const auto sample=controller.Update(buttons, x, y, GetTickCount64() * 1000);
         if(game_input_live && !options.test_controller_input)
-            game_inputs.Push({sample.buttons,focused,false,++game_input_sequence});
+            game_inputs.Push({sample.buttons,focused,false,++game_input_sequence,state.game_boot.content.post_modal.generation});
         return sample;
     }
     StartupRuntimeStatus InjectGameInput(uint32_t buttons,bool focused) {
@@ -1155,7 +1155,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if(!game_input_live)return Failure(StartupRuntimeCode::NotStarted);
         const auto& editor=state.game_boot.content.scene_ui.editor;
         if(editor.live&&editor.source_state!=3)buttons=0;
-        game_inputs.Push({buttons,focused,true,++game_input_sequence});
+        game_inputs.Push({buttons,focused,true,++game_input_sequence,state.game_boot.content.post_modal.generation});
         EmitLocked("TestGameInputFrame","TestInjectedNativeInput",0,buttons,false,0,0,0,
             focused?"focused raw button frame;not physical hardware verification":"unfocused raw button frame;must not confirm prompt");
         return {};
@@ -1469,9 +1469,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
                 if (!game_inputs.Pop(frame))
                     break;
             }
-            const bool script_message=game_content.Snapshot().actor_script.started;
+            const auto input_before=game_content.Snapshot();
+            const bool script_message=input_before.actor_script.started;
             const bool accepted=game_content.ProcessDialogInput(frame);
-            if (accepted&&script_message)
+            if(accepted&&game_content.Snapshot().post_modal.posted>input_before.post_modal.posted)
+                Emit("GamePostModalEventPosted","WindowsPostModalInteraction",0x1B4C0,0,false,0,0,0,"owned event0,arg0,callerID=-1;source469 remains blocked");
+            else if (accepted&&script_message)
                 Emit("GameKscMessageAdvance","NativeMessageInputAdapter",0,1,false,0,0,0,"explicit native fresh-Circle acknowledgement;not recovered PSP text timing");
             else if(accepted)
                 Emit("GameCircleConfirmation", "NativeInputAdapter", 0x47E0C, 1, false, 0, 0, 0,

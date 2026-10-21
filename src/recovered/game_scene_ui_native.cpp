@@ -530,6 +530,16 @@ bool GameSceneUiBootstrap::DrawEditor(GameGraphics& graphics){
     if(!graphics.FillRectangle(12,y-4,468,y+int32_t(text.height)+4,0xFFF8F2D9))return false;
     return graphics.DrawImage(text.pixels,text.width,text.height,20,y);
 }
+GameFsStatus GameSoundBank::Request73(int32_t sound,int32_t channel,int32_t volume){
+    if(!state_.metadata_ready)return {GameFsCode::Unavailable,0,"GAME73 requires live SE_SYS bank lease"};
+    (void)image_.Describe(); //checks generation/serial,including after external retirement
+    if(sound<0||channel<0||volume<0||volume>128)return {GameFsCode::Unavailable,0,"GAME73 finite sound/channel/volume domain"};
+    ++state_.playback_requests;state_.last_sound=sound;state_.last_channel=channel;state_.last_volume=volume;
+    // Source1D05C ignores4AC38's signed playback return. The current named
+    // Windows backend has no SGX mixer: retain a real refused request (-1),
+    // never an audible/playback-success claim or a synthesized channel.
+    state_.last_playback_result=-1;return {};
+}
 GameFsStatus GameSoundBank::Register(PackageView image) {
     if (state_.metadata_ready)
         return {GameFsCode::Busy, 0, "sound bank already registered"};

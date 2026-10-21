@@ -495,6 +495,9 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
     if(state_.actor_script.started){
+        if(!inventory_.Modal())main_flow_.Input(frame);
+        const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
+        if(posted)return true;
         if(inventory_.Modal())return inventory_.Input(frame);
         const bool accepted=state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle)
                             &&actor_script_.AcknowledgeMessage();
@@ -709,6 +712,8 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
+    main_flow_.Close();state_.main_flow=main_flow_.Snapshot();
     inventory_.Close();state_.inventory=inventory_.Snapshot();
     actor_script_.Close();actor_message_gate_.Stop();state_.actor_message_input_armed=false;state_.actor_script=actor_script_.Snapshot();actor_clock_={};
     records_.Close();state_.actor_script.records=records_.Snapshot();
@@ -767,6 +772,19 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
     if(state_.actor_dictionary_requested){
         if(!state_.actor_script.started)return false;
         const auto before=state_.actor_script;
+        //Named native single-worker phase0 poll before the next KSC slice.
+        //Use the prior published text phase: an acknowledgement cannot also
+        //become a new main-flow action in the same message context.
+        //Existing modal scheduler remains paused until actual close/poll/
+        //deferred retirement;this is not a recovered post32 wake producer.
+        if(!inventory_.Modal()&&!before.inventory_requested){
+            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message;
+            gate.manager_flag68=before.manager_flag68;
+            gate.loader469=state_.source_loader469;gate.loader_state20=state_.load_state;
+            gate.fade_state=scene_ui_.TitleTransitionOwner().Snapshot().state;
+            const auto flow=main_flow_.Tick(gate);state_.main_flow=main_flow_.Snapshot();
+            if(!flow){state_.status=flow;state_.blocked=true;state_.frontier_pc=state_.main_flow.last_pc;return false;}
+        }
         state_.status=actor_script_.Tick();state_.actor_script=actor_script_.Snapshot();
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
@@ -783,6 +801,11 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             actor_message_gate_.Begin();state_.actor_script=actor_script_.Snapshot();
         }
         state_.inventory=inventory_.Snapshot();
+        //1A9B4's stable469 is1 in BOTH pending and ready branches. Neither
+        //468 completion nor deferred retirement proves a persistent clear.
+        if(state_.inventory.loader469==1)state_.source_loader469=true;
+        if(state_.status){state_.status=post_modal_.Update(state_.inventory,state_.main_flow,actor_script_,state_.source_loader469);state_.post_modal=post_modal_.Snapshot();}
+        state_.sound_bank=sound_bank_.Snapshot();
         //Publish ONCE,after both room and text. CopyGameFrame must never see
         //an intermediate room-only front whileFONT is still being decoded.
         const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
@@ -865,9 +888,12 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.status=actor_runtime_.InitializeScene0(calendar_);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
-        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_);
+        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_,&sound_bank_);
         state_.actor_script=actor_script_.Snapshot();
         if(state_.status){
+            state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){return actor_script_.PostMainFlowEvent(event,arg);});
+            if(!state_.status)throw std::runtime_error(state_.status.detail);
+            state_.main_flow=main_flow_.Snapshot();
             ++state_.opened_resources;state_.blocked=false;
             if(!graphics.Clear(0xFF000000,0)||!graphics.SwapBuffers())throw std::runtime_error("Scene4 clear failed");
             return true;

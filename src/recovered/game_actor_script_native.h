@@ -11,8 +11,13 @@ namespace dokodemo::recovered {
 //6A350/7BF18 reached string-only ABI. Bytewise,nonoverlapping replacement;
 //empty needle is refused (original explicitly traps),result owns its bytes.
 script::Value GameStringReplace51(const std::vector<script::Value>&);
+struct GameOwnerEventTarget {
+    uint64_t generation=0;
+    script::Value context,callback;
+};
 struct GameActorScriptSnapshot {
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
+    uint64_t generation=0;
     bool autoload_imported=false,profile_loaded_marker=false,manager_flag68=false;
     // Native new-profile state has no optional imported save fields. Their
     // source names/producers remain unknown;this is not a BSS-zero claim.
@@ -38,6 +43,11 @@ struct GameActorScriptSnapshot {
     int32_t inventory_mode=0;
     bool context_enabled=true;
     uint32_t callbacks_posted=0,callbacks_returned=0;
+    uint32_t owner_event_calls=0,owner_event_callback_word=0,context_word=0,callback_depth=0,queued_callbacks=0,operand_count=0;
+    uint32_t sound73_requests=0,sound73_result_word=0;
+    int32_t sound73_playback_result=-1;
+    int32_t owner_event_result=-1;
+    uint64_t deadline_tick=0;
     uint32_t inventory_completions=0;
     uint32_t game71_calls=0,game71_result_word=0,record_clock_word=0,record_cell0_writes=0;
     uint32_t game3_calls=0,game3_result_word=0;
@@ -77,11 +87,13 @@ class GameActorScript final {
     using ClockWord = std::function<uint32_t()>;
     GameFsStatus Initialize(PackageView dictionary,PackageView script,std::string path,
                             const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
-                            GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr);
+                            GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr,GameSoundBank* sound=nullptr);
     GameFsStatus Tick();
     bool AcknowledgeMessage();
     bool CanResumeInventory()const;
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
+    GameOwnerEventTarget OwnerEventTarget()const;
+    GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameActorScriptSnapshot Snapshot() const;
     void Close();
   private:
@@ -97,7 +109,9 @@ class GameActorScript final {
     RngNativeOwner* rng_=nullptr;
     GameActorRuntime* runtime_=nullptr;
     GameRecordStore* records_=nullptr;
+    GameSoundBank* sound_=nullptr;
     std::map<uint32_t,script::Value> bindings_;
     GameActorScriptSnapshot state_;
+    uint64_t owner_generation_=0;
 };
 } // namespace dokodemo::recovered

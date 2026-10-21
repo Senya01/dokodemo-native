@@ -38,6 +38,9 @@ struct GameInputFrame {
     uint32_t buttons = 0;
     bool focused = false, test_injected = false;
     uint64_t sequence = 0;
+    // Published Windows post-modal context at sampling time. Queued frames
+    // from an earlier boundary cannot arm a newly created interaction.
+    uint64_t interaction_generation = 0;
 };
 // One prompt consumes only a focused release followed by a fresh press. A held
 // button at prompt creation/refocus cannot confirm it or a following prompt.

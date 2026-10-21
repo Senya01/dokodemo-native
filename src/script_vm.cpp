@@ -353,6 +353,20 @@ int32_t Vm::post_callback(const Value& target,const Value& code,const Value& fir
     }else vm.enter_callback(std::move(callback));
     ++vm.callbacks_posted_;return 0;
 }
+int32_t Vm::post_owner_event(const Value& code,int32_t event_id,int32_t argument){
+    if(!context_||context_->vm!=this||stopped_)return -1;
+    //6B4B8 has a real no-callback return1;it is not successful invocation.
+    if(code.word>>28!=7)return 1;
+    const auto* command=program_.command(code.word&0x0FFFFFFF);
+    if(code.kind!=Value::Kind::Code||!command||command->opcode!=0x30)
+        throw std::runtime_error("Owner event target needs admitted typed code/frame prologue");
+    PendingCallback callback{code.word&0x0FFFFFFF,Value::integer(event_id),Value::integer(argument),{},false};
+    if(event_depth_||event_envelope_){
+        if(pending_callbacks_.size()==64)return 1;
+        pending_callbacks_.push_back(std::move(callback));
+    }else enter_callback(std::move(callback));
+    ++callbacks_posted_;return 0;
+}
 void Vm::enter_callback(PendingCallback callback){
     if(event_envelope_)throw std::runtime_error("Nested immediate native event envelope");
     for(const auto* value:{&callback.first,&callback.second})
@@ -363,9 +377,14 @@ void Vm::enter_callback(PendingCallback callback){
     const auto delta=uint32_t(wait_until_-clock_tick_)&0x7FFFFF;
     saved->deadline_delta=int32_t(delta&0x400000?delta|0xFF800000:delta);
     saved->result=std::move(result_);saved->stack=std::move(stack_);saved->frame=std::move(frame_);
+    // NativeFrameScopedEventEnvelope: suspend the caller's owned blocks with
+    // its frames. The callback has its own native block scope. This preserves
+    // the caller;it does not claim original ctx62 was zero or reconstruct the
+    // unresolved nonzero62/pending-tail/67548 path of PSP1C.
     saved->calls=std::move(calls_);saved->blocks=std::move(blocks_);event_envelope_=std::move(saved);
     stack_.clear();calls_.clear();blocks_.clear();result_={};
-    frame_=std::make_shared<std::vector<Value>>(std::initializer_list<Value>{callback.first,callback.second,callback.caller});
+    frame_=std::make_shared<std::vector<Value>>(std::initializer_list<Value>{callback.first,callback.second});
+    if(callback.include_caller)frame_->push_back(std::move(callback.caller));
     frame_reserved_=false;pc_=callback.pc;context_enabled_=true;event_override_=false;waiting_event_=false;wait_until_=0;
 }
 void Vm::drain_callback(){
@@ -547,7 +566,10 @@ Event Vm::step() {
             //6E43C: event return overrides restored enable38 with byte39=0.
             if(!event_envelope_)return stop(cmd,"3A requires the reached event envelope");
             event_override_=true;
-        } else if(op==0x32){
+        } else if(op==0x32||op==0x1C){
+            //In the named native frame-scoped event ABI,use the6D95C saved
+            //event return for1C/32. PSP6D944's nonzero62 path remains open;
+            //callback-local active blocks are refused,not silently unwound.
             if(!event_envelope_||!calls_.empty()||!blocks_.empty())
                 return stop(cmd,"32 needs finite callback frame without abnormal active unwind");
             auto saved=std::move(event_envelope_);
@@ -567,10 +589,12 @@ Event Vm::step() {
             uint32_t target=0;
             if(op==0x23){
                 //6DE00 moves/pops one tag7 callee and replaces it with return
-                //PC. Native call records own that returnPC;reached ABI argc0.
+                //PC. Native call records own that returnPC. No674C0 argument
+                //relocation occurs:existing caller operands stay below the
+                //new frame and must survive this zero-relocation call.
                 const auto function=pop();
-                if(function.kind!=Value::Kind::Code||function.word>>28!=7||!stack_.empty())
-                    return stop(cmd,"Indirect23 needs actual tag7 and reached zero-argument operand domain");
+                if(function.kind!=Value::Kind::Code||function.word>>28!=7)
+                    return stop(cmd,"Indirect23 needs actual tag7 callee");
                 target=function.word&0x0FFFFFFF;
             }else target=program_.operand(*cmd,op==0x20?2:1,3);
             const auto* callee=program_.command(target);
@@ -702,11 +726,39 @@ Event Vm::step() {
             const auto ref=indexed_reference(array,uint32_t(index));
             stack_.push_back(op==0xF5?ref:load_reference(ref));
         } else if(op==0xF6) {
-            if(program_.operand(*cmd,1,1)!=0)throw std::runtime_error("F6 exclusion table producer not bound");
             const auto input=pop();const auto count=numeric(load_reference(input));
             if(count<=0||!random_)throw std::runtime_error("F6 needs live nonempty list and real RNG owner");
-            const auto index=random_()%uint32_t(count);
+            const auto mode=program_.operand(*cmd,1,1);
+            Value history;uint32_t capacity=0,cursor=0;std::vector<uint32_t> candidates;
+            const auto raw_key=[](const Value& value){
+                const bool scalar=(value.kind==Value::Kind::Scalar||value.kind==Value::Kind::Timestamp)&&value.word>>28<=3;
+                const bool code=value.kind==Value::Kind::Code&&value.word>>28==7;
+                if(!scalar&&!code)throw std::runtime_error("F6 exclusion raw-key domain is finite scalar/timestamp/code");
+                return value.word&0x0FFFFFFF;
+            };
+            if(mode){
+                if(mode>4)throw std::runtime_error("F6 history selector outside finite table domain");
+                history.kind=Value::Kind::Reference;history.table=mode==1?Table::Frame:mode==2?Table::Local:mode==3?Table::Global:Table::Ctx28;
+                history.index=uint16_t(program_.operand(*cmd,2,2));if(mode==1)history.frame_owner=frame_;
+                const auto header=load_reference(history);
+                capacity=header.word&0x3FFF;cursor=(header.word>>14)&0x3FFF;
+                if(header.kind!=Value::Kind::ArrayHeader||!capacity||capacity>4095||cursor>=capacity)
+                    throw std::runtime_error("F6 history packed capacity/cursor malformed");
+                std::unordered_set<uint32_t> prior;
+                for(uint32_t i=0;i<capacity;++i)prior.insert(raw_key(load_reference(indexed_reference(history,i))));
+                for(uint32_t i=0;i<uint32_t(count);++i)
+                    if(!prior.count(raw_key(load_reference(indexed_reference(input,i)))))candidates.push_back(i);
+            }
+            //77404 excludes history values,keeps source candidate order and
+            //falls back to the whole list when every value is excluded.
+            const auto chosen=random_()%(candidates.empty()?uint32_t(count):uint32_t(candidates.size()));
+            const auto index=candidates.empty()?chosen:candidates[chosen];
             last_random_=load_reference(indexed_reference(input,index));++random_selections_;
+            if(mode){
+                store_reference(indexed_reference(history,cursor),last_random_);
+                Value header;header.kind=Value::Kind::ArrayHeader;
+                header.word=0x90000000u|(((cursor+1)%capacity)<<14)|capacity;store_reference(history,header);
+            }
             stack_.push_back(last_random_);
         } else if(op==0x70) { result_=pop();
         } else if(op==0xB1) {

@@ -117,6 +117,9 @@ public:
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();
   GameFsStatus RequestManager9();
+  GameFsStatus ClearManager8();
+  GameFsStatus ClearManager9();
+  bool OwnersLive()const{return Live();}
   GameFsStatus RequestCamera(int32_t value);
   GameFsStatus ShowIntro(int32_t value);
   GameFsStatus RequestActorEvent(int32_t first, int32_t second);

@@ -3,6 +3,7 @@ param(
     [string]$OutputDirectory = 'build/functional',
     [string]$PreparedCodecRoot = '',
     [string]$UserTablesDirectory = '',
+    [string]$PrivateSourceFixturesDirectory = '',
     [switch]$Test
 )
 $ErrorActionPreference = 'Stop'
@@ -28,10 +29,11 @@ $configure = @('-S', $root, '-B', $output, '-G', 'Ninja',
     '-DDOKODEMO_MODULE_CONTROLS_SOURCE=', '-DDOKODEMO_BACKEND_CONTROLS_SOURCE=',
     ('-DCMAKE_CXX_COMPILER=' + $toolchain.compiler),
     ('-DCMAKE_MAKE_PROGRAM=' + $ninja), ('-DDOKODEMO_FFMPEG_ROOT=' + $PreparedCodecRoot),
-    ('-DDOKODEMO_USER_TABLES_DIR=' + $UserTablesDirectory))
+    ('-DDOKODEMO_USER_TABLES_DIR=' + $UserTablesDirectory),
+    ('-DDOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR=' + $PrivateSourceFixturesDirectory))
 $null = Invoke-DokodemoProcess -FilePath $cmake -Arguments $configure -WorkingDirectory $root -LogPath (Join-Path $output 'configure.log')
-$null = Invoke-DokodemoProcess -FilePath $cmake -Arguments @('--build', $output, '--target', 'dokodemo-native', 'dokodemo-game-boot-tests', 'dokodemo-game-graphics-tests', 'dokodemo-game-filesystem-tests', 'dokodemo-game-content-tests', 'dokodemo-game-scene-ui-tests', 'dokodemo-game-storage-tests', 'dokodemo-game-model-tests', 'dokodemo-game-text-tests', 'dokodemo-game-actor-tests', '--parallel', '2') -WorkingDirectory $root -LogPath (Join-Path $output 'build.log')
+$null = Invoke-DokodemoProcess -FilePath $cmake -Arguments @('--build', $output, '--target', 'dokodemo-native', 'dokodemo-game-boot-tests', 'dokodemo-game-graphics-tests', 'dokodemo-game-filesystem-tests', 'dokodemo-game-content-tests', 'dokodemo-game-scene-ui-tests', 'dokodemo-game-storage-tests', 'dokodemo-game-model-tests', 'dokodemo-game-text-tests', 'dokodemo-game-actor-tests', 'dokodemo-game-sound-tests', '--parallel', '2') -WorkingDirectory $root -LogPath (Join-Path $output 'build.log')
 if ($Test) {
-    $null = Invoke-DokodemoProcess -FilePath $ctest -Arguments @('--test-dir', $output, '-R', '^game-(boot|graphics|filesystem|content|scene-ui|storage|model|text|actor)-tests$', '--output-on-failure') -WorkingDirectory $root -LogPath (Join-Path $output 'test.log')
+    $null = Invoke-DokodemoProcess -FilePath $ctest -Arguments @('--test-dir', $output, '-R', '^game-(boot|graphics|filesystem|content|scene-ui|storage|model|text|actor|sound)-tests$', '--output-on-failure') -WorkingDirectory $root -LogPath (Join-Path $output 'test.log')
 }
 Write-Host "Native functional WIP built: $(Join-Path $output 'dokodemo-native.exe')"

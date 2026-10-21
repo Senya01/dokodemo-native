@@ -135,12 +135,15 @@ struct GameSoundBankSnapshot {
     uint32_t image_bytes = 0, chunks = 0, pool_capacity = 64;
     int32_t native_metadata_slot = -1;
     bool regions = false, waves = false, sequences = false, names = false;
+    uint32_t playback_requests=0;
+    int32_t last_sound=-1,last_channel=-1,last_volume=0,last_playback_result=-1;
 };
 // Native metadata pool adaptation of551E4/55208/5536C. This owns a live source
 // image and a real bounded slot; it does not pretend to implement SGX playback.
 class GameSoundBank final {
   public:
     GameFsStatus Register(PackageView image);
+    GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     GameSoundBankSnapshot Snapshot() const {
         return state_;
     }

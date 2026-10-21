@@ -39,8 +39,9 @@ script::Value GameStringReplace51(const std::vector<script::Value>& args) {
     return Value::string(std::move(result));
 }
 GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView image,std::string path,
-                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime,GameRecordStore* records) {
+                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime,GameRecordStore* records,GameSoundBank* sound) {
     Close();state_={};
+    state_.generation=++owner_generation_;
     try {
         Need(profile.live&&profile.actor<5,"KSC requires the actually confirmed native profile");
         const auto size=image.Describe().size;
@@ -51,7 +52,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(program_.load_original_bytes(std::move(bytes),path,error),error.text().c_str());
         const auto attached=dictionary_.Attach(std::move(dictionary));
         Need(bool(attached),attached.detail.c_str());
-        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;state_.path=std::move(path);
+        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         vm_->host_service([this](uint8_t id,const std::vector<Value>& args){return Service(id,args);});
         vm_->random_source([this]{Need(rng_&&rng_->Available(),"Current game RNG not live");return rng_->NextC3234();});
@@ -78,6 +79,14 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     ++state_.game_service_calls;state_.last_service=uint32_t(id);state_.service_ids.push_back(uint32_t(id));
     const auto& arg=args[1];
     switch(id) {
+    case 73: {
+        Need(sound_&&arg.kind==Value::Kind::Reference,"GAME73 needs registered SE_SYS bank and actual argument array");
+        const auto header=vm_->load_reference(arg);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==3,"GAME73 reached three scalar fields");
+        const auto field=[&](uint32_t n){return Number(vm_->load_reference(vm_->indexed_reference(arg,n)));};
+        const auto status=sound_->Request73(field(0),field(1),field(2));Need(bool(status),status.detail.c_str());
+        ++state_.sound73_requests;state_.sound73_playback_result=sound_->Snapshot().last_playback_result;
+        state_.sound73_result_word=False().word;return False(); //1D064 ignores playback return
+    }
     case 3: {
         Need(runtime_!=nullptr,"GAME3 needs live game manager owner");
         const auto status=runtime_->RequestManager9();Need(bool(status),status.detail.c_str());
@@ -400,9 +409,32 @@ GameFsStatus GameActorScript::CompleteInventory(const GameInventorySnapshot& gui
         vm_->resume_modal_context();state_.inventory_requested=false;++state_.inventory_completions;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{
+    Need(state_.live&&vm_&&program_.header().local_count>0,"Owner event target requires live context/local owner");
+    return {state_.generation,vm_->context_value(),vm_->read_slot(script::Table::Local,0)};
+}
+GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected){
+    try{
+        Need(state_.live&&vm_&&program_.header().local_count>0,"Main-flow event requires live head context/local owner");
+        //Current finite manager list has this one real context. ctx24 points
+        //to Local[0],not a callback table or a new synthetic VM.
+        const auto target=OwnerEventTarget();const auto& code=target.callback;
+        if(expected){
+            const auto old_owner=expected->context.context_owner.lock(),current_owner=target.context.context_owner.lock();
+            Need(expected->generation==target.generation&&old_owner&&old_owner==current_owner
+                 &&expected->context.word==target.context.word&&expected->callback.kind==code.kind&&expected->callback.word==code.word,
+                 "Native interaction target registry/generation/callback changed or retired");
+        }
+        state_.owner_event_callback_word=code.word;
+        state_.owner_event_result=vm_->post_owner_event(code,int32_t(event_id),argument);
+        ++state_.owner_event_calls;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
+        out.context_word=vm_->context_value().word;out.callback_depth=vm_->callback_depth();out.queued_callbacks=vm_->queued_callbacks();out.operand_count=uint32_t(vm_->stack().size());out.deadline_tick=vm_->deadline_tick();
+        if(program_.header().local_count)out.owner_event_callback_word=vm_->read_slot(script::Table::Local,0).word;
         out.control_blocks_entered=vm_->control_blocks_entered();out.control_blocks_closed=vm_->control_blocks_closed();
         out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
         out.waiting_for_event=vm_->waiting_for_event();out.waiting_deadline=vm_->deadline_waiting();
@@ -411,7 +443,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
 }
 void GameActorScript::Close() {
     state_=Snapshot();
-    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;
+    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;sound_=nullptr;
     state_.live=false;state_.awaiting_message=false;
 }
 } // namespace dokodemo::recovered

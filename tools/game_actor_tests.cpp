@@ -1,7 +1,9 @@
 #include "recovered/game_actor_script_native.h"
+#include "recovered/game_main_flow_native.h"
 #include "recovered/game_value_array_native.h"
 #include <algorithm>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 using namespace dokodemo;
@@ -124,6 +126,44 @@ void Focused(){
     Check(queued_first.status==script::Status::Yield&&queued.callbacks_returned()==0,"queued callback starts only after interpreter scope drains");
     Check(queued.run().status==script::Status::Yield&&queued.callbacks_returned()==1&&queued.result().signed_integer()==42&&!queued.context_enabled(),"queued callback restores builtin result ownership");
     queued.resume_modal_context();queued.clock_tick(2);Check(queued.run().status==script::Status::Complete,"queue return resumes original deadline");
+    for(const uint8_t event_return:{uint8_t(0x32),uint8_t(0x1C)}){
+    auto owner_program=Fixture({0x30,0,0x80,9,0x70,0x80,5,0x44,0x38,0x30,2,0x90,0,0,0x90,1,0,0x8B,0x7F,2,event_return});
+    script::Vm owner_event(owner_program);owner_event.clock_tick(10);owner_event.start();
+    Check(owner_event.run().status==script::Status::Yield,"owner-event original deadline entered");
+    Check(owner_event.context_value().word>>28==8,"owner event has actual admitted context registry identity");
+    auto owner_code=callback;owner_code.word=0x70000009;bool two_owner_args=false;
+    owner_event.host_service([&](uint8_t id,const std::vector<script::Value>& args){
+        bool absent=false;try{(void)owner_event.read_slot(script::Table::Frame,2);}catch(const std::exception&){absent=true;}
+        two_owner_args=id==0x7F&&args.size()==2&&args[0].signed_integer()==12&&args[1].signed_integer()==34&&absent;
+        return script::Value::string("temporary event result");});
+    const auto prior_pc=owner_event.pc(),prior_calls=owner_event.call_depth();const auto prior_deadline=owner_event.deadline_tick();
+    Check(owner_event.post_owner_event({},0,0)==1&&owner_event.pc()==prior_pc&&owner_event.deadline_tick()==prior_deadline,
+          "non-code Local0 is genuine no-callback return1 without changing caller");
+    Check(owner_event.post_owner_event(owner_code,12,34)==0,"internal event admitted without third callerID argument");
+    owner_event.clock_tick(12);Check(owner_event.run().status==script::Status::Yield&&two_owner_args
+        &&owner_event.callbacks_returned()==1&&owner_event.context_enabled()&&owner_event.pc()==prior_pc
+        &&owner_event.call_depth()==prior_calls&&owner_event.deadline_tick()==17&&owner_event.result().signed_integer()==9,
+        "two-arg32 return restores actual result/frame/PC and relative deadline,not forced success or early timer wake");
+    owner_event.clock_tick(17);Check(owner_event.run().status==script::Status::Complete,"owner event resumes only original deadline continuation");
+    }
+    auto history_program=Fixture({0x30,0,0x95,0,0,0xF6,3,4,0,0x70,0x38},
+                                {0x90000003,0x20000001,0x20000002,0x20000003,0x90004002,0x20000001,0x20000002});
+    script::Vm history(history_program);uint32_t random_calls=0;history.random_source([&]{++random_calls;return 0u;});history.start();
+    Check(history.run().status==script::Status::Complete&&history.result().signed_integer()==3&&random_calls==1
+          &&history.read_slot(script::Table::Global,4).word==0x90000002&&history.read_slot(script::Table::Global,6).word==0x20000003,
+          "F6 excludes actual scalar history,rotates packed cursor and owns selected value");
+    auto code_history_program=Fixture({0x30,0,0x95,0,0,0xF6,3,3,0,0x70,0x38,0x30,0,0x31},
+                                     {0x90000002,0x70000000,0x7000000B,0x90000001,0x70000000});
+    script::Vm code_history(code_history_program);code_history.random_source([]{return 0u;});code_history.start();
+    Check(code_history.run().status==script::Status::Complete&&code_history.result().kind==script::Value::Kind::Code
+          &&code_history.result().word==0x7000000B&&code_history.read_slot(script::Table::Global,4).word==0x7000000B,
+          "F6 actual function choices retain tag7/rawPC and exclude prior callback by payload");
+    auto exhausted_history=Fixture({0x30,0,0x95,0,0,0xF6,3,2,0,0x70,0x38},{0x90000001,0x20000007,0x90000001,0x20000007});
+    script::Vm exhausted(exhausted_history);exhausted.random_source([]{return 0u;});exhausted.start();
+    Check(exhausted.run().status==script::Status::Complete&&exhausted.result().signed_integer()==7,"F6 all-excluded falls back to whole source list ratherthan empty/success stub");
+    auto malformed_history=Fixture({0x30,0,0x95,0,0,0xF6,3,2,0,0x70,0x38},{0x90000001,0x20000007,0x90004001,0});
+    script::Vm invalid_history(malformed_history);invalid_history.random_source([]{return 0u;});invalid_history.start();
+    Check(invalid_history.run().status==script::Status::Stopped,"F6 invalid cursor refuses before history mutation");
     const auto replace=[](std::string source,std::string needle,std::string value){return GameStringReplace51({script::Value::string(source),script::Value::string(needle),script::Value::string(value)});};
     Check(replace("aaaaa","aa","b").cp932=="bba","51 advances past nonoverlapping source match");
     Check(replace("x/x","x","xx").cp932=="xx/xx","51 doesnot search newly inserted replacement");
@@ -204,6 +244,10 @@ void Focused(){
     auto indirect_program=Fixture({0x30,0,0x8A,8,0,0,0x23,0x38,0x30,0,0x80,7,0x70,0x31});
     script::Vm indirect(indirect_program);indirect.start();Check(indirect.run().status==script::Status::Complete&&indirect.result().signed_integer()==7,
         "source23 tag7 call and returnPC continue caller without invented result");
+    auto operand_call=Fixture({0x30,0,0x80,11,0x8A,11,0,0,0x23,0x70,0x38,0x30,0,0x80,7,0x70,0x31});
+    script::Vm retained_operand(operand_call);retained_operand.start();
+    Check(retained_operand.run().status==script::Status::Complete&&retained_operand.result().signed_integer()==11,
+          "23 preserves caller operands below returnPC;callee result doesnot consume caller stack");
     auto bad_indirect_program=Fixture({0x30,0,0x80,8,0x23,0x38});script::Vm bad_indirect(bad_indirect_program);bad_indirect.start();
     Check(bad_indirect.run().status==script::Status::Stopped,"numeric rawaddress cannot replace source23 tag7 callee");
     auto yield=Fixture({0x30,0,0x85,0x41,0x80,4,0x70,0x38});script::Vm scheduler(yield);
@@ -303,6 +347,38 @@ void Focused(){
     int32_t absent_slot=3;
     Check(!actor.CreateModel(170,0,0,0,absent_slot)&&absent_slot==-1&&actor.Snapshot().model_slots==0,
           "service31 cannot allocate a successful slot without actual resource owner");
+    {
+        GameMainFlow flow;std::vector<std::pair<uint32_t,int32_t>> events;
+        Check(bool(flow.Initialize(actor,[&](uint32_t event,int32_t arg){events.emplace_back(event,arg);return GameFsStatus{};})),"source constructor owns zeroed main-flow states");
+        GameMainFlowGate gate;gate.fade_state=2;
+        Check(flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0,"never force mainflow directly to phase5/state4");
+        Check(bool(actor.RequestManager())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==1,"actual byte8 transitions phase0 to1");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==5&&!actor.Snapshot().manager_request8&&!actor.Snapshot().manager_request9,
+              "phase1 byte8 branch clears9 then8 before phase5;old9 is cancelled not completed");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"real substate0 clear happens before4");
+        Check(bool(actor.RequestManager9())&&bool(actor.RequestCamera(1)),"independent later GAME3 andcamera setter admitted");
+        gate.extension_busy=true;
+        for(unsigned n=0;n<25;++n)Check(bool(flow.Tick(gate)),"busy gate remainspending without quota completion");
+        Check(actor.Snapshot().manager_request9&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"actualbusy gate prevents9clear");
+        gate.extension_busy=false;gate.manager_switch_pending=true;
+        Check(!flow.Tick(gate)&&actor.Snapshot().manager_request9,"unimplemented realswitch cannotbypassgate orclear9");
+        gate.manager_switch_pending=false;
+        Check(bool(flow.Tick(gate))&&!actor.Snapshot().manager_request9&&flow.Snapshot().substate24==11
+              &&actor.Snapshot().manager_camera_request4C==1,"2365C clearsrequest9 beforecamera requesthasbeenconsumed");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0
+              &&flow.Snapshot().outer_returns==1,"236B0 latch returnsouter0;notLoadMan scenechange");
+        gate.loader469=true;const auto returns=flow.Snapshot().outer_returns;
+        flow.Input({0,true,false,1});flow.Input({Circle,true,false,2});Check(bool(flow.Tick(gate)),"stable469 blocksfreshCircle");
+        Check(events.empty()&&flow.Snapshot().phase1C==0&&flow.Snapshot().outer_returns==returns,"UIclose/poll completion doesnotfabricate469zero or event");
+        //Separate gate0 fixture checks source input priority,not connected469 proof.
+        gate.loader469=false;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Circle,true,false,4});
+        Check(bool(flow.Tick(gate))&&events==std::vector<std::pair<uint32_t,int32_t>>{{0,0}}&&flow.Snapshot().phase1C==1,
+              "sourcephase0 freshCircle dispatches real0/0 thenphase1 evenwhen callbackcanbenoop");
+        Check(bool(actor.RequestManager9())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().phase1_request9_consumed==1,
+              "separatephase1 byte9consumer returns0withoutsubstate11");
+        flow.Close();Check(!flow.Input({Circle,true,false,5})&&!flow.Tick(gate),"retiredmainflow refuseslateinput/requests");
+        Check(bool(actor.AdvanceActorFrame()),"remainingindependentcamera requeststillowned");
+    }
     Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
           "zeroed1B188 manager receives actualservice0 request,not completion");
     owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
@@ -336,7 +412,7 @@ void Focused(){
     auto raw_not=Fixture({0x30,0,0x80,0xFF,0xB1,0x70,0x38});script::Vm negate(raw_not);negate.start();
     Check(negate.run().status==script::Status::Complete&&negate.result().word==0x10000000,"B1 tests raw nonzero payload of negative integer");
 }
-void Selected(const char* path){
+void Selected(const char* path,bool with_main_flow=false){
     // Optional new-engine diagnostic,not connected-game proof. Exactly the
     // already source-selected package is read;no extraction or ISO bootstrap.
     std::ifstream f(path,std::ios::binary);Check(bool(f),"DATA.BP open");
@@ -375,9 +451,23 @@ void Selected(const char* path){
     const auto scene_open=runtime.InitializeScene0(profile.calendar);Check(bool(scene_open),scene_open.detail.c_str());
     uint32_t fixture_clock=0x30D72E10u;bool fixture_advanced=false;
     GameRecordStore records;records.ResetCold249D0();
-    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[&]{return fixture_clock;},&rng,&runtime,&records); // explicit diagnostic clock fixture
+    std::ifstream sound_file(std::filesystem::path(path).parent_path()/"sound/se/SE_SYS.sgd",std::ios::binary|std::ios::ate);
+    Check(bool(sound_file),"actual selected SE_SYS bank open");const auto sound_size=size_t(sound_file.tellg());
+    std::vector<uint8_t> sound_bytes(sound_size);sound_file.seekg(0);sound_file.read(reinterpret_cast<char*>(sound_bytes.data()),sound_bytes.size());Check(bool(sound_file),"selected SE_SYS bounded full file");
+    Lease sound_lease(std::move(sound_bytes));GameSoundBank sound;Check(bool(sound.Register(sound_lease.View())),"actual selected sound metadata");
+    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[&]{return fixture_clock;},&rng,&runtime,&records,&sound); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
-    for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto s=game.Snapshot();
+    GameMainFlow main_flow;bool selected_loader469=false;
+    if(with_main_flow)Check(bool(main_flow.Initialize(runtime,[&](uint32_t id,int32_t arg){return game.PostMainFlowEvent(id,arg);})),"mainflow from genuine constructor beforefirstGAME0");
+    const auto tick_game=[&]()->GameFsStatus{
+        const auto before=game.Snapshot();
+        if(with_main_flow&&!before.inventory_requested){
+            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message;gate.loader469=selected_loader469;gate.fade_state=transition.Snapshot().state;
+            const auto status=main_flow.Tick(gate);if(!status)return status;
+        }
+        return game.Tick();
+    };
+    for(unsigned i=0;i<600;++i){const auto status=tick_game();const auto s=game.Snapshot();
         if(i>200&&!fixture_advanced&&s.runtime.intro_requests){fixture_clock+=5;fixture_advanced=true;std::cout<<"Explicit fixture advances calendar5minutes;NOT connected realclock evidence\n";}
         if(i<6||i%20==0||!status)
         std::cout<<"tick="<<s.ticks<<" pc="<<s.pc<<" op="<<s.last_opcode<<" steps="<<s.instructions
@@ -419,25 +509,25 @@ void Selected(const char* path){
           "ASC60 ready258 doesnot synthesize unreachable8031 or8000;live83 clip really completed first");
     Check(s.local_config_writes==1&&s.message_local_words==std::array<uint32_t,5>{{0x20000000,0x20000009,0x20000004,0x20000064,0x20000064}},
           "actualbuiltin35 fiveLocalwords feedrealtextownerconfiguration");
-    for(unsigned i=0;i<30;++i)Check(bool(game.Tick()),"realowners pump while messagewaits");
+    for(unsigned i=0;i<30;++i)Check(bool(tick_game()),"realowners pump while messagewaits");
     auto held=game.Snapshot();Check(held.messages==1&&held.awaiting_message&&held.instructions==s.instructions
         &&held.runtime.actor_phases>s.runtime.actor_phases&&held.native_clock_ticks>s.native_clock_ticks,
         "messagewait cannot autoack and doesnot freeze actor/globalclockowners");
     Check(game.AcknowledgeMessage(),"explicit selected-data messageacknowledgement");
-    for(unsigned i=0;i<600;++i){Check(bool(game.Tick()),"actualcallback continues aftermessageack");if(game.Snapshot().messages==2)break;}
+    for(unsigned i=0;i<600;++i){Check(bool(tick_game()),"actualcallback continues aftermessageack");if(game.Snapshot().messages==2)break;}
     const auto next=game.Snapshot();Check(next.messages==2&&next.awaiting_message&&next.message_acknowledgements==1&&!next.blocked,
         "actualKSC nextmessage/result afteroneack,not oldGAME44 failure oracle");
     const std::vector<uint32_t> message_pcs{0x7BC93,0x7BCB0,0x7BCDE,0x7BCF3,0x7BD1D,0x7BD42,0x7BD69,0x7BD95,0x7BDBC,0x7BEF0,0x7BF0F,0x89297,0x892A7,0x892C1,0x892E3};
     const std::vector<uint32_t> actor_commands{42,42,60,60,39,39,38,43,43,42,35,20,42,42,38};
     const auto second_steps=next.instructions;
-    for(unsigned i=0;i<12;++i)Check(bool(game.Tick()),"second context pumps live owners without input");
+    for(unsigned i=0;i<12;++i)Check(bool(tick_game()),"second context pumps live owners without input");
     Check(game.Snapshot().messages==2&&game.Snapshot().instructions==second_steps,"no hidden acknowledgement of second message");
     //Exactly thirteen separately requested diagnostic edges,one per known
     //actual context;this loop belongs to the test,never normal gameplay.
     for(unsigned message=2;message<15;++message){
         Check(game.Snapshot().awaiting_message&&game.Snapshot().messages==message,"separate actual message context");
         Check(game.AcknowledgeMessage()&&!game.AcknowledgeMessage(),"one edge cannot acknowledge a second context before it exists");
-        for(unsigned i=0;i<2000;++i){const auto status=game.Tick();Check(bool(status),status.detail.c_str());if(game.Snapshot().awaiting_message)break;}
+        for(unsigned i=0;i<2000;++i){const auto status=tick_game();Check(bool(status),status.detail.c_str());if(game.Snapshot().awaiting_message)break;}
         const auto current=game.Snapshot();
         Check(current.awaiting_message&&current.messages==message+1&&current.message_acknowledgements==message,"bounded actual conversation continues after fresh edge");
         Check(current.pc==message_pcs.at(message)&&current.runtime.requested_command==int32_t(actor_commands.at(message)),"actual callback branch and source-selected actor command");
@@ -452,7 +542,7 @@ void Selected(const char* path){
           "introduction callback returns into actual gift function with live frame and input wait");
     std::cout<<"actual conversation15 messages14 acknowledgements,51results="<<gift.string_replace_calls<<" depth="<<gift.call_depth<<" PASS\n";
     Check(game.AcknowledgeMessage(),"inventory probe separate acknowledgement15");
-    for(unsigned i=0;i<600;++i){auto status=game.Tick();const auto probe=game.Snapshot();
+    for(unsigned i=0;i<600;++i){auto status=tick_game();const auto probe=game.Snapshot();
         if(!status||(!probe.context_enabled&&probe.callbacks_returned)){
             std::cout<<"inventory callback pc="<<std::hex<<probe.pc<<std::dec<<" requests="<<probe.inventory_requests<<" enabled="<<probe.context_enabled<<" returned="<<probe.callbacks_returned<<" detail="<<status.detail<<'\n';break;
         }
@@ -487,8 +577,8 @@ void Selected(const char* path){
     Check(!game.CompleteInventory(gui),"VM cannot resume before deferred destructor drains");
     Check(bool(inventory.Tick(resources,transition))&&inventory.ClosedAndRetired(),"deferred GUI destructor releases resource owners");
     Check(!inventory.Input({Cross,true,false,++sequence}),"retired GUI rejects late input");
-    Check(bool(game.CompleteInventory(inventory.Snapshot())),"native close-only modal wake");
-    for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto after=game.Snapshot();
+    Check(bool(game.CompleteInventory(inventory.Snapshot())),"native close-only modal wake");selected_loader469=true;
+    for(unsigned i=0;i<600;++i){const auto status=tick_game();const auto after=game.Snapshot();
         if(!status||after.awaiting_message){std::cout<<"after inventory pc="<<std::hex<<after.pc<<std::dec<<" messages="<<after.messages<<" ack="<<after.message_acknowledgements<<" service="<<after.last_service<<" detail="<<status.detail<<'\n';break;}}
     const auto after=game.Snapshot();Check(!after.blocked&&after.context_enabled&&after.inventory_completions==1
         &&after.game71_calls==1&&after.game71_result_word==0x10000000&&after.awaiting_message&&after.messages==16,
@@ -499,19 +589,56 @@ void Selected(const char* path){
         &&after.record_cell0_writes==1&&after.record_cell0_before==after.record_cell0_after&&after.record_cell0_after==0,
         "actualGAME29 record/currentclock date distinct from confirmed profile;cell0 is destination byte");
     const auto& input_text=after.record_input_text;Check(input_text.size()==116&&std::equal(input_text.begin(),input_text.end(),saved.bank0[0].payload.begin(),[](char a,uint8_t b){return uint8_t(a)==b;}),"owned exact diary prefix survives temporary frame return");
-    const auto held_steps=after.instructions;for(unsigned i=0;i<15;++i)Check(bool(game.Tick()),"new message retains independent owners");
+    const auto held_steps=after.instructions;for(unsigned i=0;i<15;++i)Check(bool(tick_game()),"new message retains independent owners");
     Check(game.Snapshot().messages==16&&game.Snapshot().instructions==held_steps,"new text cannot autoack after inventory close");
     Check(game.AcknowledgeMessage(),"new message16 separate fresh acknowledgement");
-    for(unsigned i=0;i<2000;++i){const auto status=game.Tick();const auto state=game.Snapshot();
+    for(unsigned i=0;i<2000;++i){const auto status=tick_game();const auto state=game.Snapshot();
         if(!status||state.awaiting_message||(state.game3_calls==1&&state.runtime.camera_completions==2&&state.last_service==28&&state.waiting_deadline)){std::cout<<"post71 next pc="<<std::hex<<state.pc<<std::dec<<" messages="<<state.messages<<" ack="<<state.message_acknowledgements<<" cmd="<<state.runtime.requested_command<<" text=";
             for(unsigned char b:state.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<" detail="<<status.detail<<'\n';break;}}
     {const auto tail=game.Snapshot();std::cout<<"post71 tail pc="<<std::hex<<tail.pc<<std::dec<<" service="<<tail.last_service<<" messages="<<tail.messages<<" complete="<<tail.completed<<" wait="<<tail.waiting_for_event<<" deadline="<<tail.waiting_deadline<<" field58="<<tail.runtime.source_field58<<" req9="<<tail.runtime.manager_request9<<" camera="<<tail.runtime.camera_completions<<" mode="<<tail.runtime.camera_transition_mode1C<<" command="<<tail.runtime.requested_command<<" commandComplete="<<tail.runtime.command_complete<<" steps="<<tail.instructions<<" detail="<<tail.error<<'\n';}
     const auto goodbye=game.Snapshot();Check(!goodbye.blocked&&goodbye.messages==16&&!goodbye.awaiting_message
         &&goodbye.message_acknowledgements==16&&goodbye.game3_calls==1&&goodbye.game3_result_word==0x10000000
-        &&goodbye.runtime.manager_request9&&goodbye.runtime.camera_completions==2&&goodbye.runtime.camera_transition_mode1C==0
+        &&(with_main_flow?!goodbye.runtime.manager_request9:goodbye.runtime.manager_request9)&&goodbye.runtime.camera_completions==2&&goodbye.runtime.camera_transition_mode1C==0
         &&goodbye.runtime.camera_fov_degrees==30&&goodbye.last_service==28&&!goodbye.completed,
         "freshbye acknowledgement executes real manager9 setter,camera-out and live main loop;not forced session completion");
     Check(records.At(0,0).payload==saved.bank0[0].payload&&records.At(0,0).date==saved.bank0[0].date&&records.Live(),"persistent record survives inventory and subsequent temporary script contexts");
+    if(with_main_flow){
+        const auto flow=main_flow.Snapshot();
+        std::cout<<"MAIN_FLOW phase="<<flow.phase1C<<" sub="<<flow.substate24<<" returns="<<flow.outer_returns<<" consumed="<<flow.request9_consumed<<" callback="<<std::hex<<goodbye.owner_event_callback_word<<" context="<<goodbye.context_word<<std::dec<<" depth="<<goodbye.callback_depth<<" stack="<<goodbye.operand_count<<" deadline="<<goodbye.deadline_tick<<'\n';
+        Check(flow.phase5_entries==1&&flow.request9_consumed==1&&flow.outer_returns==1&&flow.phase1C==0&&flow.substate24==0,"actualbyte8/9 mainflow orderedreturn independentcamera");
+        main_flow.Input({0,true,false,100});Check(bool(tick_game()),"real released owner input");
+        GamePostModalInteraction route;
+        auto unfinished=inventory.Snapshot();unfinished.phase=6;unfinished.retirements=0;
+        Check(bool(route.Update(unfinished,main_flow.Snapshot(),game,true))&&!route.Snapshot().eligible
+              &&!route.Input({0,true,false,90,0})&&!route.Input({Circle,true,false,91,0}),"pre-retirement input refuses");
+        auto pending_flow=main_flow.Snapshot();pending_flow.outer_returns=0;pending_flow.phase1C=5;pending_flow.substate24=11;
+        Check(bool(route.Update(inventory.Snapshot(),pending_flow,game,true))&&!route.Snapshot().eligible
+              &&!route.Input({Circle,true,false,92,0}),"sub11 pending isnot genuine outer0 boundary");
+        Check(bool(route.Update(inventory.Snapshot(),main_flow.Snapshot(),game,true)),"actualclose/retirement andgenuinemainflowreturn admit named native route");
+        Check(route.Snapshot().eligible&&route.Snapshot().source_gate_blocked,"nativeeligible doesnot clear source469");
+        const auto generation=route.Snapshot().generation;
+        Check(!route.Input({Circle,true,false,101,generation}),"held Circle at context boundary refuses");
+        Check(!route.Input({0,true,false,102,generation-1})&&!route.Input({Circle,true,false,103,generation-1}),"oldqueued context cannotarm");
+        Check(!route.Input({0,false,false,104,generation})&&!route.Input({Circle,true,false,105,generation}),"refocused-held refuses");
+        Check(!route.Input({0,true,false,106,generation}),"focused fresh release arms");
+        Check(!route.Input({Circle,true,false,105,generation}),"old sequence cannot become fresh edge");
+        const auto old_target=game.OwnerEventTarget();auto wrong_target=old_target;++wrong_target.generation;
+        const auto calls_before=game.Snapshot().owner_event_calls;
+        Check(!game.PostMainFlowEvent(0,0,&wrong_target)&&game.Snapshot().owner_event_calls==calls_before,"generation mismatch refuses before queue mutation");
+        Check(route.Input({Circle,true,false,107,generation}),"fresh actual event0 posts through generationbound native context");
+        Check(!route.Input({Circle,true,false,108,generation}),"oneowned event peredge/context");
+        for(unsigned i=0;i<5000;++i){const auto status=tick_game();const auto future_state=game.Snapshot();
+            if(!status||future_state.awaiting_message||i==4999){std::cout<<"MAIN_NEXT pc="<<std::hex<<future_state.pc<<std::dec<<" service="<<future_state.last_service<<" messages="<<future_state.messages<<" instructions="<<future_state.instructions<<" field58="<<future_state.runtime.source_field58<<" requested="<<future_state.runtime.requested_command<<" req8="<<future_state.runtime.manager_request8<<" req9="<<future_state.runtime.manager_request9<<" phase="<<main_flow.Snapshot().phase1C<<" ownerCalls="<<future_state.owner_event_calls<<" ownerResult="<<future_state.owner_event_result<<" detail="<<status.detail<<'\n';break;}}
+        const auto spoken_again=game.Snapshot();
+        Check(!spoken_again.blocked&&spoken_again.awaiting_message&&spoken_again.messages==17&&spoken_again.pc==0x29CD
+            &&spoken_again.callbacks_returned==goodbye.callbacks_returned+1&&spoken_again.callback_depth==0&&spoken_again.queued_callbacks==0
+            &&spoken_again.sound73_requests==1&&spoken_again.sound73_result_word==0x10000000&&spoken_again.sound73_playback_result==-1,
+            "actual event0 returns via1C,SGXrefusal leaves sourceFALSE,and nextreal KSC message17 appears");
+        Check(bool(route.Update(inventory.Snapshot(),main_flow.Snapshot(),game,true))&&route.Snapshot().callback_returned,"real callbackreturn separatefrompost/admission");
+        std::cout<<"MAIN_TEXT17=";for(unsigned char b:spoken_again.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+        route.Close();Check(!route.Input({0,true,false,109,generation})&&!route.Input({Circle,true,false,110,generation}),"retired native interaction rejects lateinput");
+        main_flow.Close();
+    }
     //Separate synthetic list fixture,not live-game item mutation evidence.
     std::vector<GameInventoryItem> sort_items(3);for(uint32_t i=0;i<3;++i){auto& item=sort_items[i];item.row=i;item.id=int32_t(i);item.valid=true;item.category=int32_t(i);item.date_word=(i==0?10:i==1?30:20);item.name="fixture";}
     Check(bool(inventory.Request(sort_items))&&bool(inventory.Tick(resources,transition)),"separate list source-domain fixture");
@@ -527,6 +654,6 @@ void Selected(const char* path){
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");
 }
 }
-int main(int argc,char** argv){try{Focused();if(argc==3&&std::string(argv[1])=="--selected-data")Selected(argv[2]);
+int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"))Selected(argv[2],std::string(argv[1])=="--manager9-data");
     std::cout<<"actor dictionary/native VM: trees,CP932,aliases,mutation,bounds,lifetime,frames/yield/errors PASS\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

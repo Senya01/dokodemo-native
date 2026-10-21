@@ -48,6 +48,7 @@ add_library(dokodemo-core STATIC
     src/recovered/game_actor_script_native.cpp
     src/recovered/game_inventory_native.cpp
     src/recovered/game_record_native.cpp
+    src/recovered/game_main_flow_native.cpp
     src/recovered/game_actor_runtime_native.cpp
     src/recovered/game_position_native.cpp
     src/recovered/game_value_array_native.cpp
@@ -86,10 +87,11 @@ add_library(dokodemo-core STATIC
     src/recovered/current_tables_native.cpp)
 target_compile_features(dokodemo-core PUBLIC cxx_std_17)
 target_include_directories(dokodemo-core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-set(DOKODEMO_USER_TABLES_DIR "" CACHE PATH "Private directory containing generated recovered/ksc_dispatch_addresses.h and audio_catalog.h")
+set(DOKODEMO_USER_TABLES_DIR "" CACHE PATH "External user-generated audio_catalog.h and recovered/ksc_dispatch_addresses.h")
 if(DOKODEMO_USER_TABLES_DIR)
     target_include_directories(dokodemo-core PUBLIC "${DOKODEMO_USER_TABLES_DIR}")
 endif()
+set(DOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR "" CACHE PATH "Optional local source-byte fixture headers; never distributed")
 set_target_properties(dokodemo-core PROPERTIES CXX_EXTENSIONS OFF)
 if(MSVC)
     set_target_properties(dokodemo-core PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -147,6 +149,10 @@ if(DOKODEMO_GAME_BOOT_TESTS)
     endif()
     add_test(NAME game-text-tests COMMAND dokodemo-game-text-tests)
     add_executable(dokodemo-game-actor-tests tools/game_actor_tests.cpp)
+    if(DOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR)
+        target_include_directories(dokodemo-game-actor-tests PRIVATE "${DOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tools")
+        target_compile_definitions(dokodemo-game-actor-tests PRIVATE DOKODEMO_PRIVATE_SOURCE_FIXTURES=1)
+    endif()
     target_link_libraries(dokodemo-game-actor-tests PRIVATE dokodemo-core)
     if(MSVC)
         set_target_properties(dokodemo-game-actor-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

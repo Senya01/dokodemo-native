@@ -166,6 +166,12 @@ public:
     uint32_t call_depth() const noexcept { return uint32_t(calls_.size()); }
     Value context_value();
     int32_t post_callback(const Value& context,const Value& code,const Value& first,const Value& second);
+    //1B4C0/6B4B8 owner event uses the same envelope/queue,callerID=-1:
+    //two scalar arguments,without the context-token third argument.
+    int32_t post_owner_event(const Value& code,int32_t event_id,int32_t argument);
+    uint32_t callback_depth()const noexcept{return event_depth_;}
+    uint32_t queued_callbacks()const noexcept{return uint32_t(pending_callbacks_.size());}
+    uint64_t deadline_tick()const noexcept{return wait_until_;}
     bool context_enabled()const noexcept{return context_enabled_;}
     // Named native modal scheduler adapter. Called only after actual GUI close,
     // poll completion and teardown;original byte38 wake producer is unclosed.
@@ -208,7 +214,7 @@ private:
         std::weak_ptr<std::vector<Value>> frame;
     };
     std::vector<ControlBlock> blocks_;
-    struct PendingCallback {uint32_t pc=0;Value first,second,caller;};
+    struct PendingCallback {uint32_t pc=0;Value first,second,caller;bool include_caller=true;};
     struct EventEnvelope {
         uint32_t pc=0;bool reserved=false,enabled=true,waiting=false,signal=true;
         int32_t deadline_delta=0; //source packed signed23 relative deadline

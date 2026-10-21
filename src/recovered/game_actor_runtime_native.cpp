@@ -323,6 +323,14 @@ GameFsStatus GameActorRuntime::RequestManager9(){
   if(!Live())return {GameFsCode::Unavailable,0,"GAME3 manager owner/lease retired"};
   state_.manager_request9=true;return {};
 }
+GameFsStatus GameActorRuntime::ClearManager8(){
+  if(!Live())return {GameFsCode::Unavailable,0,"Manager8 clear owner retired"};
+  state_.manager_request8=false;return {};
+}
+GameFsStatus GameActorRuntime::ClearManager9(){
+  if(!Live())return {GameFsCode::Unavailable,0,"Manager9 clear owner retired"};
+  state_.manager_request9=false;return {};
+}
 GameFsStatus GameActorRuntime::RequestManager() {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Game manager0 owner expired"};
