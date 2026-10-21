@@ -20,6 +20,40 @@ struct Lease final:PackageStorageLease {
     }
     PackageView View() {return PackageStorage::Attach(std::shared_ptr<const Lease>(this,[](const Lease*){}),bytes.size());}
 };
+struct MissingResources final:GameResourceSource {
+    uint32_t calls=0;
+    GameFsStatus OpenResource(const std::string&,PackageView&)override{
+        ++calls;return {GameFsCode::Unavailable,0,"Explicit test missing model"};
+    }
+};
+class SelectedRoomResources final:public GameResourceSource {
+  public:
+    explicit SelectedRoomResources(std::ifstream& file):file_(file){}
+    GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
+        try {
+            const auto split=path.find('\\');Check(split!=std::string::npos,"diagnostic mounted request");
+            const auto mount=path.substr(0,split);Check(mount=="BG_ROOM"||mount=="NEKO"||mount=="DATA","diagnostic actual game mounts only");
+            auto& package=packages_[mount];
+            if(!package.lease) {
+                file_.clear();file_.seekg(0,std::ios::end);const auto extent=uint64_t(file_.tellg());
+                std::vector<uint8_t> prefix(23312);file_.seekg(0);
+                file_.read(reinterpret_cast<char*>(prefix.data()),prefix.size());Check(bool(file_),"root prefix full read");
+                Lease root(std::move(prefix));const auto directory=BpDirectory::Parse(root.View(),extent);
+                const auto selected=directory.Resolve(mount+".BPM");
+                Check(selected.size&&selected.size<=128*1024*1024&&selected.offset+selected.size<=extent,"selected room extent");
+                std::vector<uint8_t> bytes(size_t(selected.size));file_.seekg(selected.offset);
+                file_.read(reinterpret_cast<char*>(bytes.data()),bytes.size());Check(bool(file_),"room package actual bounded read");
+                package.lease=std::make_unique<Lease>(std::move(bytes));package.directory=BpDirectory::Parse(package.lease->View(),package.lease->bytes.size());
+                std::cout<<mount<<" offset="<<selected.offset<<" bytes="<<selected.size<<'\n';
+            }
+            out=package.directory.Open(path.substr(split+1));std::cout<<"resource="<<path<<" bytes="<<out.Describe().size<<'\n';return {};
+        }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+    }
+  private:
+    std::ifstream& file_;
+    struct OwnedPackage{std::unique_ptr<Lease> lease;BpDirectory directory;};
+    std::map<std::string,OwnedPackage> packages_;
+};
 script::Program Fixture(std::vector<uint8_t> code,std::vector<uint32_t> globals={}){
     std::vector<uint8_t> b(28+code.size()+4*globals.size());
     Word(b,0,0x0043534B);Word(b,4,0x20030204);Word(b,12,uint32_t(code.size()));
@@ -79,13 +113,110 @@ void Focused(){
     script::Vm caller(call);Check(caller.start().status==script::Status::Running,"nested start");
     Check(caller.run().status==script::Status::Complete&&caller.result().signed_integer()==9,"actual nested lvalue/result ABI");
     auto yield=Fixture({0x30,0,0x85,0x41,0x80,4,0x70,0x38});script::Vm scheduler(yield);
-    scheduler.start();Check(scheduler.run().status==script::Status::Yield,"41 yields the interpreter slice");
+    scheduler.start();Check(scheduler.run().status==script::Status::Yield,"explicit native41 timestamp-slice adapter");
     scheduler.clock_tick(1);Check(scheduler.run().status==script::Status::Complete&&scheduler.result().signed_integer()==4,"next native slice resumes exact PC");
     auto unknown=Fixture({0x30,0,0x8B,0xEE,0,0x38});script::Vm unbound(unknown);unbound.start();
     Check(unbound.run().status==script::Status::Stopped,"unknown service is not successful return");
     auto retired=Fixture({0x30,0,0x21,10,0,0,0x89,0xF0,0x38,0x03,0x30,1,0x91,0,0,0x70,0x31});
     script::Vm expired(retired);expired.start();
     Check(expired.run().diagnostic.reason=="Retired native script frame reference","returned frame references expire rather than keeping cyclic owners");
+    auto block=Fixture({0x30,0,0x18,11,0,0,0x85,0x41,0x80,7,0x70,0x1A,0x38});
+    script::Vm scoped(block);scoped.start();
+    Check(scoped.run().status==script::Status::Yield&&scoped.active_control_blocks()==1,
+          "18 continues into body and preserves block across native timestamp slice");
+    scoped.clock_tick(1);
+    Check(scoped.run().status==script::Status::Complete&&scoped.result().signed_integer()==7&&
+          scoped.control_blocks_entered()==1&&scoped.control_blocks_closed()==1&&scoped.active_control_blocks()==0,
+          "1A closes only active block without changing result");
+    auto nested=Fixture({0x30,0,0x18,10,0,0,0x21,12,0,0,0x1A,0x38,
+                         0x30,0,0x18,21,0,0,0x80,9,0x70,0x1A,0x31});
+    script::Vm unwind(nested);unwind.start();
+    Check(unwind.run().status==script::Status::Complete&&unwind.result().signed_integer()==9&&
+          unwind.control_blocks_entered()==2&&unwind.control_blocks_closed()==2&&unwind.active_control_blocks()==0,
+          "callee closes its block then returns;caller block survives and closes normally");
+    auto abnormal=Fixture({0x30,0,0x18,10,0,0,0x21,12,0,0,0x1A,0x38,
+                           0x30,0,0x18,23,0,0,0x80,9,0x70,0x31,0x03,0x1A,0x38});
+    script::Vm unclosed(abnormal);unclosed.start();
+    Check(unclosed.run().diagnostic.reason=="Return through active block: source67548 unwind unresolved",
+          "unresolved source abnormal unwind is not reconstructed as normal1A");
+    auto foreign=Fixture({0x30,0,0x18,10,0,0,0x21,12,0,0,0x1A,0x38,0x30,0,0x1A,0x31});
+    script::Vm bad_close(foreign);bad_close.start();
+    Check(bad_close.run().status==script::Status::Stopped,"callee cannot close caller block");
+    for(uint8_t selector: {uint8_t(0),uint8_t(1),uint8_t(2),uint8_t(255)}) {
+        // Linked metadata is deliberately not adjacent to its prior body.
+        // 89 captures raw result30,so no Boolean/forced branch can pass.
+        std::vector<uint8_t> code{0x30,0,0x80,selector,0x13,
+            0,0,0,0x20,15,0,0,0x89,0x70,0x38,
+            1,0,0,0x10,25,0,0,0x89,0x70,0x38,
+            0,0,0,0,0x89,0x70,0x38};
+        if(selector==255)Word(code,5,0x2FFFFFFF);
+        auto linked=Fixture(code);script::Vm sw(linked);sw.start();
+        Check(sw.run().status==script::Status::Complete&&sw.switches_executed()==1,"linked switch executes selected body");
+        const uint32_t expected=selector==0?0x20000000:selector==1?0x10000001:selector==255?0x2FFFFFFF:0;
+        Check(sw.result().word==expected,"switch signed28 selection and raw case/default result retained");
+        if(selector==0) {
+            code[9]=5;bool rejected=false;
+            try{(void)Fixture(code);}catch(const std::exception&){rejected=true;}
+            Check(rejected,"cyclic linked metadata rejected before execution");
+        }
+    }
+    auto spinning=Fixture({0x30,0,0x10,2,0,0});script::Vm responsive(spinning);responsive.start();
+    Check(responsive.run(20).status==script::Status::HostYield&&!responsive.stopped()&&responsive.pc()==2,
+          "native quota suspends without invented source yield or forced completion");
+    Check(responsive.run(10).status==script::Status::HostYield&&responsive.executed()==30,
+          "bounded loop resumes actual PC and live VM state");
+    auto waiting=Fixture({0x30,0,0x8B,0x23,0,0x80,6,0x70,0x38});
+    script::Vm event_wait(waiting);event_wait.host_service([&](uint8_t id,const std::vector<script::Value>&){
+        Check(id==0x23,"wait builtin");event_wait.wait_for_event();script::Value nil;nil.kind=script::Value::Kind::Scalar;return nil;});
+    event_wait.start();Check(event_wait.run().status==script::Status::Complete,"cold54one makes builtin23 immediate");
+    event_wait.start();event_wait.clear_event_signal();
+    Check(event_wait.run().status==script::Status::Waiting&&event_wait.pc()==5,"cleared54 waits at real postcall PC");
+    Check(event_wait.run().status==script::Status::Waiting,"no automatic one-frame event completion");
+    event_wait.signal_event();Check(event_wait.run().status==script::Status::Complete&&event_wait.result().signed_integer()==6,
+          "explicit real event signal resumes result/control state");
+    auto scopes=Fixture({0x30,0,0x0D,0x0B,0x80,8,0x70,0x0C,0x0E,0x38});
+    script::Vm event_scope(scopes);event_scope.start();
+    Check(event_scope.run().status==script::Status::Complete&&event_scope.result().signed_integer()==8&&event_scope.event_scope_depth()==0,
+          "nested event and opcode-cost scopes preserve result and balance");
+    Lease owner_input(Dictionary());GameTransition fade;Check(fade.Initialize({{0,0}}),"transition source-produced center");
+    GameActorRuntime actor;Check(bool(actor.Initialize(0,owner_input.View(),fade)),"typed actor/camera owners admitted");
+    Check(actor.WaitReady()&&actor.Snapshot().active_command==-1,"23FD0 actual cold258ready producer");
+    Check(bool(actor.BindCamera(1))&&actor.Snapshot().camera_follows_actor&&actor.Snapshot().actor_position[2]==600,
+          "72 binds live source actor point,not zero/null");
+    Check(bool(actor.StartTransition())&&fade.Snapshot().group==5&&fade.Snapshot().state==1,
+          "service6 starts real existing transition,not a returned success flag");
+    int32_t absent_slot=3;
+    Check(!actor.CreateModel(170,0,0,0,absent_slot)&&absent_slot==-1&&actor.Snapshot().model_slots==0,
+          "service31 cannot allocate a successful slot without actual resource owner");
+    Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
+          "zeroed1B188 manager receives actualservice0 request,not completion");
+    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0),"retired target lease blocks camera/wait service");
+    actor.Close();fade.Retire();Check(!actor.Snapshot().live,"typed actor/camera owners retired");
+    Lease model_input(Dictionary());GameTransition model_fade;Check(model_fade.Initialize({{0,0}}),"model error test fade");
+    MissingResources missing;GameActorRuntime model_owner;
+    Check(bool(model_owner.Initialize(0,model_input.View(),model_fade,&missing)),"model error owner initialized");
+    int32_t failed_slot=0;
+    Check(!model_owner.CreateModel(170,0,0,0,failed_slot)&&failed_slot==-1&&missing.calls==1&&model_owner.Snapshot().model_slots==0,
+          "real resource failure cannot publish first inactive model slot");
+    Check(!model_owner.CreateModel(170,1,0,0,failed_slot)&&missing.calls==1,"unrecovered category refuses before I/O");
+    model_owner.Close();model_fade.Retire();
+    for(const auto values: {std::pair<int,int>{-2,-1},{3,3},{7,6}}){
+        auto comparison=Fixture({0x30,0,0x80,uint8_t(values.first),0x80,uint8_t(values.second),0xC3,0x70,0x38});
+        script::Vm compare(comparison);compare.start();
+        Check(compare.run().status==script::Status::Complete&&compare.result().word==(0x10000000u|uint32_t(values.first<=values.second)),
+              "C3 compares signed left<=right with typed Boolean result");
+    }
+    auto deadline=Fixture({0x30,0,0x80,3,0x44,0x80,7,0x70,0x38});script::Vm timed(deadline);
+    timed.clock_tick(10);timed.start();
+    Check(timed.run().status==script::Status::Yield&&timed.deadline_writes()==1&&timed.timestamp_writes()==0,"44 writes deadline,not41timestamp");
+    timed.clock_tick(12);Check(timed.run().status==script::Status::Yield,"real deadline keeps wait before ready tick");
+    timed.clock_tick(13);Check(timed.run().status==script::Status::Complete&&timed.result().signed_integer()==7,"deadline resumes exact next instruction");
+    auto addition=Fixture({0x30,0,0x80,0xFE,0x80,3,0xE0,0x70,0x38});script::Vm add(addition);add.start();
+    Check(add.run().status==script::Status::Complete&&add.result().signed_integer()==1,"E0 signed scalar addition");
+    auto nil_addition=Fixture({0x30,0,0x87,0x84,0xE0,0x70,0x38});script::Vm nil_add(nil_addition);nil_add.start();
+    Check(nil_add.run().status==script::Status::Complete&&nil_add.result().word==0x10000001,"E0 RHS nil preserves Boolean type");
+    auto raw_not=Fixture({0x30,0,0x80,0xFF,0xB1,0x70,0x38});script::Vm negate(raw_not);negate.start();
+    Check(negate.run().status==script::Status::Complete&&negate.result().word==0x10000000,"B1 tests raw nonzero payload of negative integer");
 }
 void Selected(const char* path){
     // Optional new-engine diagnostic,not connected-game proof. Exactly the
@@ -97,7 +228,10 @@ void Selected(const char* path){
     GameProfileRecord profile;profile.live=true;profile.actor=0;profile.nickname="Toro";profile.player="Sen";
     profile.comment="test";profile.gender=1;profile.date=0x01261021;profile.blood=2;profile.calendar={3,0,0,12,21,10,2026};
     RngNativeOwner rng;rng.ApplyInitializerTimeT32(1,1,"Explicit diagnostic RNG fixture,not actual connected game seed");
-    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[]{return 0x30D72E10u;},&rng); // explicit diagnostic clock fixture
+    GameTransition transition;Check(transition.Initialize({{0,0}}),"diagnostic transition owner");
+    SelectedRoomResources resources(f);
+    GameActorRuntime runtime;Check(bool(runtime.Initialize(0,lease.View(),transition,&resources)),"source cold actor controls");
+    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[]{return 0x30D72E10u;},&rng,&runtime); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
     for(unsigned i=0;i<20;++i){const auto status=game.Tick();const auto s=game.Snapshot();
         std::cout<<"tick="<<s.ticks<<" pc="<<s.pc<<" op="<<s.last_opcode<<" steps="<<s.instructions
@@ -107,7 +241,17 @@ void Selected(const char* path){
     const auto s=game.Snapshot();std::cout<<"services=";for(auto id:s.service_ids)std::cout<<id<<',';std::cout<<'\n';
     std::cout<<"queries="<<s.array_query_calls<<" matches="<<s.array_query_matches<<" reads="<<s.dictionary_game_reads
         <<" writes="<<s.dictionary_game_writes<<" random="<<s.random_selections<<" root_returns="<<s.root_functions_returned<<'\n';
-    game.Close();lease.live=false;
+    std::cout<<"blocks="<<s.control_blocks_entered<<'/'<<s.control_blocks_closed<<" active="<<s.active_control_blocks
+        <<" switches="<<s.switches<<" camera="<<s.runtime.camera_bindings<<" fades="<<s.runtime.transition_requests<<'\n';
+    Check(s.waiting_for_event&&s.pc==0x8DE3D&&s.runtime.event_requests==1&&s.event_signals==0
+          &&s.runtime.actor_model_live&&!s.runtime.actor_request_pending&&!s.runtime.selected_extension_pending
+          &&s.runtime.command_blocked&&s.runtime.command_pc==20&&s.runtime.command_effects==2
+          &&s.runtime.logical_xy==std::array<float,2>{{1830,-27}}&&s.runtime.actor_math_mode==1&&s.runtime.pending_logical_motion==9
+          &&s.runtime.model_slots==7&&s.runtime.transition_requests==1&&!s.blocked,
+          "actual selected main loop reaches genuine pending actor176 wait beyond old18stop");
+    game.Close();runtime.Close();transition.Retire();lease.live=false;
+    Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
+          &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");
 }
 }
 int main(int argc,char** argv){try{Focused();if(argc==3&&std::string(argv[1])=="--selected-data")Selected(argv[2]);

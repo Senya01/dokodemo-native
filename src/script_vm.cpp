@@ -397,6 +397,10 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
     calls_.clear(); result_ = {}; executed_ = 0;
+    blocks_.clear(); blocks_entered_ = blocks_closed_ = switches_ = 0;
+    opcode_cost_ = 1;
+    event_depth_=0;event_signal_=true;waiting_event_=false;
+    timestamp_writes_=deadline_writes_=0;
     random_selections_=0;last_random_={};root_returns_=0;
     timer_base_ = clock_tick_; wait_until_ = 0;
     local_.clear(); global_.clear(); ctx28_.clear(); last_error_ = {};
@@ -435,6 +439,7 @@ Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
     if (!cmd || cmd->opcode < 0) return stop(cmd, "PC is not an executable command boundary");
+    if(waiting_event_){Event waiting;waiting.status=Status::Waiting;waiting.pc=waiting.next_pc=pc_;return waiting;}
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
@@ -451,6 +456,22 @@ Event Vm::step() {
             const auto p=v.word&0x0FFFFFFF;return int32_t(p&0x08000000?p|0xF0000000:p);
         };
         if (op == 0x03) { // common6B9B8 instruction-cost/no-op path
+        } else if(op==0x0B) {
+            // 6BA04 saves ctx58 on the value stack and makes subsequent
+            // source opcodes zero-cost. Native hard quotas remain separate.
+            stack_.push_back(Value::integer(opcode_cost_));opcode_cost_=0;
+        } else if(op==0x0C) {
+            // 6BA54 restores the saved counter;not the result register.
+            opcode_cost_=numeric(pop());
+        } else if(op==0x0D) {
+            // 6BB58 increments source56,deferring queued callbacks.
+            if(event_depth_==UINT16_MAX)throw std::runtime_error("Event scope overflow");
+            ++event_depth_;
+        } else if(op==0x0E) {
+            // 6BB68 ->6B33C decrements positive source56. No callback is
+            // invented for an empty native queue. Unimplemented event enqueue
+            // services remain explicit boundaries before they can queue one.
+            if(event_depth_)--event_depth_;
         } else if (op == 0x30) {
             if (frame_reserved_) return stop(cmd, "Nested frame ABI unsupported");
             uint32_t count = program_.operand(*cmd, 1, 1);
@@ -466,7 +487,52 @@ Event Vm::step() {
             auto arguments=std::make_shared<std::vector<Value>>(stack_.begin()+begin,stack_.end());
             stack_.resize(begin);calls_.push_back({next,begin,frame_reserved_,frame_});
             frame_=std::move(arguments);frame_reserved_=false;next=target;
+        } else if(op==0x18) {
+            // 6C578 saves the previous block context, target and pending
+            // control cells,then CONTINUES. The target is not a branch here.
+            const auto target=program_.operand(*cmd,1,3);
+            const auto* close=program_.command(target);
+            if(!close||close->opcode<0||blocks_.size()>=128)
+                return stop(cmd,"Invalid structured control target/depth");
+            blocks_.push_back({target,stack_.size(),calls_.size(),frame_});
+            ++blocks_entered_;
+        } else if(op==0x1A) {
+            // 6CA08 releases the current administrative block and restores
+            // its enclosing context. Refuse malformed operand imbalance.
+            if(blocks_.empty()||blocks_.back().frame.lock()!=frame_||
+               blocks_.back().call_depth!=calls_.size()||blocks_.back().operand_base!=stack_.size())
+                return stop(cmd,"Unbalanced or foreign structured control close");
+            blocks_.pop_back();++blocks_closed_;
+        } else if(op==0x13) {
+            // 6BCD8: pop/coerce selector; traverse raw tagged labels and u24
+            // NEXT HEADER links. Retain the selected raw word in result30.
+            const auto selector=numeric(pop());
+            uint32_t at=cmd->pc+1;
+            std::unordered_set<uint32_t> seen;
+            for(;;) {
+                if(!seen.insert(at).second)return stop(cmd,"Cyclic runtime switch links");
+                if(at!=cmd->pc+1) {
+                    const auto* metadata=program_.command(at);
+                    if(!metadata||metadata->opcode!=-1)return stop(cmd,"Switch link misses metadata header");
+                }
+                const auto word=uint_at(program_.bytes(),28+at,4,program_.header().pool_start());
+                result_=decode(word);
+                if(!(word>>28)){next=at+4;event.branch_taken=false;break;}
+                const auto link=uint_at(program_.bytes(),28+at+4,3,program_.header().pool_start());
+                const auto payload=word&0x0FFFFFFF;
+                const auto label=int32_t(payload&0x08000000?payload|0xF0000000:payload);
+                if(label==selector){next=at+7;event.branch_taken=true;break;}
+                at=link;
+            }
+            const auto* body=program_.command(next);
+            if(!body||body->opcode<0)return stop(cmd,"Selected switch body is not executable");
+            event.has_branch_decision=true;++switches_;
         } else if(op==0x31) {
+            // Retained67548's abnormal active-block cleanup differs from
+            // normal1A (five versus six cells). Refuse that unresolved path;
+            // do not silently invent unwind. Caller-owned blocks survive.
+            if(!blocks_.empty()&&blocks_.back().frame.lock()==frame_)
+                return stop(cmd,"Return through active block: source67548 unwind unresolved");
             if(calls_.empty()) { stopped_=true;event.status=Status::Complete; }
             else {
                 if(calls_.size()==1)++root_returns_;
@@ -547,6 +613,11 @@ Event Vm::step() {
             last_random_=load_reference(indexed_reference(input,index));++random_selections_;
             stack_.push_back(last_random_);
         } else if(op==0x70) { result_=pop();
+        } else if(op==0xB1) {
+            const auto value=pop();
+            if((value.kind!=Value::Kind::Scalar&&value.kind!=Value::Kind::Timestamp)||(value.word>>28)>3)
+                throw std::runtime_error("B1 raw-payload truth outside finite scalar domain");
+            stack_.push_back(boolean((value.word&0x0FFFFFFF)==0)); //71960;not ToNumber
         } else if(op==0xB2||op==0xB3||op==0xB8||op==0xB9) {
             const auto value=pop();if(value.kind==Value::Kind::Unknown)throw std::runtime_error("Uninitialized truth operand");
             const bool nil=value.kind==Value::Kind::Scalar&&value.word>>28==0;
@@ -566,12 +637,22 @@ Event Vm::step() {
         } else if(op==0x41) {
             const auto delta=numeric(pop());
             if(delta<0)throw std::runtime_error("Negative script timer-base offset");
-            timer_base_=clock_tick_+uint32_t(delta);wait_until_=timer_base_;event.status=Status::Yield;
+            // Source6E570 updates timestamp18 and returns to normal dispatch.
+            // Ending this native slice here is an explicit host scheduling
+            // adaptation;it is NOT a source instruction-budget clear.
+            timer_base_=clock_tick_+uint32_t(delta);++timestamp_writes_;event.status=Status::Yield;
+        } else if(op==0x44) {
+            // 6E69C writes deadline1C and clears source budget3C. This is
+            // distinct from41's timer-base18 and its native slice adapter.
+            const auto delta=numeric(pop());
+            if(delta<0)throw std::runtime_error("Negative source deadline domain not yet bound");
+            wait_until_=clock_tick_+uint32_t(delta);++deadline_writes_;event.status=Status::Yield;
         } else if(op==0x8B) {
             const auto id=uint8_t(program_.operand(*cmd,1,1));const auto argc=program_.operand(*cmd,2,1);
             if(argc>stack_.size()||!service_)return stop(cmd,"Unbound builtin/argument count;id="+std::to_string(id));
             std::vector<Value> arguments(stack_.end()-argc,stack_.end());stack_.resize(stack_.size()-argc);
             result_=service_(id,arguments);
+            if(waiting_event_)event.status=Status::Waiting;
         } else if(op==0x65||op==0x67||op==0x6D) {
             const auto rhs=numeric(pop());const auto ref=pop();const auto lhs=numeric(load_reference(ref));
             const auto word=op==0x65?uint32_t(lhs)&uint32_t(rhs):op==0x67?uint32_t(lhs)|uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
@@ -592,7 +673,22 @@ Event Vm::step() {
                 store_reference(ref,value);
             }
             if(op==0x5A)stack_.push_back(value);
-        } else if(op==0xC0||op==0xC1||op==0xC2||op==0xC4||op==0xC5) {
+        } else if(op==0xE0) {
+            // 73B2C ->75874: finite source nil/Boolean/integer/timestamp
+            // dispatch.75AC8 preserves a LEFT timestamp's tag3.
+            const auto right=pop(),left=pop();auto value=left;
+            const auto lt=left.word>>28,rt=right.word>>28;
+            const auto scalar=[](const Value& v){return v.kind==Value::Kind::Scalar||v.kind==Value::Kind::Timestamp;};
+            if(!scalar(left)||!scalar(right)||lt>3||rt>3)
+                throw std::runtime_error("E0 addition domain not bound;left="+std::to_string(left.word)+";right="+std::to_string(right.word));
+            if(rt==0) { /* RHS nil leaves LEFT unchanged,not a numeric zero. */ }
+            else if(lt==0)value=right;
+            else {
+                value=Value::integer(int32_t((uint32_t(numeric(left))+uint32_t(numeric(right)))&0x0FFFFFFF));
+                if(lt==3){value.kind=Value::Kind::Timestamp;value.word=(value.word&0x0FFFFFFF)|0x30000000;}
+            }
+            stack_.push_back(std::move(value));
+        } else if(op==0xC0||op==0xC1||op==0xC2||op==0xC3||op==0xC4||op==0xC5) {
             const auto right=pop(),left=pop();bool test=false;
             if(op==0xC0||op==0xC1) {
                 const auto tag=left.word>>28;
@@ -601,7 +697,7 @@ Event Vm::step() {
                 else if(left.kind==Value::Kind::Scalar&&tag==1)test=right.kind==Value::Kind::Scalar&&right.word>>28==1&&(left.word&1)==(right.word&1);
                 else if(left.kind!=Value::Kind::Reference&&tag!=9&&tag<11)test=left.kind==right.kind&&left.word==right.word;
                 if(op==0xC1)test=!test;
-            } else test=op==0xC2?numeric(left)<numeric(right):op==0xC4?numeric(left)>numeric(right):numeric(left)>=numeric(right);
+            } else test=op==0xC2?numeric(left)<numeric(right):op==0xC3?numeric(left)<=numeric(right):op==0xC4?numeric(left)>numeric(right):numeric(left)>=numeric(right);
             stack_.push_back(boolean(test));
         } else if(op==0xD1||op==0xD2||op==0xD4||op==0xE3) {
             const auto rhs=numeric(pop()),lhs=numeric(pop());int64_t n=0;
@@ -652,10 +748,16 @@ Event Vm::step() {
     } catch (const std::exception& ex) { return stop(cmd, ex.what()); }
 }
 Event Vm::run(uint32_t instruction_budget) {
+    // Source74C84/74CA0 wrap interpreter execution in an event-drain scope.
+    // The hard native quota below is separate from source ctx3C/ctx58 timing.
+    ++event_depth_;
     for (uint32_t i = 0; i < instruction_budget; ++i) {
         Event event = step();
-        if (event.status != Status::Running) return event;
+        if (event.status != Status::Running) {if(event_depth_)--event_depth_;return event;}
     }
-    return stop(program_.command(pc_), "Instruction budget exceeded");
+    if(event_depth_)--event_depth_;
+    Event event;event.status=Status::HostYield;event.pc=event.next_pc=pc_;
+    event.file_offset=pc_+28;const auto* cmd=program_.command(pc_);event.opcode=cmd?cmd->opcode:-1;
+    return event;
 }
 } // namespace dokodemo::script

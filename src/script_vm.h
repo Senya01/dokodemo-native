@@ -115,7 +115,7 @@ struct Value {
     int32_t signed_integer() const;
 };
 
-enum class Status { Running, Message, Yield, Complete, Stopped };
+enum class Status { Running, Message, Yield, HostYield, Waiting, Complete, Stopped };
 struct Event {
     Status status = Status::Stopped;
     uint32_t pc = 0, next_pc = 0, file_offset = 0;
@@ -160,6 +160,18 @@ public:
     uint64_t random_selections() const noexcept{return random_selections_;}
     uint32_t root_functions_returned() const noexcept{return root_returns_;}
     const Value& last_random_value() const noexcept{return last_random_;}
+    uint32_t control_blocks_entered() const noexcept { return blocks_entered_; }
+    uint32_t control_blocks_closed() const noexcept { return blocks_closed_; }
+    uint32_t active_control_blocks() const noexcept { return uint32_t(blocks_.size()); }
+    uint32_t switches_executed() const noexcept { return switches_; }
+    void clear_event_signal() noexcept { event_signal_=false; }
+    void signal_event() noexcept { event_signal_=true;waiting_event_=false; }
+    void wait_for_event() noexcept { waiting_event_=!event_signal_; }
+    bool waiting_for_event() const noexcept { return waiting_event_; }
+    uint32_t event_scope_depth() const noexcept { return event_depth_; }
+    uint32_t timestamp_writes() const noexcept { return timestamp_writes_; }
+    uint32_t deadline_writes() const noexcept { return deadline_writes_; }
+    bool deadline_waiting() const noexcept { return clock_tick_<wait_until_; }
 private:
     const Program& program_; // program must outlive Vm and remain unchanged
     std::vector<Value> stack_, local_, global_, ctx28_;
@@ -171,6 +183,19 @@ private:
         std::shared_ptr<std::vector<Value>> values;
     };
     std::vector<CallFrame> calls_;
+    // Source18's six administrative cells have typed native ownership rather
+    // than PSP stack addresses. They are not script operands or fake values.
+    struct ControlBlock {
+        uint32_t close_pc = 0;
+        size_t operand_base = 0, call_depth = 0;
+        std::weak_ptr<std::vector<Value>> frame;
+    };
+    std::vector<ControlBlock> blocks_;
+    uint32_t blocks_entered_ = 0, blocks_closed_ = 0, switches_ = 0;
+    int32_t opcode_cost_ = 1; // named native instruction-cost policy
+    uint32_t event_depth_=0;
+    bool event_signal_=true,waiting_event_=false; // source65FF4 SH1,54
+    uint32_t timestamp_writes_=0,deadline_writes_=0;
     HostService service_;
     std::function<void(const Value&,bool)> access_;
     std::function<uint32_t()> random_;

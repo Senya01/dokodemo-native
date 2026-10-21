@@ -416,6 +416,28 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 ++state_.opened_resources;
                 return {};
             }
+            if(mount=="BG_ROOM"&&game_filesystem_) {
+                // Named functional deferred mount: only the actual requested
+                // source31 package is read,with full checked extent/lease.
+                if(!room_mounted_) {
+                    const auto status=game_filesystem_->LoadMember("BG_ROOM.BPM",room_package_);
+                    if(!status)return status;
+                    room_directory_=BpDirectory::Parse(room_package_,room_package_.Describe().size);
+                    room_mounted_=true;
+                }
+                out=room_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
+            if(mount=="NEKO"&&state_.title.selected_actor==0&&game_filesystem_){
+                // Source8E64:25438(actor+21),relocation-bound actor0 NEKO.
+                // Lazy native admission keeps the original requested names.
+                if(!actor_model_mounted_){
+                    const auto status=game_filesystem_->LoadMember("NEKO.BPM",actor_model_package_);
+                    if(!status)return status;
+                    actor_model_directory_=BpDirectory::Parse(actor_model_package_,actor_model_package_.Describe().size);
+                    actor_model_mounted_=true;
+                }
+                out=actor_model_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
         }
         if (platform_) {
             auto status = platform_->OpenResource(path, out);
@@ -677,6 +699,9 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
 }
 bool GameContentBoot::Close() {
     actor_script_.Close();actor_message_gate_.Stop();state_.actor_script=actor_script_.Snapshot();actor_clock_={};
+    actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
+    actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
+    room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
     state_.title=title_.Snapshot();
@@ -729,9 +754,22 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         if(!state_.actor_script.started)return false;
         const auto before=state_.actor_script;
         state_.status=actor_script_.Tick();state_.actor_script=actor_script_.Snapshot();
+        // Existing phase6 transition and group2 authored room consumers stay
+        // live even when a later unimplemented script service stops progress.
+        scene_ui_.TitleTransitionOwner().Update();
+        const auto rendered=actor_runtime_.Draw(graphics);
+        if(!rendered){state_.status=rendered;state_.blocked=true;return false;}
+        state_.actor_script.runtime=actor_runtime_.Snapshot();
         if(state_.actor_script.dictionary.imported){actor_dictionary_.Reset();state_.actor_dictionary_live=false;}
         if(!before.awaiting_message&&state_.actor_script.awaiting_message)actor_message_gate_.Begin();
         state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
+        const auto script_ok=bool(state_.status);
+        if(state_.actor_script.runtime.command_blocked){
+            state_.blocked=true;state_.frontier_pc=state_.actor_script.runtime.command_frontier;
+            state_.status={GameFsCode::Unavailable,0,state_.actor_script.runtime.command_error};
+            // Keep independent renderer/input owners responsive while the VM
+            // genuinely waits. This is not successful ASC completion.
+        }
         // The native KSC message consumer uses the already-live original XFT.
         // No stale TITLE scene is drawn as a stand-in for scene4 graphics.
         if(state_.actor_script.awaiting_message){
@@ -741,7 +779,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
                 state_.status={GameFsCode::Unavailable,0,"Native KSC message presentation failed"};state_.blocked=true;return false;
             }
         }
-        return bool(state_.status);
+        return script_ok;
     }
     state_.actor_dictionary_requested=true;
     const auto actor=state_.title.selected_actor;
@@ -774,8 +812,11 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         constexpr const char* scripts[]{"NEKO.KSC","ROBO.KSC","USAGI.KSC","INU.KSC","KAERU.KSC"};
         state_.next_resource=std::string(mounts[actor])+"\\"+scripts[actor];
         const auto script_image=actor_directory_.Open(scripts[actor]);
+        game_filesystem_=&filesystem;
+        state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this);
+        if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
-        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_);
+        state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_);
         state_.actor_script=actor_script_.Snapshot();
         if(state_.status){
             ++state_.opened_resources;state_.blocked=false;

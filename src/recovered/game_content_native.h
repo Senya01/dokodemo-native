@@ -157,6 +157,14 @@ class GameContentBoot final : public GameResourceSource {
     PackageView actor_package_,actor_dictionary_;
     BpDirectory actor_directory_;
     GameActorScript actor_script_;
+    GameActorRuntime actor_runtime_;
+    PackageView room_package_;
+    BpDirectory room_directory_;
+    bool room_mounted_=false;
+    PackageView actor_model_package_;
+    BpDirectory actor_model_directory_;
+    bool actor_model_mounted_=false;
+    GameFilesystem* game_filesystem_=nullptr;
     GameActorScript::ClockWord actor_clock_;
     GameButtonGate actor_message_gate_;
     bool TickActorDictionary(GameFilesystem&,GameGraphics&);

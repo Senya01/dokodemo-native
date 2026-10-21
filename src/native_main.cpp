@@ -52,7 +52,7 @@ struct Options {
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false;
     bool titleMenuWindowTest=false;
-    bool softkeyWindowTest=false,actorWindowTest=false;
+    bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -70,6 +70,7 @@ Options ParseOptions() {
         else if(arg==L"--title-menu-window-test"){options.titleMenuWindowTest=options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--softkey-window-test"){options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-window-test"){options.actorWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--game-loop-window-test"){options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
         else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
@@ -1636,6 +1637,17 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         <<",\"ticks\":"<<boot.content.actor_script.ticks<<",\"yields\":"<<boot.content.actor_script.yields
         <<",\"instructions\":"<<boot.content.actor_script.instructions<<",\"messages\":"<<boot.content.actor_script.messages
         <<",\"root_functions_returned\":"<<boot.content.actor_script.root_functions_returned
+        <<",\"control_blocks_entered\":"<<boot.content.actor_script.control_blocks_entered
+        <<",\"control_blocks_closed\":"<<boot.content.actor_script.control_blocks_closed
+        <<",\"active_control_blocks\":"<<boot.content.actor_script.active_control_blocks
+        <<",\"switches\":"<<boot.content.actor_script.switches
+        <<",\"native_budget_yields\":"<<boot.content.actor_script.native_budget_yields
+        <<",\"waiting_for_event\":"<<boolean(boot.content.actor_script.waiting_for_event)
+        <<",\"event_signals\":"<<boot.content.actor_script.event_signals
+        <<",\"source_timestamp_writes\":"<<boot.content.actor_script.source_timestamp_writes
+        <<",\"source_deadline_writes\":"<<boot.content.actor_script.source_deadline_writes
+        <<",\"waiting_deadline\":"<<boolean(boot.content.actor_script.waiting_deadline)
+        <<",\"opcode41_slice_policy\":\"NativeTimestampSliceAdapter;NotSourceBudgetClear\""
         <<",\"random_selections\":"<<boot.content.actor_script.random_selections<<",\"selected_value_word\":"<<boot.content.actor_script.selected_value_word
         <<",\"message_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.message.data()),boot.content.actor_script.message.size()))
         <<",\"error\":"<<JsonString(boot.content.actor_script.error)
@@ -1647,7 +1659,38 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         <<",\"last_service\":"<<boot.content.actor_script.last_service<<",\"service_ids\":[";
     for(size_t i=0;i<boot.content.actor_script.service_ids.size();++i){if(i)out<<',';out<<boot.content.actor_script.service_ids[i];}
     const auto& dictionary=boot.content.actor_script.dictionary;
-    out<<"],\"last_query_indices\":[";
+    const auto& runtime=boot.content.actor_script.runtime;
+    out<<"],\"runtime\":{\"live\":"<<boolean(runtime.live)
+       <<",\"camera_follows_actor\":"<<boolean(runtime.camera_follows_actor)<<",\"camera_bindings\":"<<runtime.camera_bindings
+       <<",\"camera_mode\":"<<runtime.camera_mode<<",\"transition_requests\":"<<runtime.transition_requests
+       <<",\"loader_interval\":"<<runtime.loader_interval<<",\"active_command\":"<<runtime.active_command
+       <<",\"command_complete\":"<<boolean(runtime.command_complete)<<",\"command_ready\":"<<boolean(runtime.command_ready)
+       <<",\"manager_request8\":"<<boolean(runtime.manager_request8)
+       <<",\"actor_model_live\":"<<boolean(runtime.actor_model_live)<<",\"actor_model_nodes\":"<<runtime.actor_model_nodes
+       <<",\"actor_model_vertices\":"<<runtime.actor_model_vertices<<",\"actor_model_triangles\":"<<runtime.actor_model_triangles
+       <<",\"actor_request_pending\":"<<boolean(runtime.actor_request_pending)
+       <<",\"selected_extension_pending\":"<<boolean(runtime.selected_extension_pending)
+       <<",\"event_requests\":"<<runtime.event_requests<<",\"requested_command\":"<<runtime.requested_command
+       <<",\"asc_executor_implemented\":false,\"asc_partial_executor_implemented\":true,\"actor_model_drawn\":false"
+       <<",\"command_blocked\":"<<boolean(runtime.command_blocked)<<",\"command_pc\":"<<runtime.command_pc
+       <<",\"command_effects\":"<<runtime.command_effects<<",\"command_frontier\":"<<runtime.command_frontier
+       <<",\"command_error\":"<<JsonString(runtime.command_error)
+       <<",\"pending_logical_motion\":"<<runtime.pending_logical_motion
+       <<",\"logical_xy\":["<<runtime.logical_xy[0]<<','<<runtime.logical_xy[1]<<']'
+       <<",\"heading_known\":"<<boolean(runtime.heading_known)<<",\"logical_heading\":"<<runtime.logical_heading
+       <<",\"actor_math_mode\":"<<runtime.actor_math_mode<<",\"actor_phases\":"<<runtime.actor_phases
+       <<",\"source_field58\":"<<runtime.source_field58<<",\"command_flag25A\":"<<boolean(runtime.command_flag25A)
+       <<",\"actor_dynamic_followpoint_producer_implemented\":false"
+       <<",\"actor_position\":["<<runtime.actor_position[0]<<','<<runtime.actor_position[1]<<','<<runtime.actor_position[2]<<','<<runtime.actor_position[3]<<']'
+       <<",\"source_field50\":"<<runtime.source_field50<<",\"source_field54\":"<<runtime.source_field54
+       <<",\"model_slots\":"<<runtime.model_slots<<",\"model_nodes\":"<<runtime.model_nodes
+       <<",\"model_vertices\":"<<runtime.model_vertices<<",\"model_triangles\":"<<runtime.model_triangles
+       <<",\"motion_templates\":"<<runtime.motion_templates<<",\"model_frames\":"<<runtime.model_frames
+       <<",\"model_pixel_writes\":"<<runtime.model_pixel_writes<<",\"visible_pixels\":"<<runtime.visible_pixels
+       <<",\"last_model_slot\":"<<runtime.last_model_slot<<",\"last_model_path\":"<<JsonString(runtime.last_model_path)
+       <<",\"room_world_basis_policy\":\"NativeCanonicalIdentity;Source493C0BasisProducerUnrecovered\""
+       <<",\"camera_policy\":\"Cold7650Eye0Minus4400_980LookPlusYFov30Near100Far10400\"}"
+       <<",\"last_query_indices\":[";
     for(size_t i=0;i<boot.content.actor_script.last_query_indices.size();++i){if(i)out<<',';out<<boot.content.actor_script.last_query_indices[i];}
     out<<"],\"dictionary\":{\"imported\":"<<boolean(dictionary.imported)<<",\"source_live\":"<<boolean(dictionary.source_live)
         <<",\"closed\":"<<boolean(dictionary.closed)<<",\"records\":"<<dictionary.records<<",\"bytes\":"<<dictionary.bytes
@@ -3600,7 +3643,12 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
     if(observation.game_boot.content.actor_script.live||observation.game_boot.content.actor_dictionary_live
-       ||observation.game_boot.content.actor_script.dictionary.imported||observation.game_boot.content.actor_script.dictionary.source_live)return false;
+       ||observation.game_boot.content.actor_script.dictionary.imported||observation.game_boot.content.actor_script.dictionary.source_live
+       ||observation.game_boot.content.actor_script.runtime.live||observation.game_boot.content.actor_script.runtime.model_slots
+       ||observation.game_boot.content.actor_script.runtime.actor_model_live||observation.game_boot.content.actor_script.runtime.actor_request_pending
+       ||observation.game_boot.content.actor_script.runtime.selected_extension_pending
+       ||observation.game_boot.content.actor_script.runtime.active_command!=-1
+       ||observation.game_boot.content.actor_script.runtime.pending_logical_motion!=-1)return false;
     if (observation.game_boot.content.vsync_owner || observation.game_boot.content.loadman_owner
         || observation.game_boot.content.font_ready || observation.game_boot.content.package_mounted
         || observation.game_boot.content.registered_records || !observation.game_boot.content.closed
@@ -4234,8 +4282,22 @@ struct Application {
             &&!c.actor_script.dictionary.source_live&&c.actor_script.root_functions_returned==1
             &&c.actor_script.array_query_calls>0&&c.actor_script.array_query_matches>0
             &&c.actor_script.dictionary_game_reads>0&&c.actor_script.dictionary_game_writes>0
-            &&c.actor_script.random_selections>0&&c.actor_script.last_opcode==0x18&&c.actor_script.pc==0x8DDB7
-            &&c.frontier_pc==0x74C18&&c.blocked&&c.status.code==GameFsCode::Unavailable;
+            &&c.actor_script.random_selections>0&&c.frontier_pc==(options.gameLoopWindowTest?0xB790u:0x74C18u)
+            &&(options.gameLoopWindowTest?
+                (c.actor_script.control_blocks_entered>0&&c.actor_script.switches>0
+                 &&c.actor_script.instructions>20000&&c.actor_script.pc!=0x8DDB7
+                 &&c.actor_script.runtime.live&&c.actor_script.runtime.camera_follows_actor
+                 &&c.actor_script.runtime.model_slots==7&&c.actor_script.runtime.model_frames>=45
+                 &&c.actor_script.runtime.transition_requests==1&&c.actor_script.runtime.visible_pixels>1000
+                 &&c.actor_script.waiting_for_event&&c.actor_script.event_signals==0&&c.actor_script.pc==0x8DE3D
+                 &&c.actor_script.runtime.actor_model_live&&!c.actor_script.runtime.actor_request_pending
+                 &&!c.actor_script.runtime.selected_extension_pending&&c.actor_script.runtime.requested_command==176
+                 &&c.actor_script.runtime.command_blocked&&c.actor_script.runtime.command_pc==20
+                 &&c.actor_script.runtime.command_effects==2&&c.actor_script.runtime.actor_math_mode==1
+                 &&c.actor_script.runtime.pending_logical_motion==9
+                 &&c.actor_script.runtime.logical_xy==std::array<float,2>{{1830,-27}}
+                 &&c.actor_script.runtime.event_requests==1&&!c.actor_script.blocked&&c.blocked&&c.status.code==GameFsCode::Unavailable):
+                (c.actor_script.last_opcode==0x18&&c.actor_script.pc==0x8DDB7&&c.blocked&&c.status.code==GameFsCode::Unavailable));
     }
     void StartupProbe() {
         messageVisible=false;
@@ -4723,6 +4785,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
                 << ",\"softkey_window_test\":"<<(options.softkeyWindowTest?"true":"false")
                 << ",\"actor_window_test\":"<<(options.actorWindowTest?"true":"false")
+                << ",\"game_loop_window_test\":"<<(options.gameLoopWindowTest?"true":"false")
                 << ",\"text_cancel_observed\":"<<(app.textCancelObserved?"true":"false")
                 << ",\"text_natural_close_observed\":"<<(app.textCloseObserved?"true":"false")
                 << ",\"stale_text_refused\":"<<(app.staleTextRefused?"true":"false")
@@ -4732,7 +4795,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

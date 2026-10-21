@@ -3,6 +3,7 @@
 #include "game_value_array_native.h"
 #include "service39_native.h"
 #include <stdexcept>
+#include <sstream>
 
 namespace dokodemo::recovered {
 namespace {
@@ -17,7 +18,7 @@ int32_t Number(const Value& value) {
 }
 }
 GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView image,std::string path,
-                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng) {
+                                        const GameProfileRecord& profile,ClockWord clock,RngNativeOwner* rng,GameActorRuntime* runtime) {
     Close();state_={};
     try {
         Need(profile.live&&profile.actor<5,"KSC requires the actually confirmed native profile");
@@ -29,7 +30,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(program_.load_original_bytes(std::move(bytes),path,error),error.text().c_str());
         const auto attached=dictionary_.Attach(std::move(dictionary));
         Need(bool(attached),attached.detail.c_str());
-        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;state_.path=std::move(path);
+        script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         vm_->host_service([this](uint8_t id,const std::vector<Value>& args){return Service(id,args);});
         vm_->random_source([this]{Need(rng_&&rng_->Available(),"Current game RNG not live");return rng_->NextC3234();});
@@ -48,6 +49,31 @@ Value GameActorScript::GameService(const std::vector<Value>& args) {
     ++state_.game_service_calls;state_.last_service=uint32_t(id);state_.service_ids.push_back(uint32_t(id));
     const auto& arg=args[1];
     switch(id) {
+    case 0: {
+        Need(runtime_!=nullptr,"Game0 requires live zero-initialized manager owner");
+        const auto requested=runtime_->RequestManager();Need(bool(requested),requested.detail.c_str());return False();
+    }
+    case 21:
+        Need(runtime_&&runtime_->Snapshot().live,"Game21 requires actor owner");
+        {const auto status=runtime_->SetField54(Number(arg));Need(bool(status),status.detail.c_str());}return False();
+    case 22:
+        Need(runtime_&&runtime_->Snapshot().live,"Game22 requires actor owner");
+        return Value::integer(runtime_->Snapshot().source_field54);
+    case 31: {
+        Need(runtime_!=nullptr,"Render31 needs actual model slot owner");
+        const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
+        const auto resource=field(0),category=field(3),motion=field(8),x=field(9);
+        int32_t slot=-1;const auto status=runtime_->CreateModel(resource,category,motion,float(x),slot);
+        Need(bool(status),status.detail.c_str());return Value::integer(slot);
+    }
+    case 72: {
+        Need(runtime_!=nullptr,"Camera72 needs live actor/camera owners");
+        const auto bound=runtime_->BindCamera(Number(arg));Need(bool(bound),bound.detail.c_str());return False();
+    }
+    case 6: {
+        Need(runtime_!=nullptr,"Game6 needs live transition owner");
+        const auto begun=runtime_->StartTransition();Need(bool(begun),begun.detail.c_str());return False();
+    }
     case 10:case 11:case 16:case 29:case 35:
         Need(arg.kind==Value::Kind::Reference,"Game registration requires typed live table reference");
         (void)vm_->load_reference(arg);bindings_[uint32_t(id)]=arg;return False();
@@ -110,6 +136,14 @@ Value GameActorScript::GameService(const std::vector<Value>& args) {
 Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     ++state_.builtin_calls;
     if(id==0xF0)return GameService(args);
+    if(id==1){Need(args.size()==1&&args[0].kind!=Value::Kind::Unknown,"Builtin01 type query argc/value");return Value::integer(args[0].kind==Value::Kind::Reference?11:int32_t(args[0].word>>28));}
+    if(id==0x22){
+        Need(args.size()==2,"Builtin22 event request argc");
+        Need(runtime_!=nullptr,"Builtin22 needs actual actor command owner");
+        const auto begun=runtime_->RequestActorEvent(Number(args[0]),Number(args[1]));Need(bool(begun),begun.detail.c_str());
+        vm_->clear_event_signal();return Value::integer(0);
+    }
+    if(id==0x23){Need(args.empty(),"Builtin23 wait argc");vm_->wait_for_event();return Nil();}
     if(id==4) {Need(args.size()==1,"Builtin04 argc");return Value::integer(Number(args[0]));}
     if(id==17){Need(args.size()==1&&rng_&&rng_->Available(),"Builtin17 real RNG/argc");const auto divisor=Number(args[0]);Need(divisor>0,"Builtin17 positive divisor domain");return Value::integer(int32_t(rng_->NextC3234())%divisor);}
     if(id==9) {
@@ -144,12 +178,18 @@ GameFsStatus GameActorScript::Tick() {
     if(state_.completed||state_.awaiting_message)return {};
     try {
         (void)script_image_.Describe(); // live backing required throughout use
+        if(runtime_){const auto phase=runtime_->AdvanceActorFrame();Need(bool(phase),phase.detail.c_str());}
+        if(vm_->waiting_for_event()) {
+            if(!runtime_||!runtime_->WaitReady())return {};
+            vm_->signal_event();++state_.event_signals;
+        }
         ++state_.ticks;vm_->clock_tick(state_.ticks);
         const auto event=vm_->run(200000);
         dictionary_.Capture(*vm_);
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
         if(event.status==script::Status::Stopped)throw std::runtime_error(event.diagnostic.text());
         if(event.status==script::Status::Yield)++state_.yields;
+        if(event.status==script::Status::HostYield)++state_.native_budget_yields;
         if(event.status==script::Status::Message) {++state_.messages;state_.message=event.message_cp932;state_.awaiting_message=true;}
         if(event.status==script::Status::Complete)state_.completed=true;
         return {};
@@ -160,11 +200,16 @@ bool GameActorScript::AcknowledgeMessage() {
     state_.awaiting_message=false;return true;
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();}return out;
+    auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+        out.control_blocks_entered=vm_->control_blocks_entered();out.control_blocks_closed=vm_->control_blocks_closed();
+        out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
+        out.waiting_for_event=vm_->waiting_for_event();out.waiting_deadline=vm_->deadline_waiting();
+        out.source_timestamp_writes=vm_->timestamp_writes();out.source_deadline_writes=vm_->deadline_writes();
+    }if(runtime_)out.runtime=runtime_->Snapshot();return out;
 }
 void GameActorScript::Close() {
     state_=Snapshot();
-    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;
+    dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;
     state_.live=false;state_.awaiting_message=false;
 }
 } // namespace dokodemo::recovered

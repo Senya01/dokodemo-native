@@ -1,5 +1,6 @@
 #pragma once
 #include "game_actor_dictionary_native.h"
+#include "game_actor_runtime_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
 #include <map>
@@ -18,6 +19,12 @@ struct GameActorScriptSnapshot {
     uint64_t random_selections=0;
     uint32_t selected_value_word=0;
     uint32_t root_functions_returned=0;
+    uint32_t control_blocks_entered=0,control_blocks_closed=0,active_control_blocks=0,switches=0;
+    bool waiting_for_event=false;
+    uint32_t event_signals=0,native_budget_yields=0;
+    uint32_t source_timestamp_writes=0,source_deadline_writes=0;
+    bool waiting_deadline=false;
+    GameActorRuntimeSnapshot runtime;
     std::vector<uint32_t> last_query_indices;
     uint64_t instructions=0;
     std::vector<uint32_t> service_ids;
@@ -32,7 +39,8 @@ class GameActorScript final {
   public:
     using ClockWord = std::function<uint32_t()>;
     GameFsStatus Initialize(PackageView dictionary,PackageView script,std::string path,
-                            const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr);
+                            const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
+                            GameActorRuntime* runtime=nullptr);
     GameFsStatus Tick();
     bool AcknowledgeMessage();
     GameActorScriptSnapshot Snapshot() const;
@@ -47,6 +55,7 @@ class GameActorScript final {
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
+    GameActorRuntime* runtime_=nullptr;
     std::map<uint32_t,script::Value> bindings_;
     GameActorScriptSnapshot state_;
 };

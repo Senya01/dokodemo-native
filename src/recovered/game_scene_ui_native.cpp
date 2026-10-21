@@ -80,6 +80,10 @@ void GameTransition::Open(bool immediate) {
     if (immediate)
         state_.radius = state_.maximum_radius;
 }
+bool GameTransition::StartGameOpen() {
+    if(!state_.live||!SetCenter({{0,0}}))return false;
+    state_.group=5;Open(false);return true;
+}
 void GameTransition::CloseWipe(bool immediate) {
     if (!state_.live)
         return;

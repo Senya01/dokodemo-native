@@ -19,6 +19,7 @@ class GameTransition final {
     bool SetCenter(const std::array<float, 2> &center);
     void SetDuration(uint32_t ticks);
     void Open(bool immediate = false);      // D9E4; source state1 expands to2
+    bool StartGameOpen(); // source1C258 -> DA64(0,5,produced zero point)
     void CloseWipe(bool immediate = false); // contracting state3 to0
     void Update();
     bool Draw(GameGraphics &graphics) const;
