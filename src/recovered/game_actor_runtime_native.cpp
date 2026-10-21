@@ -311,7 +311,7 @@ bool GameActorRuntime::WaitReady() const {
   // own completion producer;there is no generic one-frame auto-completion.
   return !state_.actor_request_pending && !state_.selected_extension_pending &&
          (state_.actor_special_ready || state_.command_complete ||
-          state_.command_ready);
+          state_.command_ready||state_.command_repeat_ready258);
 }
 GameFsStatus GameActorRuntime::SetField54(int32_t value) {
   if (!Live())
@@ -324,6 +324,82 @@ GameFsStatus GameActorRuntime::RequestManager() {
     return {GameFsCode::Unavailable, 0, "Game manager0 owner expired"};
   state_.manager_request8 = true;
   return {}; // 1C210 sets8;not manager-update completion
+}
+GameFsStatus GameActorRuntime::RequestCamera(int32_t value) {
+  if (!Live())
+    return {GameFsCode::Unavailable, 0, "GAME44 camera manager owner expired"};
+  state_.manager_camera_request4C=value;
+  ++state_.camera_requests;
+  return {}; //1C8C4 writes4C only;23488 consumes on a later owner phase
+}
+GameFsStatus GameActorRuntime::UpdateCamera() {
+  if(state_.manager_camera_request4C!=-1){
+    const auto request=state_.manager_camera_request4C;
+    //23488 consumes the manager cell BEFORE starting camera7844. Setter
+    //has already returned. The reached domain is request1,not forcedmode3.
+    if(request!=1)return {GameFsCode::Unavailable,0,"Unimplemented reached camera request consumer"};
+    if(!state_.camera_bindings||!state_.camera_follows_actor)
+      return {GameFsCode::Unavailable,0,"Camera request has no live following target"};
+    state_.manager_camera_request4C=-1;++state_.camera_requests_consumed;
+    state_.camera_manager_state28=4;state_.camera_transition_mode1C=1;
+    state_.camera_complete2C=false;state_.camera_ratio=0;
+    camera_from_fov_=state_.camera_fov_degrees;camera_from_x_=state_.camera_position[0];camera_from_z_=state_.camera_position[2];
+    //79D8 relocation-backed scene curve. Named native direct piecewise
+    //interpolation replaces sourceVFPU quantization. Actual y=-300 lies
+    //exactly on its tenth-unit grid. Actor40 dynamic producer stays unknown.
+    const float y=state_.actor_root[1];
+    constexpr float ys[]{-1000,0,2000,3000},fs[]{23,18,13,11};
+    state_.camera_target_fov=y<=ys[0]?fs[0]:fs[3];
+    for(unsigned i=0;i<3;++i)if(y>=ys[i]&&y<ys[i+1]){
+      state_.camera_target_fov=fs[i]+(fs[i+1]-fs[i])*(y-ys[i])/(ys[i+1]-ys[i]);break;
+    }
+  }else if(state_.camera_manager_state28==4&&state_.camera_complete2C)
+    state_.camera_manager_state28=0; //23564 polls completed camera on laterphase
+  if(state_.camera_transition_mode1C==1&&!state_.camera_complete2C){
+    const float t=(std::clamp)(state_.camera_ratio,0.0f,1.0f);
+    const float s=t*t*(3-2*t); //4308 cubic Hermite,zero endpoint tangents
+    state_.camera_fov_degrees=camera_from_fov_+(state_.camera_target_fov-camera_from_fov_)*s;
+    camera_x_=camera_from_x_+(state_.actor_root[0]-camera_from_x_)*s;
+    camera_z_=camera_from_z_+(state_.actor_position[2]-camera_from_z_)*s;
+    //Named native fixed game-tick scalar2;duration=2/3 fromD98D0,
+    //source7844 rate=1/(duration*(60/2)). No setter/frame-count rendezvous.
+    state_.camera_ratio+=1.0f/((2.0f/3.0f)*30.0f);++state_.camera_transition_updates;
+    if(state_.camera_ratio>1&&state_.camera_fov_degrees<=state_.camera_target_fov){
+      state_.camera_ratio=1;state_.camera_complete2C=true;++state_.camera_completions;
+    }
+  }else if(state_.camera_complete2C){camera_x_=state_.actor_root[0];camera_z_=state_.actor_position[2];}
+  return {};
+}
+GameFsStatus GameActorRuntime::ShowIntro(int32_t value) {
+  if(!Live()||!resources_||(value!=1&&value!=0))return {GameFsCode::Unavailable,0,"GAME43 reached owner/argument domain"};
+  if(!intro_resource_){
+    auto resource=std::make_shared<GameUiResource>();
+    const auto loaded=resource->Load(*resources_,"data\\gui\\syoukai\\SYOUKAI.CB2A","data\\gui\\syoukai\\");
+    if(!loaded)return loaded;
+    GameUiInstance pending;if(!pending.Clone(resource))return {GameFsCode::Unavailable,0,"CGuiIntro clone refused"};
+    for(uint32_t i=0;i<3;++i){
+      if(!pending.Bind(i,i,0))return {GameFsCode::Unavailable,0,"CGuiIntro actual channel base refused"};
+      auto* control=pending.AddControl(i);if(!control)return {GameFsCode::Unavailable,0,"CGuiIntro owned channel unavailable"};
+      control->frame=i?1:0;control->mode=i?2:0;control->active=i?1:0;
+    }
+    intro_clone_=std::move(pending);intro_resource_=std::move(resource);state_.intro_live=true;
+    state_.intro_nodes=uint32_t(intro_clone_.Nodes().size());
+  }
+  if(value==0){
+    auto* c=intro_clone_.Control(1);c->frame=1;c->mode=2;c->active=1;state_.intro_state38=3;
+    //Reached other branch remains cold3.3E9E8/964F8 hides actual root0;
+    //control0 is disabled. This is immediate source hide,not fade completion.
+    if(!intro_clone_.ShowRoot(0,false))return {GameFsCode::Unavailable,0,"CGuiIntro root hide refused"};
+    c=intro_clone_.Control(0);c->mode=c->active=0;state_.intro_state34=3;++state_.intro_closes;
+    return {};
+  }
+  if(state_.intro_state34==3){
+    if(!intro_clone_.ShowRoot(0)||!intro_clone_.Bind(0,0,0))return {GameFsCode::Unavailable,0,"CGuiIntro actual root activation refused"};
+    auto* c=intro_clone_.Control(0);c->frame=0;c->mode=c->active=1;state_.intro_state34=1;
+  }
+  auto* c=intro_clone_.Control(1);c->frame=1;c->mode=c->active=1;
+  state_.intro_state38=1;++state_.intro_requests;
+  return {}; //1C890 returns dispatcherFALSE;not waiting for CB2A end
 }
 GameFsStatus GameActorRuntime::PrepareActor() {
   if (state_.actor_model_live)
@@ -400,6 +476,9 @@ GameFsStatus GameActorRuntime::RequestActorEvent(int32_t first,
       throw std::runtime_error("Actor event already pending");
     auto command = AscRecord(actor_asc_, uint32_t(first));
     command_image_ = std::move(command);
+    command_loops_.clear();state_.command_loop_depth=0;
+    state_.command_repeat_ready258=false;
+    state_.command_wait_motion=false;
     state_.requested_command = first;
     state_.command_pc = state_.command_effects = state_.command_frontier = 0;
     state_.effect_order={};
@@ -531,6 +610,9 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
   const auto scene = UpdateScene();
   if (!scene)
     return scene;
+  const auto camera=UpdateCamera();if(!camera)return camera;
+  if(state_.intro_live){std::string error;if(!intro_clone_.Update(error))return {GameFsCode::Unavailable,0,error};
+    ++state_.intro_updates;for(uint32_t i=0;i<3;++i)state_.intro_controls[i]=*intro_clone_.Control(i);}
   if (state_.command_blocked)
     return UpdateActorPose();
   try {
@@ -610,7 +692,21 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       ++state_.command_effects;
       return {};
     }
-    if (op == 0x8010) {
+    if (op == 0x8020) {
+      if(size-at<8||command_loops_.size()>=64)
+        throw std::runtime_error("ASC8020 loop operand/depth outside native capacity");
+      state_.command_pc+=8;
+      command_loops_.push_back({state_.command_pc,command_image_.ReadLE32(at+4)});
+      state_.command_repeat_ready258=false; //243A0 byte258=0
+      state_.command_loop_depth=uint32_t(command_loops_.size());
+    } else if(op==0x8021) {
+      if(command_loops_.empty())throw std::runtime_error("ASC8021 without live owning loop frame");
+      auto& frame=command_loops_.back();
+      if(frame.remaining==1){command_loops_.pop_back();state_.command_pc+=4;}
+      else {if(frame.remaining>1)--frame.remaining;else state_.command_repeat_ready258=true; //24304 byte258=1,NOT8000/25E
+        state_.command_pc=frame.start;++state_.command_loop_repeats;}
+      state_.command_loop_depth=uint32_t(command_loops_.size());
+    } else if (op == 0x8010) {
       if (size - at < 12)
         throw std::runtime_error("ASC8010 operand truncated");
       const auto blend = command_image_.ReadLE32(at + 8);
@@ -628,6 +724,7 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
         state_.asc176_ready = true;
       state_.command_pc += 4;
     } else if (op == 0x8000) {
+      if(!command_loops_.empty())throw std::runtime_error("ASC8000 abnormal loop unwind outside reached finite contract");
       state_.command_complete = true;
       if (state_.active_command == 176)
         state_.asc176_complete = true;
@@ -768,7 +865,7 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   out = int32_t(index);
   return {};
 }
-GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics) {
+GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay) {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Actor render owners expired"};
   if (!state_.model_slots)
@@ -786,18 +883,20 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics) {
   // No asset bounds fit,scale or viewer recenter is performed.
   const float follow_x = channels_[0].motion >= 0 ? state_.actor_root[0] : 0;
   const float follow_y = channels_[0].motion >= 0 ? state_.actor_root[1] : 0;
-  state_.camera_position = {{follow_x, follow_y - 4400, 980, 1}};
-  state_.camera_look = {{follow_x, follow_y - 4399, 980, 1}};
+  const float eye_x=state_.camera_transition_mode1C?camera_x_:follow_x;
+  const float eye_z=state_.camera_transition_mode1C?camera_z_:980;
+  state_.camera_position = {{eye_x, follow_y - 4400, eye_z, 1}};
+  state_.camera_look = {{eye_x, follow_y - 4399, eye_z, 1}};
   auto view = ModelIdentity();
   view[5] = 0;
   view[9] = 1;
   view[6] = -1;
   view[10] = 0;
-  view[12] = -follow_x;
-  view[13] = -980;
+  view[12] = -eye_x;
+  view[13] = -eye_z;
   view[14] = follow_y - 4400;
   const auto camera = ModelMultiply(
-      ModelPerspective(0.5235987756f, 480.0f / 272.0f, 100, 10400), view);
+      ModelPerspective(state_.camera_fov_degrees*3.14159265358979323846f/180, 480.0f / 272.0f, 100, 10400), view);
   if (!graphics.Clear(0xFF000000, 0))
     return {GameFsCode::Unavailable, 0, "Room clear failed"};
   const auto prior_pixels = graphics.Snapshot().mesh_pixels;
@@ -823,7 +922,13 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics) {
     state_.actor_visible_pixels = uint32_t(pixels);
     ++state_.actor_draw_frames;
   }
-  if (!transition_->Draw(graphics) || !graphics.SwapBuffers())
+  if(state_.intro_live){GameUiDrawStats drawn;std::string error;
+    if(!intro_clone_.Draw(graphics,drawn,error))return {GameFsCode::Unavailable,0,error};
+    state_.intro_quads=drawn.quads;}
+  if (!transition_->Draw(graphics))
+    return {GameFsCode::Unavailable, 0, "Room transition draw failed"};
+  if(overlay){const auto drawn=overlay(graphics);if(!drawn)return drawn;}
+  if (!graphics.SwapBuffers())
     return {GameFsCode::Unavailable, 0, "Room frame presentation failed"};
   state_.model_pixel_writes += graphics.Snapshot().mesh_pixels - prior_pixels;
   GameGraphicsFrame frame;
@@ -838,6 +943,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics) {
   return {};
 }
 void GameActorRuntime::Close() {
+  intro_clone_.Close();intro_resource_.reset();state_.intro_live=false;state_.intro_controls={};
   light_on_control_={};season_controls_.clear();
   state_.scene_clock_ready=state_.light_on_control_present=false;
   state_.scene_light_nodes=0;
@@ -859,6 +965,8 @@ void GameActorRuntime::Close() {
   actor_asset_.reset();
   actor_asc_.Reset();
   command_image_.Reset();
+  command_loops_.clear();state_.command_loop_depth=0;
+  state_.command_repeat_ready258=false;
   coordinate_image_.Reset();
   actor_motion_names_.clear();
   state_.actor_model_live = false;
@@ -867,6 +975,9 @@ void GameActorRuntime::Close() {
   state_.active_command = -1;
   state_.pending_logical_motion = -1;
   state_.manager_request8 = false;
+  state_.manager_camera_request4C=-1;state_.camera_manager_state28=state_.camera_transition_mode1C=0;
+  state_.camera_complete2C=false;
+  camera_from_fov_=30;camera_from_z_=camera_z_=980;camera_from_x_=camera_x_=0;
   state_.command_flag25A = false;
   for (auto &slot : models_) {
     slot.clone.Close();

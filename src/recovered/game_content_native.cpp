@@ -487,9 +487,10 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
     if(state_.actor_script.started){
-        if(state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle))
-            return actor_script_.AcknowledgeMessage();
-        return false;
+        const bool accepted=state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle)
+                            &&actor_script_.AcknowledgeMessage();
+        state_.actor_message_input_armed=actor_message_gate_.Armed();
+        return accepted;
     }
     if(state_.title_constructor_returned){
         if(scene_ui_.Snapshot().storage_dialog)return scene_ui_.HandleDialogInput(frame);
@@ -698,7 +699,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
-    actor_script_.Close();actor_message_gate_.Stop();state_.actor_script=actor_script_.Snapshot();actor_clock_={};
+    actor_script_.Close();actor_message_gate_.Stop();state_.actor_message_input_armed=false;state_.actor_script=actor_script_.Snapshot();actor_clock_={};
     actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
@@ -757,11 +758,33 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
-        const auto rendered=actor_runtime_.Draw(graphics);
+        //Publish ONCE,after both room and text. CopyGameFrame must never see
+        //an intermediate room-only front whileFONT is still being decoded.
+        const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+            if(!state_.actor_script.awaiting_message)return {};
+            std::string visible;
+            for(unsigned char c:state_.actor_script.message){
+                if(c==0x16)continue; //NativeNoHighlight adaptation;rawrequest remains unchanged
+                if(c<32&&c!=10)return {GameFsCode::Unavailable,0,"Unimplemented reached KSC text formatting control"};
+                visible.push_back(char(c));
+            }
+            GameFontBitmap text;const auto drawn=font_.RasterizeCp932({visible},440,text);
+            if(!drawn)return drawn;
+            //Named native KSC panel layout,not originalpopup pixelmatching.
+            if(!surface.FillRectangle(12,12,468,24+int32_t(text.height),0xFFF5E8CD,65535)
+               ||!surface.DrawImage(text.pixels,text.width,text.height,20,16,0xFFFFFFFF,65535))
+                return {GameFsCode::Unavailable,0,"Native KSC message draw failed"};
+            state_.actor_message_glyphs=text.glyphs;state_.actor_message_ink_pixels=0;
+            for(auto p:text.pixels)if(p>>24)++state_.actor_message_ink_pixels;
+            ++state_.actor_message_draw_frames;
+            return {};
+        });
         if(!rendered){state_.status=rendered;state_.blocked=true;return false;}
         state_.actor_script.runtime=actor_runtime_.Snapshot();
         if(state_.actor_script.dictionary.imported){actor_dictionary_.Reset();state_.actor_dictionary_live=false;}
-        if(!before.awaiting_message&&state_.actor_script.awaiting_message)actor_message_gate_.Begin();
+        if(state_.actor_script.awaiting_message&&(!before.awaiting_message||before.messages!=state_.actor_script.messages)){
+            actor_message_gate_.Begin();++state_.actor_message_contexts;state_.actor_message_input_armed=false;
+        }
         state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
         const auto script_ok=bool(state_.status);
         if(state_.actor_script.runtime.command_blocked){
@@ -769,15 +792,6 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.status={GameFsCode::Unavailable,0,state_.actor_script.runtime.command_error};
             // Keep independent renderer/input owners responsive while the VM
             // genuinely waits. This is not successful ASC completion.
-        }
-        // The native KSC message consumer uses the already-live original XFT.
-        // No stale TITLE scene is drawn as a stand-in for scene4 graphics.
-        if(state_.actor_script.awaiting_message){
-            GameFontBitmap text;const auto drawn=font_.RasterizeCp932({state_.actor_script.message},440,text);
-            if(!drawn){state_.status=drawn;state_.blocked=true;return false;}
-            if(!graphics.Clear(0xFF000000,0)||!graphics.DrawImage(text.pixels,text.width,text.height,20,30)||!graphics.SwapBuffers()){
-                state_.status={GameFsCode::Unavailable,0,"Native KSC message presentation failed"};state_.blocked=true;return false;
-            }
         }
         // A stopped VM is a semantic frontier,not retirement of independent
         // actor/render owners. Let their real pending phase (including ASC

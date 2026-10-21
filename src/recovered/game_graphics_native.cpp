@@ -249,7 +249,7 @@ bool GameGraphics::DrawRadialFade(float x, float y, float inner, float outer) {
     ++state_.draw_calls; return true;
 }
 bool GameGraphics::DrawImage(const std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
-                             int32_t left, int32_t top, uint32_t modulation) {
+                               int32_t left, int32_t top, uint32_t modulation,uint16_t depth) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!state_.live || !width || !height || width > 4096 || height > 4096
         || pixels.size() != size_t(width) * height || left < -1048576 || left > 1048576
@@ -261,7 +261,7 @@ bool GameGraphics::DrawImage(const std::vector<uint32_t>& pixels, uint32_t width
         const auto original=pixels[size_t(y)*width+x];
         for(unsigned shift=0;shift<32;shift+=8)
             color|=((((original>>shift)&255)*((modulation>>shift)&255)+127)/255)<<shift;
-        Pixel(uint32_t(dx),uint32_t(dy),color,0);
+          Pixel(uint32_t(dx),uint32_t(dy),color,depth);
     }
     ++state_.draw_calls;return true;
 }

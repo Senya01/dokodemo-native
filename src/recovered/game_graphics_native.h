@@ -80,7 +80,7 @@ public:
     // per-pixel math replaces its60-segment geometry, not a PSP GE interpreter.
     bool DrawRadialFade(float center_x, float center_y, float inner_radius, float outer_radius);
     bool DrawImage(const std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
-                   int32_t left, int32_t top, uint32_t color_modulation = 0xFFFFFFFF);
+                   int32_t left, int32_t top, uint32_t color_modulation = 0xFFFFFFFF,uint16_t depth=0);
     bool ProjectClipVertex(const GameClipVertex& input, GameVertex& output) const;
     bool SetMatrixMode(uint32_t mode);
     bool LoadMatrix(const GameMatrix& matrix);

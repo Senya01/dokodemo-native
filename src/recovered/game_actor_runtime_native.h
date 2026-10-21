@@ -3,6 +3,7 @@
 #include "game_model_native.h"
 #include "game_position_native.h"
 #include "game_scene_ui_native.h"
+#include <functional>
 
 namespace dokodemo::recovered {
 // 7398 compares five adjacent intervals from six signed16 (hour,minute)
@@ -15,8 +16,18 @@ uint32_t SceneSeason709C(uint32_t month,uint32_t day);
 struct GameActorRuntimeSnapshot {
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
-       command_ready = false;
+       command_ready = false,command_repeat_ready258=false;
   bool manager_request8 = false; // 1B188 zeroed6C owner,1C210 request
+  int32_t manager_camera_request4C = -1; //1B204 sentinel;GAME44 is a setter
+  uint32_t camera_requests=0;
+  uint32_t camera_requests_consumed=0,camera_transition_updates=0,camera_completions=0;
+  uint32_t camera_manager_state28=0,camera_transition_mode1C=0;
+  bool camera_complete2C=false;
+  float camera_fov_degrees=30,camera_target_fov=30,camera_ratio=0;
+  uint32_t command_loop_depth=0,command_loop_repeats=0;
+  bool intro_live=false;uint32_t intro_requests=0,intro_closes=0,intro_state34=3,intro_state38=3;
+  uint32_t intro_nodes=0,intro_quads=0,intro_updates=0;
+  std::array<GameUiControl,3> intro_controls{};
   int32_t active_command = -1, camera_mode = 0;
   int32_t source_field5C = 0; //9480/94F8 explicit produced base+4C
   bool region_owners_live=false;
@@ -104,11 +115,13 @@ public:
   bool WaitReady() const;
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();
+  GameFsStatus RequestCamera(int32_t value);
+  GameFsStatus ShowIntro(int32_t value);
   GameFsStatus RequestActorEvent(int32_t first, int32_t second);
   GameFsStatus AdvanceActorFrame();
   GameFsStatus CreateModel(int32_t resource, int32_t category, int32_t motion,
                            float x, int32_t &slot);
-  GameFsStatus Draw(GameGraphics &);
+  GameFsStatus Draw(GameGraphics &,const std::function<GameFsStatus(GameGraphics&)>& overlay={});
   GameActorRuntimeSnapshot Snapshot() const { return state_; }
   void Close();
 
@@ -132,6 +145,8 @@ private:
   GameModelClone actor_clone_;
   GameFsStatus PrepareActor();
   PackageView command_image_;
+  struct CommandLoop { uint32_t start=0,remaining=0; };
+  std::vector<CommandLoop> command_loops_;
   PackageView coordinate_image_;
   bool coordinate_loaded_ = false;
   struct ActorChannel {
@@ -159,5 +174,9 @@ private:
   GameFsStatus ApplySceneLightToggle(int32_t value);
   GameFsStatus ApplyScenePair(uint32_t pair);
   GameFsStatus UpdateScene();
+  GameFsStatus UpdateCamera();
+  std::shared_ptr<GameUiResource> intro_resource_;
+  GameUiInstance intro_clone_;
+  float camera_from_fov_=30,camera_from_z_=980,camera_from_x_=0,camera_z_=980,camera_x_=0;
 };
 } // namespace dokodemo::recovered

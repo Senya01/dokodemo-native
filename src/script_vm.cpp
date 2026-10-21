@@ -477,9 +477,17 @@ Event Vm::step() {
             uint32_t count = program_.operand(*cmd, 1, 1);
             if (frame_->size() > count) return stop(cmd, "Caller argument count exceeds reserved frame");
             frame_->resize(count); frame_reserved_ = true;
-        } else if(op==0x20||op==0x21) {
+        } else if(op==0x20||op==0x21||op==0x23) {
             const auto argc=op==0x20?program_.operand(*cmd,1,1):0;
-            const auto target=program_.operand(*cmd,op==0x20?2:1,3);
+            uint32_t target=0;
+            if(op==0x23){
+                //6DE00 moves/pops one tag7 callee and replaces it with return
+                //PC. Native call records own that returnPC;reached ABI argc0.
+                const auto function=pop();
+                if(function.kind!=Value::Kind::Code||function.word>>28!=7||!stack_.empty())
+                    return stop(cmd,"Indirect23 needs actual tag7 and reached zero-argument operand domain");
+                target=function.word&0x0FFFFFFF;
+            }else target=program_.operand(*cmd,op==0x20?2:1,3);
             const auto* callee=program_.command(target);
             if(!callee||callee->opcode!=0x30||argc>stack_.size()||calls_.size()>=128)
                 return stop(cmd,"Invalid script call/frame/argument bound");
@@ -551,6 +559,9 @@ Event Vm::step() {
             // BOOT 70BB0/70C18 sign-extend 80/81; 70C8C uses three LBU for unsigned 82.
             if (width < 3 && (raw & (1u << (width * 8 - 1)))) raw |= UINT32_MAX << (width * 8);
             stack_.push_back(Value::integer(static_cast<int32_t>(raw)));
+        } else if (op == 0x8D) {
+            //70FF8: elapsed source tick since ctx18;ordinary opcode cost.
+            stack_.push_back(Value::integer(int32_t(uint32_t(clock_tick_-timer_base_) & 0x0FFFFFFF)));
         } else if (op == 0x84) { Value nil;nil.kind=Value::Kind::Scalar;stack_.push_back(nil); }
         else if (op == 0x85) stack_.push_back(Value::integer(0));
         else if (op == 0x86||op==0x87) stack_.push_back(boolean(op==0x87));

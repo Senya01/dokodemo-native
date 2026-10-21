@@ -84,6 +84,9 @@ struct GameContentSnapshot {
     std::string actor_dictionary_path;
     std::array<uint8_t,16> actor_dictionary_prefix{};
     GameActorScriptSnapshot actor_script;
+    uint32_t actor_message_contexts=0;
+    bool actor_message_input_armed=false;
+    uint32_t actor_message_draw_frames=0,actor_message_glyphs=0,actor_message_ink_pixels=0;
     std::string next_resource;
     GameFsStatus status;
 };

@@ -32,7 +32,8 @@ class SelectedRoomResources final:public GameResourceSource {
     GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
         try {
             const auto split=path.find('\\');Check(split!=std::string::npos,"diagnostic mounted request");
-            const auto mount=path.substr(0,split);Check(mount=="BG_ROOM"||mount=="NEKO"||mount=="DATA","diagnostic actual game mounts only");
+            auto mount=path.substr(0,split);if(mount=="data")mount="DATA";
+            Check(mount=="BG_ROOM"||mount=="NEKO"||mount=="DATA","diagnostic actual game mounts only");
             auto& package=packages_[mount];
             if(!package.lease) {
                 file_.clear();file_.seekg(0,std::ios::end);const auto extent=uint64_t(file_.tellg());
@@ -134,6 +135,11 @@ void Focused(){
                        0x90,0,0,0x70,0x38,0x03,0x30,1,0x90,0,0,0x80,9,0x51,0x31});
     script::Vm caller(call);Check(caller.start().status==script::Status::Running,"nested start");
     Check(caller.run().status==script::Status::Complete&&caller.result().signed_integer()==9,"actual nested lvalue/result ABI");
+    auto indirect_program=Fixture({0x30,0,0x8A,8,0,0,0x23,0x38,0x30,0,0x80,7,0x70,0x31});
+    script::Vm indirect(indirect_program);indirect.start();Check(indirect.run().status==script::Status::Complete&&indirect.result().signed_integer()==7,
+        "source23 tag7 call and returnPC continue caller without invented result");
+    auto bad_indirect_program=Fixture({0x30,0,0x80,8,0x23,0x38});script::Vm bad_indirect(bad_indirect_program);bad_indirect.start();
+    Check(bad_indirect.run().status==script::Status::Stopped,"numeric rawaddress cannot replace source23 tag7 callee");
     auto yield=Fixture({0x30,0,0x85,0x41,0x80,4,0x70,0x38});script::Vm scheduler(yield);
     scheduler.start();Check(scheduler.run().status==script::Status::Yield,"explicit native41 timestamp-slice adapter");
     scheduler.clock_tick(1);Check(scheduler.run().status==script::Status::Complete&&scheduler.result().signed_integer()==4,"next native slice resumes exact PC");
@@ -205,6 +211,19 @@ void Focused(){
     Check(actor.WaitReady()&&actor.Snapshot().active_command==-1,"23FD0 actual cold258ready producer");
     Check(bool(actor.BindCamera(1))&&actor.Snapshot().camera_follows_actor&&actor.Snapshot().actor_position[2]==600,
           "72 binds live source actor point,not zero/null");
+    Check(actor.Snapshot().manager_camera_request4C==-1&&bool(actor.RequestCamera(1))
+          &&actor.Snapshot().manager_camera_request4C==1&&actor.Snapshot().camera_requests_consumed==0
+          &&actor.Snapshot().camera_fov_degrees==30,"GAME44 setter publishes request without consuming or changing camera");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().manager_camera_request4C==-1
+          &&actor.Snapshot().camera_manager_state28==4&&actor.Snapshot().camera_fov_degrees==30
+          &&!actor.Snapshot().camera_complete2C,"23488 clear/start then camera samples ratio0;not completion");
+    float fov=30;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){
+        Check(bool(actor.AdvanceActorFrame()),"live camera interpolation update");
+        const auto now=actor.Snapshot();Check(now.camera_fov_degrees<=fov&&now.camera_fov_degrees>=18,"monotone actual curve target,not forced result");fov=now.camera_fov_degrees;
+    }
+    Check(actor.Snapshot().camera_complete2C&&fov==18&&actor.Snapshot().camera_manager_state28==4
+          &&actor.Snapshot().camera_completions==1&&actor.WaitReady(),"camera threshold completion is independent of BCFC cold ready");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0,"manager observes camera completion on later phase");
     Check(bool(actor.StartTransition())&&fade.Snapshot().group==5&&fade.Snapshot().state==1,
           "service6 starts real existing transition,not a returned success flag");
     int32_t absent_slot=3;
@@ -212,7 +231,7 @@ void Focused(){
           "service31 cannot allocate a successful slot without actual resource owner");
     Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
           "zeroed1B188 manager receives actualservice0 request,not completion");
-    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0),"retired target lease blocks camera/wait service");
+    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1),"retired target lease blocks camera/wait/setter");
     actor.Close();fade.Retire();Check(!actor.Snapshot().live,"typed actor/camera owners retired");
     Lease model_input(Dictionary());GameTransition model_fade;Check(model_fade.Initialize({{0,0}}),"model error test fade");
     MissingResources missing;GameActorRuntime model_owner;
@@ -233,6 +252,9 @@ void Focused(){
     Check(timed.run().status==script::Status::Yield&&timed.deadline_writes()==1&&timed.timestamp_writes()==0,"44 writes deadline,not41timestamp");
     timed.clock_tick(12);Check(timed.run().status==script::Status::Yield,"real deadline keeps wait before ready tick");
     timed.clock_tick(13);Check(timed.run().status==script::Status::Complete&&timed.result().signed_integer()==7,"deadline resumes exact next instruction");
+    auto elapsed_program=Fixture({0x30,0,0x80,3,0x41,0x8D,0x70,0x38});script::Vm elapsed(elapsed_program);
+    elapsed.clock_tick(10);elapsed.start();Check(elapsed.run().status==script::Status::Yield,"source41 writes timestamp13 under named native slice adapter");
+    elapsed.clock_tick(14);Check(elapsed.run().status==script::Status::Complete&&elapsed.result().word==0x20000001,"8D reads elapsed tick from actual ctx18,not fixedzero");
     auto addition=Fixture({0x30,0,0x80,0xFE,0x80,3,0xE0,0x70,0x38});script::Vm add(addition);add.start();
     Check(add.run().status==script::Status::Complete&&add.result().signed_integer()==1,"E0 signed scalar addition");
     auto nil_addition=Fixture({0x30,0,0x87,0x84,0xE0,0x70,0x38});script::Vm nil_add(nil_addition);nil_add.start();
@@ -277,9 +299,11 @@ void Selected(const char* path){
     }
     GameActorRuntime runtime;Check(bool(runtime.Initialize(0,lease.View(),transition,&resources)),"source cold actor controls");
     const auto scene_open=runtime.InitializeScene0(profile.calendar);Check(bool(scene_open),scene_open.detail.c_str());
-    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[]{return 0x30D72E10u;},&rng,&runtime); // explicit diagnostic clock fixture
+    uint32_t fixture_clock=0x30D72E10u;bool fixture_advanced=false;
+    GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[&]{return fixture_clock;},&rng,&runtime); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
     for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto s=game.Snapshot();
+        if(i>200&&!fixture_advanced&&s.runtime.intro_requests){fixture_clock+=5;fixture_advanced=true;std::cout<<"Explicit fixture advances calendar5minutes;NOT connected realclock evidence\n";}
         if(i<6||i%20==0||!status)
         std::cout<<"tick="<<s.ticks<<" pc="<<s.pc<<" op="<<s.last_opcode<<" steps="<<s.instructions
                  <<" imported="<<s.dictionary.imported<<" service="<<s.last_service<<" command="<<s.runtime.command_pc
@@ -288,6 +312,7 @@ void Selected(const char* path){
         if(!status||s.awaiting_message||s.completed)break;
     }
     const auto s=game.Snapshot();std::cout<<"services=";for(auto id:s.service_ids)std::cout<<id<<',';std::cout<<'\n';
+    std::cout<<"intro_args="<<std::hex<<s.intro_caller_words[0]<<','<<s.intro_caller_words[1]<<','<<s.intro_caller_words[2]<<std::dec<<" message="<<s.message<<" cameraFov="<<s.runtime.camera_fov_degrees<<" repeats="<<s.runtime.command_loop_repeats<<'\n';
     std::cout<<"queries="<<s.array_query_calls<<" matches="<<s.array_query_matches<<" reads="<<s.dictionary_game_reads
         <<" writes="<<s.dictionary_game_writes<<" random="<<s.random_selections<<" root_returns="<<s.root_functions_returned<<'\n';
     std::cout<<"blocks="<<s.control_blocks_entered<<'/'<<s.control_blocks_closed<<" active="<<s.active_control_blocks
@@ -310,15 +335,23 @@ void Selected(const char* path){
           &&s.runtime.position3B0==GameVector4{{600,-300,0,1}}
           &&s.game28_queries>0&&s.game28_result_word==0x10000000u&&s.runtime.source_flag2A97C==0,
           "actual region compilation and Boolean GAME19/GAME28 outputs drive continuation");
-    Check(s.blocked&&s.last_service==44&&s.pc==0x297C&&s.event_signals==4&&!s.waiting_for_event
-          &&s.last_service_argument_word==0x20000001u&&s.runtime.angular_completions==3
-          &&!s.last_service_returned&&!s.runtime.command_blocked,
-          "actual178 turn/completion precedes reached GAME44 camera request,not old19 failure");
-    Check(!game.Tick()&&!game.Tick(),"blocked VM stays stopped while independent controls remain live");
-    const auto after_stop=game.Snapshot();
-    Check(after_stop.pc==s.pc&&after_stop.instructions==s.instructions&&after_stop.event_signals==s.event_signals
-          &&after_stop.runtime.command_completions==4&&after_stop.runtime.actor_phases>s.runtime.actor_phases,
-          "semantic stop cannot fabricate VM completion;real native owners keep pumping");
+    Check(!s.blocked&&s.awaiting_message&&s.messages==1&&s.camera_setter_returns==1
+          &&s.camera_setter_result_word==0x10000000&&s.runtime.camera_completions==1
+          &&s.runtime.camera_manager_state28==0&&s.runtime.camera_fov_degrees==19.5f
+          &&s.runtime.intro_requests==1&&s.runtime.intro_closes==1&&!s.runtime.command_blocked,
+          "actual setter returnsFalse,independentcamera completes,realintro andcallback reach KSC message");
+    Check(s.event_repeat_signals>0&&s.runtime.command_loop_repeats>0,
+          "ASC60 ready258 doesnot synthesize unreachable8031 or8000;live83 clip really completed first");
+    Check(s.local_config_writes==1&&s.message_local_words==std::array<uint32_t,5>{{0x20000000,0x20000009,0x20000004,0x20000064,0x20000064}},
+          "actualbuiltin35 fiveLocalwords feedrealtextownerconfiguration");
+    for(unsigned i=0;i<30;++i)Check(bool(game.Tick()),"realowners pump while messagewaits");
+    auto held=game.Snapshot();Check(held.messages==1&&held.awaiting_message&&held.instructions==s.instructions
+        &&held.runtime.actor_phases>s.runtime.actor_phases&&held.native_clock_ticks>s.native_clock_ticks,
+        "messagewait cannot autoack and doesnot freeze actor/globalclockowners");
+    Check(game.AcknowledgeMessage(),"explicit selected-data messageacknowledgement");
+    for(unsigned i=0;i<600;++i){Check(bool(game.Tick()),"actualcallback continues aftermessageack");if(game.Snapshot().messages==2)break;}
+    const auto next=game.Snapshot();Check(next.messages==2&&next.awaiting_message&&next.message_acknowledgements==1&&!next.blocked,
+        "actualKSC nextmessage/result afteroneack,not oldGAME44 failure oracle");
     game.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");

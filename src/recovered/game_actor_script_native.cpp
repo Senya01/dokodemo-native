@@ -100,6 +100,18 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         state_.source_flag2A980=runtime_->Snapshot().source_flag2A980!=0;
         ++state_.scene_flag_queries;auto value=False();if(state_.source_flag2A980)value.word|=1;return value;
     }
+    case 43: {
+        for(uint16_t i=0;i<3;++i)state_.intro_caller_words[i]=vm_->read_slot(script::Table::Frame,i).word;
+        if(Number(arg)==0)state_.intro_clock_expired=state_.last_clock_word;
+        Need(runtime_!=nullptr,"GAME43 needs live CGuiIntro owner");
+        const auto status=runtime_->ShowIntro(Number(arg));Need(bool(status),status.detail.c_str());return False();
+    }
+    case 44: {
+        Need(runtime_!=nullptr,"GAME44 needs live camera manager owner");
+        const auto status=runtime_->RequestCamera(Number(arg));Need(bool(status),status.detail.c_str());
+        ++state_.camera_setter_returns;state_.camera_setter_result_word=0x10000000;
+        return False(); // dispatcher default remainsBooleanFALSE;no camera wait
+    }
     case 45: {
         Need(runtime_&&runtime_->Snapshot().live,"GAME45 needs live actor command owner");
         ++state_.actor_flag_queries;auto value=False();if(runtime_->Snapshot().command_flag25A)value.word|=1;return value;
@@ -200,11 +212,25 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         vm_->clear_event_signal();return Value::integer(0);
     }
     if(id==0x23){Need(args.empty(),"Builtin23 wait argc");vm_->wait_for_event();return Nil();}
+    if(id==0x35){
+        Need(args.size()==5&&program_.header().local_count>=7,"Builtin35 actual local configuration extent/argc");
+        for(const auto& arg:args)Need((arg.kind==Value::Kind::Scalar||arg.kind==Value::Kind::Timestamp)&&arg.word>>28<=3,
+                                     "Builtin35 reached finite scalar configuration domain");
+        //69EE0 moves five owned arguments into ctx24[2..6]. The VM host
+        //dispatcher owns/releases args;native assignments release prior cells.
+        //These are the SAME locals used by KSC instructions/string expansion.
+        for(uint16_t i=0;i<5;++i){Value ref;ref.kind=Value::Kind::Reference;ref.table=script::Table::Local;ref.index=i+2;
+            vm_->store_reference(ref,args[i]);state_.message_local_words[i]=args[i].word;}
+        ++state_.local_config_writes;return Nil();
+    }
     if(id==4) {Need(args.size()==1,"Builtin04 argc");return Value::integer(Number(args[0]));}
     if(id==17){Need(args.size()==1&&rng_&&rng_->Available(),"Builtin17 real RNG/argc");const auto divisor=Number(args[0]);Need(divisor>0,"Builtin17 positive divisor domain");return Value::integer(int32_t(rng_->NextC3234())%divisor);}
     if(id==9) {
         Value value;value.kind=Value::Kind::Timestamp;
-        if(args.empty()) {Need(bool(clock_),"Live native clock provider unavailable");value.word=clock_();return value;}
+        if(args.empty()) {Need(bool(clock_),"Live native clock provider unavailable");value.word=clock_();
+            ++state_.clock_calls;state_.last_clock_word=value.word;
+            if(runtime_&&runtime_->Snapshot().intro_requests&&state_.intro_clock_origin==0)state_.intro_clock_origin=value.word;
+            return value;}
         Need(args.size()==5,"Builtin09 calendar argc");
         std::array<int32_t,5> fields{};for(size_t i=0;i<5;++i)fields[i]=Number(args[i]);
         value.word=0x30000000u|(CalendarScalar7C660(CalendarRecord689B8(fields))&0x0FFFFFFF);return value;
@@ -226,14 +252,20 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         state_.array_actions+=result.writes;
         return Value::integer(result.selected);
     }
-    throw std::runtime_error("Unimplemented reached KSC builtin id="+std::to_string(id));
+    std::ostringstream unimplemented;unimplemented<<"Unimplemented reached KSC builtin id="<<unsigned(id)<<" argc="<<args.size()<<" args=";
+    for(const auto& arg:args)unimplemented<<int(arg.kind)<<':'<<std::hex<<arg.word<<',';
+    throw std::runtime_error(unimplemented.str());
 }
 GameFsStatus GameActorScript::Tick() {
     if(!state_.live||!vm_)return {GameFsCode::Unavailable,0,"KSC owner not live"};
+    //The source global clock advances independently of VM interpreter entries.
+    //Named native one-clock-unit per owner phase,including event/text waits.
+    vm_->clock_tick(++state_.native_clock_ticks);
     // 1E788 checks readiness before actor+8 and only then copies394->ext20.
     // A flag produced by this actor phase is eligible on a later phase,not
     // an immediate same-phase acknowledgement of a newly reached8031.
     const bool event_eligible=vm_->waiting_for_event()&&runtime_&&runtime_->WaitReady();
+    const bool repeat_eligible=event_eligible&&runtime_->Snapshot().command_repeat_ready258;
     if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
     if(state_.completed||state_.awaiting_message)return {};
@@ -241,23 +273,23 @@ GameFsStatus GameActorScript::Tick() {
         (void)script_image_.Describe(); // live backing required throughout use
         if(vm_->waiting_for_event()) {
             if(!event_eligible)return {};
-            vm_->signal_event();++state_.event_signals;
+            vm_->signal_event();++state_.event_signals;if(repeat_eligible)++state_.event_repeat_signals;
         }
-        ++state_.ticks;vm_->clock_tick(state_.ticks);
+        ++state_.ticks;
         const auto event=vm_->run(200000);
         dictionary_.Capture(*vm_);
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
         if(event.status==script::Status::Stopped)throw std::runtime_error(event.diagnostic.text());
         if(event.status==script::Status::Yield)++state_.yields;
         if(event.status==script::Status::HostYield)++state_.native_budget_yields;
-        if(event.status==script::Status::Message) {++state_.messages;state_.message=event.message_cp932;state_.awaiting_message=true;}
+        if(event.status==script::Status::Message) {++state_.messages;state_.message=event.message_cp932;state_.message_history.push_back(state_.message);state_.awaiting_message=true;}
         if(event.status==script::Status::Complete)state_.completed=true;
         return {};
     } catch(const std::exception& e) {state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameActorScript::AcknowledgeMessage() {
     if(!state_.live||!state_.awaiting_message)return false;
-    state_.awaiting_message=false;return true;
+    state_.awaiting_message=false;++state_.message_acknowledgements;return true;
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();

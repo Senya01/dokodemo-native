@@ -39,6 +39,10 @@ void SurfaceTests() {
     GameGraphicsFrame second;
     Check(graphics.CopyFront(second) && At(second, 6, 6) == 0xFF112233 && At(first, 6, 6) == 0xFF7F0080, "frame copy ownership survives swaps");
     Check(!graphics.Initialize(config) && graphics.Snapshot().frame_sequence == 2, "live reinit refused without destroying surfaces");
+    Check(graphics.FillRectangle(2,2,14,14,0xFFF5E8CD,65535)
+          &&graphics.DrawImage({0xFF552F0D},1,1,3,3,0xFFFFFFFF,65535)&&graphics.SwapBuffers(),"text ink and native panel share foreground depth");
+    GameGraphicsFrame ink;Check(graphics.CopyFront(ink)&&At(ink,3,3)==0xFF552F0D&&At(ink,4,4)==0xFFF5E8CD,
+          "glyph is visible over depth-writing panel,not accepted-but-invisible draw");
     graphics.Close();
     Check(!graphics.Snapshot().live && !graphics.Snapshot().color_bytes && !graphics.Snapshot().depth_bytes,
           "close releases actual buffers");
