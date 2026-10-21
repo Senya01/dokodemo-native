@@ -1,6 +1,6 @@
+#include "recovered/game_boot_native.h"
 #include "recovered/game_model_native.h"
 #include "recovered/game_title_native.h"
-#include "recovered/game_boot_native.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -99,9 +99,7 @@ struct Lease : PackageStorageLease {
         return true;
     }
 };
-bool Near(float a, float b) {
-    return std::abs(a - b) < .0001f;
-}
+bool Near(float a, float b) { return std::abs(a - b) < .0001f; }
 void MathAndSkin() {
     const auto camera_rotation = ModelQuaternion({{-.70710678f, 0, 0, .70710678f}});
     const auto forward = ModelTransform(camera_rotation, {{0, 0, -1, 0}});
@@ -302,9 +300,11 @@ void TitleLifetimeAndFade() {
               !state.actors[5].visible,
           "primary movement,cold kuro remains hidden without target");
     Check(!state.scene3_completed && !state.menu_input_implemented, "no fake scene completion/menu success");
-    GameFsStatus boundary;
-    for(unsigned i=0;i<100&&boundary;++i)boundary=scene.TickAndDraw(graphics,fade);
-    Check(!boundary&&scene.Snapshot().arrival_branch_pending&&scene.Snapshot().frontier_pc==0x33B90,"unimplemented arrival random/input branch stops explicitly");
+    for (unsigned i = 0; i < 300; ++i)
+        Check(bool(scene.TickAndDraw(graphics, fade)), "running through real arrivals");
+    Check(scene.Snapshot().primary_arrivals >= 2 && scene.Snapshot().primary_restarts >= 2 &&
+              !scene.Snapshot().arrival_branch_pending && scene.Snapshot().arrival_countdown == 3,
+          "phase11 source arrival restarts cycle;only index0 decrements countdown");
     Check(scene.Close() && arena.Used() == baseline, "TITLE releases text/task/clone ownership");
     GameTitleScene failed;
     source.fail = true;
@@ -319,6 +319,180 @@ void TitleLifetimeAndFade() {
     Check(manager.Close() && arena.Used() == 0, "all native owners closed");
     arena.Reset();
 }
+void ArrivalBranchTests() {
+    GameTitleSnapshot state;
+    state.state = 1;
+    state.layout = 0;
+    for (unsigned i = 0; i < 10; ++i) {
+        auto &actor = state.actors[i];
+        actor.type = i < 5 ? i : 5;
+        actor.x = 2500;
+        actor.y = 2000 + 500.0f * i;
+        actor.target_x = -4000;
+        actor.target_y = actor.y;
+        actor.target_produced = i < 5;
+        actor.moving = i < 5;
+        actor.visible = actor.desired_visible = i < 5;
+    }
+    state.actors[1].x = -4000;
+    state.actors[1].moving = false;
+    TitleArrivalCycle(state, nullptr);
+    Check(state.arrival_countdown == 4 && state.primary_restarts == 1 && state.rng_calls == 0 &&
+              state.actors[1].x == 5700 && state.actors[1].target_y == 4000,
+          "Suzuki arrival restarts source offset position without random/motion "
+          "restart");
+    state.actors[0].x = -4000;
+    state.actors[0].moving = false;
+    TitleArrivalCycle(state, nullptr);
+    Check(state.arrival_countdown == 3 && state.actors[0].x == 2500, "only Toro decrements140");
+    state.actors[0].x = -4000;
+    state.selection = 0;
+    TitleArrivalCycle(state, nullptr);
+    Check(!state.actors[0].desired_visible && state.primary_restarts == 2,
+          "selection suppresses attract restart");
+    state.selection = -1;
+    state.media_state = 1;
+    TitleArrivalCycle(state, nullptr);
+    Check(state.primary_restarts == 2, "media transition suppresses restart");
+    state.media_state = 0;
+    state.arrival_countdown = 0;
+    RngNativeOwner rng;
+    uint64_t seed = 0;
+    for (;; ++seed) {
+        RngNativeOwner candidate;
+        candidate.ImportCurrentState64(seed, 1, "explicit deterministic fixture");
+        if (candidate.NextC3234() % 64 == 0)
+            break;
+    }
+    rng.ImportCurrentState64(seed, 1, "explicit deterministic fixture");
+    TitleArrivalCycle(state, &rng);
+    Check(state.kuro_selections == 1 && state.rng_calls == 1 && state.actors[5].moving &&
+              state.actors[5].visible && !state.actors[0].visible,
+          "zero countdown seeded64-way branch creates real kuro target");
+    state.actors[5].x = state.actors[5].target_x;
+    state.actors[5].y = state.actors[5].target_y;
+    TitleArrivalCycle(state, &rng);
+    Check(!state.actors[5].visible && state.rng_calls == 1,
+          "paired visible kuro arrival clears only itself that invocation");
+}
+void TitleMenuLifecycle() {
+    // Synthetic checked assets isolate source state/input/fade/ownership. The
+    // connected window run separately validates actual CB2A/GIM/model bodies.
+    struct MenuSource : GameResourceSource {
+        TitleSource models;
+        GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
+            if (path != "fixture.CB2A")
+                return models.OpenResource(path, out);
+            std::vector<uint8_t> b(32 + 404 * 8 + 30 * 52, 0);
+            Word(b, 0, 0x30413242);
+            Word(b, 8, 32);
+            Word(b, 12, 404);
+            Word(b, 16, 32);
+            Word(b, 20, 30);
+            Word(b, 24, 32 + 404 * 8);
+            Word(b, 28, 30);
+            auto lease = std::make_shared<Lease>(std::move(b));
+            out = PackageStorage::Attach(lease, lease->b.size());
+            return {};
+        }
+    } source;
+    std::vector<uint8_t> memory(4 * 1024 * 1024);
+    GameArena arena;
+    Check(arena.Initialize(memory.data(), uint32_t(memory.size())), "menu arena");
+    GameVmBoot manager;
+    Check(manager.Initialize74EF4(arena) && manager.InitializeManager93404(), "menu manager");
+    const auto baseline = arena.Used();
+    auto ui = std::make_shared<GameUiResource>();
+    Check(bool(ui->Load(source, "fixture.CB2A", "")), "synthetic UI table");
+    GameUiInstance clone;
+    Check(clone.Clone(ui), "independent menu clone");
+    std::vector<uint8_t> f(96, 0);
+    Word(f, 0, 0x31544658);
+    Word(f, 4, 0x00100010);
+    Word(f, 24, 1);
+    Word(f, 32, 4);
+    Word(f, 36, 4);
+    Word(f, 40, 16);
+    Word(f, 44, 64);
+    Word(f, 52, 8);
+    Word(f, 56, 80);
+    auto lease = std::make_shared<Lease>(std::move(f));
+    GameFontResource font;
+    Check(bool(font.Initialize(PackageStorage::Attach(lease, lease->b.size()))), "live font prerequisite");
+    RngNativeOwner rng;
+    rng.ApplyInitializerTimeT32(1234, 1, "explicit menu test seed");
+    GameTitleScene scene;
+    Check(bool(scene.Initialize(source, arena, manager, NativeTitleLayout::CharacterEntrance, 0)) &&
+              bool(scene.AttachMenu(clone, font, rng)),
+          "title owns tasks and borrows actual-lifetime UI/font/RNG");
+    GameGraphics graphics;
+    Check(graphics.Initialize({}), "menu graphics");
+    GameTransition fade;
+    Check(fade.Initialize({{0, 0}}), "menu fade");
+    const auto tick = [&](unsigned n) {
+        for (unsigned i = 0; i < n; ++i)
+            Check(bool(scene.TickAndDraw(graphics, fade)), "menu phase state");
+    };
+    const auto await_root=[&](uint32_t root){
+        for(unsigned i=0;i<160&&(scene.Snapshot().layout!=root||scene.Snapshot().state!=1);++i)tick(1);
+        Check(scene.Snapshot().layout==root&&scene.Snapshot().state==1,"source fade must reach requested root within bounded test");
+    };
+    tick(40);
+    scene.Input({Circle, true, true, 1});
+    tick(1);
+    Check(scene.Snapshot().confirmations == 0, "held prior-dialog Circle cannot choose New Game");
+    scene.Input({0, true, true, 2});
+    scene.Input({Down, true, true, 3});
+    tick(1);
+    Check(scene.Snapshot().menu_row == 1, "cold124=-1 prevents invented Continue enablement");
+    scene.Input({0, true, true, 4});
+    scene.Input({Circle, true, true, 5});
+    tick(1);
+    Check(scene.Snapshot().state == 2 && scene.Snapshot().layout == 0,
+          "confirm begins genuine contracting fade");
+    await_root(2);
+    Check(scene.Snapshot().layout == 2 && scene.Snapshot().state == 1 && scene.Snapshot().confirmations == 1,
+          "root2 waits actual close/open,held Circle not inherited");
+    scene.Input({0, true, true, 6});
+    scene.Input({Right, true, true, 7});
+    tick(1);
+    Check(scene.Snapshot().selected_actor == 1 && scene.Snapshot().selection_moving,
+          "Right starts real carousel target");
+    scene.Input({0, true, true, 8});
+    tick(11);
+    Check(!scene.Snapshot().selection_moving && scene.Snapshot().actors[1].x == 0 &&
+              scene.Snapshot().actors[1].z == 0,
+          "selected target clamps by200,root2 placement has Z0");
+    scene.Input({Cross, true, true, 9});
+    tick(1);
+    await_root(0);
+    Check(scene.Snapshot().layout == 0 && scene.Snapshot().state == 1 && !scene.Snapshot().scene3_completed,
+          "Cancel returns through fade instead of scene completion");
+    scene.Input({0, true, true, 10});
+    scene.Input({Circle, true, true, 11});
+    tick(1);
+    await_root(2);
+    scene.Input({0, true, true, 12});
+    scene.Input({Circle, true, true, 13});
+    tick(1);
+    Check(scene.Snapshot().pending_root == -1 && !scene.Snapshot().selection_motion_complete,
+          "motion3 starts without immediate result");
+    GameFsStatus status;
+    for (unsigned i = 0; i < 100 && status; ++i)
+        status = scene.TickAndDraw(graphics, fade);
+    Check(!status && status.code == GameFsCode::Unavailable && scene.Snapshot().frontier_pc == 0x1FD80 &&
+              scene.Snapshot().selection_motion_complete && scene.Snapshot().state == 1 &&
+              scene.Snapshot().layout == 3 && scene.Snapshot().actors[1].x == -600 &&
+              !scene.Snapshot().scene3_completed,
+          "actual nonloop motion/fade/root3 reach explicit unsupported SOFTKEY,never fake CC3");
+    Check(!manager.Close() && scene.Close() && arena.Used() == baseline,
+          "menu owner survives until joined cleanup");
+    clone.Close();
+    ui->Close();
+    font.Close();
+    graphics.Close();
+    Check(manager.Close() && !arena.Used(), "all borrowed and owned state retires");
+}
 } // namespace
 int main() {
     try {
@@ -326,8 +500,10 @@ int main() {
         GeometryAndRaster();
         Motion();
         TitleLifetimeAndFade();
-        std::cout
-            << "model clone/geometry,skin/source quaternion,clip/texture pixels,errors/retirement PASS\n";
+        ArrivalBranchTests();
+        TitleMenuLifecycle();
+        std::cout << "model clone/geometry,skin/source quaternion,clip/texture "
+                     "pixels,errors/retirement PASS\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

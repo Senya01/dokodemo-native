@@ -65,7 +65,7 @@ void GameFontResource::Close() {
 }
 GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
                                               GameFontBitmap &out, GameFontDrawRecord *records,
-                                              uint32_t capacity) const {
+                                              uint32_t capacity,uint32_t native_modulation) const {
     try {
         if (!state_.ready || !max_width || max_width > 480)
             return FormatFailure("font raster ownership/width");
@@ -84,7 +84,7 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
             uint32_t index, x, y, width;
         };
         std::vector<Placed> placed;
-        uint32_t x = 0, y = 0;
+        uint32_t x = 0, y = 0,advance_width=0;
         for (const auto &text : lines) {
             for (size_t pos = 0; pos < text.size();) {
                 Glyph glyph;
@@ -111,6 +111,7 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
                     return {GameFsCode::Bounds, 0, "TRC ten-line/1024-record native text cap"};
                 placed.push_back({index, x, y, uint32_t(width)});
                 x += uint32_t(width) + 2;
+                advance_width=(std::max)(advance_width,x);
             }
             x = 0;
             y += 23;
@@ -119,6 +120,7 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
         bitmap.width = max_width;
         bitmap.height = y ? y : 23;
         bitmap.glyphs = uint32_t(placed.size());
+        bitmap.advance_width=advance_width;
         if (bitmap.height > 230)
             return {GameFsCode::Bounds, 0, "TRC native text exceeds ten lines"};
         bitmap.pixels.resize(size_t(bitmap.width) * bitmap.height, 0);
@@ -168,10 +170,9 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
                     const auto color = NativeColorFromPspAbgr(palette.ReadLE32(index * 4));
                     // 4808C source ABGR8007182B times E4D0's255/128 factor,
                     // native ARGB modulator FF552F0D. Alpha stays from real CLUT.
-                    uint32_t modulated = color & 0xFF000000;
-                    constexpr uint32_t modulation = 0xFF552F0D;
-                    for (unsigned shift = 0; shift < 24; shift += 8)
-                        modulated |= ((((color >> shift) & 255) * ((modulation >> shift) & 255)) / 255)
+                    uint32_t modulated = 0;
+                    for (unsigned shift = 0; shift < 32; shift += 8)
+                        modulated |= ((((color >> shift) & 255) * ((native_modulation >> shift) & 255)) / 255)
                                      << shift;
                     bitmap.pixels[size_t(uint32_t(record.y) + gy) * bitmap.width + uint32_t(record.x) + gx] =
                         modulated;
@@ -463,6 +464,7 @@ bool GameContentBoot::DrawColdFrame(GameGraphics &graphics) {
 bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
+    if(state_.title_constructor_returned){title_.Input(frame);return false;}
     const auto accepted = scene_ui_.HandleDialogInput(frame);
     state_.scene_ui = scene_ui_.Snapshot();
     return accepted;
@@ -496,7 +498,9 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
         state_.status=title_.TickAndDraw(graphics,scene_ui_.TitleTransitionOwner());
         state_.title=title_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
         state_.frontier_pc=state_.title.frontier_pc;
-        state_.blocked=false;
+        state_.blocked=!bool(state_.status);
+        if(state_.title.softkey_requested)
+            state_.next_resource="31CA0->1FD80 SOFTKEY(mode0,type1,max4,actual CP932 nickname);editing/update/result unimplemented";
         return bool(state_.status);
     }
     //Phase0 observes the previous phase6 result. Reaching TRC3 below does
@@ -625,6 +629,10 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
                 }
             state_.title_model_read = true;
             status=title_.Initialize(*this,*arena_,*manager_,title_layout_,StateWord(0x4C));
+            if(status) {
+                if(!title_rng_)status={GameFsCode::Unavailable,0,"TITLE requires worker-owned initialized RNG"};
+                else status=title_.AttachMenu(title_clone_,font_,*title_rng_);
+            }
             state_.title=title_.Snapshot();
             if(!status){state_.status=status;return false;}
             state_.title_constructor_returned=true;

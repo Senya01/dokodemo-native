@@ -22,7 +22,7 @@ struct GameFontSnapshot {
     float scale_x = 1, scale_y = 1, spacing_x = 2, spacing_y = 2;
 };
 struct GameFontBitmap {
-    uint32_t width = 0, height = 0, glyphs = 0;
+    uint32_t width = 0, height = 0, glyphs = 0,advance_width=0;
     std::vector<uint32_t> pixels;
 };
 struct GameFontDrawRecord {
@@ -51,7 +51,7 @@ class GameFontResource final {
     // 941C8 CP932 codes, with explicit native character wrapping at max_width.
     GameFsStatus RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
                                 GameFontBitmap &out, GameFontDrawRecord *records = nullptr,
-                                uint32_t capacity = 0) const;
+                                uint32_t capacity = 0,uint32_t native_modulation=0xFF552F0D) const;
     void Close();
 
   private:
@@ -108,6 +108,7 @@ class GameContentBoot final : public GameResourceSource {
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
+    void SetTitleRng(RngNativeOwner& rng){title_rng_=&rng;}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
@@ -145,6 +146,7 @@ class GameContentBoot final : public GameResourceSource {
     GameUiInstance title_clone_;
     GameTitleScene title_;
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
+    RngNativeOwner* title_rng_=nullptr;
     GameResourceSource *platform_ = nullptr;
     GameContentSnapshot state_;
 };

@@ -1,8 +1,9 @@
 #pragma once
+#include "game_graphics_native.h"
 #include "game_image_native.h"
 #include <array>
-#include <memory>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,12 +13,8 @@ class GameResourceSource {
     virtual ~GameResourceSource() = default;
     virtual GameFsStatus OpenResource(const std::string &path, PackageView &out) = 0;
     GameFsStatus TextureResource(const std::string &path, std::shared_ptr<GameImage> &out);
-    void ClearTextureCache() {
-        texture_cache_.clear();
-    }
-    uint32_t TextureCacheSize() const {
-        return uint32_t(texture_cache_.size());
-    }
+    void ClearTextureCache() { texture_cache_.clear(); }
+    uint32_t TextureCacheSize() const { return uint32_t(texture_cache_.size()); }
     uint32_t TextureCachePixels() const {
         uint32_t pixels = 0;
         for (const auto &item : texture_cache_)
@@ -46,21 +43,11 @@ struct GameUiClip {
 class GameUiResource final {
   public:
     GameFsStatus Load(GameResourceSource &source, const std::string &path, const std::string &prefix);
-    const std::vector<GameUiTexture> &Textures() const {
-        return textures_;
-    }
-    const std::vector<std::array<uint16_t, 4>> &InitialNodes() const {
-        return nodes_;
-    }
-    const std::vector<GameUiClip> &Clips() const {
-        return clips_;
-    }
-    const PackageView &Image() const {
-        return image_;
-    }
-    uint32_t RootCount() const {
-        return roots_;
-    }
+    const std::vector<GameUiTexture> &Textures() const { return textures_; }
+    const std::vector<std::array<uint16_t, 4>> &InitialNodes() const { return nodes_; }
+    const std::vector<GameUiClip> &Clips() const { return clips_; }
+    const PackageView &Image() const { return image_; }
+    uint32_t RootCount() const { return roots_; }
     void Close();
 
   private:
@@ -77,6 +64,21 @@ struct GameUiNode {
     std::array<float, 2> base_position{}, position{}, base_scale{{1, 1}}, scale{{1, 1}};
     float base_angle = 0, angle = 0;
     uint32_t base_color = 0x80808080, color = 0x80808080;
+    uint32_t source_callback_pc = 0;
+    uint32_t draw_group = UINT32_MAX; // unset nodes inherit current group
+};
+// Native column-vector affine2D: x'=a*x+c*y+tx,y'=b*x+d*y+ty.
+struct GameUiMatrix {
+    float a = 1, b = 0, c = 0, d = 1, tx = 0, ty = 0;
+};
+struct GameUiDrawStats {
+    uint32_t nodes = 0, quads = 0, callbacks = 0;
+};
+class GameUiCallbacks {
+  public:
+    virtual ~GameUiCallbacks() = default;
+    virtual bool DrawUiCallback(uint32_t source_pc, uint32_t node, const GameUiMatrix &, uint32_t psp_color,
+                                GameGraphics &, std::string &error) = 0;
 };
 struct GameUiControl {
     uint32_t frame = 0, clip = 0;
@@ -94,12 +96,16 @@ class GameUiInstance final {
     GameUiControl *AddControl(uint32_t clip);
     GameUiControl *Control(uint32_t index);
     bool Update(std::string &error);
+    // 96870/96F20/97FC0. Both matrices at a root are the same instance base;
+    // children inherit current parent world, not previous-frame cached state.
+    bool Draw(GameGraphics &, GameUiDrawStats &, std::string &error, GameUiCallbacks *callbacks = nullptr,
+              GameUiMatrix instance_base = {}, uint32_t first_group = 0,
+              uint32_t last_group = UINT32_MAX) const;
+    bool SetSourceCallback(uint32_t node, uint32_t source_pc);
     bool ShowRoot(uint32_t index, bool visible = true);
     uint32_t VisibleRoots() const;
     GameUiNode *Node(uint32_t index);
-    const std::vector<GameUiNode> &Nodes() const {
-        return nodes_;
-    }
+    const std::vector<GameUiNode> &Nodes() const { return nodes_; }
     void Close() {
         controls_.clear();
         nodes_.clear();

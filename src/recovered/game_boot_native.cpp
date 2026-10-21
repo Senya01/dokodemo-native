@@ -4,6 +4,38 @@
 #include <utility>
 
 namespace dokodemo::recovered {
+void GameMenuInput::BeginContext()noexcept {
+    counters_.fill(-1);buttons_=armed_=active_=pending_=0;focused_=false;
+}
+void GameMenuInput::Observe(const GameInputFrame& frame)noexcept {
+    if(!frame.focused){BeginContext();return;}
+    focused_=true;const auto raw=frame.buttons&0xFFFFFFu;
+    armed_|=(~raw)&0xFFFFFFu;active_&=raw;
+    const auto first=raw&armed_&~active_;
+    pending_|=first;active_|=first;armed_&=~raw;buttons_=raw;
+}
+void GameMenuInput::Tick()noexcept {
+    for(unsigned i=0;i<counters_.size();++i){const auto bit=1u<<i;auto& counter=counters_[i];
+        if(pending_&bit)counter=0;
+        else if((buttons_&active_&bit)&&counter>=0){if(counter<INT32_MAX)++counter;}
+        else counter=-1;
+    }
+    pending_=0;
+}
+int32_t GameMenuInput::Counter(uint32_t mask)const noexcept {
+    for(unsigned i=0;i<counters_.size();++i)if(mask==(1u<<i))return counters_[i];return -1;
+}
+bool GameMenuInput::First(uint32_t mask)const noexcept {
+    for(unsigned i=0;i<counters_.size();++i)if((mask&(1u<<i))&&counters_[i]==0)return true;return false;
+}
+uint32_t GameMenuInput::Repeat(uint32_t mask,uint32_t delay,uint32_t period)const noexcept {
+    if(First(mask))return 1;
+    if(!period)return 0;
+    for(unsigned i=0;i<counters_.size();++i)if(mask&(1u<<i)){
+        const auto value=counters_[i];if(value>=0&&uint32_t(value)>=delay&&(uint32_t(value)-delay)%period==0)return 2;
+    }
+    return 0;
+}
 bool GameButtonGate::Observe(const GameInputFrame &frame, uint32_t mask) noexcept {
     if (!active_ || !mask)
         return false;

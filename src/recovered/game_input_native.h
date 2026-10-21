@@ -27,12 +27,8 @@ class ControllerState {
     int32_t SetSamplingMode(int32_t mode) noexcept;
     int32_t SetSamplingCycle(int32_t cycle) noexcept;
     ControllerSample Update(uint32_t buttons, uint8_t x, uint8_t y, uint64_t timestamp_us) noexcept;
-    int32_t SamplingMode() const noexcept {
-        return mode_;
-    }
-    int32_t SamplingCycle() const noexcept {
-        return cycle_;
-    }
+    int32_t SamplingMode() const noexcept { return mode_; }
+    int32_t SamplingCycle() const noexcept { return cycle_; }
 
   private:
     int32_t mode_ = 0, cycle_ = 0;
@@ -51,16 +47,32 @@ class GameButtonGate {
         active_ = true;
         armed_ = false;
     }
-    void Stop() noexcept {
-        active_ = armed_ = false;
-    }
+    void Stop() noexcept { active_ = armed_ = false; }
     bool Observe(const GameInputFrame &frame, uint32_t mask) noexcept;
-    bool Armed() const noexcept {
-        return armed_;
-    }
+    bool Armed() const noexcept { return armed_; }
 
   private:
     bool active_ = false, armed_ = false;
+};
+// Worker-owned native input sampler for source counter consumers such as94F90.
+// Raw queued frames are observed in order; counters advance once per game tick.
+// A new UI context/refocus needs a fresh release. No stored dialog edge can
+// become a title confirmation. Queued quick presses survive until one tick.
+class GameMenuInput {
+  public:
+    GameMenuInput() { BeginContext(); }
+    void BeginContext() noexcept;
+    void Observe(const GameInputFrame &) noexcept;
+    void Tick() noexcept;
+    int32_t Counter(uint32_t single_button) const noexcept;
+    bool First(uint32_t mask) const noexcept;
+    uint32_t Repeat(uint32_t mask, uint32_t delay, uint32_t period) const noexcept;
+    bool Focused() const noexcept { return focused_; }
+
+  private:
+    std::array<int32_t, 24> counters_{};
+    uint32_t buttons_ = 0, armed_ = 0, active_ = 0, pending_ = 0;
+    bool focused_ = false;
 };
 // Caller synchronizes the mailbox. Overflow inserts a focus-loss resync rather
 // than silently retaining an edge that could acknowledge the wrong prompt.

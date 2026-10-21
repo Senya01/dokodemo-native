@@ -49,6 +49,7 @@ struct Options {
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false;
+    bool titleMenuWindowTest=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -63,6 +64,7 @@ Options ParseOptions() {
         else if(arg==L"--storage-window-test"){options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--storage-direct-window-test"){options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--title-window-test"){options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--title-menu-window-test"){options.titleMenuWindowTest=options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
         else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
@@ -1548,6 +1550,25 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"menu_input_implemented\":" << boolean(boot.content.title.menu_input_implemented)
         << ",\"scene3_completed\":" << boolean(boot.content.title.scene3_completed)
         << ",\"arrival_branch_pending\":" << boolean(boot.content.title.arrival_branch_pending)
+        << ",\"primary_arrivals\":" << boot.content.title.primary_arrivals
+        << ",\"primary_restarts\":" << boot.content.title.primary_restarts
+        << ",\"kuro_selections\":" << boot.content.title.kuro_selections
+        << ",\"rng_calls\":" << boot.content.title.rng_calls
+        << ",\"arrival_countdown\":" << boot.content.title.arrival_countdown
+        << ",\"media_adapter\":\"UnsupportedPSPRemovableDeviceReturnsUnavailable0;NativeSaveRootSeparate\""
+        << ",\"attract_flag_policy\":\"NativeDisabledNotPSP2A950Observation\""
+        << ",\"menu_row\":" << boot.content.title.menu_row
+        << ",\"selected_actor\":" << boot.content.title.selected_actor
+        << ",\"pending_root\":" << boot.content.title.pending_root
+        << ",\"confirmations\":" << boot.content.title.confirmations
+        << ",\"navigation_events\":" << boot.content.title.navigation_events
+        << ",\"ui_quads\":" << boot.content.title.ui_quads
+        << ",\"ui_callbacks\":" << boot.content.title.ui_callbacks
+        << ",\"visible_roots\":" << boot.content.title.visible_roots
+        << ",\"model_pixel_writes\":" << boot.content.title.model_pixel_writes
+        << ",\"selection_moving\":" << boolean(boot.content.title.selection_moving)
+        << ",\"selection_motion_complete\":" << boolean(boot.content.title.selection_motion_complete)
+        << ",\"softkey_requested\":" << boolean(boot.content.title.softkey_requested)
         << ",\"camera_position\":[0,-4400,560],\"camera_lookpoint\":[0,-4399,560]"
         << ",\"field_of_view\":" << boot.content.title.field_of_view
         << ",\"near_plane\":" << boot.content.title.near_plane
@@ -1556,6 +1577,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
     for(size_t i=0;i<boot.content.title.actors.size();++i) {
         if(i)out<<',';const auto& actor=boot.content.title.actors[i];
         out<<"{\"type\":"<<actor.type<<",\"animation_time\":"<<actor.animation_time
+            <<",\"motion\":"<<actor.motion
             <<",\"movement_counter\":"<<actor.movement_counter<<",\"local_pose_digest\":"<<actor.local_pose_digest
             <<",\"desired_visible\":"<<boolean(actor.desired_visible)<<",\"visible\":"<<boolean(actor.visible)
             <<",\"moving\":"<<boolean(actor.moving)<<",\"position\":["<<actor.x<<','<<actor.y<<','<<actor.z<<']'
@@ -3687,6 +3709,8 @@ struct Application {
     unsigned storageInputStep=0;uint64_t storageInputStart=0,titleReadyFrame=0;
     bool heldIgnored=false,unfocusedIgnored=false,closingObserved=false,storageBoundaryPassed=false;
     bool titleEarlyCaptured=false,titleAnimationObserved=false;
+    unsigned titleMenuStep=0;uint32_t titleMenuWait=0;
+    bool titleArrivalObserved=false,titleMenuSelectionObserved=false;
     dokodemo::recovered::GameTitleSnapshot titleEarly;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
@@ -3760,8 +3784,9 @@ struct Application {
         else if (AtGameBootBoundary(startupObservation)) {
             const auto& c=startupObservation.game_boot.content;
             if(c.title.frame_drawn) {
-                startupStatus=L"TITLE: исходные персонажи, DAK-анимация и камера; native nonmatching renderer.";
-                status=L"Вход персонажей. TITLE menu/input и scene3 completion ещё не реализованы; SGX mixer недоступен.";
+                startupStatus=L"TITLE: игровое меню и персонажи — промежуточная Windows-сборка.";
+                status=c.title.softkey_requested?L"Следующий шаг — ввод имени. Эта клавиатура пока не реализована; Esc закрывает игру."
+                    :L"X = ○ подтвердить; Z = × назад; стрелки — меню и выбор персонажа. Звуковой движок пока недоступен.";
             } else if(c.title_constructor_returned) {
                 startupStatus=L"TITLE: модели/анимации загружены; исходная fade-цепочка, ожидание видимости.";
                 status=L"Явная native character-entry policy; неизвестный 7E65C не считается наблюдённым PSP значением.";
@@ -3855,7 +3880,7 @@ struct Application {
             if (result && result != static_cast<int>(GDI_ERROR)) {
                 renderedFrameGeneration = gameFrame.generation; renderedFrameSequence = gameFrame.sequence;
             }
-            Text(dc, gameFrame.diagnostic ? L"RENDERER TEST FRAME — не игровой контент" : (startupObservation.game_boot.content.title.frame_drawn?L"Native 480×272 — TITLE actors / DAK / source camera":L"Native 480×272 — source font/dialog; nonmatching panel adapter"),
+            if(gameFrame.diagnostic)Text(dc,L"RENDERER TEST FRAME — не игровой контент",
                 {vx + 12, vy + vh - 30, vx + vw - 12, vy + vh - 6}, RGB(255,255,255), DT_LEFT | DT_TOP | DT_SINGLELINE);
         } else if (messageVisible) {
             // Isolated bytecode fixture on a neutral surface, with original XFT
@@ -3885,7 +3910,8 @@ struct Application {
         Text(dc, gameFrameReady && gameFrame.diagnostic
             ? L"Диагностика native renderer: синтетические примитивы, не декодированный игровой ресурс." : status,
             {24,y+30,width-24,y+78}, RGB(211,219,223));
-        Text(dc, L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F10 clock  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
+        Text(dc,nativeStartup&&!options.smoke?L"Стрелки — выбор · X — ○ · Z — × · Esc — выход · F12 — снимок"
+            :L"←/→ ресурсы  F1/F4 KSC  F2 текст  F3 звук  F6 проба  F7 очередь  F8 storage  F10 clock  F5/F9 save/load", {24,height-62,width-24,height-32}, RGB(167,181,192));
         std::wostringstream metrics; metrics << L"Win32 · " << frames << L" кадров · " << inputEvents << L" событий ввода · " << images.size() << L" ресурсов";
         Text(dc, metrics.str(), {24,height-31,width-24,height-8}, RGB(125,149,163));
     }
@@ -3927,6 +3953,12 @@ struct Application {
     }
     void Key(WPARAM key) {
         ++inputEvents;
+        //Game controls are sampled through the synchronized worker mailbox.
+        //They must not simultaneously browse assets or run isolated probes.
+        if(nativeStartup&&!options.smoke){
+            if(key==VK_F12)Capture();else if(key==VK_ESCAPE)RequestWindowClose();
+            InvalidateRect(window,nullptr,FALSE);return;
+        }
         if ((key == VK_RIGHT || key == VK_LEFT) && !images.empty()) {
             selected = key == VK_RIGHT ? (selected+1)%images.size() : (selected+images.size()-1)%images.size(); LoadSelected();
         } else if (key == VK_F1) RunScript();
@@ -4243,6 +4275,48 @@ struct Application {
                 &&(options.titleWindowTest?(titleAnimationObserved&&c.title_constructor_returned&&c.title.frame_drawn&&c.title.live&&c.title.camera_ready&&c.title.state==1&&c.title.frames>=100&&c.title.visible_actors>0&&c.title.pixel_writes>1000&&c.title.clones==10&&c.title.motions==21&&!c.title.scene3_completed&&!c.title.arrival_branch_pending):c.title_constructor_returned)
                 &&c.autoload.phase==dokodemo::recovered::GameAutoloadPhase::TitleRequested
                 &&!c.autoload.source_fields_applied&&c.autoload.storage.load_calls==1&&c.autoload.storage.publish_calls==0;
+            if(options.titleMenuWindowTest) {
+                using namespace dokodemo::recovered;
+                const auto& title=c.title;
+                const auto save=[&](const wchar_t* name){
+                    WriteStartupObservation(options.evidence/(std::wstring(name)+L".json"),startupObservation);
+                    Capture();std::filesystem::copy_file(options.evidence/L"native-window.bmp",options.evidence/(std::wstring(name)+L".bmp"),std::filesystem::copy_options::overwrite_existing);
+                };
+                if(titleMenuStep==0&&title.state==1&&title.layout==0&&title.frames>=300&&title.arrival_countdown<=3&&title.primary_restarts>=3) {
+                    titleArrivalObserved=true;save(L"title-attract-arrival");
+                    (void)nativeStartup->InjectTestControllerInput(0,true);titleMenuWait=title.updates+3;titleMenuStep=1;
+                }else if(titleMenuStep==1&&title.updates>=titleMenuWait){
+                    (void)nativeStartup->InjectTestControllerInput(Down,true);titleMenuWait=title.updates+12;titleMenuStep=2;
+                }else if(titleMenuStep==2&&title.updates>=titleMenuWait&&title.menu_row==1&&!title.confirmations){
+                    save(L"title-main-menu");(void)nativeStartup->InjectTestControllerInput(0,true);titleMenuWait=title.updates+3;titleMenuStep=3;
+                }else if(titleMenuStep==3&&title.updates>=titleMenuWait){
+                    (void)nativeStartup->InjectTestControllerInput(Circle,true);titleMenuStep=4;
+                }else if(titleMenuStep==4&&title.layout==2&&title.state==1&&title.confirmations==1){
+                    save(L"title-character-menu");(void)nativeStartup->InjectTestControllerInput(0,true);titleMenuWait=title.updates+3;titleMenuStep=5;
+                }else if(titleMenuStep==5&&title.updates>=titleMenuWait){
+                    (void)nativeStartup->InjectTestControllerInput(Right,true);titleMenuStep=6;
+                }else if(titleMenuStep==6&&title.selected_actor==1){
+                    (void)nativeStartup->InjectTestControllerInput(0,true);titleMenuStep=7;
+                }else if(titleMenuStep==7&&title.selected_actor==1&&!title.selection_moving){
+                    titleMenuSelectionObserved=true;save(L"title-character-selected");
+                    (void)nativeStartup->InjectTestControllerInput(Cross,true);titleMenuStep=10;
+                }else if(titleMenuStep==10&&title.layout==0&&title.state==1){
+                    save(L"title-main-menu-returned");(void)nativeStartup->InjectTestControllerInput(0,true);
+                    titleMenuWait=title.updates+3;titleMenuStep=11;
+                }else if(titleMenuStep==11&&title.updates>=titleMenuWait){
+                    (void)nativeStartup->InjectTestControllerInput(Circle,true);titleMenuStep=12;
+                }else if(titleMenuStep==12&&title.layout==2&&title.state==1&&title.confirmations==2){
+                    (void)nativeStartup->InjectTestControllerInput(0,true);titleMenuWait=title.updates+3;titleMenuStep=13;
+                }else if(titleMenuStep==13&&title.updates>=titleMenuWait){
+                    (void)nativeStartup->InjectTestControllerInput(Circle,true);titleMenuStep=8;
+                }else if(titleMenuStep==8&&title.confirmations==3){
+                    (void)nativeStartup->InjectTestControllerInput(0,true);titleMenuStep=9;
+                }
+                storageBoundaryPassed=titleArrivalObserved&&titleMenuSelectionObserved&&titleMenuStep==9&&title.softkey_requested
+                    &&title.selection_motion_complete&&title.confirmations==3&&title.menu_input_implemented
+                    &&!title.scene3_completed&&!title.arrival_branch_pending&&c.blocked&&c.frontier_pc==0x1FD80
+                    &&c.status.code==GameFsCode::Unavailable&&title.layout==3&&title.state==1;
+            }
         }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
             && AtNativeModuleSequenceBoundary(startupObservation)
@@ -4256,7 +4330,7 @@ struct Application {
             Capture();
             PostMessageW(window, WM_CLOSE, 0, 0); // actual app shutdown route, no old F-key sequence
         }
-        if (options.connectedStartupWindowTest && elapsed > (options.titleWindowTest?20.0:5.0) && !startupWindowCloseSent) {
+        if (options.connectedStartupWindowTest && elapsed > (options.titleMenuWindowTest?75.0:(options.titleWindowTest?20.0:5.0)) && !startupWindowCloseSent) {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-unexpected.json", startupObservation);
@@ -4371,6 +4445,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"unfocused_ignored\":" << (app.unfocusedIgnored?"true":"false")
                 << ",\"natural_closing_observed\":" << (app.closingObserved?"true":"false")
                 << ",\"storage_boundary_passed\":" << (app.storageBoundaryPassed?"true":"false")
+                << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
+                << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
+                << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
+                << ",\"validation_scope\":" << JsonString(options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

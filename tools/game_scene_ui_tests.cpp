@@ -170,12 +170,20 @@ void ImageTests() {
           "checked GIM decode");
     Check(image.Pixels() == std::vector<uint32_t>({0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF}),
           "ABGR source to native ARGB");
-    auto mip=Gim();mip.resize(148);W(mip,20,132);W(mip,36,116);W(mip,52,100);W(mip,56,100);
-    W(mip,96,84);H(mip,106,2);W(mip,116,80);W(mip,144,0xFF808080);
-    Check(bool(image.DecodeGim(View(mip)))&&image.Width()==2&&image.Pixels()[0]==0xFFFF0000,
+    auto mip = Gim();
+    mip.resize(148);
+    W(mip, 20, 132);
+    W(mip, 36, 116);
+    W(mip, 52, 100);
+    W(mip, 56, 100);
+    W(mip, 96, 84);
+    H(mip, 106, 2);
+    W(mip, 116, 80);
+    W(mip, 144, 0xFF808080);
+    Check(bool(image.DecodeGim(View(mip))) && image.Width() == 2 && image.Pixels()[0] == 0xFFFF0000,
           "all mip extents checked,native base-level sample retains actual pixels");
-    W(mip,116,1000);
-    Check(!image.DecodeGim(View(mip)),"unused lower mip still must have valid extent");
+    W(mip, 116, 1000);
+    Check(!image.DecodeGim(View(mip)), "unused lower mip still must have valid extent");
     for (unsigned bad = 0; bad < 4; ++bad) {
         auto b = Gim();
         if (bad == 0)
@@ -278,6 +286,10 @@ void FontDrawTests() {
               records[0].u == 2 && records[0].v == 8,
           "actual typed44-byte draw records are populated and consumed");
     Check(!font.RasterizeCp932({"AAA"}, 16, bitmap, records, 2), "glyph owner capacity cannot overflow");
+    Check(bool(font.RasterizeCp932({"A"}, 16, bitmap, records, 2, 0x80204060)) &&
+              bitmap.pixels[0] == 0x80204060,
+          "TITLE uses its own live glyph color and fade alpha,not TRC hardcoded "
+          "color");
     Check(!font.RasterizeCp932({std::string("\x83", 1)}, 16, bitmap), "incomplete source CP932 rejected");
     auto b = Atlas();
     W(b, 52, 17);
@@ -285,24 +297,115 @@ void FontDrawTests() {
     Check(bool(font.Initialize(View(b))) && !font.RasterizeCp932({"A"}, 16, bitmap),
           "unreached palette domain never generic success");
 }
+void UiDrawTests() {
+    struct DrawResources : Resources {
+        GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
+            if (path.find(".CB2A") == std::string::npos)
+                return Resources::OpenResource(path, out);
+            std::vector<uint8_t> b(144, 0);
+            W(b, 0, 0x30413242);
+            W(b, 4, 1);
+            W(b, 8, 32);
+            W(b, 12, 2);
+            W(b, 16, 40);
+            W(b, 20, 1);
+            W(b, 24, 56);
+            W(b, 28, 1);
+            H(b, 32, uint16_t(-1));
+            H(b, 34, uint16_t(-1));
+            W(b, 36, 112);
+            const char name[] = "fixture.GIM";
+            std::copy(name, name + sizeof(name), b.begin() + 112);
+            H(b, 42, 1);
+            W(b, 44, 14);
+            W(b, 52, 14);
+            out = View(std::move(b));
+            return {};
+        }
+    } source;
+    auto resource = std::make_shared<GameUiResource>();
+    Check(bool(resource->Load(source, "draw.CB2A", "")), "checked draw resource");
+    GameUiInstance instance;
+    Check(instance.Clone(resource) && instance.ShowRoot(0), "live UI clone");
+    auto *root = instance.Node(0);
+    root->position = {{20, 30}};
+    root->scale = {{2, 2}};
+    auto *child = instance.Node(1);
+    child->position = {{3, 4}};
+    child->texture = 1;
+    Check(instance.SetSourceCallback(1, 0x1234), "typed callback binding");
+    struct Callbacks : GameUiCallbacks {
+        GameUiMatrix matrix;
+        uint32_t count = 0;
+        bool DrawUiCallback(uint32_t pc, uint32_t node, const GameUiMatrix &m, uint32_t, GameGraphics &,
+                            std::string &) override {
+            Check(pc == 0x1234 && node == 1, "exact callback identity");
+            matrix = m;
+            ++count;
+            return true;
+        }
+    } callbacks;
+    GameGraphics graphics;
+    Check(graphics.Initialize({}) && graphics.Clear(0xFF000000), "draw surface");
+    GameUiDrawStats stats;
+    std::string error;
+    Check(instance.Draw(graphics, stats, error, &callbacks) && stats.quads == 1 && stats.callbacks == 1 &&
+              callbacks.matrix.tx == 26 && callbacks.matrix.ty == 38 && callbacks.matrix.a == 2,
+          "source low flags2/4 retain parent world,append local transform");
+    Check(instance.Draw(graphics, stats, error, &callbacks) && callbacks.matrix.tx == 26 &&
+              callbacks.matrix.ty == 38,
+          "second frame recomputes parent transform without cached accumulation");
+    Check(!instance.Draw(graphics, stats, error), "reached callback cannot silently become no-op");
+    Check(instance.SetSourceCallback(1, 0) && graphics.SwapBuffers(), "remove fixture callback");
+    GameGraphicsFrame frame;
+    Check(graphics.CopyFront(frame) && frame.pixels[172 * frame.stride + 264] != 0xFF000000,
+          "negative texture origin subtracts locally and actual GIM reaches "
+          "framebuffer");
+    child->texture = -1;
+    Check(!instance.Draw(graphics, stats, error), "negative-selector recursive reference rejects cycle");
+    child->texture = 2;
+    Check(!instance.Draw(graphics, stats, error), "out-of-range texture is error");
+    instance.Close();
+    resource->Close();
+    Check(!instance.Draw(graphics, stats, error), "retired UI cannot draw");
+}
 void DialogInputTests() {
-    GameDialogController dialog;Check(dialog.Begin(),"source TRC prompt begins opening");
-    for(unsigned i=0;i<5;++i)dialog.Tick();
-    Check(dialog.Snapshot().state==1&&dialog.Snapshot().progress==1,"opening reaches input wait naturally");
-    Check(!dialog.Input({Circle,true,false,1}),"held on initial wait not accepted");
-    Check(!dialog.Input({0,false,false,2})&&!dialog.Input({Circle,true,false,3}),"unfocused release cannot arm confirmation");
-    Check(!dialog.Input({Cross,true,false,4})&&dialog.Snapshot().state==1,"cold TRC cancel-disabled ignores Cross");
-    Check(!dialog.Input({0,true,false,4})&&dialog.Input({Circle,true,false,5}),"focused release/first press triggers48224");
-    Check(dialog.Snapshot().result==1&&dialog.Snapshot().state==2&&dialog.Snapshot().progress==1,
-        "result producer precedes genuine closing,never forced state3");
-    dialog.Tick();Check(dialog.Snapshot().state==2&&dialog.Snapshot().progress<1,"closing is a real animation state");
-    for(unsigned i=0;i<10&&dialog.Snapshot().state!=3;++i)dialog.Tick();
-    Check(dialog.Snapshot().state==3&&!dialog.Snapshot().progress&&dialog.Snapshot().confirmations==1,"natural zero progress completes");
-    Check(!dialog.Input({Circle,true,false,6})&&dialog.Begin(1,1)&&!dialog.Input({Circle,true,false,7}),"no retired/held-key next prompt confirmation");
-    for(unsigned i=0;i<5;++i)dialog.Tick();
-    Check(!dialog.Input({0,true,false,8})&&dialog.Input({Circle,true,false,9})&&dialog.Snapshot().result==2,"selection+1 source result");
-    dialog.Retire();Check(dialog.Begin(2),"mode2 prompt can open");for(unsigned i=0;i<5;++i)dialog.Tick();
-    Check(!dialog.Input({0,true,false,10})&&!dialog.Input({Circle,true,false,11}),"source mode2 suppresses Circle");
+    GameDialogController dialog;
+    Check(dialog.Begin(), "source TRC prompt begins opening");
+    for (unsigned i = 0; i < 5; ++i)
+        dialog.Tick();
+    Check(dialog.Snapshot().state == 1 && dialog.Snapshot().progress == 1,
+          "opening reaches input wait naturally");
+    Check(!dialog.Input({Circle, true, false, 1}), "held on initial wait not accepted");
+    Check(!dialog.Input({0, false, false, 2}) && !dialog.Input({Circle, true, false, 3}),
+          "unfocused release cannot arm confirmation");
+    Check(!dialog.Input({Cross, true, false, 4}) && dialog.Snapshot().state == 1,
+          "cold TRC cancel-disabled ignores Cross");
+    Check(!dialog.Input({0, true, false, 4}) && dialog.Input({Circle, true, false, 5}),
+          "focused release/first press triggers48224");
+    Check(dialog.Snapshot().result == 1 && dialog.Snapshot().state == 2 && dialog.Snapshot().progress == 1,
+          "result producer precedes genuine closing,never forced state3");
+    dialog.Tick();
+    Check(dialog.Snapshot().state == 2 && dialog.Snapshot().progress < 1,
+          "closing is a real animation state");
+    for (unsigned i = 0; i < 10 && dialog.Snapshot().state != 3; ++i)
+        dialog.Tick();
+    Check(dialog.Snapshot().state == 3 && !dialog.Snapshot().progress && dialog.Snapshot().confirmations == 1,
+          "natural zero progress completes");
+    Check(!dialog.Input({Circle, true, false, 6}) && dialog.Begin(1, 1) &&
+              !dialog.Input({Circle, true, false, 7}),
+          "no retired/held-key next prompt confirmation");
+    for (unsigned i = 0; i < 5; ++i)
+        dialog.Tick();
+    Check(!dialog.Input({0, true, false, 8}) && dialog.Input({Circle, true, false, 9}) &&
+              dialog.Snapshot().result == 2,
+          "selection+1 source result");
+    dialog.Retire();
+    Check(dialog.Begin(2), "mode2 prompt can open");
+    for (unsigned i = 0; i < 5; ++i)
+        dialog.Tick();
+    Check(!dialog.Input({0, true, false, 10}) && !dialog.Input({Circle, true, false, 11}),
+          "source mode2 suppresses Circle");
 }
 } // namespace
 int main() {
@@ -310,9 +413,11 @@ int main() {
         ImageTests();
         OwnerTests();
         BankTests();
-        FontDrawTests();DialogInputTests();
-        std::cout
-            << "scene UI resources,decoded pixels,source XFT text,fade,NJ and partial retirement PASS\n";
+        FontDrawTests();
+        DialogInputTests();
+        UiDrawTests();
+        std::cout << "scene UI resources,decoded pixels,source XFT text,fade,NJ "
+                     "and partial retirement PASS\n";
         return 0;
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <stdexcept>
 
 namespace dokodemo::recovered {
@@ -50,8 +51,8 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
     status = decoded->DecodeGim(std::move(image));
     if (!status)
         return status;
-    if(uint64_t(TextureCachePixels())+uint64_t(decoded->Width())*decoded->Height()>16*1024*1024)
-        return {GameFsCode::Bounds,0,"native decoded texture budget64MiB"};
+    if (uint64_t(TextureCachePixels()) + uint64_t(decoded->Width()) * decoded->Height() > 16 * 1024 * 1024)
+        return {GameFsCode::Bounds, 0, "native decoded texture budget64MiB"};
     texture_cache_.emplace(std::move(key), decoded);
     out = std::move(decoded);
     return {};
@@ -314,7 +315,117 @@ uint32_t GameUiInstance::VisibleRoots() const {
                 ++count;
     return count;
 }
-GameUiNode *GameUiInstance::Node(uint32_t index) {
-    return index < nodes_.size() ? &nodes_[index] : nullptr;
+GameUiNode *GameUiInstance::Node(uint32_t index) { return index < nodes_.size() ? &nodes_[index] : nullptr; }
+bool GameUiInstance::SetSourceCallback(uint32_t node, uint32_t pc) {
+    if (node >= nodes_.size())
+        return false;
+    nodes_[node].source_callback_pc = pc;
+    return true;
+}
+bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::string &error,
+                          GameUiCallbacks *callbacks, GameUiMatrix base, uint32_t first_group,
+                          uint32_t last_group) const {
+    stats = {};
+    try {
+        Need(resource_ && resource_->Image().Describe().readable, "UI draw source lease retired");
+        const auto config = graphics.Snapshot().config;
+        std::vector<bool> path(nodes_.size(), false);
+        uint32_t calls = 0;
+        const auto multiply = [](uint32_t left, uint32_t right) {
+            uint32_t color = 0;
+            for (unsigned j = 0; j < 4; ++j)
+                color |= (std::min)(255u, (((left >> (8 * j)) & 255) * ((right >> (8 * j)) & 255)) >> 7)
+                         << (8 * j);
+            return color;
+        };
+        const auto native = [](uint32_t psp) {
+            uint32_t out = 0;
+            for (unsigned j = 0; j < 4; ++j)
+                out |= (uint32_t(float((psp >> (8 * j)) & 255) * 1.9921875f) & 255) << (8 * j);
+            return NativeColorFromPspAbgr(out);
+        };
+        std::function<void(uint32_t, const GameUiMatrix &, uint32_t, uint32_t)> draw;
+        draw = [&](uint32_t index, const GameUiMatrix &parent, uint32_t parent_color,
+                   uint32_t inherited_group) {
+            Need(index < nodes_.size() && !path[index] && ++calls <= 32768,
+                 "UI reference cycle/index/call cap");
+            path[index] = true;
+            ++stats.nodes;
+            const auto &node = nodes_[index];
+            const auto group = node.draw_group == UINT32_MAX ? inherited_group : node.draw_group;
+            const bool render = group >= first_group && group <= last_group;
+            const auto flags = uint32_t(node.encoded_initial[2]) | uint32_t(node.encoded_initial[3]) << 16;
+            auto world = parent;
+            if (!(flags & 4)) {
+                world.tx = world.ty = 0;
+            }
+            if (!(flags & 2)) {
+                world.a = base.a;
+                world.b = base.b;
+                world.c = base.c;
+                world.d = base.d;
+            }
+            const auto angle = -node.angle, cosine = std::cos(angle), sine = std::sin(angle);
+            GameUiMatrix result;
+            result.tx = world.a * node.position[0] + world.c * node.position[1] + world.tx;
+            result.ty = world.b * node.position[0] + world.d * node.position[1] + world.ty;
+            result.a = (world.a * cosine + world.c * sine) * node.scale[0];
+            result.b = (world.b * cosine + world.d * sine) * node.scale[0];
+            result.c = (-world.a * sine + world.c * cosine) * node.scale[1];
+            result.d = (-world.b * sine + world.d * cosine) * node.scale[1];
+            for (auto v : {result.a, result.b, result.c, result.d, result.tx, result.ty})
+                Need(std::isfinite(v) && std::abs(v) <= 1e7f, "UI world transform bounds");
+            const auto color = multiply(flags & 8 ? parent_color : 0x80808080u, node.color);
+            if (node.texture > 0 && render) {
+                Need(size_t(node.texture) <= resource_->Textures().size(),
+                     "UI one-based texture outside resource");
+                const auto &texture = resource_->Textures()[size_t(node.texture - 1)];
+                Need(texture.image && !texture.image->Pixels().empty(), "UI texture not live");
+                const float x = float(texture.origin_x), y = float(texture.origin_y);
+                const float w = float(texture.image->Width()), h = float(texture.image->Height());
+                std::array<GameMeshVertex, 4> vertices;
+                for (unsigned i = 0; i < 4; ++i) {
+                    const auto px = x + (i & 1 ? w : 0), py = y + (i & 2 ? h : 0);
+                    const auto wx = result.a * px + result.c * py + result.tx,
+                               wy = result.b * px + result.d * py + result.ty;
+                    vertices[i].clip = {{wx * 2 / float(config.width), -wy * 2 / float(config.height), 0, 1}};
+                    vertices[i].u = i & 1 ? 1.0f : 0.0f;
+                    vertices[i].v = i & 2 ? 1.0f : 0.0f;
+                    vertices[i].color = native(color);
+                }
+                GameTextureSpan image{texture.image->Pixels().data(), texture.image->Width(),
+                                      texture.image->Height(), texture.image->Pixels().size()};
+                GameRasterPolicy policy;
+                policy.two_sided = true;
+                policy.depth_test = policy.depth_write = false;
+                policy.repeat = false;
+                Need(graphics.DrawMeshTriangle({{vertices[0], vertices[1], vertices[2]}}, image, policy) &&
+                         graphics.DrawMeshTriangle({{vertices[2], vertices[1], vertices[3]}}, image, policy),
+                     "UI native quad draw failed");
+                ++stats.quads;
+            } else if (node.texture < 0)
+                draw(~uint32_t(node.texture), result, color, group);
+            if (node.source_callback_pc && render) {
+                Need(callbacks, "UI reached callback has no native handler");
+                if (!callbacks->DrawUiCallback(node.source_callback_pc, index, result, color, graphics,
+                                               error))
+                    throw std::runtime_error(error.empty() ? "UI callback unsupported" : error);
+                ++stats.callbacks;
+            }
+            if (node.encoded_initial[1])
+                draw(node.encoded_initial[1], result, color, group);
+            if (node.encoded_initial[0])
+                draw(node.encoded_initial[0], parent, parent_color, inherited_group);
+            path[index] = false;
+        };
+        for (uint32_t root = 0; root < resource_->RootCount(); ++root)
+            if (nodes_[root].visible)
+                draw(root, base, 0x80808080, 0);
+        error.clear();
+        return true;
+    } catch (const std::exception &e) {
+        error = e.what();
+        return false;
+    }
 }
 } // namespace dokodemo::recovered

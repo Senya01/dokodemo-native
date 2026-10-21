@@ -1330,6 +1330,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         Emit("GameFontResourceInitialized", "NativeE364FontConsumer", 0x18EE0, 0, false,
             0, 0, 0, "actual distant DATA.BPM member,nested FONT\\FONT.XFT borrowed image and checked texture views;completed before scene1 UI constructors");
         game_content.SetNativeTitleLayout(options.native_title_layout);
+        game_content.SetTitleRng(game_rng);
         const auto scene_status=game_content.InitializeSceneResources(*this);
         if(!scene_status) {
             Emit("GameSceneResourceFailure","NativeSceneResourceConsumers",0x18EE8,0,false,0,scene_status.native_error,0,scene_status.detail.c_str());
@@ -1408,7 +1409,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         state.barrier_source_pc = state.current_frontier_source_pc = content.frontier_pc;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        const char *frontier = !content.status            ? "GameResourceFailure"
+        const char *frontier = content.title.softkey_requested&&!content.status ? "NativeTitleSoftkeyUnavailable"
+                               : !content.status            ? "GameResourceFailure"
                                : content.title.frame_drawn ? "NativeTitleCharacterFrame"
                                : content.title_constructor_returned ? "NativeTitleFadeUpdate"
                                : content.title_model_read ? "TitleModelConsumerPending"
@@ -1449,9 +1451,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if (!before.title_constructor_returned && after.title_constructor_returned)
             Emit("GameTitleResourceConsumer", "RecoveredGameCaller", 0x80384, after.title_model_bytes, false,
                  0, 0, 0,
-                 "actual TITLE.BPM/UI/GIM,six actor assets,light,ten mutable clones and21 motions;native character entrance policy;scene3 still waitsCC3");
+                 "actual TITLE.BPM/UI/GIM,six actor assets,light,ten mutable clones and21 motions;native layout policy;scene3 still waitsCC3");
         if(!before.title.frame_drawn&&after.title.frame_drawn)
-            Emit("GameTitleCharacterFrame","NonMatchingNativeModelRaster",0x3177C,after.title.visible_actors,false,0,0,0,"real source-selected geometry,motions,material GIMs,camera;no menu/KSC/scene3 completion claimed");
+            Emit("GameTitleCharacterFrame","NonMatchingNativeModelRaster",0x3177C,after.title.visible_actors,false,0,0,0,"real source-selected geometry,motions,material GIMs,camera;no KSC/scene3 completion claimed");
         PublishInteractiveState();
     }
     void BarrierPump() {
