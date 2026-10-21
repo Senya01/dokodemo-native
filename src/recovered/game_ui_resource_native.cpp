@@ -40,8 +40,8 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
         out = found->second;
         return {};
     }
-    if (texture_cache_.size() >= 128)
-        return {GameFsCode::Bounds, 0, "native texture cache cap128"};
+    if (texture_cache_.size() >= 512)
+        return {GameFsCode::Bounds, 0, "native texture cache cap512"};
     PackageView image;
     auto status = OpenResource(path, image);
     if (!status)
@@ -50,6 +50,8 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
     status = decoded->DecodeGim(std::move(image));
     if (!status)
         return status;
+    if(uint64_t(TextureCachePixels())+uint64_t(decoded->Width())*decoded->Height()>16*1024*1024)
+        return {GameFsCode::Bounds,0,"native decoded texture budget64MiB"};
     texture_cache_.emplace(std::move(key), decoded);
     out = std::move(decoded);
     return {};

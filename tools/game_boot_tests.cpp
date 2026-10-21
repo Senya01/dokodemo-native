@@ -29,6 +29,16 @@ struct MemoryServices : GameMemoryServices {
     }
 };
 void ControllerTests() {
+    GameButtonGate gate;gate.Begin();
+    Check(!gate.Observe({Circle,true,false,1},Circle),"held before prompt cannot confirm");
+    Check(!gate.Observe({0,false,false,2},Circle)&&!gate.Observe({Circle,true,false,3},Circle),"focus loss/refocus still held cannot confirm");
+    Check(!gate.Observe({0,true,false,4},Circle)&&gate.Armed(),"focused release arms prompt");
+    Check(gate.Observe({Circle,true,false,5},Circle)&&!gate.Observe({Circle,true,false,6},Circle),"fresh edge consumes exactly one prompt");
+    gate.Begin();Check(!gate.Observe({Circle,true,false,7},Circle),"held key cannot accept next prompt");
+    GameInputMailbox mailbox;for(uint64_t i=0;i<129;++i)mailbox.Push({Circle,true,true,i});
+    GameInputFrame frame;Check(mailbox.Pop(frame)&&!frame.focused,"overflow requires safe input resync");
+    Check(mailbox.Pop(frame)&&frame.focused&&frame.test_injected&&frame.sequence==128,"mailbox retains latest actual sample after resync");
+    mailbox.Clear();Check(!mailbox.Pop(frame),"retired/next-prompt queue clears old edges");
     InputServices input;
     Check(InitializeGameInput52D58(input).returned && input.calls == std::vector<int32_t>{1, 0}, "52D58 calls and delays");
     input.calls.clear(); input.mode = {true, -1};

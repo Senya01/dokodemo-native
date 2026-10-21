@@ -1,6 +1,7 @@
 #pragma once
 #include "game_filesystem_native.h"
 #include "game_scene_ui_native.h"
+#include "game_storage_native.h"
 #include <array>
 #include <vector>
 
@@ -69,6 +70,13 @@ struct GameContentSnapshot {
     GameSceneUiSnapshot scene_ui;
     GameSoundBankSnapshot sound_bank;
     uint32_t scene_substate = 0, opened_resources = 0;
+    GameAutoloadSnapshot autoload;
+    bool title_mounted = false, title_ui_ready = false, title_model_read = false,
+         title_constructor_returned = false;
+    uint32_t title_bytes = 0, title_slots = 0, title_nodes = 0, title_clips = 0, title_textures = 0;
+    uint32_t title_model_bytes = 0, title_model_nodes = 0, title_model_materials = 0;
+    std::vector<std::string> title_material_resources;
+    std::string next_resource;
     GameFsStatus status;
 };
 // Nonmatching cold-loading driver. It runs the recovered phase0 state machines
@@ -94,6 +102,9 @@ class GameContentBoot final : public GameResourceSource {
     // constructors. A platform source is only used for actual absolute files.
     GameFsStatus InitializeSceneResources(GameResourceSource &platform);
     GameFsStatus ShowUnavailableMemoryStick(uint32_t native_error);
+    bool ProcessDialogInput(const GameInputFrame &frame);
+    GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
+    bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
@@ -124,6 +135,11 @@ class GameContentBoot final : public GameResourceSource {
     GameFontResource font_;
     GameSceneUiBootstrap scene_ui_;
     GameSoundBank sound_bank_;
+    GameAutoload autoload_;
+    PackageView title_package_, title_model_image_;
+    BpDirectory title_directory_;
+    std::shared_ptr<GameUiResource> title_ui_;
+    GameUiInstance title_clone_;
     GameResourceSource *platform_ = nullptr;
     GameContentSnapshot state_;
 };

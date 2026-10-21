@@ -6,6 +6,42 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+bool GameDialogController::Begin(uint32_t mode, uint32_t selection) noexcept {
+    if (state_.state != 3 || mode > 2 || selection > INT32_MAX - 1)
+        return false;
+    const auto confirmations = state_.confirmations;
+    state_ = {};
+    state_.state = 0;
+    state_.mode = mode;
+    state_.selection = selection;
+    state_.confirmations = confirmations;
+    gate_.Begin();
+    return true;
+}
+bool GameDialogController::Input(const GameInputFrame &frame) noexcept {
+    if (state_.state != 1 || state_.mode == 2)
+        return false;
+    if (!gate_.Observe(frame, Circle))
+        return false;
+    state_.result = int32_t(state_.selection + 1);
+    ++state_.confirmations;
+    state_.state = 2;
+    return true;
+}
+void GameDialogController::Tick() noexcept {
+    if (state_.state == 0) {
+        state_.progress = (std::min)(1.0f, state_.progress + 0.2f);
+        if (state_.progress >= 1)
+            state_.state = 1;
+    } else if (state_.state == 2) {
+        state_.progress -= 0.2f;
+        if (state_.progress <= 0) {
+            state_.progress = 0;
+            state_.state = 3;
+            gate_.Stop();
+        }
+    }
+}
 bool GameTransition::Initialize(const std::array<float, 2> &center) {
     if (state_.live)
         return false;
@@ -224,7 +260,25 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
     if (state_.storage_dialog) {
         // Native tick quanta2 /10, using the retained backed initial value.
         // PSP runtime timing producer/matrix matching remain unrecovered.
-        state_.dialog_progress = (std::min)(1.0f, state_.dialog_progress + 0.2f);
+        dialog_.Tick();
+        const auto dialog = dialog_.Snapshot();
+        state_.dialog_progress = dialog.progress;
+        state_.dialog_state = dialog.state;
+        state_.dialog_result = dialog.result;
+        state_.confirmations = dialog.confirmations;
+        state_.awaiting_confirmation = dialog.state == 1;
+        if (dialog.state == 3) {
+            state_.storage_dialog = false;
+            clones_[2].ShowRoot(0, false);
+            if (auto *control = clones_[2].Control(0)) {
+                control->mode = 0;
+                control->active = 0;
+            }
+            if (!graphics.SwapBuffers())
+                return false;
+            ++state_.native_frames;
+            return true;
+        }
         const auto scale = state_.dialog_progress;
         const auto w = (std::max)(1u, uint32_t(float(dialog_width_) * scale));
         const auto h = (std::max)(1u, uint32_t(float(dialog_height_) * scale));
@@ -242,7 +296,6 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
             !graphics.DrawImage(pixels, w, h, x, y))
             return false;
         state_.text_drawn = true;
-        state_.awaiting_confirmation = scale == 1;
     }
     if (!graphics.SwapBuffers())
         return false;
@@ -270,6 +323,8 @@ GameFsStatus GameSceneUiBootstrap::ShowStorageDialog(const GameFontResource &fon
         return status;
     if (!clones_[2].ShowRoot(0))
         return {GameFsCode::Unavailable, 0, "TRC root0 unavailable"};
+    if (!dialog_.Begin(1, 0))
+        return {GameFsCode::Busy, 0, "TRC dialog already active"};
     dialog_pixels_ = std::move(bitmap.pixels);
     dialog_width_ = bitmap.width;
     dialog_height_ = bitmap.height;
@@ -277,7 +332,21 @@ GameFsStatus GameSceneUiBootstrap::ShowStorageDialog(const GameFontResource &fon
     state_.dialog_glyphs = bitmap.glyphs;
     state_.storage_error = error;
     state_.dialog_progress = 0;
+    state_.dialog_state = 0;
+    state_.dialog_result = 0;
+    state_.awaiting_confirmation = false;
     return {};
+}
+bool GameSceneUiBootstrap::HandleDialogInput(const GameInputFrame &frame) {
+    if (!state_.live || !state_.storage_dialog)
+        return false;
+    const auto accepted = dialog_.Input(frame);
+    const auto dialog = dialog_.Snapshot();
+    state_.dialog_state = dialog.state;
+    state_.dialog_result = dialog.result;
+    state_.confirmations = dialog.confirmations;
+    state_.awaiting_confirmation = dialog.state == 1;
+    return accepted;
 }
 GameSceneUiSnapshot GameSceneUiBootstrap::Snapshot() const {
     auto out = state_;
@@ -322,6 +391,7 @@ bool GameSceneUiBootstrap::Close() {
     arena_ = nullptr;
     manager_ = nullptr;
     transition_.Retire();
+    dialog_.Retire();
     state_.live = false;
     state_.storage_dialog = state_.awaiting_confirmation = false;
     state_.owners = state_.records = state_.ui_resources = state_.ui_nodes = state_.ui_clips =

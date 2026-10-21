@@ -1,6 +1,7 @@
 #include "game_content_native.h"
 #include "game_boot_native.h"
 #include "game_primitives.h"
+#include "model_formats.hpp"
 #include <algorithm>
 #include <new>
 #include <stdexcept>
@@ -409,6 +410,11 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 ++state_.opened_resources;
                 return {};
             }
+            if (mount == "TITLE" && state_.title_mounted) {
+                out = title_directory_.Open(path.substr(split + 1));
+                ++state_.opened_resources;
+                return {};
+            }
         }
         if (platform_) {
             auto status = platform_->OpenResource(path, out);
@@ -454,6 +460,166 @@ bool GameContentBoot::DrawColdFrame(GameGraphics &graphics) {
     state_.scene_ui = scene_ui_.Snapshot();
     return ok;
 }
+bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
+    if (state_.closed)
+        return false;
+    const auto accepted = scene_ui_.HandleDialogInput(frame);
+    state_.scene_ui = scene_ui_.Snapshot();
+    return accepted;
+}
+GameFsStatus GameContentBoot::BeginStorage(GameStorage &storage, bool test_prompt) {
+    if (state_.frontier_pc != 0x4E67C)
+        return {GameFsCode::Unavailable, 0, "native storage query not reached"};
+    const auto available = storage.Probe();
+    const bool dialog = test_prompt || !available;
+    autoload_.Begin(dialog);
+    state_.autoload = autoload_.Snapshot();
+    if (dialog)
+        return ShowUnavailableMemoryStick(test_prompt ? 50 : available.native_error);
+    state_.scene_substate = 3;
+    state_.blocked = false;
+    state_.frontier_pc = 0x4E100;
+    return {};
+}
+bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &storage,
+                                      GameGraphics &graphics) {
+    if (state_.closed || !state_.scene_ui.live)
+        return false;
+    //Phase0 observes the previous phase6 result. Reaching TRC3 below does
+    //not let CLoadMan consume completion in that same scheduler iteration.
+    const auto prior_dialog_state=state_.scene_ui.dialog_state;
+    if (!DrawColdFrame(graphics)) {
+        state_.status={GameFsCode::Unavailable,0,"native phase6/phase9 drawing failed"};
+        return false;
+    }
+    if (state_.autoload.phase == GameAutoloadPhase::Dialog) {
+        if (autoload_.DialogCompleted(prior_dialog_state)) {
+            state_.scene_substate = 3;
+            state_.blocked = false;
+            state_.frontier_pc = 0x4E100;
+        }
+        state_.autoload = autoload_.Snapshot();
+        return true;
+    }
+    if (state_.autoload.phase == GameAutoloadPhase::Begin) {
+        // 249D0 resets the game state before mode0. A missing file cannot
+        // invent loaded game fields; the reset0 is what25058 later consumes.
+        const auto zero = [this](size_t at, size_t count) {
+            std::fill_n(reset_bytes_.begin() + at, count, uint8_t(0));
+        };
+        for (size_t at : {0u, 4u, 8u, 0x10u, 0x14u, 0x18u, 0x1Cu, 0x20u, 0xA4u, 0xA8u, 0xACu})
+            zero(at, 4);
+        zero(0xC, 1);
+        zero(0x24, 64);
+        zero(0x64, 64);
+        zero(0xB0, 84);
+        zero(0x114, 0x10A3C);
+        for (uint32_t slot = 0; slot < 11; ++slot) {
+            const auto base = 276 + slot * 6196;
+            for (uint32_t entry = 0; entry < 28; ++entry)
+                for (uint32_t offset : {4u, 0xD0u, 0xD4u, 0xD8u})
+                    std::fill_n(reset_bytes_.begin() + base + entry * 220 + offset, 4, uint8_t(255));
+            std::fill_n(reset_bytes_.begin() + base + 0x1830, 4, uint8_t(255));
+        }
+        reset_bytes_[0x10] = 2;
+        reset_bytes_[0x14] = 3;
+        reset_bytes_[0x18] = 3;
+        autoload_.Tick(storage);
+        state_.autoload = autoload_.Snapshot();
+        if (state_.autoload.phase != GameAutoloadPhase::TitleRequested) {
+            state_.blocked = true;
+            state_.frontier_pc = 0x4DF18;
+            return true;
+        }
+        state_.requested_bits |= 1u << 11;
+        state_.scene_substate = 9;
+        state_.owned_bits |= 1u << 11;
+        state_.mount_state = 1;
+        state_.blocked = false;
+        state_.frontier_pc = 0x18160;
+        return true;
+    }
+    if (state_.mount_state == 1 && (state_.requested_bits & (1u << 11))) {
+        state_.mount_state = 2;
+        return true; // queued1E28 node, no read on creation
+    }
+    if (state_.mount_state == 2 && (state_.requested_bits & (1u << 11))) {
+        try {
+            auto status = filesystem.LoadMember("TITLE.BPM", title_package_);
+            if (!status) {
+                state_.status = status;
+                return false;
+            }
+            title_directory_ = BpDirectory::Parse(title_package_, title_package_.Describe().size);
+            state_.title_mounted = true;
+            state_.title_bytes = uint32_t(title_package_.Describe().size);
+            state_.title_slots = title_directory_.Header().slots;
+            state_.completed_bits |= 1u << 11;
+            state_.mount_state = 0;
+            // 192D4 frees the first storage buffer before the TITLE constructor.
+            autoload_.Close();
+            state_.autoload = autoload_.Snapshot();
+            // 1A238(active11)->1A3E8->30188. This is an actual requested
+            // resource/texture consumer, not a guessed title screen.
+            title_ui_ = std::make_shared<GameUiResource>();
+            status = title_ui_->Load(*this, "title\\gui\\title\\TITLE.CB2A", "title\\gui\\title\\");
+            if (!status) {
+                state_.status = status;
+                return false;
+            }
+            if (!title_clone_.Clone(title_ui_)) {
+                state_.status={GameFsCode::MalformedDirectory,0,"TITLE native clone failed"};
+                return false;
+            }
+            for (uint32_t i = 0; i < 30; ++i)
+                if (!title_clone_.Bind(i, i, 0)) {
+                    state_.status = {GameFsCode::MalformedDirectory, 0,
+                                     "30188 requires30 valid root/clip bindings"};
+                    return false;
+                }
+            state_.title_ui_ready = true;
+            state_.title_nodes = uint32_t(title_ui_->InitialNodes().size());
+            state_.title_clips = uint32_t(title_ui_->Clips().size());
+            state_.title_textures = uint32_t(title_ui_->Textures().size());
+            // 33484's first of ten actor constructors selects toro.DVS.
+            // Keep its real image and validate the existing typed model parser.
+            // No character transform/skin/animation callback is substituted.
+            state_.next_resource = "title\\charmodel_title\\toro.DVS";
+            status = OpenResource(state_.next_resource, title_model_image_);
+            if (!status) {
+                state_.status = status;
+                return false;
+            }
+            model::Bytes bytes(size_t(title_model_image_.Describe().size));
+            for (size_t i = 0; i < bytes.size(); ++i)
+                bytes[i] = title_model_image_.ReadU8(i);
+            const auto model = model::parseDvs(bytes);
+            state_.title_model_bytes = uint32_t(bytes.size());
+            state_.title_model_nodes = uint32_t(model.nodes.size());
+            state_.title_model_materials = uint32_t(model.materials.size());
+            state_.frontier_pc = 0x7F68C;
+            for (const auto &material : model.materials)
+                for (const auto &texture : material.textures) {
+                    std::shared_ptr<GameImage> actual_texture;
+                    state_.next_resource = "title\\charmodel_title\\gim\\" + texture.name + ".GIM";
+                    status = TextureResource(state_.next_resource, actual_texture);
+                    if (!status) {
+                        state_.status = status;
+                        return false;
+                    }
+                    state_.title_material_resources.push_back(state_.next_resource);
+                }
+            state_.title_model_read = true;
+            state_.next_resource = "7F68C/80DA8 typed character transform,clone and draw consumer";
+            state_.status = {};
+            state_.blocked = true;
+        } catch (const std::exception &e) {
+            state_.status = {GameFsCode::MalformedDirectory, 0, e.what()};
+            return false;
+        }
+    }
+    return true;
+}
 GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) {
     if (state_.frontier_pc != 0x4E67C || !state_.sound_bank.metadata_ready)
         return {GameFsCode::Unavailable, 0, "MemoryStick query not reached"};
@@ -469,6 +635,14 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    title_clone_.Close();
+    title_ui_.reset();
+    title_model_image_.Reset();
+    title_directory_.Reset();
+    title_package_.Reset();
+    autoload_.Close();
+    state_.autoload = autoload_.Snapshot();
+    state_.title_mounted = state_.title_ui_ready = false;
     if (!scene_ui_.Close())
         return false;
     sound_bank_.Close();

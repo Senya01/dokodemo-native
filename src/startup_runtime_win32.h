@@ -22,6 +22,10 @@ struct StartupRuntimeOptions {
     // Actual native directory bound to disc0:, e.g. <workspace>/assets/iso.
     std::wstring media_root;
     bool prepared_codec_envelope = false; // explicit NEW domain, legacy finite prefix stays default
+    bool test_controller_input = false; // explicit injected-frame test domain, never physical-input credit
+    std::wstring native_save_root;
+    bool storage_unavailable=false,storage_read_only=false;
+    bool test_missing_device_prompt=false; // test-only negative IoDevctl path before real native autoload
 };
 inline constexpr uint32_t StartupNoCurrentModule = UINT32_MAX;
 struct StartupRuntimeEvent {
@@ -146,6 +150,7 @@ public:
     // Real keyboard polling for the native game input adapter. An unfocused
     // window releases buttons; no synthetic key events are sent to Windows.
     recovered::ControllerSample PollControllerInput(bool window_focused);
+    StartupRuntimeStatus InjectTestControllerInput(uint32_t buttons,bool focused);
     bool CopyGameFrame(recovered::GameGraphicsFrame& out) const;
     bool RecordGameFramePresented(uint64_t generation, uint64_t sequence);
     bool DrawGraphicsDiagnosticFrame(); // explicit window-smoke image, not gameplay

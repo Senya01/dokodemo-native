@@ -2,6 +2,7 @@
 #include "game_graphics_native.h"
 #include "game_ui_resource_native.h"
 #include "game_dictionary_native.h"
+#include "game_input_native.h"
 #include <array>
 
 namespace dokodemo::recovered {
@@ -34,6 +35,30 @@ class GameTransition final {
 class GameArena;
 class GameVmBoot;
 class GameFontResource;
+struct GameDialogSnapshot {
+    int32_t state = 3, result = 0;
+    uint32_t mode = 1, selection = 0, confirmations = 0;
+    float progress = 0;
+};
+// 47E0C/48224/47EA4: first press produces selection+1, then state2 really
+// contracts to0/hides the root before state3. No forced completion/autoack.
+class GameDialogController {
+  public:
+    bool Begin(uint32_t mode = 1, uint32_t selection = 0) noexcept;
+    bool Input(const GameInputFrame &frame) noexcept;
+    void Tick() noexcept;
+    void Retire() noexcept {
+        gate_.Stop();
+        state_.state = 3;
+    }
+    GameDialogSnapshot Snapshot() const noexcept {
+        return state_;
+    }
+
+  private:
+    GameButtonGate gate_;
+    GameDialogSnapshot state_;
+};
 struct GameSceneUiSnapshot {
     bool live = false, constructors_returned = false, scene1_returned = false;
     bool ui_render_implemented = false, text_drawn = false, mixer_implemented = false;
@@ -43,6 +68,8 @@ struct GameSceneUiSnapshot {
     bool storage_dialog = false, awaiting_confirmation = false;
     uint32_t storage_error = 0, dialog_glyphs = 0;
     float dialog_progress = 0;
+    int32_t dialog_state = 3, dialog_result = 0;
+    uint32_t confirmations = 0;
     GameTransitionSnapshot transition;
 };
 // 18EE8..18F38: grouped typed native owners. Immutable views borrow DATA.BPM;
@@ -53,6 +80,7 @@ class GameSceneUiBootstrap final {
                             const GameFontResource &font);
     bool DrawColdFrame(GameGraphics &graphics);
     GameFsStatus ShowStorageDialog(const GameFontResource &font, uint32_t native_error);
+    bool HandleDialogInput(const GameInputFrame &frame);
     GameSceneUiSnapshot Snapshot() const;
     bool Close();
     ~GameSceneUiBootstrap();
@@ -71,6 +99,7 @@ class GameSceneUiBootstrap final {
     std::array<GameDictionary, 9> dictionaries_;
     std::shared_ptr<GameImage> moving_;
     GameTransition transition_;
+    GameDialogController dialog_;
     std::vector<uint32_t> dialog_pixels_;
     uint32_t dialog_width_ = 0, dialog_height_ = 0;
     GameSceneUiSnapshot state_;

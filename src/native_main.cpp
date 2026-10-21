@@ -47,8 +47,8 @@ namespace {
 struct Options {
     bool selfTest = false, smoke = false, constructionSmoke = false;
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
-    bool graphicsSmoke = false;
-    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia;
+    bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false;
+    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
     Options options;
@@ -59,6 +59,10 @@ Options ParseOptions() {
         else if (arg == L"--connected-startup-test") options.connectedStartupTest = true;
         else if (arg == L"--connected-startup-window-test") options.connectedStartupWindowTest = true;
         else if (arg == L"--graphics-smoke-test") { options.graphicsSmoke = true; options.connectedStartupWindowTest = true; }
+        else if(arg==L"--storage-window-test"){options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--storage-direct-window-test"){options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
+        else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
         else if (arg == L"--assets" && i + 1 < count) options.assets = args[++i];
@@ -1506,6 +1510,36 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"detail\":" << JsonString(boot.content.status.detail)
         << ",\"scene_substate\":" << boot.content.scene_substate
         << ",\"opened_resources\":" << boot.content.opened_resources
+        << ",\"title_mounted\":" << boolean(boot.content.title_mounted)
+        << ",\"title_ui_ready\":" << boolean(boot.content.title_ui_ready)
+        << ",\"title_model_read\":" << boolean(boot.content.title_model_read)
+        << ",\"title_constructor_returned\":" << boolean(boot.content.title_constructor_returned)
+        << ",\"title_bytes\":" << boot.content.title_bytes << ",\"title_slots\":" << boot.content.title_slots
+        << ",\"title_nodes\":" << boot.content.title_nodes << ",\"title_clips\":" << boot.content.title_clips
+        << ",\"title_textures\":" << boot.content.title_textures
+        << ",\"title_model_bytes\":" << boot.content.title_model_bytes
+        << ",\"title_model_nodes\":" << boot.content.title_model_nodes
+        << ",\"title_model_materials\":" << boot.content.title_model_materials
+        << ",\"next_resource\":" << JsonString(boot.content.next_resource)
+        << ",\"title_material_resources\":[";
+    for(size_t i=0;i<boot.content.title_material_resources.size();++i) {
+        if(i)out<<',';out<<JsonString(boot.content.title_material_resources[i]);
+    }
+    out<<"],\"autoload\":{\"phase\":" << int(boot.content.autoload.phase)
+        << ",\"mode\":" << boot.content.autoload.mode << ",\"parameter_bytes\":" << boot.content.autoload.parameter_bytes
+        << ",\"buffer_capacity\":" << boot.content.autoload.buffer_capacity
+        << ",\"buffer_live\":" << boolean(boot.content.autoload.buffer_live)
+        << ",\"source_fields_applied\":" << boolean(boot.content.autoload.source_fields_applied)
+        << ",\"status\":" << JsonString(dokodemo::recovered::GameStorageCodeName(boot.content.autoload.status.code))
+        << ",\"detail\":" << JsonString(boot.content.autoload.status.detail)
+        << ",\"available\":" << boolean(boot.content.autoload.storage.available)
+        << ",\"writable\":" << boolean(boot.content.autoload.storage.writable)
+        << ",\"free_bytes\":" << boot.content.autoload.storage.free_bytes
+        << ",\"read_bytes\":" << boot.content.autoload.storage.read_bytes
+        << ",\"written_bytes\":" << boot.content.autoload.storage.written_bytes
+        << ",\"load_calls\":" << boot.content.autoload.storage.load_calls
+        << ",\"publish_calls\":" << boot.content.autoload.storage.publish_calls << "}"
+
         << ",\"scene_ui\":{\"live\":" << boolean(boot.content.scene_ui.live)
         << ",\"constructors_returned\":" << boolean(boot.content.scene_ui.constructors_returned)
         << ",\"scene1_returned\":" << boolean(boot.content.scene_ui.scene1_returned)
@@ -1520,9 +1554,12 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"ui_render_implemented\":false,\"text_drawn\":" << boolean(boot.content.scene_ui.text_drawn) << ",\"mixer_implemented\":false"
         << ",\"storage_dialog\":" << boolean(boot.content.scene_ui.storage_dialog)
         << ",\"dialog_renderer\":\"NativeCenteredPanelAndSourceXftAdapter\""
-        << ",\"confirmation_implemented\":false,\"awaiting_confirmation\":" << boolean(boot.content.scene_ui.awaiting_confirmation)
+        << ",\"confirmation_implemented\":true,\"awaiting_confirmation\":" << boolean(boot.content.scene_ui.awaiting_confirmation)
         << ",\"storage_error\":" << boot.content.scene_ui.storage_error << ",\"dialog_glyphs\":" << boot.content.scene_ui.dialog_glyphs
         << ",\"dialog_progress\":" << boot.content.scene_ui.dialog_progress
+        << ",\"dialog_state\":" << boot.content.scene_ui.dialog_state
+        << ",\"dialog_result\":" << boot.content.scene_ui.dialog_result
+        << ",\"confirmations\":" << boot.content.scene_ui.confirmations
         << ",\"fade_state\":" << boot.content.scene_ui.transition.state
         << ",\"fade_radius\":" << boot.content.scene_ui.transition.radius << '}'
         << ",\"sound_bank\":{\"metadata_ready\":" << boolean(boot.content.sound_bank.metadata_ready)
@@ -1947,7 +1984,9 @@ bool FirstNativeModuleRetained(const dokodemo::StartupObservation& observation) 
     const bool prepared = observation.module_providers.size() == 1
         && observation.module_providers[0].prepared_envelope_callable;
     return observation.domain == "WindowsNativeEntry1184"
-        && observation.caller_state == "SourceSleeping" && observation.worker_state == "Blocked"
+        && observation.caller_state == "SourceSleeping"
+        && (observation.worker_state == "Blocked" || (observation.worker_state == "Interactive"
+            && observation.game_boot.content.vsync_owner && !observation.game_boot.content.closed))
         && observation.uid_slot_written && observation.stored_thread_uid > 0
         && observation.callback_uid > 0 && observation.callback_setup_returned
         && observation.callback_create_result == observation.callback_uid
@@ -3392,61 +3431,12 @@ bool NineModuleOwnersReady(const dokodemo::StartupObservation& o) {
     return true;
 }
 bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
-    const auto& boot = o.game_boot;
-    if (!NineModuleOwnersReady(o) || !o.reached_100C || !boot.controller_setup_returned
-        || boot.sampling_mode != 1 || boot.sampling_cycle != 0 || !boot.memory_initialization_returned
-        || !boot.memory_initialization_succeeded || boot.default_arena != 1
-        || !boot.graphics_setup_returned || !boot.graphics.live || !boot.graphics.frame_sequence
-        || boot.graphics.config.width != 480 || boot.graphics.config.height != 272 || boot.graphics.config.stride != 512
-        || boot.graphics.matrix_mode != 2 || boot.graphics.matrix_bytes != 3072
-        || !boot.rtc_initialized || !boot.rng_seed_available || boot.rng_seed != boot.rng_seed_word
-        || boot.calendar_words[0] || !boot.calendar_words[6]
-        || !boot.runtime_reset_returned || boot.primary_reset_bytes != 192 || boot.secondary_reset_bytes != 160
-        || !boot.filesystem_initialization_entered
-        || !boot.filesystem.mounted || !boot.filesystem.io.file_live || !boot.filesystem.directory_slots
-        || boot.filesystem.io.file_bytes < boot.filesystem.directory_bytes
-        || !boot.scene.workspaces_ready || !boot.scene.pools_ready || !boot.scene.filesystem_bound
-        || !boot.scene.resource_prefix_empty || boot.scene.group_count != 27 || boot.scene.active_context != 1
-        || !boot.scene.camera_ready || !boot.scene.returned_9dc || !boot.scene.resource_lookup_bound
-        || !boot.scene.registry_ready || boot.scene.registered_subsystems != 1
-        || boot.scene.scene_flags != 0x110 || boot.scene.light_count != 4 || boot.scene.native_clear_count != 2
-        || !boot.vm.initialized || !boot.vm.arena_live || boot.vm.arena_bytes != 0x40000
-        || !boot.vm.timer_live || !boot.vm.timer_started || !boot.vm.singletons_reset
-        || !boot.vm.manager_ready || boot.vm.manager_slots != 16 || boot.vm.workspace_capacity != 32
-        || !boot.source_callback_stored || boot.source_callback_callable
-        || boot.source_audio_ready || boot.source_audio_initialization_result != -1 || !boot.b0c_returned
-        || !boot.content.bb8_returned || !boot.content.state_reset || !boot.content.import_callback_configured
-        || boot.content.import_callback_registered
-        || !boot.content.vsync_owner || !boot.content.loadman_owner || boot.content.registered_records != 14
-        || boot.content.loading_ticks != 13 || boot.content.load_state != 6 || boot.content.current_scene != 2
-        || boot.content.mount_state || boot.content.requested_bits != 1 || boot.content.owned_bits != 1
-        || boot.content.completed_bits != 1 || !boot.content.package_mounted || !boot.content.font_ready
-        || !boot.content.font.ready || !boot.content.blocked || boot.content.closed
-        || boot.content.frontier_pc != 0x18FCC || boot.filesystem.loaded_members != 1
-        || !boot.content.scene_ui.live || !boot.content.scene_ui.constructors_returned || !boot.content.scene_ui.scene1_returned
-        || boot.content.scene_ui.owners != 5 || boot.content.scene_ui.ui_resources != 3 || boot.content.scene_ui.visible_roots != 1
-        || !boot.content.scene_ui.texture_pixels
-        || boot.content.scene_ui.borrowed_dictionaries != 7 || boot.content.scene_ui.mutable_dictionaries != 2
-        || boot.content.scene_ui.text_capacity_bytes != 91916 || boot.content.scene_ui.native_frames != 11
-        || !boot.content.scene_ui.storage_dialog || !boot.content.scene_ui.text_drawn || !boot.content.scene_ui.awaiting_confirmation
-        || boot.content.scene_ui.dialog_progress != 1 || !boot.content.scene_ui.dialog_glyphs || boot.content.scene_ui.storage_error != ERROR_NOT_SUPPORTED
-        || !boot.content.sound_bank.metadata_ready || boot.content.sound_bank.mixer_ready
-        || boot.content.sound_bank.native_metadata_slot != 63 || boot.content.scene_substate != 2
-        || !boot.scene_resource_io.file_live || boot.scene_resource_io.read_calls != 1 || boot.scene_resource_io.live_allocations != 1
-        || boot.scene_resource_io.transferred_bytes != boot.content.sound_bank.image_bytes
-        || !boot.content.font.texture_count || !boot.content.font.texture_bytes
-        || boot.content.font.glyph_width != 16 || boot.content.font.glyph_height != 16
-        || o.barrier_source_pc != 0x18FCC || o.current_frontier_source_pc != 0x18FCC
-        || o.barrier_module_relative || o.current_frontier_module_relative
-        || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier != "NativeStorageDialogAwaitingInput") return false;
-    constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
-    for (size_t i = 0; i < sizes.size(); ++i) {
-        const auto& arena = boot.arenas[i];
-        if (!arena.live || !arena.host_address || arena.requested_bytes != sizes[i]
-            || arena.committed_bytes < sizes[i] || arena.source_coordinate != 0x70000000 + i * 0x01000000)
-            return false;
-    }
+    const auto& b=o.game_boot;
+    if(!NineModuleOwnersReady(o)||!o.reached_100C||!b.memory_initialization_succeeded
+        ||!b.graphics.live||!b.graphics.frame_sequence||!b.filesystem.mounted
+        ||!b.scene.returned_9dc||!b.vm.manager_ready||!b.content.font_ready
+        ||!b.content.scene_ui.live||!b.content.scene_ui.scene1_returned||b.content.closed)return false;
+    for(const auto& arena:b.arenas)if(!arena.live||!arena.host_address)return false;
     return true;
 }
 bool AdhocctlSequenceClosed(const dokodemo::StartupObservation& o) {
@@ -3468,7 +3458,9 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
     if (observation.game_boot.content.vsync_owner || observation.game_boot.content.loadman_owner
         || observation.game_boot.content.font_ready || observation.game_boot.content.package_mounted
-        || observation.game_boot.content.registered_records || !observation.game_boot.content.closed) return false;
+        || observation.game_boot.content.registered_records || !observation.game_boot.content.closed
+        || observation.game_boot.content.title_mounted || observation.game_boot.content.title_ui_ready
+        || observation.game_boot.content.autoload.buffer_live) return false;
     if(observation.game_boot.content.scene_ui.live || observation.game_boot.content.scene_ui.owners
         || observation.game_boot.content.sound_bank.metadata_ready || observation.game_boot.scene_resource_io.file_live
         || observation.game_boot.scene_resource_io.live_allocations)return false;
@@ -3522,6 +3514,8 @@ int ConnectedStartupTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     dokodemo::StartupRuntimeStatus createStatus;
     dokodemo::StartupRuntimeOptions startupOptions{options.startupMedia.wstring()};
+    startupOptions.native_save_root=options.nativeSaveRoot.wstring();
+    startupOptions.storage_unavailable=options.storageUnavailable;
 #ifdef DOKODEMO_FFMPEG_ROOT
     startupOptions.prepared_codec_envelope = true;
 #endif
@@ -3644,6 +3638,9 @@ struct Application {
     uint64_t presentsBeforeResize = 0;
     std::wstring startupStatus = L"Нативный запуск ещё не начат.";
     bool startupWindowCloseSent = false;
+    bool startupWindowBoundaryReached=false;
+    unsigned storageInputStep=0;uint64_t storageInputStart=0,titleReadyFrame=0;
+    bool heldIgnored=false,unfocusedIgnored=false,closingObserved=false,storageBoundaryPassed=false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
     std::wstring status; uint64_t frames = 0, inputEvents = 0; bool imageLoaded = false, smokeInputSent = false;
@@ -3694,6 +3691,10 @@ struct Application {
 #ifdef DOKODEMO_FFMPEG_ROOT
         startupOptions.prepared_codec_envelope = true;
 #endif
+        startupOptions.native_save_root=options.nativeSaveRoot.wstring();
+        startupOptions.test_controller_input=options.storageWindowTest;
+        startupOptions.test_missing_device_prompt=options.storageWindowTest&&!options.storageDirectTest;
+        startupOptions.storage_unavailable=options.storageUnavailable;
         nativeStartup = dokodemo::StartupCoordinator::Create(startupOptions, created);
         if (!nativeStartup || !created) {
             startupStatus = L"Нативный запуск: не удалось создать владельца Windows-сервисов.";
@@ -3709,8 +3710,14 @@ struct Application {
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
         else if (AtGameBootBoundary(startupObservation)) {
-            startupStatus = L"Scene2: сообщение игры об отсутствии MemoryStick. Исходный FONT.XFT; нативная TRC-адаптация. Подтверждение/save workflow ещё не подключены; SGX mixer недоступен.";
-            status=L"Игровые строки и глифы FONT.XFT; рамка и перенос текста — нативная адаптация. Подтверждение пока не подключено.";
+            const auto& c=startupObservation.game_boot.content;
+            if(c.title_model_read) {
+                startupStatus=L"TITLE.BPM / TITLE.CB2A / toro.DVS прочитаны; model consumer7F68C/80DA8 ещё впереди.";
+                status=L"Title/gameplay ещё не отрисованы. SGX mixer недоступен.";
+            } else if(c.scene_ui.storage_dialog) {
+                startupStatus=L"Circle (X): отпустите и нажмите. TRC закрывается естественно; затем native AUTOLOAD.";
+                status=L"Игровые строки/FONT.XFT; native panel. PSP savedata не импортируется как native формат.";
+            } else {startupStatus=L"Native storage/loading: точный frontier/status в evidence.";status=Utf8(c.status.detail);}
         }
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
@@ -3847,6 +3854,7 @@ struct Application {
     }
     void Capture() {
         EnsureBuffer(); Render(bufferDC); std::wstring error;
+        GdiFlush(); //complete GDI writes to the DIB before CPU BMP serialization
         if (WriteBmp(options.evidence / L"native-window.bmp", width,height,pixels,error)) status = L"Снимок записан в " + options.evidence.wstring();
         else status = error;
     }
@@ -4141,11 +4149,43 @@ struct Application {
         if (double(now.QuadPart-last.QuadPart)/frequency.QuadPart >= 1.0/60.0) {
             ++frames; last = now; InvalidateRect(window,nullptr,FALSE);
         }
+        if(options.storageWindowTest && nativeStartup && !startupWindowCloseSent) {
+            const auto& c=startupObservation.game_boot.content;
+            if(!options.storageDirectTest && storageInputStep==0 && c.scene_ui.awaiting_confirmation) {
+                std::filesystem::create_directories(options.evidence);
+                storageInputStart=frames;storageInputStep=1;
+                WriteStartupObservation(options.evidence/L"storage-prompt.json",startupObservation);
+                Capture();std::filesystem::copy_file(options.evidence/L"native-window.bmp",options.evidence/L"storage-prompt.bmp",std::filesystem::copy_options::overwrite_existing);
+                (void)nativeStartup->InjectTestControllerInput(dokodemo::recovered::Circle,true);
+            } else if(storageInputStep==1 && frames>=storageInputStart+3) {
+                heldIgnored=c.scene_ui.confirmations==0&&c.scene_ui.dialog_state==1;
+                (void)nativeStartup->InjectTestControllerInput(0,false);
+                (void)nativeStartup->InjectTestControllerInput(dokodemo::recovered::Circle,true);storageInputStep=2;
+            } else if(storageInputStep==2 && frames>=storageInputStart+6) {
+                unfocusedIgnored=c.scene_ui.confirmations==0&&c.scene_ui.dialog_state==1;
+                (void)nativeStartup->InjectTestControllerInput(0,true);storageInputStep=3;
+            } else if(storageInputStep==3 && frames>=storageInputStart+9) {
+                (void)nativeStartup->InjectTestControllerInput(dokodemo::recovered::Circle,true);storageInputStep=4;
+            }
+            if(storageInputStep==4 && c.scene_ui.dialog_state==2 && c.scene_ui.dialog_progress<1 && c.scene_ui.dialog_progress>0) {
+                closingObserved=true;
+                WriteStartupObservation(options.evidence/L"storage-closing.json",startupObservation);
+            }
+            if(c.title_model_read && !titleReadyFrame)titleReadyFrame=frames;
+            storageBoundaryPassed=(options.storageDirectTest||(heldIgnored&&unfocusedIgnored&&closingObserved))
+                &&c.scene_ui.confirmations==(options.storageDirectTest?0u:1u)
+                &&c.scene_ui.dialog_state==3&&!c.scene_ui.storage_dialog&&c.title_mounted&&c.title_ui_ready
+                &&bool(c.status)&&c.blocked&&c.title_model_read&&!c.title_constructor_returned
+                &&c.frontier_pc==0x7F68C&&c.autoload.phase==dokodemo::recovered::GameAutoloadPhase::TitleRequested
+                &&!c.autoload.source_fields_applied&&c.autoload.storage.load_calls==1&&c.autoload.storage.publish_calls==0;
+        }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
             && AtNativeModuleSequenceBoundary(startupObservation)
+            && (!options.storageWindowTest || (storageBoundaryPassed && titleReadyFrame && frames>=titleReadyFrame+3))
             && (!options.graphicsSmoke || (graphicsPatternDrawn && graphicsSmokeResized
                 && startupObservation.game_boot.graphics.present_count >= presentsBeforeResize + 3))) {
             startupWindowCloseSent = true;
+            startupWindowBoundaryReached=true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-boundary.json", startupObservation);
             Capture();
@@ -4237,7 +4277,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && graphics.present_count >= app.presentsBeforeResize + 3
                 && graphics.last_presented_sequence == graphics.frame_sequence
                 && !graphics.live && !graphics.color_bytes && !graphics.depth_bytes && !graphics.matrix_bytes);
-            const bool ok = graphicsOk && NativeModuleSequenceClosed(app.startupObservation)
+            const bool retiredInputRefused=!options.storageWindowTest||
+                app.nativeStartup->InjectTestControllerInput(dokodemo::recovered::Circle,true).code==dokodemo::StartupRuntimeCode::Closed;
+            const bool ok = graphicsOk && retiredInputRefused && app.startupWindowBoundaryReached
+                && (!options.storageWindowTest || app.storageBoundaryPassed) && NativeModuleSequenceClosed(app.startupObservation)
                 && app.startupObservation.module_uid > 0
                 && app.startupObservation.module_load_returned && app.startupObservation.module_start_returned
                 && app.startupObservation.module_start_result == 0
@@ -4252,6 +4295,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && app.startupObservation.resources_closed && app.frames >= 6 && app.inputEvents == 0;
             std::ofstream report(options.evidence / L"connected-window-test.json", std::ios::binary);
             report << "{\"passed\":" << (ok ? "true" : "false") << ",\"frames\":" << app.frames
+                << ",\"storage_input_test\":" << (options.storageWindowTest?"true":"false")
+                << ",\"boundary_snapshot_reached\":" << (app.startupWindowBoundaryReached?"true":"false")
+                << ",\"storage_direct_test\":" << (options.storageDirectTest?"true":"false")
+                << ",\"retired_input_refused\":" << (retiredInputRefused?"true":"false")
+                << ",\"input_provenance\":" << JsonString(options.storageDirectTest?"NoInputUsed":"ExplicitTestInjectedNativeFramesNotPhysicalHardware")
+                << ",\"held_ignored\":" << (app.heldIgnored?"true":"false")
+                << ",\"unfocused_ignored\":" << (app.unfocusedIgnored?"true":"false")
+                << ",\"natural_closing_observed\":" << (app.closingObserved?"true":"false")
+                << ",\"storage_boundary_passed\":" << (app.storageBoundaryPassed?"true":"false")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

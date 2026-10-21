@@ -44,6 +44,7 @@ add_library(dokodemo-core STATIC
     src/recovered/game_ui_resource_native.cpp
     src/recovered/game_scene_ui_native.cpp
     src/recovered/game_dictionary_native.cpp
+    src/recovered/game_storage_native.cpp
     src/recovered/package_storage_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
@@ -114,6 +115,14 @@ if(DOKODEMO_GAME_BOOT_TESTS)
     endif()
     add_test(NAME game-scene-ui-tests COMMAND dokodemo-game-scene-ui-tests)
     if(WIN32)
+        add_executable(dokodemo-game-storage-tests tools/game_storage_tests.cpp src/game_storage_win32.cpp)
+        target_link_libraries(dokodemo-game-storage-tests PRIVATE dokodemo-core)
+        target_compile_definitions(dokodemo-game-storage-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        if(MSVC)
+            set_target_properties(dokodemo-game-storage-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+            target_compile_options(dokodemo-game-storage-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+        endif()
+        add_test(NAME game-storage-tests COMMAND dokodemo-game-storage-tests)
         add_executable(dokodemo-game-filesystem-tests tools/game_filesystem_tests.cpp src/game_filesystem_win32.cpp src/startup_memory_backend_win32.cpp)
         target_link_libraries(dokodemo-game-filesystem-tests PRIVATE dokodemo-core)
         target_compile_definitions(dokodemo-game-filesystem-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

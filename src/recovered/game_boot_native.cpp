@@ -4,6 +4,43 @@
 #include <utility>
 
 namespace dokodemo::recovered {
+bool GameButtonGate::Observe(const GameInputFrame &frame, uint32_t mask) noexcept {
+    if (!active_ || !mask)
+        return false;
+    if (!frame.focused) {
+        armed_ = false;
+        return false;
+    }
+    if (!(frame.buttons & mask)) {
+        armed_ = true;
+        return false;
+    }
+    if (!armed_)
+        return false;
+    active_ = armed_ = false;
+    return true;
+}
+void GameInputMailbox::Push(GameInputFrame frame) noexcept {
+    if (count_ == frames_.size()) {
+        head_ = count_ = 0;
+        resync_ = true;
+    }
+    frames_[(head_ + count_) % frames_.size()] = frame;
+    ++count_;
+}
+bool GameInputMailbox::Pop(GameInputFrame &frame) noexcept {
+    if (resync_) {
+        resync_ = false;
+        frame = {};
+        return true;
+    }
+    if (!count_)
+        return false;
+    frame = frames_[head_];
+    head_ = (head_ + 1) % uint32_t(frames_.size());
+    --count_;
+    return true;
+}
 int32_t ControllerState::SetSamplingMode(int32_t mode) noexcept {
     if (mode != 0 && mode != 1) return -1;
     const auto previous = mode_;

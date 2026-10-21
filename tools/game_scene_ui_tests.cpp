@@ -279,13 +279,32 @@ void FontDrawTests() {
     Check(bool(font.Initialize(View(b))) && !font.RasterizeCp932({"A"}, 16, bitmap),
           "unreached palette domain never generic success");
 }
+void DialogInputTests() {
+    GameDialogController dialog;Check(dialog.Begin(),"source TRC prompt begins opening");
+    for(unsigned i=0;i<5;++i)dialog.Tick();
+    Check(dialog.Snapshot().state==1&&dialog.Snapshot().progress==1,"opening reaches input wait naturally");
+    Check(!dialog.Input({Circle,true,false,1}),"held on initial wait not accepted");
+    Check(!dialog.Input({0,false,false,2})&&!dialog.Input({Circle,true,false,3}),"unfocused release cannot arm confirmation");
+    Check(!dialog.Input({Cross,true,false,4})&&dialog.Snapshot().state==1,"cold TRC cancel-disabled ignores Cross");
+    Check(!dialog.Input({0,true,false,4})&&dialog.Input({Circle,true,false,5}),"focused release/first press triggers48224");
+    Check(dialog.Snapshot().result==1&&dialog.Snapshot().state==2&&dialog.Snapshot().progress==1,
+        "result producer precedes genuine closing,never forced state3");
+    dialog.Tick();Check(dialog.Snapshot().state==2&&dialog.Snapshot().progress<1,"closing is a real animation state");
+    for(unsigned i=0;i<10&&dialog.Snapshot().state!=3;++i)dialog.Tick();
+    Check(dialog.Snapshot().state==3&&!dialog.Snapshot().progress&&dialog.Snapshot().confirmations==1,"natural zero progress completes");
+    Check(!dialog.Input({Circle,true,false,6})&&dialog.Begin(1,1)&&!dialog.Input({Circle,true,false,7}),"no retired/held-key next prompt confirmation");
+    for(unsigned i=0;i<5;++i)dialog.Tick();
+    Check(!dialog.Input({0,true,false,8})&&dialog.Input({Circle,true,false,9})&&dialog.Snapshot().result==2,"selection+1 source result");
+    dialog.Retire();Check(dialog.Begin(2),"mode2 prompt can open");for(unsigned i=0;i<5;++i)dialog.Tick();
+    Check(!dialog.Input({0,true,false,10})&&!dialog.Input({Circle,true,false,11}),"source mode2 suppresses Circle");
+}
 } // namespace
 int main() {
     try {
         ImageTests();
         OwnerTests();
         BankTests();
-        FontDrawTests();
+        FontDrawTests();DialogInputTests();
         std::cout
             << "scene UI resources,decoded pixels,source XFT text,fade,NJ and partial retirement PASS\n";
         return 0;

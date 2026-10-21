@@ -1,4 +1,5 @@
 #include "startup_runtime_win32.h"
+#include "game_storage_win32.h"
 #include "startup_memory_backend_win32.h"
 #include "native_codec_workspace_win32.h"
 #include "sascore_runtime_win32.h"
@@ -108,6 +109,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     mutable SRWLOCK repeated_lock=SRWLOCK_INIT;
     recovered::StartupRepeatedModuleSnapshot repeated_state;
     recovered::ControllerState controller;
+    recovered::GameInputMailbox game_inputs;
+    uint64_t game_input_sequence=0;
+    bool game_input_live=false;
     std::array<StartupNativeBlock, 3> game_blocks{};
     std::array<StartupAllocationBorrow, 3> game_borrows{};
     std::array<recovered::GameArena, 3> game_arenas{};
@@ -119,6 +123,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameVmBoot game_vm;
     recovered::GameContentBoot game_content;
     std::unique_ptr<recovered::GameFileSource> scene_sound_file;
+    std::unique_ptr<recovered::GameStorage> game_storage;
     uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
@@ -259,7 +264,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             self.EmitLocked("WorkerException", "HostLifecycle");
         }
         if (entered) self.Leave(context);
-        { std::lock_guard<std::mutex> lock(self.metadata); self.state.worker_state = "Exited"; }
+        { std::lock_guard<std::mutex> lock(self.metadata); self.game_input_live=false;self.game_inputs.Clear();self.state.worker_state = "Exited"; }
         return 0;
     }
     uintptr_t Begin(bool is_worker, unsigned stack, unsigned& thread_id) {
@@ -1134,7 +1139,20 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
         const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
         const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
-        return controller.Update(buttons, x, y, GetTickCount64() * 1000);
+        const auto sample=controller.Update(buttons, x, y, GetTickCount64() * 1000);
+        if(game_input_live && !options.test_controller_input)
+            game_inputs.Push({sample.buttons,focused,false,++game_input_sequence});
+        return sample;
+    }
+    StartupRuntimeStatus InjectGameInput(uint32_t buttons,bool focused) {
+        std::lock_guard<std::mutex> lock(metadata);
+        if(state.closing || state.resources_closed)return Failure(StartupRuntimeCode::Closed);
+        if(!options.test_controller_input)return Failure(StartupRuntimeCode::Busy);
+        if(!game_input_live)return Failure(StartupRuntimeCode::NotStarted);
+        game_inputs.Push({buttons,focused,true,++game_input_sequence});
+        EmitLocked("TestGameInputFrame","TestInjectedNativeInput",0,buttons,false,0,0,0,
+            focused?"focused raw button frame;not physical hardware verification":"unfocused raw button frame;must not confirm prompt");
+        return {};
     }
     recovered::StartupFlowStop ContinueGameAfterModules() override {
         using recovered::StartupFlowStop;
@@ -1337,35 +1355,33 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             }
         }
         if(!game_content.Snapshot().blocked)throw NativeFailure{};
-        //There is no PSP MemoryStick controller device on this native host.
-        //Report the named unavailable policy, not an invented IoDevctl API
-        //success. Source4E67C maps that negative result to its real dialog.
-        Emit("GameMemoryStickUnavailable","WindowsStorageDevicePolicy",0x4E67C,-1,false,0,ERROR_NOT_SUPPORTED,0,
-            "mscmhc0:02025806 has no native device backend;no successful media state fabricated");
-        const auto dialog_status=game_content.ShowUnavailableMemoryStick(ERROR_NOT_SUPPORTED);
-        if(!dialog_status) {
-            Emit("GameStorageDialogFailure","NativeTrcFontConsumer",0x4808C,0,false,0,dialog_status.native_error,0,dialog_status.detail.c_str());
+        //Named Windows storage is an explicit platform adaptation; never a
+        //fabricated mscmhc0: result or decrypted PSP savedata.
+        WindowsGameStorageOptions storage_options;
+        storage_options.root = options.native_save_root;
+        if (storage_options.root.empty()) {
+            wchar_t local[32768]{};
+            const auto length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, 32768);
+            if (length && length < 32768)
+                storage_options.root = std::wstring(local) + L"/DokoDemoNative/Saves";
+        }
+        storage_options.forbidden_roots = {options.media_root + L"/.."};
+        storage_options.unavailable = options.storage_unavailable;
+        storage_options.read_only = options.storage_read_only;
+        game_storage = CreateWindowsGameStorage(std::move(storage_options));
+        const auto storage_status =
+            game_content.BeginStorage(*game_storage, options.test_missing_device_prompt);
+        if (!storage_status)
             throw NativeFailure{};
+        PublishInteractiveState();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            game_inputs.Clear();
+            game_input_live = true;
         }
-        for(uint32_t frame=0;frame<5;++frame) {
-            if(HostCancelled())return StartupFlowStop::HostCancelled;
-            if(!game_content.DrawColdFrame(game_graphics))throw NativeFailure{};
-            const auto wait=WaitForSingleObject(cancel,16);if(wait==WAIT_OBJECT_0)return StartupFlowStop::HostCancelled;
-            if(wait!=WAIT_TIMEOUT)throw NativeFailure{};
-        }
-        Emit("GameStorageDialogDrawn","NativeTrcFontAdapter",0x4808C,0,false,0,0,0,
-            "actual sourceCP932 messages,941C8 glyph codes and live XFT palette/pixels;native centered panel/wrap/progress adaptation,not CB2A/VFPU matching;no autoack,SGX/mixer unsupported");
-        std::lock_guard<std::mutex> lock(metadata);
-        state.game_boot.content = game_content.Snapshot();
-        state.game_boot.filesystem = game_filesystem.Snapshot();
-        if(scene_sound_file)state.game_boot.scene_resource_io=scene_sound_file->Snapshot();
-        state.barrier_source_pc = state.current_frontier_source_pc = 0x18FCC;
-        state.barrier_module_relative = state.current_frontier_module_relative = false;
-        state.barrier_source_module = state.current_frontier_source_module = {};
-        state.barrier = state.current_frontier = "NativeStorageDialogAwaitingInput";
-        state.worker_state = "Blocked";
-        EmitLocked("NativeStorageDialogAwaitingInput", "RecoveredGameCaller", 0x18FCC, 0, false,
-            0, 0, 0, "scene2 substate2 awaits real TRC/user completion;native missing-media dialog drawn;confirmation/save workflow not implemented or auto-completed;no KSC/title/gameplay");
+        Emit("GameNativeStorageBegin", "NamedWindowsStorageAdaptation", 0x4E67C, 0, false, 0, 0, 0,
+             "real configured root/free-space;AUTOLOAD mode0 UCJS10002/000/DATA.BIN;PSP original format "
+             "unsupported;no autoack");
         return StartupFlowStop::Unsupported;
     }
     recovered::GameFsStatus OpenResource(const std::string& path,recovered::PackageView& out) override {
@@ -1381,23 +1397,95 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         return scene_sound_file->Read(0,uint32_t(extent),out);
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
+    void PublishInteractiveState() {
+        const auto content = game_content.Snapshot();
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.content = content;
+        state.game_boot.filesystem = game_filesystem.Snapshot();
+        if (scene_sound_file)
+            state.game_boot.scene_resource_io = scene_sound_file->Snapshot();
+        state.barrier_source_pc = state.current_frontier_source_pc = content.frontier_pc;
+        state.barrier_module_relative = state.current_frontier_module_relative = false;
+        state.barrier_source_module = state.current_frontier_source_module = {};
+        const char *frontier = !content.status            ? "GameResourceFailure"
+                               : content.title_model_read ? "TitleModelConsumerPending"
+                               : content.autoload.phase == recovered::GameAutoloadPhase::Blocked
+                                   ? "NativeAutoloadBlocked"
+                               : content.scene_ui.awaiting_confirmation ? "NativeStorageDialogAwaitingInput"
+                               : content.scene_ui.dialog_state == 2     ? "NativeStorageDialogClosing"
+                                                                        : "NativeStorageSceneTick";
+        if (state.current_frontier != frontier)
+            EmitLocked(frontier, "FunctionalNativeScheduler", content.frontier_pc, 0, false);
+        state.barrier = state.current_frontier = frontier;
+        state.worker_state = "Interactive";
+    }
+    void TickInteractiveGame() {
+        recovered::GameInputFrame frame;
+        for (;;) {
+            {
+                std::lock_guard<std::mutex> lock(metadata);
+                if (!game_inputs.Pop(frame))
+                    break;
+            }
+            if (game_content.ProcessDialogInput(frame))
+                Emit("GameCircleConfirmation", "NativeInputAdapter", 0x47E0C, 1, false, 0, 0, 0,
+                     frame.test_injected ? "explicit test-injected native release/press,not physical hardware"
+                                         : "focused native Circle release/press");
+        }
+        const auto before = game_content.Snapshot();
+        if (game_storage && !game_content.TickInteractive(game_filesystem, *game_storage, game_graphics)) {
+            const auto failure = game_content.Snapshot();
+            Emit("GameInteractiveFailure", "NativeResourceConsumer", failure.frontier_pc, 0, false, 0,
+                 failure.status.native_error, 0, failure.status.detail.c_str());
+            // Retain all acquired owners at the actual error frontier; do not
+            // repeat resource reads or turn an incomplete consumer into success.
+            std::lock_guard<std::mutex> lock(metadata);
+            game_input_live = false;
+        }
+        const auto after = game_content.Snapshot();
+        if (!before.title_model_read && after.title_model_read)
+            Emit("GameTitleResourceConsumer", "RecoveredGameCaller", 0x80384, after.title_model_bytes, false,
+                 0, 0, 0,
+                 "actual TITLE.BPM/UI/GIM/toro.DVS consumers;3D model clone/animation/draw remains "
+                 "pending;no scene3 return");
+        PublishInteractiveState();
+    }
     void BarrierPump() {
         HANDLE notification = nullptr;
-        { std::lock_guard<std::mutex> lock(metadata); if (callback) notification = callback->notification; }
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            if (callback)
+                notification = callback->notification;
+        }
         for (;;) {
-            // Exit notification precedes cancellation if both were signalled by Close.
+            bool live = false;
+            {
+                std::lock_guard<std::mutex> lock(metadata);
+                live = game_input_live;
+            }
+            // Exit callback retains priority over cancellation. Live game state
+            // belongs only to this worker; UI posts bounded raw frames under lock.
             HANDLE handles[2] = {notification ? notification : exit_event, cancel};
-            const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+            const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, live ? 16 : INFINITE);
+            if (wait == WAIT_TIMEOUT) {
+                TickInteractiveGame();
+                continue;
+            }
             const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
             Emit("WorkerBarrierWait", "HostBarrierPump", 0, 0, false, 0, error, wait);
             if (wait == WAIT_OBJECT_0) {
                 (void)Dispatch(recovered::StartupDispatchOrigin::HostBarrierPump);
-                if (HostCancelled()) return;
-                if (!notification) { //no registered callback; an exit request still cancels host lifetime.
-                    codec_session->cancelled.store(true); (void)SetEvent(cancel); return;
+                if (HostCancelled())
+                    return;
+                if (!notification) {
+                    codec_session->cancelled.store(true);
+                    (void)SetEvent(cancel);
+                    return;
                 }
-            } else if (wait == WAIT_OBJECT_0 + 1) return;
-            else throw NativeFailure{};
+            } else if (wait == WAIT_OBJECT_0 + 1)
+                return;
+            else
+                throw NativeFailure{};
         }
     }
     StartupRuntimeStatus QueueExitLocked() {
@@ -1908,6 +1996,9 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
 }
 recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_focused) {
     return impl_->PollGameController(window_focused);
+}
+StartupRuntimeStatus StartupCoordinator::InjectTestControllerInput(uint32_t buttons,bool focused) {
+    return impl_->InjectGameInput(buttons,focused);
 }
 bool StartupCoordinator::CopyGameFrame(recovered::GameGraphicsFrame& out) const {
     return impl_->game_graphics.CopyFront(out);

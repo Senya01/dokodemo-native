@@ -7,35 +7,11 @@
 #include "game_scene_native.h"
 #include "game_vm_boot_native.h"
 #include "game_content_native.h"
+#include "game_input_native.h"
 
 namespace dokodemo::recovered {
 // Readable non-matching game boot. Source PCs identify the recovered caller;
 // these are native objects, not PSP registers or addresses.
-enum ControllerButton : uint32_t {
-    Select = 0x000001, Start = 0x000008,
-    Up = 0x000010, Right = 0x000020, Down = 0x000040, Left = 0x000080,
-    LTrigger = 0x000100, RTrigger = 0x000200,
-    Triangle = 0x001000, Circle = 0x002000, Cross = 0x004000, Square = 0x008000
-};
-struct ControllerSample {
-    uint32_t buttons = 0, pressed = 0, released = 0;
-    uint8_t analog_x = 128, analog_y = 128;
-    uint64_t timestamp_us = 0;
-};
-class ControllerState {
-public:
-    // Native configuration returns the previous value. PSP timing and error
-    // numbers are not claimed by this Windows adapter.
-    int32_t SetSamplingMode(int32_t mode) noexcept;
-    int32_t SetSamplingCycle(int32_t cycle) noexcept;
-    ControllerSample Update(uint32_t buttons, uint8_t x, uint8_t y,
-                            uint64_t timestamp_us) noexcept;
-    int32_t SamplingMode() const noexcept { return mode_; }
-    int32_t SamplingCycle() const noexcept { return cycle_; }
-private:
-    int32_t mode_ = 0, cycle_ = 0;
-    uint32_t buttons_ = 0;
-};
 struct GameServiceResult {
     bool returned = false;
     int32_t value = 0;
