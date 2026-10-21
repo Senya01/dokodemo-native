@@ -117,6 +117,9 @@ struct GameNameEntrySnapshot {
     uint64_t context = 0;
     std::string initial, staged, source120, result, error;
 };
+//Named Windows keyboard-activity equivalent for Input32's source activity
+//counters. Admission is independent of whether an edit fits the text buffer.
+bool GameInput32KeyboardActivity(const GameNameEntrySnapshot&,const GameTextEvent&) noexcept;
 // Finite mode0/type1 adapter: source0(open)->1(edit)->2(close)->3(result).
 // Only actual UI control completion2 advances open/close. No result on timer,
 // opening,composition or a queued event from a previous editor context.
@@ -130,6 +133,7 @@ class GameNameEntry final {
         return false;
     }
     bool SetStaged(std::string_view value);
+    bool Expire(); //source inactivity:clear text,close even while unfocused/composing
     void ControlCompleted(uint8_t actual_mode);
     GameNameEntrySnapshot Snapshot() const;
     const std::string *Result() const noexcept;

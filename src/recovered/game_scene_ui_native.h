@@ -98,6 +98,7 @@ struct GameSceneUiSnapshot {
     GameNameEntrySnapshot editor;
     std::string editor_label;
     bool select_adapter=false;
+    bool input32_text_panel=false; //named Windows committed-text display
 };
 // 18EE8..18F38: grouped typed native owners. Immutable views borrow DATA.BPM;
 // mutable NJ/text/control state is owned and retired before that package/font.
@@ -111,11 +112,12 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool HandleDialogInput(const GameInputFrame &frame);
     GameFsStatus BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
                             uint32_t select_mode=0,int32_t minimum=0,int32_t maximum_value=0,
-                            bool allow_cancel=true);
+                            bool allow_cancel=true,bool input32_presentation=false);
     bool HandleText(const GameTextEvent&);
     GameNameEntrySnapshot Editor()const{return editor_.Snapshot();}
     const std::string* EditorResult()const noexcept{return editor_.Result();}
     bool TickEditor();
+    bool ExpireEditor();
     bool DrawEditor(GameGraphics&);
     GameFsStatus BeginProfileConfirmation();
     bool DrawProfileConfirmation(GameGraphics&);
@@ -151,6 +153,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     uint32_t editor_resource_=1,editor_open_clip_=17,editor_close_clip_=18;
     int32_t editor_min_=0,editor_max_=0;
     bool editor_cancel_=true;
+    bool editor_failed_=false;
     bool profile_confirmation_=false;
     GameChoiceController choice_;
     bool DrawUiCallback(uint32_t,uint32_t,const GameUiMatrix&,uint32_t,GameGraphics&,std::string&)override;

@@ -34,7 +34,7 @@ struct Header {
     uint32_t ctx28_start() const { return pool_end() + 4u * local_count; }
     uint32_t global_start() const { return ctx28_start() + 4u * ctx28_count; }
 };
-enum class Table : uint8_t { Frame, Local, Global, Ctx28 };
+enum class Table : uint8_t { Frame, Local, Global, Ctx28, InputResult };
 struct Reference {
     uint32_t file_offset = 0, target = 0;
     uint8_t width = 0;
@@ -146,7 +146,7 @@ struct NormalReturnWitness {
     VmStateWitness before,after;
 };
 
-enum class Status { Running, Message, Choice, Yield, HostYield, Waiting, Complete, Stopped };
+enum class Status { Running, Message, Choice, Yield, HostYield, Waiting, Complete, Stopped, Input };
 struct Event {
     Status status = Status::Stopped;
     uint32_t pc = 0, next_pc = 0, file_offset = 0;
@@ -223,6 +223,12 @@ public:
     std::vector<Value> take_choice_arguments();
     bool complete_choice(uint32_t result);
     bool choice_waiting()const noexcept{return choice_waiting_;}
+    //697C0/state8 retains exactly two original arguments until682B8. The
+    //native result buffer models ctx2C's fixed header+two owning cells; its
+    //references remain weak and expire on restart/retirement,like frames.
+    std::vector<Value> input_arguments() const;
+    bool complete_input(std::string text,std::string auxiliary);
+    bool input_waiting()const noexcept{return input_waiting_;}
     uint32_t b4_calls()const noexcept{return b4_calls_;}
     uint32_t b4_operand_word()const noexcept{return b4_operand_word_;}
     uint32_t b4_result_word()const noexcept{return b4_result_word_;}
@@ -311,6 +317,9 @@ private:
     std::vector<Value> choice_arguments_;
     bool choice_waiting_=false,choice_arguments_taken_=false;
     uint32_t choice_count_=0;
+    std::vector<Value> input_arguments_;
+    std::shared_ptr<std::vector<Value>> input_result_;
+    bool input_waiting_=false;
     uint32_t b4_calls_=0,b4_operand_word_=0,b4_result_word_=0;
     uint32_t e2_calls_=0,e2_left_word_=0,e2_right_word_=0,e2_result_word_=0;
     uint32_t d0_calls_=0,d0_left_word_=0,d0_right_word_=0,d0_result_word_=0;

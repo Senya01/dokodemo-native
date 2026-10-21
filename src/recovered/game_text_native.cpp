@@ -250,6 +250,21 @@ void GameNameEntry::ControlCompleted(uint8_t mode) {
         state_.result = state_.source120;
     }
 }
+bool GameNameEntry::Expire(){
+    if(!state_.live||state_.source_state!=1)return false;
+    state_.source120.clear();state_.accepted=state_.cancelled=false;
+    state_.composing=state_.focused=false;state_.source_state=2;return true;
+}
+bool GameInput32KeyboardActivity(const GameNameEntrySnapshot& state,const GameTextEvent& event) noexcept{
+    if(!state.live||state.source_state!=1||!state.focused||event.context!=state.context||event.bytes>event.text.size())return false;
+    switch(event.kind){
+    case GameTextKind::Commit:case GameTextKind::Backspace:case GameTextKind::Delete:
+    case GameTextKind::Left:case GameTextKind::Right:case GameTextKind::Home:case GameTextKind::End:
+    case GameTextKind::Confirm:case GameTextKind::Cancel:case GameTextKind::InvalidEncoding:
+    case GameTextKind::CompositionBegin:case GameTextKind::CompositionEnd:return true;
+    default:return false;
+    }
+}
 GameNameEntrySnapshot GameNameEntry::Snapshot() const {
     auto value = state_;
     value.staged = buffer_.Bytes();

@@ -94,6 +94,8 @@ struct GameContentSnapshot {
     uint32_t actor_message_contexts=0;
     uint32_t actor_message_stale_inputs=0;
     GameChoiceSnapshot actor_choice;
+    uint32_t actor_input_remaining=0,actor_input_active_updates=0;
+    bool actor_input_timed_out=false;
     bool actor_message_input_armed=false;
     uint32_t actor_message_draw_frames=0,actor_message_glyphs=0,actor_message_ink_pixels=0;
     std::string next_resource;
@@ -123,7 +125,7 @@ class GameContentBoot final : public GameResourceSource {
     GameFsStatus InitializeSceneResources(GameResourceSource &platform);
     GameFsStatus ShowUnavailableMemoryStick(uint32_t native_error);
     bool ProcessDialogInput(const GameInputFrame &frame);
-    bool ProcessText(const GameTextEvent& event){return !inventory_.Modal()&&scene_ui_.HandleText(event);}
+    bool ProcessText(const GameTextEvent& event);
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
@@ -190,6 +192,7 @@ class GameContentBoot final : public GameResourceSource {
     GameMessageInput actor_message_gate_;
     GameMessageTarget actor_message_target_;
     GameChoiceTarget actor_choice_target_;
+    GameChoiceTarget actor_input_target_;
     bool TickActorDictionary(GameFilesystem&,GameGraphics&);
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;

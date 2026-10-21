@@ -7,6 +7,7 @@
 #include "game_return_witness_regressions.h"
 #include "game_post25_regressions.h"
 #include "game_returned_interaction_regressions.h"
+#include "game_input32_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -78,6 +79,7 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    GameInput32RegressionChecks();
     GameReturnedInteractionRegressionChecks();
     GameChoiceRegressionChecks();
     GameMessageScopeRegressionChecks();

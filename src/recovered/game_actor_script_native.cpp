@@ -313,6 +313,7 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         Need(args.size()==2,"Builtin22 event request argc");
         Need(runtime_!=nullptr,"Builtin22 needs actual actor command owner");
         const auto begun=runtime_->RequestActorEvent(Number(args[0]),Number(args[1]));Need(bool(begun),begun.detail.c_str());
+        ++state_.actor22_calls;state_.actor22_pc=vm_->pc();state_.actor22_command_word=args[0].word;state_.actor22_parameter_word=args[1].word;
         vm_->clear_event_signal();return Value::integer(0);
     }
     if(id==0x23){Need(args.empty(),"Builtin23 wait argc");vm_->wait_for_event();return Nil();}
@@ -328,7 +329,13 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         ++state_.local_config_writes;return Nil();
     }
     if(id==4) {Need(args.size()==1,"Builtin04 argc");return Value::integer(Number(args[0]));}
-    if(id==17){Need(args.size()==1&&rng_&&rng_->Available(),"Builtin17 real RNG/argc");const auto divisor=Number(args[0]);Need(divisor>0,"Builtin17 positive divisor domain");return Value::integer(int32_t(rng_->NextC3234())%divisor);}
+    if(id==17){
+        Need(args.size()==1&&rng_&&rng_->Available(),"Builtin17 real RNG/argc");
+        const auto divisor=Number(args[0]);Need(divisor>0,"Builtin17 positive divisor domain");
+        const auto raw=rng_->NextC3234();const auto result=Value::integer(int32_t(raw)%divisor);
+        ++state_.rng17_calls;state_.rng17_pc=vm_->pc();state_.rng17_bound=uint32_t(divisor);state_.rng17_raw=raw;state_.rng17_result_word=result.word;
+        return result;
+    }
     if(id==9) {
         Value value;value.kind=Value::Kind::Timestamp;
         if(args.empty()) {Need(bool(clock_),"Live native clock provider unavailable");value.word=clock_();
@@ -375,7 +382,7 @@ GameFsStatus GameActorScript::Tick() {
     const bool repeat_eligible=event_eligible&&runtime_->Snapshot().command_repeat_ready258;
     if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
-    if(state_.completed||state_.awaiting_message||state_.awaiting_choice)return {};
+    if(state_.completed||state_.awaiting_message||state_.awaiting_choice||state_.awaiting_input)return {};
     try {
         (void)script_image_.Describe(); // live backing required throughout use
         if(vm_->waiting_for_event()) {
@@ -404,6 +411,16 @@ GameFsStatus GameActorScript::Tick() {
                 state_.choice_options.push_back(value.cp932);
             }
             ++state_.choice_requests;state_.awaiting_choice=true;
+        }
+        if(event.status==script::Status::Input){
+            state_.source_main_input_suppressed48=true; //1E154 same source latch
+            const auto args=vm_->input_arguments();
+            Need(args.size()==2&&args[1].kind==Value::Kind::String,"Input32 arguments unavailable");
+            const auto mode=args[0].signed_integer();
+            Need(mode==0,"WindowsInput32 finite mode0 adapter;other modes not implemented");
+            state_.input_mode=uint32_t(mode);state_.input_initial=args[1].cp932;
+            state_.input_text.clear();state_.input_auxiliary.clear();state_.input_timed_out=false;
+            ++state_.input_requests;state_.awaiting_input=true;
         }
         if(event.status==script::Status::Complete)state_.completed=true;
         return {};
@@ -443,6 +460,26 @@ GameFsStatus GameActorScript::CompleteChoice(const GameChoiceTarget& expected,ui
         if(result==0){const auto posted=PostMainFlowEvent(20,0);state_.source_main_input_suppressed48=false;return posted;}
         state_.source_main_input_suppressed48=false;
         return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameChoiceTarget GameActorScript::InputTarget()const{
+    Need(state_.live&&state_.awaiting_input&&vm_&&vm_->input_waiting(),"Input32 target needs live state8 context");
+    return {state_.generation,state_.input_requests,state_.pc,vm_->context_value()};
+}
+GameFsStatus GameActorScript::CompleteInput(const GameChoiceTarget& expected,std::string text,std::string auxiliary,bool timed_out){
+    try{
+        const auto current=InputTarget();const auto owner=expected.context.context_owner.lock();
+        Need(owner&&owner==current.context.context_owner.lock()&&expected.context.word==current.context.word
+             &&expected.generation==current.generation&&expected.request==current.request&&expected.pc==current.pc,
+             "Input32 completion target generation/registry/request changed");
+        Need(!timed_out||text.empty(),"Expired Input32 must publish nil pair");
+        Need(vm_->complete_input(text,auxiliary),"Input32 completion refused");
+        state_.input_text=std::move(text);state_.input_auxiliary=std::move(auxiliary);
+        state_.input_timed_out=timed_out;state_.awaiting_input=false;++state_.input_completions;
+        //682B8 publishes/drains before timeout event20;cancel/accepted empty
+        //with remaining time does not emit it. Suppression clears last.
+        GameFsStatus status;if(timed_out)status=PostMainFlowEvent(20,0);
+        state_.source_main_input_suppressed48=false;return status;
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameActorScript::CanResumeInventory()const{
@@ -497,7 +534,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
 void GameActorScript::Close() {
     state_=Snapshot();
     dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;sound_=nullptr;
-    state_.live=false;state_.awaiting_message=state_.awaiting_choice=false;
+    state_.live=false;state_.awaiting_message=state_.awaiting_choice=state_.awaiting_input=false;
     state_.source_main_input_suppressed48=false;
 }
 } // namespace dokodemo::recovered

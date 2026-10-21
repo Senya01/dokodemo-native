@@ -181,6 +181,21 @@ void LifecycleTests() {
           "source empty accept may close");
     editor.ControlCompleted(2);
     Check(!editor.Result(), "22A78 empty result remains null");
+    Check(editor.Begin("12345678",8),"Input32 source mode0 character capacity");
+    context=editor.Snapshot().context;editor.ControlCompleted(2);
+    Check(editor.Apply(event(GameTextKind::FocusGained)),"Input32 focus");
+    const auto ninth=event(GameTextKind::Commit,"9");uint32_t remaining=1;
+    if(GameInput32KeyboardActivity(editor.Snapshot(),ninth))remaining=9000;
+    Check(!editor.Apply(ninth)&&editor.Snapshot().staged=="12345678"&&remaining==9000,
+          "rejected capacity edit is still real keyboard activity before timeout");
+    auto stale=ninth;--stale.context;
+    Check(!GameInput32KeyboardActivity(editor.Snapshot(),stale),"foreign editor context cannot reset inactivity");
+    Check(editor.Apply(event(GameTextKind::CompositionBegin))&&editor.Apply(event(GameTextKind::FocusLost)),"Input32 interrupted composition");
+    Check(!GameInput32KeyboardActivity(editor.Snapshot(),ninth),"unfocused key cannot reset inactivity");
+    Check(editor.Expire()&&editor.Snapshot().source_state==2&&!editor.Result(),"timeout starts actual close despite focus/composition");
+    editor.ControlCompleted(1);Check(!editor.Result()&&!editor.Snapshot().result_ready,"timeout cannot publish before close2");
+    editor.ControlCompleted(2);Check(editor.Snapshot().result_ready&&!editor.Result(),"timeout nil only after close producer");
+    Check(!GameInput32KeyboardActivity(editor.Snapshot(),ninth),"closing/retired context cannot reset idle clock");
     editor.Retire();
     Check(!editor.Snapshot().live && !editor.Apply(event(GameTextKind::Commit, "X")),
           "retired owner rejects edits");

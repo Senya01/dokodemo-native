@@ -19,7 +19,7 @@ GameFsStatus GameMainFlow::Event(uint32_t id,int32_t arg){
 GameFsStatus GameMainFlow::Tick(const GameMainFlowGate& gate){
     if(!state_.live||!runtime_||!runtime_->OwnersLive())
         return {GameFsCode::Unavailable,0,"Main-flow owner retired"};
-    //1E4A0 sets this source main owner.byte48 for SELECT state9 and clears
+    //1E154/1E4A0 set this source main owner.byte48 for INPUT8/SELECT9 and clear
     //it after the completion bridge. Source prefix routes remain enabled
     //outside that exact modal interval.
     state_.input_suppressed48=gate.choice_busy48;

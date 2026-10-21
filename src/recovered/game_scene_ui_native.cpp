@@ -508,25 +508,29 @@ bool GameSceneUiBootstrap::DrawProfileConfirmation(GameGraphics& graphics){
 }
 GameFsStatus GameSceneUiBootstrap::BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
                                                uint32_t select_mode,int32_t minimum,int32_t maximum_value,
-                                               bool allow_cancel){
-    if(!state_.live||select_mode>5)return {GameFsCode::Busy,0,"editor ownership/mode"};
+                                               bool allow_cancel,bool input32_presentation){
+    if(!state_.live||select_mode>5||(choice_.Snapshot().live&&choice_.Snapshot().state!=3))return {GameFsCode::Busy,0,"editor ownership/mode"};
     const uint32_t resource=select_mode?0u:1u;
     constexpr uint32_t opens[]{17,3,11,5,7,9};
-    const uint32_t open=opens[select_mode],close=open+1;
-    if(!editor_.Begin(initial,maximum))return {GameFsCode::Busy,0,"invalid/active editor"};
+    const uint32_t open=input32_presentation&&select_mode==0?15u:opens[select_mode],close=open+1;
+    auto next=editor_;
+    if(!next.Begin(initial,maximum))return {GameFsCode::Busy,0,"invalid/active editor"};
     editor_resource_=resource;editor_open_clip_=open;editor_close_clip_=close;
     editor_min_=minimum;editor_max_=maximum_value;editor_cancel_=allow_cancel;
     state_.editor_label=std::move(label);state_.select_adapter=select_mode!=0;
+    state_.input32_text_panel=input32_presentation;
     const auto root=select_mode?0u:9u;
     auto& clone=clones_[resource];auto* c=clone.Control(0);
-    if(!c||!clone.Bind(root,open,0)||!clone.ShowRoot(root))
-        return {GameFsCode::Unavailable,0,"actual editor open clip/root unavailable"};
+    if(!c||!clone.Bind(root,open,0)||!clone.ShowRoot(root)){
+        editor_failed_=true;return {GameFsCode::Unavailable,0,"actual editor open clip/root unavailable"};}
     c->clip=open;c->frame=0;c->mode=c->active=1;
-    if(resource==1&&!clone.SetSourceCallback(42,0x222E0))
-        return {GameFsCode::Unavailable,0,"SOFTKEY glyph callback node42 missing"};
+    if(resource==1&&!clone.SetSourceCallback(42,0x222E0)){
+        editor_failed_=true;return {GameFsCode::Unavailable,0,"SOFTKEY glyph callback node42 missing"};}
+    editor_=std::move(next);editor_failed_=false;
     return {};
 }
 bool GameSceneUiBootstrap::HandleText(const GameTextEvent& event){
+    if(editor_failed_)return false;
     const auto before=editor_.Snapshot();
     if(event.context!=before.context||!before.live||before.source_state==3)return false;
     if(event.kind==GameTextKind::Cancel&&!editor_cancel_)return editor_.Reject("Source guided year cannot cancel");
@@ -543,15 +547,25 @@ bool GameSceneUiBootstrap::HandleText(const GameTextEvent& event){
                 return editor_.Reject("Selection outside source range");
         }
     }
-    const auto accepted=editor_.Apply(event);
-    if(accepted&&before.source_state==1&&editor_.Snapshot().source_state==2){
+    auto next=editor_;const auto accepted=next.Apply(event);
+    if(accepted&&before.source_state==1&&next.Snapshot().source_state==2){
         auto& clone=clones_[editor_resource_];auto* c=clone.Control(0);
-        if(!c||!clone.Bind(editor_resource_?9u:0u,editor_close_clip_,0))return false;
+        if(!c||!clone.Bind(editor_resource_?9u:0u,editor_close_clip_,0)){editor_failed_=true;return false;}
         c->clip=editor_close_clip_;c->frame=0;c->mode=c->active=1;
     }
+    editor_=std::move(next);
     return accepted;
 }
+bool GameSceneUiBootstrap::ExpireEditor(){
+    if(editor_failed_)return false;
+    auto next=editor_;if(!next.Expire())return false;
+    auto& clone=clones_[editor_resource_];auto* c=clone.Control(0);
+    if(!c||!clone.Bind(editor_resource_?9u:0u,editor_close_clip_,0)){editor_failed_=true;return false;}
+    c->clip=editor_close_clip_;c->frame=0;c->mode=c->active=1;
+    editor_=std::move(next);return true;
+}
 bool GameSceneUiBootstrap::TickEditor(){
+    if(editor_failed_)return false;
     const auto before=editor_.Snapshot();
     if(!before.live||before.source_state==3)return true;
     auto& clone=clones_[editor_resource_];std::string error;
@@ -587,6 +601,15 @@ bool GameSceneUiBootstrap::DrawEditor(GameGraphics& graphics){
     const auto e=editor_.Snapshot();if(!e.live||e.source_state==3)return true;
     std::string error;GameUiDrawStats stats;
     if(!clones_[editor_resource_].Draw(graphics,stats,error,this))return false;
+    if(state_.input32_text_panel){
+        //WindowsInput32TextPanel:actual committed bytes and original FONT.
+        //Original SOFTKEY dynamic glyph placement/IME remains unclosed;
+        //this explicit panel makes editing visible without claiming it.
+        const auto& visible=e.source_state==1?e.staged:e.source120;
+        GameFontBitmap text;const auto status=font_->RasterizeCp932({visible},440,text,nullptr,0,0xFF552F0D);
+        if(!status||!graphics.FillRectangle(12,8,468,36,0xFFF8F2D9,65535))return false;
+        return text.width==0||text.height==0||graphics.DrawImage(text.pixels,text.width,text.height,20,12,0xFFFFFFFF,65535);
+    }
     if(!state_.select_adapter)return true; //native instructions/errors live outside the game framebuffer
     //Explicit Windows committed-text/choice adapter caption. This is not NJ
     //conversion or the original dynamic SELECT row renderer.

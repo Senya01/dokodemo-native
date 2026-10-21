@@ -495,6 +495,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
     if(state_.actor_script.started){
+        if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
         if(!inventory_.Modal())main_flow_.Input(frame);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
         if(posted)return true;
@@ -520,6 +521,20 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     const auto accepted = scene_ui_.HandleDialogInput(frame);
     state_.scene_ui = scene_ui_.Snapshot();
     return accepted;
+}
+bool GameContentBoot::ProcessText(const GameTextEvent& event){
+    if(state_.closed||inventory_.Modal())return false;
+    if(state_.actor_script.awaiting_input&&GameInput32KeyboardActivity(scene_ui_.Editor(),event))
+        state_.actor_input_remaining=9000;
+    //Named WindowsInput32Ascii:raw14E44/14F90 proves these finite mappings.
+    //Other CP932 auxiliary normalization remains an explicit unsupported
+    //domain;existing title/profile editors retain their own accepted domain.
+    if(state_.actor_script.awaiting_input&&event.kind==GameTextKind::Commit){
+        if(event.bytes>event.text.size())return false;
+        for(uint32_t i=0;i<event.bytes;++i){const auto c=uint8_t(event.text[i]);
+            if(!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')))return false;}
+    }
+    return scene_ui_.HandleText(event);
 }
 GameFsStatus GameContentBoot::BeginStorage(GameStorage &storage, bool test_prompt) {
     if (state_.frontier_pc != 0x4E67C)
@@ -800,7 +815,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         //Existing modal scheduler remains paused until actual close/poll/
         //deferred retirement;this is not a recovered post32 wake producer.
         if(!inventory_.Modal()&&!before.inventory_requested){
-            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message||before.awaiting_choice;
+            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message||before.awaiting_choice||before.awaiting_input;
             gate.choice_busy48=before.source_main_input_suppressed48;
             gate.manager_flag68=before.manager_flag68;
             gate.loader469=state_.source_loader469;gate.loader_state20=state_.load_state;
@@ -822,6 +837,37 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
                 state_.actor_script=actor_script_.Snapshot();
             }
         }
+        if(state_.status&&state_.actor_script.awaiting_input){
+            if(actor_input_target_.generation!=state_.actor_script.generation||actor_input_target_.request!=state_.actor_script.input_requests){
+                actor_input_target_=actor_script_.InputTarget();
+                actor_message_gate_.Stop();state_.actor_message_input_armed=false;
+                state_.actor_input_remaining=9000;state_.actor_input_active_updates=0;state_.actor_input_timed_out=false;
+                state_.status=scene_ui_.BeginEditor(state_.actor_script.input_initial,8,"",0,0,0,true,true);
+            }
+            const auto editor=scene_ui_.Editor();
+            if(state_.status&&editor.source_state==1){
+                ++state_.actor_input_active_updates;
+                if(state_.actor_input_remaining&&!--state_.actor_input_remaining){
+                    state_.actor_input_timed_out=true;
+                    if(!scene_ui_.ExpireEditor())state_.status={GameFsCode::Unavailable,0,"Input32 timeout close refused"};
+                }
+            }
+            if(state_.status&&!scene_ui_.TickEditor())state_.status={GameFsCode::Unavailable,0,"Input32 actual editor clip update failed"};
+            const auto finished=scene_ui_.Editor();
+            if(state_.status&&finished.live&&finished.source_state==3&&finished.result_ready){
+                const auto* borrowed=scene_ui_.EditorResult();
+                const std::string text=borrowed?*borrowed:std::string();std::string aux=text;
+                bool supported=true;
+                for(auto& c:aux){
+                    if(c>='a'&&c<='z')c=char(c-'a'+'A');
+                    else if(!((c>='A'&&c<='Z')||(c>='0'&&c<='9')))supported=false;
+                }
+                if(!supported)state_.status={GameFsCode::Unavailable,0,"Input32 auxiliary normalization outside finite ASCII domain"};
+                else state_.status=actor_script_.CompleteInput(actor_input_target_,text,aux,state_.actor_input_timed_out);
+                state_.actor_script=actor_script_.Snapshot();
+            }
+        }
+        state_.scene_ui=scene_ui_.Snapshot(); //publishes editor context to Windows text sampler
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
@@ -846,6 +892,10 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         //an intermediate room-only front whileFONT is still being decoded.
         const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
             if(inventory_.Modal())return inventory_.Draw(surface,font_);
+            if(state_.actor_script.awaiting_input){
+                if(!scene_ui_.DrawEditor(surface))return {GameFsCode::Unavailable,0,"Input32 editor draw failed"};
+                return {};
+            }
             if(!state_.actor_script.awaiting_message&&!state_.actor_script.awaiting_choice)return {};
             std::string visible;
             for(unsigned char c:state_.actor_script.message){

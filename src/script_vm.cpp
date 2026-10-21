@@ -472,6 +472,10 @@ std::vector<Value>& Vm::slots(Table table) {
     }
 }
 Value Vm::read_slot(Table table, uint16_t index) const {
+    if(table==Table::InputResult){
+        if(!input_result_||index>=input_result_->size())throw std::runtime_error("Input result cell unavailable");
+        return (*input_result_)[index];
+    }
     if (table == Table::Frame && !frame_) throw std::runtime_error("No live native script frame");
     const auto& values = table == Table::Frame ? *frame_ : table == Table::Local ? local_ : table == Table::Global ? global_ : ctx28_;
     if (index >= values.size()) throw std::runtime_error("Runtime slot index out of bounds");
@@ -482,7 +486,7 @@ Value Vm::load_reference(const Value& ref) const {
 }
 Value Vm::peek_reference(const Value& ref) const {
     if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script reference");
-    if (ref.table!=Table::Frame) return read_slot(ref.table,ref.index);
+    if (ref.table!=Table::Frame&&ref.table!=Table::InputResult) return read_slot(ref.table,ref.index);
     const auto owner=ref.frame_owner.lock();
     if(!owner)throw std::runtime_error("Retired native script frame reference");
     if (ref.index >= owner->size()) throw std::runtime_error("Frame reference out of bounds");
@@ -491,8 +495,9 @@ Value Vm::peek_reference(const Value& ref) const {
 void Vm::store_reference(const Value& ref, Value value) {
     if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script destination");
     const auto owner=ref.frame_owner.lock();
-    if(ref.table==Table::Frame&&!owner)throw std::runtime_error("Retired native script destination frame");
-    auto& values = ref.table==Table::Frame ? *owner : slots(ref.table);
+    const bool weak_owner=ref.table==Table::Frame||ref.table==Table::InputResult;
+    if(weak_owner&&!owner)throw std::runtime_error("Retired native script destination frame");
+    auto& values = weak_owner ? *owner : slots(ref.table);
     if (ref.index >= values.size()) throw std::runtime_error("Script destination out of bounds");
     values[ref.index] = std::move(value);
     if(access_)access_(ref,true);
@@ -515,6 +520,8 @@ Event Vm::stop(const Command* cmd, const std::string& reason) {
 Event Vm::start(const std::vector<Value>& arguments) { return start_at(program_.header().entrypoint, arguments); }
 Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     choice_arguments_.clear();choice_waiting_=choice_arguments_taken_=false;choice_count_=0;
+    input_arguments_.clear();input_waiting_=false;
+    input_result_=std::make_shared<std::vector<Value>>(3);
     b4_calls_=b4_operand_word_=b4_result_word_=0;
     e2_calls_=e2_left_word_=e2_right_word_=e2_result_word_=0;
     d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
@@ -567,7 +574,7 @@ Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
     if (!cmd || cmd->opcode < 0) return stop(cmd, "PC is not an executable command boundary");
-    if(!context_enabled_||choice_waiting_){Event paused;paused.status=Status::Waiting;paused.pc=paused.next_pc=pc_;return paused;}
+    if(!context_enabled_||choice_waiting_||input_waiting_){Event paused;paused.status=Status::Waiting;paused.pc=paused.next_pc=pc_;return paused;}
     if(waiting_event_){Event waiting;waiting.status=Status::Waiting;waiting.pc=waiting.next_pc=pc_;return waiting;}
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
@@ -758,6 +765,26 @@ Event Vm::step() {
             if (ref.kind != Value::Kind::Reference || !usable(value)) return stop(cmd, "Unsupported assignment reference/value");
             store_reference(ref,value); stack_.resize(stack_.size() - 2);
             if(op==0x50)stack_.push_back(value);
+        } else if(op==0x57) {
+            if(stack_.size()<2)throw std::runtime_error("Array assignment needs two references");
+            const auto lhs=stack_[stack_.size()-2],rhs=stack_.back();
+            const auto left=load_reference(lhs);
+            if(left.kind!=Value::Kind::ArrayHeader||(left.word>>28)!=9)
+                throw std::runtime_error("Opcode57 left reference requires array header");
+            const auto right=load_reference(rhs);
+            if(right.kind!=Value::Kind::ArrayHeader||(right.word>>28)!=9)
+                throw std::runtime_error("Opcode57 right reference requires array header");
+            const uint32_t dst=left.word&0xFFF,src=right.word&0xFFF;
+            for(uint32_t i=0;i<std::min(dst,src);++i){
+                const auto value=load_reference(indexed_reference(rhs,i));
+                if(value.kind==Value::Kind::Unknown)throw std::runtime_error("Opcode57 unknown source cell");
+                store_reference(indexed_reference(lhs,i),value);
+            }
+            //Raw6F134..144 repeatedly releases the SAME first remaining
+            //destination cell;it does not advance to clear the whole tail.
+            if(dst>src){Value nil;nil.kind=Value::Kind::Scalar;
+                store_reference(indexed_reference(lhs,src),nil);}
+            stack_.resize(stack_.size()-2);
         } else if(op==0x14) {
             if(stack_.size()<2)throw std::runtime_error("Foreach needs two references");
             const auto destination=stack_[stack_.size()-2],source=stack_.back();
@@ -866,7 +893,15 @@ Event Vm::step() {
         } else if(op==0x8B) {
             const auto id=uint8_t(program_.operand(*cmd,1,1));const auto argc=program_.operand(*cmd,2,1);
             if(argc>stack_.size())return stop(cmd,"Builtin argument count;id="+std::to_string(id));
-            if(id==0x21){
+            if(id==0x20){
+                if(argc!=2||event_depth_==UINT16_MAX)throw std::runtime_error("Input32 requires two arguments/live nesting");
+                const auto& mode=stack_[stack_.size()-2];const auto& text=stack_.back();
+                if(mode.kind!=Value::Kind::Scalar||(mode.word>>28)!=2||text.kind!=Value::Kind::String)
+                    throw std::runtime_error("Input32 unsupported mode/text conversion domain");
+                input_arguments_.assign(std::make_move_iterator(stack_.end()-2),std::make_move_iterator(stack_.end()));
+                stack_.resize(stack_.size()-2);result_={};input_waiting_=true;
+                ++event_depth_;display_state_=8;event.status=Status::Input;
+            }else if(id==0x21){
                 if(!argc||argc>32||event_depth_==UINT16_MAX)throw std::runtime_error("Native SELECT33 count/nesting budget");
                 choice_arguments_.assign(std::make_move_iterator(stack_.end()-argc),std::make_move_iterator(stack_.end()));
                 stack_.resize(stack_.size()-argc);result_={};
@@ -1023,6 +1058,23 @@ std::vector<Value> Vm::take_choice_arguments(){
 bool Vm::complete_choice(uint32_t result){
     if(stopped_||!choice_waiting_||!choice_arguments_taken_||result>choice_count_)return false;
     result_=Value::integer(int32_t(result));display_state_=2;choice_waiting_=false;
+    if(event_depth_)--event_depth_;
+    drain_callback();return true;
+}
+std::vector<Value> Vm::input_arguments() const{
+    if(stopped_||!input_waiting_)throw std::runtime_error("Input32 arguments unavailable");
+    return input_arguments_;
+}
+bool Vm::complete_input(std::string text,std::string auxiliary){
+    if(stopped_||!input_waiting_||display_state_!=8||input_arguments_.size()!=2)return false;
+    //Construct/validate owning strings before changing the suspended context.
+    Value nil;nil.kind=Value::Kind::Scalar;
+    std::vector<Value> cells(3,nil);cells[0].kind=Value::Kind::ArrayHeader;cells[0].word=0x90000002;
+    if(!text.empty()){cells[1]=Value::string(std::move(text));cells[2]=Value::string(std::move(auxiliary));}
+    input_arguments_.clear();result_={};
+    *input_result_=std::move(cells);result_.kind=Value::Kind::Reference;
+    result_.table=Table::InputResult;result_.frame_owner=input_result_;
+    display_state_=2;input_waiting_=false;
     if(event_depth_)--event_depth_;
     drain_callback();return true;
 }
