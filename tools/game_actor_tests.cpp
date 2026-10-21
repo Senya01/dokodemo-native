@@ -3,6 +3,7 @@
 #include "recovered/game_value_array_native.h"
 #include "game_choice_regressions.h"
 #include "game_message_scope_regressions.h"
+#include "game_post21_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -76,6 +77,7 @@ std::vector<uint8_t> Dictionary(){
 void Focused(){
     GameChoiceRegressionChecks();
     GameMessageScopeRegressionChecks();
+    GamePost21RegressionChecks();
     {auto program=Fixture({0x30,1,0x90,0,0,0x70,0x38});script::Vm strict(program);strict.start();
         Check(strict.run().status==script::Status::Stopped,"standalone probe keeps unspecified frame slot Unknown");
         script::Vm owned(program);owned.native_reserved_local_nil(true);owned.start();

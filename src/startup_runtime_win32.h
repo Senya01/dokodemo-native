@@ -26,6 +26,10 @@ struct StartupRuntimeOptions {
     // Explicit window-fixture civil-clock step AFTER the intro's first clock
     // read. Zero in normal play;not elapsed-time or real-RTC timing evidence.
     uint32_t test_actor_calendar_step_minutes = 0;
+    // Explicit captured-seed replay for injected-input regression sessions.
+    // Off in ordinary play; this never changes source RNG arithmetic.
+    bool test_rng_seed_replay = false;
+    uint32_t test_rng_seed_word = 0;
     std::wstring native_save_root;
     bool storage_unavailable=false,storage_read_only=false;
     bool test_missing_device_prompt=false; // test-only negative IoDevctl path before real native autoload

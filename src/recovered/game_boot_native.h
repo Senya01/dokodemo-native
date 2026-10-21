@@ -78,8 +78,8 @@ struct GameBootObservation {
     std::array<GameArenaObservation, 3> arenas{};
     bool graphics_setup_entered = false, graphics_setup_returned = false;
     GameGraphicsSnapshot graphics;
-    bool rtc_initialized = false, rng_seed_available = false;
-    uint32_t rtc_error = 0, rng_seed_word = 0;
+    bool rtc_initialized = false, rng_seed_available = false, rng_seed_fixture = false;
+    uint32_t rtc_error = 0, rng_seed_word = 0, rng_live_seed_word = 0;
     uint64_t utc_tick_us = 0, local_tick_us = 0, rng_seed = 0;
     int32_t effective_offset_minutes = 0;
     std::array<uint32_t, 7> calendar_words{};

@@ -1242,18 +1242,23 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             EmitLocked("GameCalendarInitialized", "WindowsStartupRtcAdapter", 0x1050, 0, false,
                 0, 0, 0, "real UTC->Windows dynamic local civil time->DE0 words;not E08 fixed+9h clock cache");
         }
-        game_rng.ApplyInitializerTimeT32(sample.conversion.local_civil_epoch_seconds, state.owner,
-            "Actual native startup RTC101C..105C local civil time;C321C at1068");
+        const auto seed_word=options.test_rng_seed_replay?options.test_rng_seed_word:sample.conversion.local_civil_epoch_seconds;
+        game_rng.ApplyInitializerTimeT32(seed_word,state.owner,options.test_rng_seed_replay
+            ?"ExplicitCapturedRngSeedReplay;not live startup RTC input"
+            :"Actual native startup RTC101C..105C local civil time;C321C at1068");
         const auto rng = game_rng.Snapshot();
         {
         std::lock_guard<std::mutex> lock(metadata);
         state.game_boot.rtc_initialized = true;
-        state.game_boot.rng_seed_word = sample.conversion.local_civil_epoch_seconds;
+        state.game_boot.rng_live_seed_word = sample.conversion.local_civil_epoch_seconds;
+        state.game_boot.rng_seed_fixture = options.test_rng_seed_replay;
+        state.game_boot.rng_seed_word = seed_word;
         state.game_boot.rng_seed = rng.seed;
         state.game_boot.rng_seed_available = rng.seed_available;
-        EmitLocked("GameRngInitialized", "RecoveredC321CWindowsTimeInput", 0x1068,
-            sample.conversion.local_civil_epoch_seconds, false, 0, 0, 0,
-            "same live game RNG owner;seed is actual local civil epoch word,not image seed1 or fixed timezone");
+        EmitLocked("GameRngInitialized", options.test_rng_seed_replay?"ExplicitCapturedRngSeedReplay":"RecoveredC321CWindowsTimeInput",options.test_rng_seed_replay?0:0x1068,
+            seed_word,false,0,0,0,options.test_rng_seed_replay
+            ?"injected-input fixture replays an explicitly captured seed;not live RNG initialization credit"
+            :"same live game RNG owner;seed is actual local civil epoch word,not image seed1 or fixed timezone");
         recovered::ResetGameRuntime253B8(game_runtime_reset);
         state.game_boot.runtime_reset_returned = true;
         state.game_boot.primary_reset_bytes = uint32_t(game_runtime_reset.primary.size());
@@ -1926,6 +1931,9 @@ StartupCoordinator::~StartupCoordinator() {
 std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRuntimeOptions& options,
                                                              StartupRuntimeStatus& status) {
     status = {};
+    if(options.test_rng_seed_replay&&!options.test_controller_input){
+        status=Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_PARAMETER);return {};
+    }
     if(options.test_actor_calendar_step_minutes
        &&(!options.test_controller_input||options.test_actor_calendar_step_minutes!=5)) {
         status=Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_PARAMETER);return {};
