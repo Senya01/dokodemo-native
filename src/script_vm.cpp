@@ -525,6 +525,8 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     b4_calls_=b4_operand_word_=b4_result_word_=0;
     e2_calls_=e2_left_word_=e2_right_word_=e2_result_word_=0;
     d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
+    d5_calls_=d5_first_pc_=d5_first_left_word_=d5_first_right_word_=d5_first_result_word_=0;
+    ctx_reference_branches_=ctx_reference_first_pc_=ctx_reference_first_index_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
     frame_id_=++next_frame_id_;code_entry_=code_pc;++run_id_;normal_returns_={};
@@ -754,6 +756,7 @@ Event Vm::step() {
                 if (index >= slots(table).size()) return stop(cmd, "Reference slot out of bounds");
                 value.kind = Value::Kind::Reference; value.table = table; value.index = index;
                 if (table == Table::Frame) value.frame_owner = frame_;
+                if (table == Table::Ctx28) value.context_owner = context_;
             } else {
                 value = read_slot(table, index);
                 if (!usable(value)) return stop(cmd, "Uninitialized/opaque runtime slot; table="+std::to_string(uint32_t(table))+"; index="+std::to_string(index)+"; frame_cells="+std::to_string(frame_->size())+"; caller_return="+std::to_string(calls_.empty()?0:calls_.back().return_pc)+"; caller argument or service required");
@@ -964,6 +967,18 @@ Event Vm::step() {
             if(op==0xD1||op==0xD2) {if(!rhs)throw std::runtime_error("Script division by zero");n=op==0xD1?int64_t(lhs)/rhs:int64_t(lhs)%rhs;}
             else n=op==0xD4?uint32_t(lhs)&uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
             stack_.push_back(Value::integer(int32_t(uint32_t(n)&0x0FFFFFFF)));
+        } else if(op==0xD5) {
+            // E050C ->7345C;73544 OR uses signed low28 scalar conversions.
+            // Typed native references with raw0 are not source tag0 values.
+            const auto right=pop(),left=pop();
+            const auto bits=[](const Value& v){
+                if((v.kind!=Value::Kind::Scalar&&v.kind!=Value::Kind::Timestamp)||v.word>>28>3)
+                    throw std::runtime_error("D5 bitwise OR conversion outside finite scalar domain");
+                const auto p=v.word&0x0FFFFFFF;return p&0x08000000?p|0xF0000000:p;
+            };
+            const auto answer=Value::integer(int32_t((bits(left)|bits(right))&0x0FFFFFFF));
+            if(!d5_calls_){d5_first_pc_=pc_;d5_first_left_word_=left.word;d5_first_right_word_=right.word;d5_first_result_word_=answer.word;}
+            ++d5_calls_;stack_.push_back(answer);
         } else if(op==0xD0) {
             //72C24 ->75EC0: owned LEFT/RIGHT temporaries. Numeric signed
             // MULT/MFLO at75F80/75F9C yields tag2 low28. A nil RIGHT clears
@@ -1005,8 +1020,19 @@ Event Vm::step() {
             if (op != 0x10) {
                 if (stack_.empty()) return stop(cmd, "Conditional branch stack underflow");
                 const Value& condition = stack_.back();
-                if (condition.kind != Value::Kind::Scalar) return stop(cmd, "Conditional payload for non-scalar unsupported");
-                bool nonzero = (condition.word & 0x0FFFFFFF) != 0;
+                bool nonzero=false;
+                if(condition.kind==Value::Kind::Scalar)nonzero=(condition.word&0x0FFFFFFF)!=0;
+                else if(condition.kind==Value::Kind::Reference&&condition.table==Table::Ctx28){
+                    //6BBF8 masks the original nonnull reference address;
+                    //6BC20 tests its presence, without loading the referent.
+                    //Native symbolic references can have raw0. Admit only
+                    //the reached, bounded table in this live registered owner.
+                    if(!context_||condition.context_owner.lock()!=context_||context_->vm!=this||context_->thread!=std::this_thread::get_id()||condition.index>=ctx28_.size())
+                        return stop(cmd,"Conditional Ctx28 reference needs its live registered table owner");
+                    nonzero=true;
+                    if(!ctx_reference_branches_){ctx_reference_first_pc_=pc_;ctx_reference_first_index_=condition.index;}
+                    ++ctx_reference_branches_;
+                }else return stop(cmd,"Conditional payload for non-scalar unsupported");
                 take = op == 0x11 ? !nonzero : nonzero;
                 stack_.pop_back();
             }

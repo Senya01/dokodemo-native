@@ -11,6 +11,32 @@ namespace dokodemo::recovered {
 //6A350/7BF18 reached string-only ABI. Bytewise,nonoverlapping replacement;
 //empty needle is refused (original explicitly traps),result owns its bytes.
 script::Value GameStringReplace51(const std::vector<script::Value>&);
+//6A5DC ->7C000 finite alphanumeric ASCII character count. Other character
+//table domains and75778 numeric formatting remain explicitly unsupported.
+script::Value GameStringLength53(const std::vector<script::Value>&);
+//6A780 ->7C2D8: proven NONEMPTY alphanumeric ASCII branch returns literal NIL.
+//Other inputs/character-map branches are unavailable, not fallback NIL values.
+script::Value GameAsciiPrefix71(const std::vector<script::Value>&);
+//693E4: finite canonical-NIL75778 path points to E0760 bytes83,73; read
+//little-endian byte pair and return integer7383. Other conversions refused.
+script::Value GameNilBytePair0D(const std::vector<script::Value>&);
+//76A50 static-constructor defaults, owned for this native script lifetime.
+//Only the reached nonempty alphanumeric ASCII7C1EC branch is implemented.
+//No interface fabricates later aliased PSP global writes or CP932 results.
+class GameAsciiClass70Owner final {
+  public:
+    void Begin(uint64_t generation) noexcept;
+    void Close() noexcept;
+    script::Value Query(const std::vector<script::Value>&)const;
+    bool Live()const noexcept{return live_;}
+    uint64_t Generation()const noexcept{return generation_;}
+    uint32_t CurrentWord()const noexcept{return current_.word;}
+    uint32_t OtherWord()const noexcept{return other_.word;}
+  private:
+    bool live_=false;
+    uint64_t generation_=0;
+    script::Value current_,other_;
+};
 struct GameOwnerEventTarget {
     uint64_t generation=0;
     script::Value context,callback;
@@ -25,6 +51,16 @@ struct GameChoiceTarget {
     uint32_t request=0,pc=0;
     script::Value context;
 };
+// Passive, bounded current-table evidence. No Value or owner lease escapes.
+// The imported dictionary snapshot intentionally remains its original 162 rows.
+struct GameWordRowObservation {
+    bool valid=false;
+    uint64_t generation=0,run_id=0;
+    uint32_t row=0,table=0,index=0,global_header_word=0,record_header_word=0,error_code=0;
+    std::array<char,65> code_sha256{};
+    std::array<script::ValueWitness,19> fields{};
+};
+GameWordRowObservation GameObserveWordRow(const script::Vm&,uint64_t generation,uint32_t row) noexcept;
 struct GameActorScriptSnapshot {
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
     uint64_t generation=0;
@@ -37,6 +73,12 @@ struct GameActorScriptSnapshot {
     uint32_t bytes=0,entry_pc=0,pc=0,last_opcode=0,ticks=0,yields=0,messages=0;
     uint64_t native_clock_ticks=0;
     script::VmStateWitness vm_current;
+    GameWordRowObservation candidate_word_row;
+    //Independent stable-table watch bound at the actual first builtin53
+    //consumer frame. A successor message need not have numeric Frame[0].
+    GameWordRowObservation word_consumer_row;
+    uint32_t word_consumer_source_pc=0,word_consumer_source_entry=0;
+    uint64_t word_consumer_source_frame_id=0;
     script::NormalReturnWitness normal_return;
     script::NormalReturnWitness farewell_return;
     uint32_t b3_calls=0,b3_pc=0,b3_operand_kind=0,b3_operand_word=0,b3_result_word=0;
@@ -59,9 +101,21 @@ struct GameActorScriptSnapshot {
     uint32_t b4_calls=0,b4_operand_word=0,b4_result_word=0;
     uint32_t e2_calls=0,e2_left_word=0,e2_right_word=0,e2_result_word=0;
     uint32_t d0_calls=0,d0_left_word=0,d0_right_word=0,d0_result_word=0;
+    uint32_t d5_calls=0,d5_first_pc=0,d5_first_left_word=0,d5_first_right_word=0,d5_first_result_word=0;
+    uint32_t ctx_reference_branches=0,ctx_reference_first_pc=0,ctx_reference_first_index=0;
     bool native_reserved_local_nil=false;
     std::vector<std::string> choice_options;
     uint32_t string_replace_calls=0;
+    uint32_t string_length53_calls=0,string_length53_pc=0,string_length53_result_word=0;
+    std::string string_length53_input;
+    uint32_t string_prefix71_calls=0,string_prefix71_pc=0,string_prefix71_result_word=0,string_prefix71_result_kind=0;
+    std::string string_prefix71_input;
+    uint32_t nil_code0d_calls=0,nil_code0d_pc=0,nil_code0d_result_word=0;
+    bool ascii_class70_live=false;
+    uint64_t ascii_class70_generation=0;
+    uint32_t ascii_class70_current_word=0,ascii_class70_other_word=0;
+    uint32_t ascii_class70_calls=0,ascii_class70_pc=0,ascii_class70_result_word=0;
+    std::string ascii_class70_input;
     std::string last_replacement;
     std::vector<std::string> replacement_results;
     uint32_t call_depth=0;
@@ -128,6 +182,7 @@ class GameActorScript final {
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameActorScriptSnapshot Snapshot() const;
+    GameWordRowObservation ObserveWordRow(uint32_t row)const noexcept;
     void Close();
   private:
     script::Value Service(uint8_t,const std::vector<script::Value>&);
@@ -137,6 +192,7 @@ class GameActorScript final {
     script::Program program_;
     std::unique_ptr<script::Vm> vm_;
     GameActorDictionary dictionary_;
+    GameAsciiClass70Owner ascii_class70_;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
@@ -146,5 +202,6 @@ class GameActorScript final {
     std::map<uint32_t,script::Value> bindings_;
     GameActorScriptSnapshot state_;
     uint64_t owner_generation_=0;
+    uint32_t word_consumer_row_index_=UINT32_MAX;
 };
 } // namespace dokodemo::recovered

@@ -320,6 +320,29 @@ void FontDrawTests() {
     Check(bool(font.Initialize(View(b))) && !font.RasterizeCp932({"A"}, 16, bitmap),
           "unreached palette domain never generic success");
 }
+void ChoiceDrawTests() {
+    std::vector<uint8_t> storage(1024*1024);
+    GameArena arena;Check(arena.Initialize(storage.data(),uint32_t(storage.size())),"SELECT draw arena");
+    GameVmBoot vm;Check(vm.Initialize74EF4(arena)&&vm.InitializeManager93404(),"SELECT draw manager");
+    GameFontResource font;Check(bool(font.Initialize(View(Atlas()))),"SELECT draw atlas");
+    Resources source;GameGraphics graphics;Check(graphics.Initialize({}),"SELECT draw surface");
+    std::vector<uint32_t> plain;
+    const std::vector<std::string> options{"A",std::string("\x16")+"A\x16",std::string("\x14")+"A",std::string("\x83",1)};
+    for(size_t i=0;i<options.size();++i){
+        GameSceneUiBootstrap scene;Check(bool(scene.Initialize(source,arena,vm,font)),"SELECT draw owners");
+        Check(bool(scene.BeginChoice({options[i]},20+i,4)),"owning raw SELECT option");
+        Check(graphics.Clear(0xFF000000),"SELECT draw clear");
+        Check(scene.DrawChoice(graphics)==(i<2),"only highlight markers are suppressed; unknown controls and malformed CP932 refuse");
+        Check(scene.Choice().options[0]==options[i],"display projection preserves owning raw option");
+        if(i<2){
+            GameGraphicsFrame frame;Check(graphics.SwapBuffers()&&graphics.CopyFront(frame),"SELECT draw publication");
+            if(i==0)plain=frame.pixels;
+            else Check(frame.pixels==plain,"highlight projection reaches the same actual glyph raster");
+        }
+        Check(scene.Close(),"SELECT draw owners retire");
+    }
+    Check(vm.Close()&&!arena.Used(),"SELECT draw registry and buffers retired");
+}
 void UiDrawTests() {
     struct DrawResources : Resources {
         GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -449,6 +472,7 @@ int main() {
         OwnerTests();
         BankTests();
         FontDrawTests();
+        ChoiceDrawTests();
         DialogInputTests();
         UiDrawTests();
         std::cout << "scene UI resources,decoded pixels,source XFT text,fade,NJ "

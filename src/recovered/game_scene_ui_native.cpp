@@ -372,7 +372,15 @@ bool GameSceneUiBootstrap::DrawChoice(GameGraphics& graphics){
     //preserved;PSP dynamic glyph/layout/style matching remains separate.
     int32_t y=128;
     for(uint32_t i=0;i<choice.options.size();++i){
-        GameFontBitmap text;const auto drawn=font_->RasterizeCp932({choice.options[i]},420,text);
+        //Same finite NativeNoHighlight display projection as KSC messages.
+        //The owned option, its ordering and SELECT result remain unchanged.
+        std::string visible;
+        for(unsigned char c:choice.options[i]){
+            if(c==0x16)continue;
+            if(c<32&&c!=10)return false;
+            visible.push_back(char(c));
+        }
+        GameFontBitmap text;const auto drawn=font_->RasterizeCp932({visible},420,text);
         if(!drawn)return false;
         const auto height=(std::max)(21u,text.height);
         if(!graphics.FillRectangle(20,y-2,460,y+int32_t(height),i==choice.row?0xFFFFDC8C:0xFFF5E8CD,65535)

@@ -240,6 +240,14 @@ public:
     uint32_t d0_left_word()const noexcept{return d0_left_word_;}
     uint32_t d0_right_word()const noexcept{return d0_right_word_;}
     uint32_t d0_result_word()const noexcept{return d0_result_word_;}
+    uint32_t d5_calls()const noexcept{return d5_calls_;}
+    uint32_t d5_first_pc()const noexcept{return d5_first_pc_;}
+    uint32_t d5_first_left_word()const noexcept{return d5_first_left_word_;}
+    uint32_t d5_first_right_word()const noexcept{return d5_first_right_word_;}
+    uint32_t d5_first_result_word()const noexcept{return d5_first_result_word_;}
+    uint32_t ctx_reference_branches()const noexcept{return ctx_reference_branches_;}
+    uint32_t ctx_reference_first_pc()const noexcept{return ctx_reference_first_pc_;}
+    uint32_t ctx_reference_first_index()const noexcept{return ctx_reference_first_index_;}
     // Named native modal scheduler adapter. Called only after actual GUI close,
     // poll completion and teardown;original byte38 wake producer is unclosed.
     void resume_modal_context();
@@ -323,6 +331,8 @@ private:
     uint32_t b4_calls_=0,b4_operand_word_=0,b4_result_word_=0;
     uint32_t e2_calls_=0,e2_left_word_=0,e2_right_word_=0,e2_result_word_=0;
     uint32_t d0_calls_=0,d0_left_word_=0,d0_right_word_=0,d0_result_word_=0;
+    uint32_t d5_calls_=0,d5_first_pc_=0,d5_first_left_word_=0,d5_first_right_word_=0,d5_first_result_word_=0;
+    uint32_t ctx_reference_branches_=0,ctx_reference_first_pc_=0,ctx_reference_first_index_=0;
     uint64_t executed_ = 0;
     uint64_t clock_tick_ = 0, timer_base_ = 0, wait_until_ = 0;
     uint32_t pc_ = 0, display_state_ = 0;

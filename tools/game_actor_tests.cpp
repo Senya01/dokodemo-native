@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
+#include <type_traits>
 using namespace dokodemo;
 using namespace dokodemo::recovered;
 namespace {
@@ -64,12 +65,14 @@ class SelectedRoomResources final:public GameResourceSource {
     struct OwnedPackage{std::unique_ptr<Lease> lease;BpDirectory directory;};
     std::map<std::string,OwnedPackage> packages_;
 };
-script::Program Fixture(std::vector<uint8_t> code,std::vector<uint32_t> globals={}){
-    std::vector<uint8_t> b(28+code.size()+4*globals.size());
+script::Program Fixture(std::vector<uint8_t> code,std::vector<uint32_t> globals={},std::vector<uint32_t> ctx={}){
+    std::vector<uint8_t> b(28+code.size()+4*(ctx.size()+globals.size()));
     Word(b,0,0x0043534B);Word(b,4,0x20030204);Word(b,12,uint32_t(code.size()));
     b[24]=uint8_t(globals.size());b[25]=uint8_t(globals.size()>>8);
+    b[26]=uint8_t(ctx.size());b[27]=uint8_t(ctx.size()>>8);
     std::copy(code.begin(),code.end(),b.begin()+28);
-    for(size_t i=0;i<globals.size();++i)Word(b,28+code.size()+4*i,globals[i]);
+    for(size_t i=0;i<ctx.size();++i)Word(b,28+code.size()+4*i,ctx[i]);
+    for(size_t i=0;i<globals.size();++i)Word(b,28+code.size()+4*(ctx.size()+i),globals[i]);
     script::Program p;script::Diagnostic error;Check(p.load_test_fixture(std::move(b),error),error.text().c_str());return p;
 }
 std::vector<uint8_t> Dictionary(){
@@ -78,7 +81,155 @@ std::vector<uint8_t> Dictionary(){
     const uint8_t text[]{0x83,0x6C,0x83,0x52,0,0x82,0xCB,0x82,0xB1,0};
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
+void BitwiseOrAndWordObservationChecks(){
+    using script::Value;using script::Table;
+    const auto program=Fixture({0x30,2,0x90,0,0,0x90,1,0,0xD5,0x70,0x38});
+    constexpr uint32_t payloads[]{0,1,4,32,0x08000000,0x0FFFFFFF};
+    for(uint32_t lt=0;lt<4;++lt)for(uint32_t rt=0;rt<4;++rt)for(auto l:payloads)for(auto r:payloads){
+        Value left,right;left.kind=lt==3?Value::Kind::Timestamp:Value::Kind::Scalar;left.word=lt<<28|l;
+        right.kind=rt==3?Value::Kind::Timestamp:Value::Kind::Scalar;right.word=rt<<28|r;
+        script::Vm vm(program);vm.start({left,right});
+        Check(vm.run().status==script::Status::Complete&&vm.result().kind==Value::Kind::Scalar&&vm.result().word==(0x20000000u|(l|r)),"D5 raw tag0..3 OR boundary matrix");
+        Check(vm.d5_calls()==1&&vm.d5_first_pc()==8&&vm.d5_first_left_word()==left.word&&vm.d5_first_right_word()==right.word&&vm.d5_first_result_word()==vm.result().word,"D5 first execution evidence preserves ordered operands");
+    }
+    {
+        const auto linked=Fixture({0x30,2,0x91,0,0,0x90,0,0,0x90,1,0,0xD5,0x51,0x90,0,0,0x70,0x38});
+        script::Vm vm(linked);vm.start({Value::integer(32),Value::integer(4)});
+        for(int i=0;i<4;++i)Check(vm.run(1).status==script::Status::HostYield,"D5 linked setup slice");
+        const auto before=vm.current_witness();Check(before.current_pc==11&&before.operand_cells==3,"D5 leaves real destination below two scalars");
+        Check(vm.run(1).status==script::Status::HostYield,"D5 scalar execution");const auto after=vm.current_witness();
+        Check(after.current_pc==12&&after.operand_cells==2&&after.operands[0].kind==Value::Kind::Reference&&after.operands[0].index==0&&after.operands[1].word==0x20000024&&after.result.kind==before.result.kind&&after.result.word==before.result.word&&after.deadline_tick==before.deadline_tick&&after.active_blocks==before.active_blocks,"D5 consumes two scalar cells, keeps destination/result/deadline/blocks and PC+1");
+        Check(vm.run().status==script::Status::Complete&&vm.result().word==0x20000024&&vm.read_slot(Table::Frame,0).word==0x20000024,"D5 actual following51 store and caller result");
+        auto reference=Value{};reference.kind=Value::Kind::Reference;reference.table=Table::Global;
+        for(auto unsupported:std::vector<Value>{Value{},reference,Value::string("owned")}){
+            vm.start({unsupported,Value::integer(4)});const auto first=vm.run();
+            Check(first.status==script::Status::Stopped&&first.pc==(unsupported.kind==Value::Kind::Unknown?5u:11u)&&vm.d5_calls()==0,"Unknown slot refuses before D5; native reference/string refuse at D5");
+            Check(vm.run().diagnostic.text()==first.diagnostic.text(),"D5 refusal preserves first error");
+        }
+    }
+    {
+        static_assert(std::is_trivially_copyable<GameWordRowObservation>::value,"Word observation must not retain owners");
+        std::vector<uint32_t> globals(0x3DD4,0);globals[0]=0x90000013;globals[0x3DD2]=0x90000001;
+        const auto p=Fixture({0x30,0,0x80,1,0x44,0x38},globals);script::Vm vm(p);vm.start();
+        const auto ref=[](uint16_t index){Value v;v.kind=Value::Kind::Reference;v.table=Table::Global;v.index=index;return v;};
+        vm.store_reference(ref(0x3DD3),ref(0));vm.store_reference(ref(1),Value{});
+        vm.store_reference(ref(2),Value::string("shirt"));vm.store_reference(ref(3),Value::string("SHIRT"));vm.store_reference(ref(13),Value::integer(128));
+        uint32_t accesses=0;vm.access_observer([&](const Value&,bool){++accesses;});const auto before=vm.current_witness();
+        const auto row=GameObserveWordRow(vm,77,0);const auto after=vm.current_witness();
+        Check(row.valid&&row.generation==77&&row.run_id==before.run_id&&row.table==uint32_t(Table::Global)&&row.index==0&&row.record_header_word==0x90000013&&row.fields[0].kind==Value::Kind::Unknown&&row.fields[1].cp932_bytes==5&&row.fields[12].word==0x20000080,"Word row fixed typed/hash-only observation");
+        Check(accesses==0&&before.current_pc==after.current_pc&&before.executed==after.executed&&before.frame_id==after.frame_id&&before.context_registered==after.context_registered&&before.clock_tick==after.clock_tick&&before.deadline_tick==after.deadline_tick,"Word row observation has no access/context/clock/execution side effects");
+        Check(!GameObserveWordRow(vm,77,1).valid,"Word row rejects index outside low12 header");
+        vm.store_reference(ref(0),Value::integer(19));Check(!GameObserveWordRow(vm,77,0).valid,"Word row rejects scalar header with same payload");
+        Value header;header.kind=Value::Kind::ArrayHeader;header.word=0x90000013;vm.store_reference(ref(0),header);
+        auto bad=ref(0);bad.table=Table(99);vm.store_reference(ref(0x3DD3),bad);Check(!GameObserveWordRow(vm,77,0).valid,"Word row rejects invalid table enum before VM fallback");
+        bad.table=Table::Frame;vm.store_reference(ref(0x3DD3),bad);Check(!GameObserveWordRow(vm,77,0).valid,"Word row refuses unresolved weak frame owner");
+        Check(row.valid&&row.fields[1].cp932_bytes==5&&row.fields[12].word==0x20000080,"Retained word witness is independent of later table mutation");
+        vm.store_reference(ref(0x3DD3),ref(0));vm.run();vm.clock_tick(2);vm.run();
+        Check(GameObserveWordRow(vm,77,0).valid,"Stopped/completed VM still owns readable cells until teardown; observation is not input admission");
+    }
+}
+
+void StringLength53Checks(){
+    using script::Value;using script::Table;
+    for(const auto& text:std::vector<std::string>{"","shirt","SHIRT","Aa09","abcdefgh"}){
+        const auto input=Value::string(text);Check(GameStringLength53({input}).word==Value::integer(int32_t(text.size())).word&&input.cp932==text,"Builtin53 ASCII character count, no normalization/input mutation");
+    }
+    for(char c='0';c<='z';++c)if((c<='9')||(c>='A'&&c<='Z')||c>='a')Check(GameStringLength53({Value::string(std::string(1,c))}).word==0x20000001,"Builtin53 all62 source-proved ASCII flags");
+    Value nil;nil.kind=Value::Kind::Scalar;Check(GameStringLength53({nil}).word==0x20000000,"Builtin53 canonical NIL produces integer0, not NIL");
+    Value ref;ref.kind=Value::Kind::Reference;
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{Value::integer(0)},{Value::string("sh irt")},{Value::string(std::string("\x82\xA0",2))},{Value::string("a"),Value::string("b")}}){
+        bool refused=false;try{(void)GameStringLength53(args);}catch(const std::exception&){refused=true;}Check(refused,"Builtin53 unsupported conversion/character/argc refuses");
+    }
+    const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x53,1,0x89,0x51,0x94,0,0,0x70,0x38},{0});
+    script::Vm vm(p);uint32_t calls=0;vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x53&&args.size()==1&&args[0].cp932=="shirt","Builtin53 real owned caller argument");++calls;return GameStringLength53(args);});
+    vm.start({Value::string("shirt")});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().word==0x20000005&&vm.read_slot(Table::Global,0).word==0x20000005&&vm.stack().empty(),"Builtin53 real dispatcher result89/51 to preserved destination and exact consumer");
+}
+
+void AsciiPrefix71Checks(){
+    using script::Value;using script::Table;
+    for(char c='0';c<='z';++c)if(c<='9'||(c>='A'&&c<='Z')||c>='a'){
+        const auto input=Value::string(std::string(1,c));const auto v=GameAsciiPrefix71({input});Check(v.kind==Value::Kind::Scalar&&v.word==0&&input.cp932==std::string(1,c),"Builtin71 proven ASCII branch returns Scalar NIL without editing input");
+    }
+    Value ref;ref.kind=Value::Kind::Reference;Value nil;nil.kind=Value::Kind::Scalar;
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{nil},{ref},{Value::string("")},{Value::string("SH IRT")},{Value::string(std::string("\x82\xA0",2))},{Value::string("S"),Value::string("H")}}){
+        bool refused=false;try{(void)GameAsciiPrefix71(args);}catch(const std::exception&){refused=true;}Check(refused,"Builtin71 unknown/nonASCII/empty/conversion domains refuse instead of arbitrary NIL");
+    }
+    const auto p=Fixture({0x30,1,0x80,9,0x70,0x95,0,0,0x90,0,0,0x8B,0x71,1,0x89,0x51,0x94,0,0,0x70,0x38},{0x20000009});
+    script::Vm vm(p);uint32_t calls=0;vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x71&&args.size()==1&&args[0].cp932=="SHIRT","Builtin71 actual source uppercase argument");++calls;return GameAsciiPrefix71(args);});
+    vm.start({Value::string("SHIRT")});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().kind==Value::Kind::Scalar&&vm.result().word==0&&vm.read_slot(Table::Global,0).kind==Value::Kind::Scalar&&vm.read_slot(Table::Global,0).word==0&&vm.read_slot(Table::Frame,0).cp932=="SHIRT"&&vm.stack().empty(),"Builtin71 genuine NIL result replaces old9 and goes through89/51 consumer; caller string retained");
+}
+
+void NilBytePair0DChecks(){
+    using script::Value;using script::Table;
+    Value nil;nil.kind=Value::Kind::Scalar;const auto code=GameNilBytePair0D({nil});
+    Check(code.kind==Value::Kind::Scalar&&code.word==0x20007383,"Builtin0D source NIL text first2 bytes form integer7383, not integer0");
+    Value ref;ref.kind=Value::Kind::Reference;Value boolean;boolean.kind=Value::Kind::Scalar;boolean.word=0x10000000;
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{boolean},{Value::integer(0)},{Value::string("SHIRT")},{nil,nil}}){bool refused=false;try{(void)GameNilBytePair0D(args);}catch(const std::exception&){refused=true;}Check(refused,"Builtin0D only source-closed canonicalNIL conversion is admitted");}
+    const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x0D,1,0x89,0x51,0x94,0,0,0x70,0x38},{0});script::Vm vm(p);uint32_t calls=0;
+    vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x0D,"Builtin0D linked actualid");++calls;return GameNilBytePair0D(args);});
+    vm.start({nil});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().word==0x20007383&&vm.read_slot(Table::Global,0).word==0x20007383&&vm.stack().empty(),"Builtin0D genuine dispatcher/result89/51 preserves real destination and integercode consumer");
+}
+
+void AsciiClass70OwnerChecks(){
+    using script::Value;using script::Table;GameAsciiClass70Owner owner;
+    const auto refuses=[&](const std::vector<Value>& args){bool denied=false;try{(void)owner.Query(args);}catch(const std::exception&){denied=true;}return denied;};
+    Check(refuses({Value::string("SHIRT")}),"Builtin70 cannot query an unconstructed flag owner");
+    owner.Begin(51);Check(owner.Live()&&owner.Generation()==51&&owner.CurrentWord()==0x10000000&&owner.OtherWord()==0x10000001,"Builtin70 explicit76A50 constructor values, not BSS/raw-data default");
+    for(char c='0';c<='z';++c)if(c<='9'||(c>='A'&&c<='Z')||c>='a'){
+        auto input=Value::string(std::string(1,c));const auto result=owner.Query({input});
+        Check(result.kind==Value::Kind::Scalar&&result.word==0x10000000&&input.cp932==std::string(1,c),"Builtin70 ASCII route reads live FALSE flag without mutating owned text");
+    }
+    Value ref;ref.kind=Value::Kind::Reference;Value nil;nil.kind=Value::Kind::Scalar;
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{nil},{Value::integer(0)},{Value::string("")},{Value::string("SH IRT")},{Value::string(std::string("\x82\xA0",2))},{Value::string("S"),Value::string("H")}})
+        Check(refuses(args),"Builtin70 unsupported domain refuses instead of assuming the flag result");
+    const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x70,1,0x89,0x51,0x94,0,0,0x70,0x38},{0x20000009});script::Vm vm(p);uint32_t calls=0;
+    vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x70&&args.size()==1&&args[0].cp932=="SHIRT","Builtin70 reached real dispatch and retained caller argument");++calls;return owner.Query(args);});
+    vm.start({Value::string("SHIRT")});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().word==0x10000000&&vm.read_slot(Table::Global,0).word==0x10000000&&vm.read_slot(Table::Frame,0).cp932=="SHIRT"&&vm.stack().empty(),"Builtin70 constructor-owned Boolean passes through actual89/51 consumer, no scalar NIL substitute");
+    owner.Close();Check(!owner.Live()&&owner.Generation()==0&&refuses({Value::string("SHIRT")}),"Builtin70 teardown revokes old flag owner");
+    owner.Begin(52);Check(owner.Live()&&owner.Generation()==52&&owner.CurrentWord()==0x10000000,"Builtin70 new lifetime explicitly constructs defaults");
+    owner.Begin(0);Check(!owner.Live()&&refuses({Value::string("SHIRT")}),"Builtin70 refuses generation-zero owner");
+}
+
+void OwnedCtxReferenceBranchChecks(){
+    using script::Value;using script::Table;
+    for(uint8_t op:{uint8_t(0x11),uint8_t(0x12)}){
+        const auto p=Fixture({0x30,0,0x80,9,0x70,0x99,1,0,op,16,0,0,0x80,5,0x70,0x38,0x80,7,0x70,0x38},{},{0,0,0,0});
+        script::Vm vm(p);vm.start();const auto context=vm.context_value();uint32_t accesses=0;
+        vm.access_observer([&](const Value&,bool){++accesses;});const auto before=vm.current_witness();
+        (void)vm.run(5);const auto cut=vm.current_witness();
+        Check(!vm.stopped()&&cut.executed==before.executed+5&&cut.current_pc==(op==0x11?12u:16u)&&vm.stack().empty()&&vm.result().word==0x20000009&&accesses==0,
+            "Owned Ctx28 raw0 reference is present, not scalarNIL or loaded NIL referent; native result preserved");
+        Check(vm.ctx_reference_branches()==1&&vm.ctx_reference_first_pc()==8&&vm.ctx_reference_first_index()==1&&cut.context_word==context.word&&cut.frame_id==before.frame_id&&cut.deadline_tick==before.deadline_tick,
+            "Ctx reference branch retains exact owning frame/registry/deadline and source counter");
+        Check(vm.run().status==script::Status::Complete&&vm.result().word==(op==0x11?0x20000005u:0x20000007u),"Ctx branch continues to actual selected consumer");
+    }
+    const auto make=Fixture({0x30,0,0x99,1,0,0x70,0x38},{},{0,0});Value foreign;
+    {
+        script::Vm producer(make);producer.start();producer.context_value();producer.run();foreign=producer.result();
+        const auto take=Fixture({0x30,1,0x90,0,0,0x11,12,0,0,0x80,5,0x70,0x38},{},{0,0});
+        script::Vm receiver(take);receiver.start({foreign});receiver.context_value();const auto failed=receiver.run();
+        Check(failed.status==script::Status::Stopped&&failed.diagnostic.pc==5&&receiver.ctx_reference_branches()==0,"Foreign Ctx28 reference cannot claim current owner by matching table/index");
+    }
+    const auto take=Fixture({0x30,1,0x90,0,0,0x11,12,0,0,0x80,5,0x70,0x38},{},{0,0});
+    for(auto ref:std::vector<Value>{foreign,Value{}}){
+        if(ref.kind==Value::Kind::Unknown){ref.kind=Value::Kind::Reference;ref.table=Table::Ctx28;ref.index=1;}
+        script::Vm vm(take);vm.start({ref});vm.context_value();const auto failed=vm.run();
+        Check(failed.status==script::Status::Stopped&&failed.diagnostic.pc==5&&vm.ctx_reference_branches()==0,"Expired or unstamped Ctx28 owner refuses; no fake presence");
+        Check(vm.run().diagnostic.text()==failed.diagnostic.text(),"Ctx presence failure remains the first error");
+    }
+    {
+        const auto p=Fixture({0x30,0,0x99,1,0,0x11,9,0,0,0x38},{},{0,0});script::Vm vm(p);vm.start();
+        Check(vm.run().status==script::Status::Stopped&&!vm.current_witness().context_registered&&vm.ctx_reference_branches()==0,"Ctx presence does not allocate a registry to satisfy its own check");
+    }
+}
+
 void Focused(){
+    OwnedCtxReferenceBranchChecks();
+    AsciiClass70OwnerChecks();
+    NilBytePair0DChecks();
+    AsciiPrefix71Checks();
+    StringLength53Checks();
+    BitwiseOrAndWordObservationChecks();
     GameInput32RegressionChecks();
     GameReturnedInteractionRegressionChecks();
     GameChoiceRegressionChecks();

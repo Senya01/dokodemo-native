@@ -2,6 +2,7 @@
 #include "calendar_native.h"
 #include "game_value_array_native.h"
 #include "service39_native.h"
+#include "core_hash.h"
 #include <stdexcept>
 #include <sstream>
 
@@ -16,6 +17,70 @@ int32_t Number(const Value& value) {
     Need((value.kind==Value::Kind::Scalar||value.kind==Value::Kind::Timestamp)&&value.word>>28<=3,"Native KSC service needs scalar value");
     const auto p=value.word&0x0FFFFFFF;return int32_t(p&0x08000000?p|0xF0000000:p);
 }
+}
+GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generation,uint32_t row) noexcept {
+    GameWordRowObservation out;out.generation=generation;out.row=row;
+    try {
+        const auto current=vm.current_witness();
+        out.error_code=1;Need(current.valid&&current.run_id>0,"Word row needs an owning VM run");
+        out.run_id=current.run_id;out.code_sha256=current.code_sha256;
+        Value root;root.kind=Value::Kind::Reference;root.table=script::Table::Global;root.index=0x3DD2;
+        const auto header=vm.peek_reference(root);out.global_header_word=header.word;
+        out.error_code=2;Need(header.kind==Value::Kind::ArrayHeader&&header.word>>28==9&&row<(header.word&0xFFF),"Word row global header/index");
+        const auto at=uint64_t(root.index)+1+row;Need(at<=UINT16_MAX,"Word row global index extent");root.index=uint16_t(at);
+        const auto record=vm.peek_reference(root);
+        out.error_code=3;Need(record.kind==Value::Kind::Reference&&(record.table==script::Table::Global||record.table==script::Table::Local||record.table==script::Table::Ctx28),"Word row needs a stable VM table owner");
+        out.table=uint32_t(record.table);out.index=record.index;
+        const auto record_header=vm.peek_reference(record);out.record_header_word=record_header.word;
+        out.error_code=4;Need(record_header.kind==Value::Kind::ArrayHeader&&record_header.word>>28==9&&(record_header.word&0xFFF)==19,"Word row record header/count");
+        Need(uint64_t(record.index)+19<=UINT16_MAX,"Word row record extent");
+        out.error_code=5;for(uint32_t i=0;i<19;++i){
+            auto ref=record;ref.index=uint16_t(uint32_t(record.index)+1+i);const auto value=vm.peek_reference(ref);auto& field=out.fields[i];
+            field.kind=value.kind;field.word=value.word;field.table=uint32_t(value.table);field.index=value.index;
+            if(value.kind==Value::Kind::String){field.cp932_bytes=value.cp932.size();field.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(value.cp932.data()),value.cp932.size());}
+        }
+        out.valid=true;out.error_code=0;
+    }catch(...){/* Fixed evidence remains invalid; no owner or VM mutation. */}
+    return out;
+}
+script::Value GameNilBytePair0D(const std::vector<script::Value>& args){
+    Need(args.size()==1&&args[0].kind==Value::Kind::Scalar&&args[0].word==0,"Builtin0D conversion outside finite canonical NIL domain");
+    //757D8 selects static E0760 for tag0. 69404/6940C LBU and69418 SLL8
+    //pack the first two bytes83,73;686A4/685C0 publish tagged integer.
+    return Value::integer(0x7383);
+}
+void GameAsciiClass70Owner::Begin(uint64_t generation) noexcept {
+    generation_=generation;other_=False();other_.word=0x10000001;
+    current_=False();live_=generation!=0;
+}
+void GameAsciiClass70Owner::Close() noexcept {
+    live_=false;generation_=0;current_={};other_={};
+}
+script::Value GameAsciiClass70Owner::Query(const std::vector<script::Value>& args)const {
+    Need(live_&&generation_!=0,"Builtin70 requires its current constructor-owned character flags");
+    Need(args.size()==1&&args[0].kind==Value::Kind::String&&args[0].word>>28==6&&!args[0].cp932.empty(),"Builtin70 outside finite nonempty owned-string domain");
+    for(unsigned char c:args[0].cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin70 character map outside finite alphanumeric ASCII domain");
+    Need(current_.kind==Value::Kind::Scalar&&(current_.word==0x10000000||current_.word==0x10000001),"Builtin70 current flag outside finite constructor-owned domain");
+    //The relocated7C204 load reads1C94D0, not raw .data E5950.
+    //76A50/.ctors initializes encoded FALSE;7C2C0 returns low28!=0.
+    auto result=False();result.word|=uint32_t((current_.word&0x0FFFFFFF)!=0);return result;
+}
+script::Value GameAsciiPrefix71(const std::vector<script::Value>& args){
+    Need(args.size()==1,"Builtin71 requires one string argument");const auto& value=args[0];
+    Need(value.kind==Value::Kind::String&&value.word>>28==6&&!value.cp932.empty(),"Builtin71 outside finite nonempty owned-string domain");
+    for(unsigned char c:value.cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin71 character map outside finite alphanumeric ASCII domain");
+    //First byte is neither81 nor82:7C300 BNEL executes v1=0; JR7C334
+    //executes7C338 v0=v1. Wrapper6A7DC therefore writes canonical NIL.
+    return Nil();
+}
+script::Value GameStringLength53(const std::vector<script::Value>& args){
+    Need(args.size()==1,"Builtin53 character count requires one argument");const auto& value=args[0];
+    if(value.kind==Value::Kind::Scalar&&value.word==0)return Value::integer(0);
+    Need(value.kind==Value::Kind::String&&value.word>>28==6,"Builtin53 conversion outside finite owned-string domain");
+    for(unsigned char c:value.cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin53 character table outside finite alphanumeric ASCII domain");
+    //E07CC table flags for every admitted byte have bit4 clear. Each7C000
+    //iteration consumes exactly one byte; no case or text conversion occurs.
+    return Value::integer(int32_t(value.cp932.size()&0x0FFFFFFF));
 }
 script::Value GameStringReplace51(const std::vector<script::Value>& args) {
     Need(args.size()==3,"Builtin51 requires source,needle,replacement");
@@ -54,6 +119,9 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(bool(attached),attached.detail.c_str());
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
+        ascii_class70_.Begin(state_.generation);
+        state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
+        state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
         vm_->native_reserved_local_nil(true);
         if(profile.actor==0){ // finite passive NEKO return witnesses, independently retained
             vm_->trace_normal_return_at(0x85438);vm_->trace_normal_return_at(0x7D628,1);
@@ -308,6 +376,31 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
             for(const auto& a:args){detail<<std::hex<<a.word<<':';for(unsigned char b:a.cp932)detail<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];detail<<',';}
             throw std::runtime_error(detail.str());}
     }
+    if(id==0x53){
+        auto value=GameStringLength53(args);
+        if(!state_.string_length53_calls){
+            const auto current=vm_->current_witness();
+            if(current.frame_captured&&current.frame_values[0].kind==Value::Kind::Scalar&&current.frame_values[0].word>>28==2){
+                const auto row=current.frame_values[0].word&0x0FFFFFFF;
+                if(row<600&&ObserveWordRow(row).valid){word_consumer_row_index_=row;state_.word_consumer_source_pc=current.current_pc;
+                    state_.word_consumer_source_entry=current.code_entry;state_.word_consumer_source_frame_id=current.frame_id;}
+            }
+        }
+        ++state_.string_length53_calls;state_.string_length53_pc=vm_->pc();
+        state_.string_length53_input=args[0].kind==Value::Kind::String?args[0].cp932:std::string{};
+        state_.string_length53_result_word=value.word;return value;
+    }
+    if(id==0x71){
+        auto value=GameAsciiPrefix71(args);++state_.string_prefix71_calls;state_.string_prefix71_pc=vm_->pc();
+        state_.string_prefix71_input=args[0].cp932;state_.string_prefix71_result_word=value.word;state_.string_prefix71_result_kind=uint32_t(value.kind);return value;
+    }
+    if(id==0x0D){
+        auto value=GameNilBytePair0D(args);++state_.nil_code0d_calls;state_.nil_code0d_pc=vm_->pc();state_.nil_code0d_result_word=value.word;return value;
+    }
+    if(id==0x70){
+        auto value=ascii_class70_.Query(args);++state_.ascii_class70_calls;state_.ascii_class70_pc=vm_->pc();
+        state_.ascii_class70_input=args[0].cp932;state_.ascii_class70_result_word=value.word;return value;
+    }
     if(id==1){Need(args.size()==1&&args[0].kind!=Value::Kind::Unknown,"Builtin01 type query argc/value");return Value::integer(args[0].kind==Value::Kind::Reference?11:int32_t(args[0].word>>28));}
     if(id==0x22){
         Need(args.size()==2,"Builtin22 event request argc");
@@ -519,8 +612,15 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
+        out.d5_calls=vm_->d5_calls();out.d5_first_pc=vm_->d5_first_pc();out.d5_first_left_word=vm_->d5_first_left_word();out.d5_first_right_word=vm_->d5_first_right_word();out.d5_first_result_word=vm_->d5_first_result_word();
+        out.ctx_reference_branches=vm_->ctx_reference_branches();out.ctx_reference_first_pc=vm_->ctx_reference_first_pc();out.ctx_reference_first_index=vm_->ctx_reference_first_index();
         out.native_reserved_local_nil=vm_->native_reserved_local_nil();
         out.vm_current=vm_->current_witness();out.normal_return=vm_->last_normal_return();out.farewell_return=vm_->last_normal_return(1);
+        if(word_consumer_row_index_!=UINT32_MAX)out.word_consumer_row=ObserveWordRow(word_consumer_row_index_);
+        if(out.vm_current.frame_captured&&out.vm_current.frame_values[0].kind==Value::Kind::Scalar&&out.vm_current.frame_values[0].word>>28==2){
+            const auto index=out.vm_current.frame_values[0].word&0x0FFFFFFF;
+            if(index<600)out.candidate_word_row=ObserveWordRow(index);
+        }
         out.b3_calls=vm_->b3_calls();out.b3_pc=vm_->b3_pc();out.b3_operand_kind=vm_->b3_operand_kind();out.b3_operand_word=vm_->b3_operand_word();out.b3_result_word=vm_->b3_result_word();
         out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
         out.context_word=vm_->context_value().word;out.callback_depth=vm_->callback_depth();out.queued_callbacks=vm_->queued_callbacks();out.operand_count=uint32_t(vm_->stack().size());out.deadline_tick=vm_->deadline_tick();
@@ -532,9 +632,16 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
     }if(runtime_){out.runtime=runtime_->Snapshot();out.source_flag2A980=out.runtime.source_flag2A980!=0;}return out;
 }
 void GameActorScript::Close() {
+    ascii_class70_.Close();state_.ascii_class70_live=false;state_.ascii_class70_generation=0;
+    state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
     state_=Snapshot();
+    word_consumer_row_index_=UINT32_MAX;
     dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;sound_=nullptr;
     state_.live=false;state_.awaiting_message=state_.awaiting_choice=state_.awaiting_input=false;
     state_.source_main_input_suppressed48=false;
+}
+GameWordRowObservation GameActorScript::ObserveWordRow(uint32_t row)const noexcept{
+    if(state_.live&&vm_)return GameObserveWordRow(*vm_,state_.generation,row);
+    GameWordRowObservation out;out.generation=state_.generation;out.row=row;out.error_code=1;return out;
 }
 } // namespace dokodemo::recovered
