@@ -110,6 +110,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::StartupRepeatedModuleSnapshot repeated_state;
     recovered::ControllerState controller;
     recovered::GameInputMailbox game_inputs;
+    recovered::GameTextMailbox game_text;
     uint64_t game_input_sequence=0;
     bool game_input_live=false;
     std::array<StartupNativeBlock, 3> game_blocks{};
@@ -1139,6 +1140,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
         const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
         const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
+        const auto& editor=state.game_boot.content.scene_ui.editor;
+        if(editor.live&&editor.source_state!=3)buttons=0; //typing X/Z/Enter is never Circle/Cross/Start
         const auto sample=controller.Update(buttons, x, y, GetTickCount64() * 1000);
         if(game_input_live && !options.test_controller_input)
             game_inputs.Push({sample.buttons,focused,false,++game_input_sequence});
@@ -1149,9 +1152,22 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if(state.closing || state.resources_closed)return Failure(StartupRuntimeCode::Closed);
         if(!options.test_controller_input)return Failure(StartupRuntimeCode::Busy);
         if(!game_input_live)return Failure(StartupRuntimeCode::NotStarted);
+        const auto& editor=state.game_boot.content.scene_ui.editor;
+        if(editor.live&&editor.source_state!=3)buttons=0;
         game_inputs.Push({buttons,focused,true,++game_input_sequence});
         EmitLocked("TestGameInputFrame","TestInjectedNativeInput",0,buttons,false,0,0,0,
             focused?"focused raw button frame;not physical hardware verification":"unfocused raw button frame;must not confirm prompt");
+        return {};
+    }
+    StartupRuntimeStatus PostGameText(const recovered::GameTextEvent& event){
+        std::lock_guard<std::mutex> lock(metadata);
+        if(state.closing||state.resources_closed)return Failure(StartupRuntimeCode::Closed);
+        if(!game_input_live)return Failure(StartupRuntimeCode::NotStarted);
+        const auto& editor=state.game_boot.content.scene_ui.editor;
+        if(!editor.live||editor.source_state==3||event.context!=editor.context||
+           (event.test_injected&&!options.test_controller_input)||event.bytes>event.text.size())
+            return Failure(StartupRuntimeCode::Busy);
+        if(!game_text.Push(event))return Failure(StartupRuntimeCode::Busy);
         return {};
     }
     recovered::StartupFlowStop ContinueGameAfterModules() override {
@@ -1331,6 +1347,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             0, 0, 0, "actual distant DATA.BPM member,nested FONT\\FONT.XFT borrowed image and checked texture views;completed before scene1 UI constructors");
         game_content.SetNativeTitleLayout(options.native_title_layout);
         game_content.SetTitleRng(game_rng);
+        game_content.SetCalendar(state.game_boot.calendar_words);
         const auto scene_status=game_content.InitializeSceneResources(*this);
         if(!scene_status) {
             Emit("GameSceneResourceFailure","NativeSceneResourceConsumers",0x18EE8,0,false,0,scene_status.native_error,0,scene_status.detail.c_str());
@@ -1379,6 +1396,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         {
             std::lock_guard<std::mutex> lock(metadata);
             game_inputs.Clear();
+            game_text.Clear();
             game_input_live = true;
         }
         Emit("GameNativeStorageBegin", "NamedWindowsStorageAdaptation", 0x4E67C, 0, false, 0, 0, 0,
@@ -1409,7 +1427,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         state.barrier_source_pc = state.current_frontier_source_pc = content.frontier_pc;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        const char *frontier = content.title.softkey_requested&&!content.status ? "NativeTitleSoftkeyUnavailable"
+        const char *frontier = content.title.scene3_completed ? "NativeProfileConfirmedScene4Pending"
+                               : content.title.softkey_requested&&!content.status ? "NativeTitleSoftkeyFailure"
                                : !content.status            ? "GameResourceFailure"
                                : content.title.frame_drawn ? "NativeTitleCharacterFrame"
                                : content.title_constructor_returned ? "NativeTitleFadeUpdate"
@@ -1425,6 +1444,11 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         state.worker_state = "Interactive";
     }
     void TickInteractiveGame() {
+        recovered::GameTextEvent text;
+        for(;;){
+            {std::lock_guard<std::mutex> lock(metadata);if(!game_text.Pop(text))break;}
+            (void)game_content.ProcessText(text);
+        }
         recovered::GameInputFrame frame;
         for (;;) {
             {
@@ -2006,6 +2030,7 @@ recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_
 StartupRuntimeStatus StartupCoordinator::InjectTestControllerInput(uint32_t buttons,bool focused) {
     return impl_->InjectGameInput(buttons,focused);
 }
+StartupRuntimeStatus StartupCoordinator::PostGameText(const recovered::GameTextEvent& event){return impl_->PostGameText(event);}
 bool StartupCoordinator::CopyGameFrame(recovered::GameGraphicsFrame& out) const {
     return impl_->game_graphics.CopyFront(out);
 }

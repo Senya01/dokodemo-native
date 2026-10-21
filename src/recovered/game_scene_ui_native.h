@@ -3,6 +3,7 @@
 #include "game_ui_resource_native.h"
 #include "game_dictionary_native.h"
 #include "game_input_native.h"
+#include "game_text_native.h"
 #include <array>
 
 namespace dokodemo::recovered {
@@ -49,6 +50,7 @@ class GameDialogController {
     void Tick() noexcept;
     void Retire() noexcept {
         gate_.Stop();
+        cancel_gate_.Stop();
         state_.state = 3;
     }
     GameDialogSnapshot Snapshot() const noexcept {
@@ -57,6 +59,7 @@ class GameDialogController {
 
   private:
     GameButtonGate gate_;
+    GameButtonGate cancel_gate_;
     GameDialogSnapshot state_;
 };
 struct GameSceneUiSnapshot {
@@ -71,10 +74,13 @@ struct GameSceneUiSnapshot {
     int32_t dialog_state = 3, dialog_result = 0;
     uint32_t confirmations = 0;
     GameTransitionSnapshot transition;
+    GameNameEntrySnapshot editor;
+    std::string editor_label;
+    bool select_adapter=false;
 };
 // 18EE8..18F38: grouped typed native owners. Immutable views borrow DATA.BPM;
 // mutable NJ/text/control state is owned and retired before that package/font.
-class GameSceneUiBootstrap final {
+class GameSceneUiBootstrap final : private GameUiCallbacks {
   public:
     GameFsStatus Initialize(GameResourceSource &source, GameArena &arena, GameVmBoot &manager,
                             const GameFontResource &font);
@@ -82,6 +88,16 @@ class GameSceneUiBootstrap final {
     GameTransition& TitleTransitionOwner()noexcept{return transition_;} //worker-owned,never exposed to UI thread
     GameFsStatus ShowStorageDialog(const GameFontResource &font, uint32_t native_error);
     bool HandleDialogInput(const GameInputFrame &frame);
+    GameFsStatus BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
+                            uint32_t select_mode=0,int32_t minimum=0,int32_t maximum_value=0,
+                            bool allow_cancel=true);
+    bool HandleText(const GameTextEvent&);
+    GameNameEntrySnapshot Editor()const{return editor_.Snapshot();}
+    const std::string* EditorResult()const noexcept{return editor_.Result();}
+    bool TickEditor();
+    bool DrawEditor(GameGraphics&);
+    GameFsStatus BeginProfileConfirmation();
+    bool DrawProfileConfirmation(GameGraphics&);
     GameSceneUiSnapshot Snapshot() const;
     bool Close();
     ~GameSceneUiBootstrap();
@@ -104,6 +120,13 @@ class GameSceneUiBootstrap final {
     std::vector<uint32_t> dialog_pixels_;
     uint32_t dialog_width_ = 0, dialog_height_ = 0;
     GameSceneUiSnapshot state_;
+    const GameFontResource* font_=nullptr;
+    GameNameEntry editor_;
+    uint32_t editor_resource_=1,editor_open_clip_=17,editor_close_clip_=18;
+    int32_t editor_min_=0,editor_max_=0;
+    bool editor_cancel_=true;
+    bool profile_confirmation_=false;
+    bool DrawUiCallback(uint32_t,uint32_t,const GameUiMatrix&,uint32_t,GameGraphics&,std::string&)override;
 };
 
 struct GameSoundBankSnapshot {

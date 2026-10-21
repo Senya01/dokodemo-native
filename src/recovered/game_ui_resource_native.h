@@ -100,7 +100,7 @@ class GameUiInstance final {
     // children inherit current parent world, not previous-frame cached state.
     bool Draw(GameGraphics &, GameUiDrawStats &, std::string &error, GameUiCallbacks *callbacks = nullptr,
               GameUiMatrix instance_base = {}, uint32_t first_group = 0,
-              uint32_t last_group = UINT32_MAX) const;
+              uint32_t last_group = UINT32_MAX,int32_t explicit_root=-1) const;
     bool SetSourceCallback(uint32_t node, uint32_t source_pc);
     bool ShowRoot(uint32_t index, bool visible = true);
     uint32_t VisibleRoots() const;

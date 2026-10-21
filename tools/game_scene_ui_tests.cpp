@@ -319,6 +319,7 @@ void UiDrawTests() {
             H(b, 42, 1);
             W(b, 44, 14);
             W(b, 52, 14);
+            W(b,104,2); //source control end,independent of unconsumed clip+28
             out = View(std::move(b));
             return {};
         }
@@ -365,6 +366,16 @@ void UiDrawTests() {
     Check(!instance.Draw(graphics, stats, error), "negative-selector recursive reference rejects cycle");
     child->texture = 2;
     Check(!instance.Draw(graphics, stats, error), "out-of-range texture is error");
+    child->texture=1;
+    auto* control=instance.AddControl(0);Check(control!=nullptr,"animation control owner");
+    control->mode=control->active=1;
+    Check(instance.Update(error)&&control->frame==1&&control->mode==1,"96730 frame<end-1 advances without premature result");
+    Check(instance.Update(error)&&control->frame==2&&control->mode==2,"96730 equality advances AND completes on this tick");
+    control->frame=3;control->mode=1;
+    Check(instance.Update(error)&&control->frame==3&&control->mode==1,"96730 beyond-end does not invent completion");
+    control->active=0;
+    instance.ShowRoot(0,false);
+    Check(instance.Draw(graphics,stats,error)&&stats.nodes==0&&instance.Draw(graphics,stats,error,nullptr,{},0,UINT32_MAX,0)&&stats.quads==1,"32B04 manual root draw independent of B8 visible flag");
     instance.Close();
     resource->Close();
     Check(!instance.Draw(graphics, stats, error), "retired UI cannot draw");

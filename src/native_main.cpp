@@ -12,6 +12,8 @@
 #include "script_vm.h"
 #include "audio_native.h"
 #include "game_font.h"
+#include "game_text_win32.h"
+#include <imm.h>
 #include "model_formats.hpp"
 #include "startup_probe.h"
 #include "startup_runtime_win32.h"
@@ -50,6 +52,7 @@ struct Options {
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false;
     bool titleMenuWindowTest=false;
+    bool softkeyWindowTest=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -65,6 +68,7 @@ Options ParseOptions() {
         else if(arg==L"--storage-direct-window-test"){options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--title-window-test"){options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--title-menu-window-test"){options.titleMenuWindowTest=options.titleWindowTest=options.storageWindowTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--softkey-window-test"){options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
         else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
@@ -1390,6 +1394,33 @@ void WriteNextGameCallValue(std::ostream& out, const dokodemo::StartupObservatio
         << ",\"returned\":" << (o.game_boot.controller_setup_returned ? "true" : "false")
         << ",\"result_domain\":\"WindowsInputAdapter\",\"later_100C_reached\":" << (o.reached_100C ? "true" : "false") << '}';
 }
+void WriteGameTextValue(std::ostream& out,const dokodemo::recovered::GameNameEntrySnapshot& e){
+    const auto flag=[](bool v){return v?"true":"false";};
+    const auto hex=[](const std::string& v){return StartupHexBytes(reinterpret_cast<const uint8_t*>(v.data()),v.size());};
+    out<<"{\"live\":"<<flag(e.live)<<",\"focused\":"<<flag(e.focused)<<",\"composing\":"<<flag(e.composing)
+        <<",\"source_state\":"<<e.source_state<<",\"context\":"<<e.context<<",\"maximum_units\":"<<e.maximum_units
+        <<",\"units\":"<<e.units<<",\"native_caret_units\":"<<e.native_caret_units
+        <<",\"edits\":"<<e.edits<<",\"rejections\":"<<e.rejections<<",\"confirmations\":"<<e.confirmations
+        <<",\"cancellations\":"<<e.cancellations<<",\"accepted\":"<<flag(e.accepted)<<",\"cancelled\":"<<flag(e.cancelled)
+        <<",\"result_ready\":"<<flag(e.result_ready)<<",\"initial_cp932_hex\":"<<JsonString(hex(e.initial))
+        <<",\"staged_cp932_hex\":"<<JsonString(hex(e.staged))<<",\"source120_cp932_hex\":"<<JsonString(hex(e.source120))
+        <<",\"result_cp932_hex\":"<<JsonString(hex(e.result))<<",\"error\":"<<JsonString(e.error)<<'}';
+}
+void WriteGameProfileValue(std::ostream& out,const dokodemo::recovered::GameProfileSnapshot& p){
+    const auto hex=[](const std::string& v){return StartupHexBytes(reinterpret_cast<const uint8_t*>(v.data()),v.size());};
+    out<<"{\"nickname_cp932_hex\":"<<JsonString(hex(p.nickname))<<",\"player_cp932_hex\":"<<JsonString(hex(p.player))
+        <<",\"comment_cp932_hex\":"<<JsonString(hex(p.comment))<<",\"gender\":"<<p.gender<<",\"year\":"<<p.year
+        <<",\"month\":"<<p.month<<",\"day\":"<<p.day<<",\"zodiac\":"<<p.zodiac<<",\"blood\":"<<p.blood
+        <<",\"present_count_E6\":"<<p.present<<",\"editor_field\":"<<p.editor_field
+        <<",\"accepted_results\":"<<p.accepted_results<<",\"cancelled_results\":"<<p.cancelled_results
+        <<",\"confirmed\":"<<(p.confirmed?"true":"false")<<",\"applied\":"<<(p.applied?"true":"false")
+        <<",\"profile_loaded_marker\":false,\"psp_savedata_serialized\":false,\"stored\":{\"live\":"<<(p.stored.live?"true":"false")
+        <<",\"actor\":"<<p.stored.actor<<",\"gender\":"<<p.stored.gender<<",\"packed_date\":"<<p.stored.date<<",\"blood\":"<<p.stored.blood
+        <<",\"nickname_cp932_hex\":"<<JsonString(hex(p.stored.nickname))<<",\"player_cp932_hex\":"<<JsonString(hex(p.stored.player))
+        <<",\"comment_cp932_hex\":"<<JsonString(hex(p.stored.comment))
+        <<",\"raw16_comment_hex\":"<<JsonString(StartupHexBytes(p.stored.source_comment.data(),16))<<",\"calendar\":[";
+    for(size_t i=0;i<7;++i){if(i)out<<',';out<<p.stored.calendar[i];}out<<"]}}";
+}
 void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootObservation& boot) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
     out << "{\"controller_setup_entered\":" << boolean(boot.controller_setup_entered)
@@ -1585,8 +1616,15 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         if(actor.target_produced)out<<'['<<actor.target_x<<','<<actor.target_y<<']';else out<<"null";
         out<<'}';
     }
-    out<<"]}"
+    out<<"],\"profile\":";WriteGameProfileValue(out,boot.content.title.profile);out<<'}'
         << ",\"next_resource\":" << JsonString(boot.content.next_resource)
+        << ",\"actor_dictionary_requested\":"<<boolean(boot.content.actor_dictionary_requested)
+        << ",\"actor_dictionary_ready\":"<<boolean(boot.content.actor_dictionary_ready)
+        << ",\"actor_dictionary_live\":"<<boolean(boot.content.actor_dictionary_live)
+        << ",\"actor_package_bytes\":"<<boot.content.actor_package_bytes
+        << ",\"actor_dictionary_bytes\":"<<boot.content.actor_dictionary_bytes
+        << ",\"actor_dictionary_path\":"<<JsonString(boot.content.actor_dictionary_path)
+        << ",\"actor_dictionary_prefix_hex\":"<<JsonString(StartupHexBytes(boot.content.actor_dictionary_prefix.data(),16))
         << ",\"title_material_resources\":[";
     for(size_t i=0;i<boot.content.title_material_resources.size();++i) {
         if(i)out<<',';out<<JsonString(boot.content.title_material_resources[i]);
@@ -1627,7 +1665,10 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"dialog_result\":" << boot.content.scene_ui.dialog_result
         << ",\"confirmations\":" << boot.content.scene_ui.confirmations
         << ",\"fade_state\":" << boot.content.scene_ui.transition.state
-        << ",\"fade_radius\":" << boot.content.scene_ui.transition.radius << '}'
+        << ",\"fade_radius\":" << boot.content.scene_ui.transition.radius
+        << ",\"editor_label\":" << JsonString(boot.content.scene_ui.editor_label)
+        << ",\"select_adapter\":"<<boolean(boot.content.scene_ui.select_adapter)<<",\"editor\":";
+    WriteGameTextValue(out,boot.content.scene_ui.editor);out<<'}'
         << ",\"sound_bank\":{\"metadata_ready\":" << boolean(boot.content.sound_bank.metadata_ready)
         << ",\"mixer_ready\":false,\"image_bytes\":" << boot.content.sound_bank.image_bytes
         << ",\"chunks\":" << boot.content.sound_bank.chunks
@@ -3712,6 +3753,16 @@ struct Application {
     unsigned titleMenuStep=0;uint32_t titleMenuWait=0;
     bool titleArrivalObserved=false,titleMenuSelectionObserved=false;
     dokodemo::recovered::GameTitleSnapshot titleEarly;
+    dokodemo::recovered::GameTextKeyGate textGate;
+    bool imeComposing=false;
+    wchar_t highSurrogate=0;
+    uint64_t imeContext=0;
+    uint32_t softkeyStep=0,softkeyWait=0;
+    uint64_t cancelledTextContext=0;
+    bool textCancelObserved=false,textCloseObserved=false,staleTextRefused=false,playerCancelObserved=false;
+    uint64_t testedEditorContext=0;
+    bool birthdayBackObserved=false,dayValidationPending=false,dayRejectedObserved=false;
+    bool profileNoObserved=false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
     std::wstring status; uint64_t frames = 0, inputEvents = 0; bool imageLoaded = false, smokeInputSent = false;
@@ -3779,14 +3830,18 @@ struct Application {
     void RefreshNativeStartup() {
         if (!nativeStartup) return;
         startupObservation = nativeStartup->Observe();
+        SyncTextContext();
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
         else if (AtGameBootBoundary(startupObservation)) {
             const auto& c=startupObservation.game_boot.content;
             if(c.title.frame_drawn) {
                 startupStatus=L"TITLE: игровое меню и персонажи — промежуточная Windows-сборка.";
-                status=c.title.softkey_requested?L"Следующий шаг — ввод имени. Эта клавиатура пока не реализована; Esc закрывает игру."
+                status=c.title.softkey_requested?L"Windows text/IME → CP932: вводите текст, Enter — принять, Esc — отменить. Стрелки/Home/End/Delete — native caret; NJ engine пока не реализован."
                     :L"X = ○ подтвердить; Z = × назад; стрелки — меню и выбор персонажа. Звуковой движок пока недоступен.";
+                if(c.scene_ui.editor.live&&c.scene_ui.editor.source_state!=3){
+                    status=Utf8(c.scene_ui.editor_label)+L"  "+Utf8(c.scene_ui.editor.error);
+                }
             } else if(c.title_constructor_returned) {
                 startupStatus=L"TITLE: модели/анимации загружены; исходная fade-цепочка, ожидание видимости.";
                 status=L"Явная native character-entry policy; неизвестный 7E65C не считается наблюдённым PSP значением.";
@@ -3951,8 +4006,92 @@ struct Application {
         bool ok=player.Play(clip,loop,error);
         status=ok ? L"Оригинальный BGM_TITLE: нативный WinMM, intro + исходный sample loop. F3 остановит звук." : Utf8(error);
     }
-    void Key(WPARAM key) {
+    bool PostText(dokodemo::recovered::GameTextKind kind,uint64_t context=0,std::string_view value={}){
+        if(!nativeStartup)return false;
+        dokodemo::recovered::GameTextEvent event;
+        event.context=context?context:textGate.Id();event.kind=kind;event.test_injected=options.softkeyWindowTest;
+        if(value.size()>event.text.size())return false;
+        event.bytes=uint16_t(value.size());std::copy(value.begin(),value.end(),event.text.begin());
+        return bool(nativeStartup->PostGameText(event));
+    }
+    void SyncTextContext(){
+        const auto& e=startupObservation.game_boot.content.scene_ui.editor;
+        const auto context=e.live&&e.source_state!=3?e.context:0;
+        if(textGate.Id()==context)return;
+        CancelIme();highSurrogate=0;
+        const bool focused=options.softkeyWindowTest||GetForegroundWindow()==window;
+        textGate.Context(context,focused);
+        if(context)PostText(focused?dokodemo::recovered::GameTextKind::FocusGained:dokodemo::recovered::GameTextKind::FocusLost);
+    }
+    void TextFocus(bool focused){
+        if(!focused)CancelIme();
+        textGate.Focus(focused);highSurrogate=0;
+        if(textGate.Id())PostText(focused?dokodemo::recovered::GameTextKind::FocusGained:dokodemo::recovered::GameTextKind::FocusLost);
+    }
+    void CancelIme(){
+        const bool pending=imeComposing;imeComposing=false;imeContext=0;
+        if(pending){const auto context=ImmGetContext(window);if(context){ImmNotifyIME(context,NI_COMPOSITIONSTR,CPS_CANCEL,0);ImmReleaseContext(window,context);}}
+    }
+    bool CommitUnicode(std::wstring_view value,uint64_t context=0){
+        std::string encoded,error;
+        if(!dokodemo::EncodeGameText932(value,encoded,error)){
+            PostText(dokodemo::recovered::GameTextKind::InvalidEncoding,context);return false;
+        }
+        return PostText(dokodemo::recovered::GameTextKind::Commit,context,encoded);
+    }
+    void Character(wchar_t value,LPARAM info){
+        if(!textGate.Id()||imeComposing)return;
+        const auto key=MapVirtualKeyW(uint32_t((uint64_t(info)>>16)&255),MAPVK_VSC_TO_VK);
+        if(!textGate.Character(key)||value<32||value==127)return;
+        if(value>=0xD800&&value<=0xDBFF){highSurrogate=value;return;}
+        std::wstring text;
+        if(highSurrogate){text.push_back(highSurrogate);highSurrogate=0;}
+        text.push_back(value);CommitUnicode(text);
+    }
+    void ImeStart(){
+        if(!textGate.Id())return;
+        imeComposing=true;imeContext=textGate.Id();highSurrogate=0;
+        PostText(dokodemo::recovered::GameTextKind::CompositionBegin,imeContext);
+    }
+    bool ImeComposition(LPARAM flags){
+        if(!(flags&GCS_RESULTSTR))return false;
+        if(!imeComposing||imeContext!=textGate.Id())return true; //discard retired/unowned IME result
+        const auto context=ImmGetContext(window);if(!context)return false;
+        const auto bytes=ImmGetCompositionStringW(context,GCS_RESULTSTR,nullptr,0);
+        if(bytes<0||bytes>512||(bytes&1)){
+            ImmReleaseContext(window,context);PostText(dokodemo::recovered::GameTextKind::InvalidEncoding,imeContext);return true;
+        }
+        std::wstring value(size_t(bytes)/2,L'\0');
+        const auto read=ImmGetCompositionStringW(context,GCS_RESULTSTR,value.data(),DWORD(bytes));
+        ImmReleaseContext(window,context);
+        if(read!=bytes)PostText(dokodemo::recovered::GameTextKind::InvalidEncoding,imeContext);
+        else CommitUnicode(value,imeContext);
+        return true; //result handled;DefWindowProc must not emit duplicate WM_CHAR
+    }
+    void ImeEnd(){
+        if(imeContext&&imeContext==textGate.Id())PostText(dokodemo::recovered::GameTextKind::CompositionEnd,imeContext);
+        imeComposing=false;imeContext=0;textGate.Focus(GetForegroundWindow()==window);
+    }
+    void Key(WPARAM key,LPARAM info=0) {
         ++inputEvents;
+        if(textGate.Id()){
+            using dokodemo::recovered::GameTextKind;
+            const bool repeat=(uint64_t(info)&(1ull<<30))!=0;
+            if(!textGate.KeyDown(uint32_t(key),repeat))return;
+            if(imeComposing)return; //Enter finishes host composition only
+            switch(key){
+                case VK_RETURN:if(!repeat)PostText(GameTextKind::Confirm);break;
+                case VK_ESCAPE:if(!repeat)PostText(GameTextKind::Cancel);break;
+                case VK_BACK:PostText(GameTextKind::Backspace);break;
+                case VK_DELETE:PostText(GameTextKind::Delete);break;
+                case VK_LEFT:PostText(GameTextKind::Left);break;
+                case VK_RIGHT:PostText(GameTextKind::Right);break;
+                case VK_HOME:PostText(GameTextKind::Home);break;
+                case VK_END:PostText(GameTextKind::End);break;
+                case VK_F12:Capture();break;
+            }
+            return;
+        }
         //Game controls are sampled through the synchronized worker mailbox.
         //They must not simultaneously browse assets or run isolated probes.
         if(nativeStartup&&!options.smoke){
@@ -3974,6 +4113,86 @@ struct Application {
         else if (key == VK_F12) Capture();
         else if (key == VK_ESCAPE) RequestWindowClose();
         InvalidateRect(window,nullptr,FALSE);
+    }
+    void SoftkeyTestTick(const dokodemo::recovered::GameContentSnapshot& c){
+        using namespace dokodemo::recovered;
+        const auto& title=c.title;const auto& e=c.scene_ui.editor;
+        const auto save=[&](const wchar_t* name){
+            WriteStartupObservation(options.evidence/(std::wstring(name)+L".json"),startupObservation);
+            Capture();std::filesystem::copy_file(options.evidence/L"native-window.bmp",options.evidence/(std::wstring(name)+L".bmp"),std::filesystem::copy_options::overwrite_existing);
+        };
+        const auto button=[&](uint32_t value){(void)nativeStartup->InjectTestControllerInput(value,true);};
+        const auto command=[&](GameTextKind kind){return PostText(kind);};
+        const auto replace=[&](std::wstring_view value){
+            command(GameTextKind::Home);for(unsigned n=0;n<40;++n)command(GameTextKind::Delete);
+            CommitUnicode(value);
+        };
+        if(softkeyStep==0&&title.state==1&&title.layout==0&&title.frames>=40){
+            button(0);softkeyWait=title.updates+3;softkeyStep=1;
+        }else if(softkeyStep==1&&title.updates>=softkeyWait){button(Circle);softkeyStep=2;
+        }else if(softkeyStep==2&&title.layout==2&&title.state==1){button(0);softkeyWait=title.updates+3;softkeyStep=3;
+        }else if(softkeyStep==3&&title.updates>=softkeyWait){button(Circle);softkeyStep=4;
+        }else if(softkeyStep==4&&title.layout==3&&e.source_state==1&&e.focused){
+            save(L"softkey-open");
+            const auto scan=LPARAM(MapVirtualKeyW('X',MAPVK_VK_TO_VSC))<<16;
+            SendMessageW(window,WM_KEYDOWN,'X',scan);SendMessageW(window,WM_CHAR,'x',scan);SendMessageW(window,WM_KEYUP,'X',scan);
+            button(Circle);softkeyWait=title.updates+3;softkeyStep=5;
+        }else if(softkeyStep==5&&title.updates>=softkeyWait&&e.units==3&&title.confirmations==2){
+            replace(L"トロAB");CommitUnicode(L"C");CommitUnicode(L"\U0001F600");
+            command(GameTextKind::CompositionBegin);command(GameTextKind::Confirm);command(GameTextKind::CompositionEnd);
+            command(GameTextKind::FocusLost);command(GameTextKind::Confirm);command(GameTextKind::FocusGained);
+            softkeyWait=title.updates+3;softkeyStep=6;
+        }else if(softkeyStep==6&&title.updates>=softkeyWait&&e.units==4&&e.rejections>=4){
+            save(L"softkey-edited");cancelledTextContext=e.context;command(GameTextKind::Cancel);softkeyStep=7;
+        }else if(softkeyStep==7){
+            if(e.source_state==2&&!e.result_ready){textCloseObserved=true;save(L"softkey-closing");}
+            if(title.layout==2&&title.state==1&&e.source_state==3&&e.cancelled){
+                textCancelObserved=true;save(L"softkey-cancelled");button(0);softkeyWait=title.updates+3;softkeyStep=8;
+            }
+        }else if(softkeyStep==8&&title.updates>=softkeyWait){button(Circle);softkeyStep=9;
+        }else if(softkeyStep==9&&title.layout==3&&e.source_state==1&&e.focused&&e.context!=cancelledTextContext){
+            staleTextRefused=!PostText(GameTextKind::Confirm,cancelledTextContext);
+            replace(L"トロA");command(GameTextKind::Confirm);softkeyStep=10;
+        }else if(softkeyStep==10&&title.layout==4&&title.profile.editor_field==uint32_t(GameProfileField::Player)&&e.source_state==1&&e.focused){
+            save(L"nickname-result");testedEditorContext=e.context;command(GameTextKind::Cancel);softkeyStep=11;
+        }else if(softkeyStep==11&&title.profile.editor_field==uint32_t(GameProfileField::Player)&&e.context!=testedEditorContext&&e.source_state==1&&e.focused){
+            playerCancelObserved=title.profile.player.empty()&&title.profile.present==1;
+            save(L"player-cancelled");replace(L"Sen");command(GameTextKind::Confirm);softkeyStep=12;
+        }else if(softkeyStep==12&&e.source_state==1&&e.focused){
+            const auto field=GameProfileField(title.profile.editor_field);
+            if(dayValidationPending&&field==GameProfileField::Day&&!e.error.empty()){
+                dayRejectedObserved=true;dayValidationPending=false;save(L"birthday-invalid");replace(L"29");command(GameTextKind::Confirm);
+            }else if(e.context!=testedEditorContext){
+                testedEditorContext=e.context;
+                switch(field){
+                    case GameProfileField::Gender:save(L"profile-gender");replace(L"2");command(GameTextKind::Confirm);break;
+                    case GameProfileField::Year:command(GameTextKind::Cancel);replace(L"2000");command(GameTextKind::Confirm);break;
+                    case GameProfileField::Month:
+                        if(!birthdayBackObserved){birthdayBackObserved=true;command(GameTextKind::Cancel);}
+                        else {replace(L"2");command(GameTextKind::Confirm);}break;
+                    case GameProfileField::Day:replace(L"31");command(GameTextKind::Confirm);dayValidationPending=true;break;
+                    case GameProfileField::Blood:replace(L"3");command(GameTextKind::Confirm);break;
+                    case GameProfileField::Comment:save(L"profile-comment");replace(L"あいうえおかきくけこさしす");command(GameTextKind::Confirm);break;
+                    default:break;
+                }
+            }
+        }
+        if(softkeyStep==12&&title.profile.present==7&&c.scene_ui.awaiting_confirmation){
+            save(L"profile-confirmation");button(0);softkeyWait=title.updates+3;softkeyStep=13;
+        }else if(softkeyStep==13&&title.updates>=softkeyWait){button(Cross);softkeyStep=14;
+        }else if(softkeyStep==14&&c.scene_ui.dialog_state==3&&!title.profile.applied){
+            profileNoObserved=true;save(L"profile-no");button(0);softkeyWait=title.updates+3;softkeyStep=15;
+        }else if(softkeyStep==15&&title.updates>=softkeyWait){button(0);softkeyWait=title.updates+3;softkeyStep=19;
+        }else if(softkeyStep==19&&title.updates>=softkeyWait){button(Circle);softkeyStep=16;
+        }else if(softkeyStep==16&&c.scene_ui.awaiting_confirmation){button(0);softkeyWait=title.updates+3;softkeyStep=17;
+        }else if(softkeyStep==17&&title.updates>=softkeyWait){button(Circle);softkeyStep=18;}
+        storageBoundaryPassed=softkeyStep==18&&profileNoObserved&&textCancelObserved&&textCloseObserved&&staleTextRefused&&playerCancelObserved
+            &&birthdayBackObserved&&dayRejectedObserved&&title.scene3_completed&&title.state==3
+            &&title.profile.present==7&&title.profile.applied&&title.profile.confirmed
+            &&title.profile.gender==1&&title.profile.year==2000&&title.profile.month==2&&title.profile.day==29
+            &&title.profile.blood==2&&title.profile.comment.size()==26&&c.next_scene==4&&c.current_scene==4&&c.frontier_pc==0x1AF20
+            &&c.actor_dictionary_ready&&c.actor_dictionary_live&&c.actor_dictionary_bytes>0
+            &&c.blocked&&c.status.code==GameFsCode::Unavailable;
     }
     void StartupProbe() {
         messageVisible=false;
@@ -4317,6 +4536,7 @@ struct Application {
                     &&!title.scene3_completed&&!title.arrival_branch_pending&&c.blocked&&c.frontier_pc==0x1FD80
                     &&c.status.code==GameFsCode::Unavailable&&title.layout==3&&title.state==1;
             }
+            if(options.softkeyWindowTest)SoftkeyTestTick(c);
         }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
             && AtNativeModuleSequenceBoundary(startupObservation)
@@ -4330,7 +4550,7 @@ struct Application {
             Capture();
             PostMessageW(window, WM_CLOSE, 0, 0); // actual app shutdown route, no old F-key sequence
         }
-        if (options.connectedStartupWindowTest && elapsed > (options.titleMenuWindowTest?75.0:(options.titleWindowTest?20.0:5.0)) && !startupWindowCloseSent) {
+        if (options.connectedStartupWindowTest && elapsed > (options.softkeyWindowTest?90.0:(options.titleMenuWindowTest?75.0:(options.titleWindowTest?20.0:5.0))) && !startupWindowCloseSent) {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-unexpected.json", startupObservation);
@@ -4380,11 +4600,19 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case WM_SIZE: app->width = std::max(1,int(LOWORD(lParam))); app->height = std::max(1,int(HIWORD(lParam))); app->ReleaseBuffer(); return 0;
         case WM_PAINT: app->Paint(); return 0;
         case WM_ERASEBKGND: return 1;
-        case WM_KEYDOWN: app->Key(wParam); return 0;
+        case WM_KEYDOWN: app->Key(wParam,lParam); return 0;
+        case WM_KEYUP: app->textGate.KeyUp(uint32_t(wParam));return 0;
+        case WM_CHAR: app->Character(wchar_t(wParam),lParam);return 0;
+        case WM_SETFOCUS:app->TextFocus(true);break;
+        case WM_KILLFOCUS:app->TextFocus(false);break;
+        case WM_IME_STARTCOMPOSITION:app->ImeStart();break;
+        case WM_IME_COMPOSITION:if(app->ImeComposition(lParam))return 0;break;
+        case WM_IME_ENDCOMPOSITION:app->ImeEnd();break;
         case WM_CLOSE: app->RequestWindowClose(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
-        default: return DefWindowProcW(window,message,wParam,lParam);
+        default: break;
     }
+    return DefWindowProcW(window,message,wParam,lParam);
 }
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
@@ -4418,7 +4646,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && !graphics.live && !graphics.color_bytes && !graphics.depth_bytes && !graphics.matrix_bytes);
             const bool retiredInputRefused=!options.storageWindowTest||
                 app.nativeStartup->InjectTestControllerInput(dokodemo::recovered::Circle,true).code==dokodemo::StartupRuntimeCode::Closed;
-            const bool ok = graphicsOk && retiredInputRefused && app.startupWindowBoundaryReached
+            dokodemo::recovered::GameTextEvent retiredText;
+            retiredText.context=app.cancelledTextContext;retiredText.kind=dokodemo::recovered::GameTextKind::Confirm;retiredText.test_injected=true;
+            const bool retiredTextRefused=!options.softkeyWindowTest||app.nativeStartup->PostGameText(retiredText).code==dokodemo::StartupRuntimeCode::Closed;
+            const bool ok = graphicsOk && retiredInputRefused && retiredTextRefused && app.startupWindowBoundaryReached
                 && (!options.storageWindowTest || app.storageBoundaryPassed) && NativeModuleSequenceClosed(app.startupObservation)
                 && app.startupObservation.module_uid > 0
                 && app.startupObservation.module_load_returned && app.startupObservation.module_start_returned
@@ -4431,7 +4662,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && app.startupObservation.callback_dispatch_count == 1
                 && app.startupObservation.callback_dispatch_thread == app.startupObservation.worker_thread_id
                 && app.startupObservation.caller_joined && app.startupObservation.worker_joined
-                && app.startupObservation.resources_closed && app.frames >= 6 && app.inputEvents == 0;
+                && app.startupObservation.resources_closed && app.frames >= 6 && (options.softkeyWindowTest?app.inputEvents>0:app.inputEvents==0);
             std::ofstream report(options.evidence / L"connected-window-test.json", std::ios::binary);
             report << "{\"passed\":" << (ok ? "true" : "false") << ",\"frames\":" << app.frames
                 << ",\"title_window_test\":" << (options.titleWindowTest?"true":"false")
@@ -4440,15 +4671,24 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"boundary_snapshot_reached\":" << (app.startupWindowBoundaryReached?"true":"false")
                 << ",\"storage_direct_test\":" << (options.storageDirectTest?"true":"false")
                 << ",\"retired_input_refused\":" << (retiredInputRefused?"true":"false")
-                << ",\"input_provenance\":" << JsonString(options.storageDirectTest?"NoInputUsed":"ExplicitTestInjectedNativeFramesNotPhysicalHardware")
+                << ",\"input_provenance\":" << JsonString(options.softkeyWindowTest?"ExplicitTestInjectedFramesAndWindowTextPath;NotPhysicalHardwareOrInstalledIME":options.storageDirectTest?"NoInputUsed":"ExplicitTestInjectedNativeFramesNotPhysicalHardware")
+                << ",\"retired_text_refused\":"<<(retiredTextRefused?"true":"false")
                 << ",\"held_ignored\":" << (app.heldIgnored?"true":"false")
                 << ",\"unfocused_ignored\":" << (app.unfocusedIgnored?"true":"false")
                 << ",\"natural_closing_observed\":" << (app.closingObserved?"true":"false")
                 << ",\"storage_boundary_passed\":" << (app.storageBoundaryPassed?"true":"false")
                 << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
+                << ",\"softkey_window_test\":"<<(options.softkeyWindowTest?"true":"false")
+                << ",\"text_cancel_observed\":"<<(app.textCancelObserved?"true":"false")
+                << ",\"text_natural_close_observed\":"<<(app.textCloseObserved?"true":"false")
+                << ",\"stale_text_refused\":"<<(app.staleTextRefused?"true":"false")
+                << ",\"player_cancel_observed\":"<<(app.playerCancelObserved?"true":"false")
+                << ",\"birthday_back_observed\":"<<(app.birthdayBackObserved?"true":"false")
+                << ",\"invalid_day_rejected\":"<<(app.dayRejectedObserved?"true":"false")
+                << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.softkeyWindowTest?"SourceEditorResultsProfileNaturalCC3AndActorDictionaryRead;WindowsTextSelectAdapters;NotDictionaryEngineOrNJ":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

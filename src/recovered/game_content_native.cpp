@@ -464,7 +464,11 @@ bool GameContentBoot::DrawColdFrame(GameGraphics &graphics) {
 bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
-    if(state_.title_constructor_returned){title_.Input(frame);return false;}
+    if(state_.title_constructor_returned){
+        if(scene_ui_.Snapshot().storage_dialog)return scene_ui_.HandleDialogInput(frame);
+        if(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3)return false;
+        title_.Input(frame);return false;
+    }
     const auto accepted = scene_ui_.HandleDialogInput(frame);
     state_.scene_ui = scene_ui_.Snapshot();
     return accepted;
@@ -488,6 +492,7 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
     if (state_.closed || !state_.scene_ui.live)
         return false;
     if(state_.title_constructor_returned) {
+        if(state_.title.scene3_completed)return TickActorDictionary(filesystem);
         if(state_.load_state==2) {
             state_.previous_scene=state_.current_scene;state_.current_scene=state_.next_scene;
             //Native phase0 folds the no-mount-delta transition into the
@@ -499,8 +504,11 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
         state_.title=title_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
         state_.frontier_pc=state_.title.frontier_pc;
         state_.blocked=!bool(state_.status);
-        if(state_.title.softkey_requested)
-            state_.next_resource="31CA0->1FD80 SOFTKEY(mode0,type1,max4,actual CP932 nickname);editing/update/result unimplemented";
+        if(state_.title.scene3_completed){
+            state_.next_scene=4;state_.load_state=2;
+            constexpr const char* dictionaries[]{"KSNEKO\\neko.dic","KSROBO\\robo.dic","KSUSAGI\\usagi.dic","KSINU\\inu.dic","KSKAERU\\kaeru.dic"};
+            state_.next_resource=dictionaries[state_.title.selected_actor];
+        }else if(state_.title.softkey_requested)state_.next_resource="Live native CP932/editor/profile;no KSC request";
         return bool(state_.status);
     }
     //Phase0 observes the previous phase6 result. Reaching TRC3 below does
@@ -629,9 +637,10 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
                 }
             state_.title_model_read = true;
             status=title_.Initialize(*this,*arena_,*manager_,title_layout_,StateWord(0x4C));
+            title_.SetCalendar(calendar_);
             if(status) {
                 if(!title_rng_)status={GameFsCode::Unavailable,0,"TITLE requires worker-owned initialized RNG"};
-                else status=title_.AttachMenu(title_clone_,font_,*title_rng_);
+                else status=title_.AttachMenu(title_clone_,font_,*title_rng_,&scene_ui_,calendar_year_);
             }
             state_.title=title_.Snapshot();
             if(!status){state_.status=status;return false;}
@@ -662,6 +671,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
     state_.title=title_.Snapshot();
     title_clone_.Close();
@@ -707,5 +717,39 @@ bool GameContentBoot::Close() {
     state_.sound_bank = sound_bank_.Snapshot();
     state_.closed = true;
     return true;
+}
+bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem){
+    if(state_.actor_dictionary_requested)return false;
+    state_.actor_dictionary_requested=true;
+    const auto actor=state_.title.selected_actor;
+    state_.frontier_pc=0x1AF20;
+    if(actor>4||!state_.title.profile.stored.live||state_.title.profile.stored.actor!=actor){
+        state_.status={GameFsCode::Unavailable,0,"scene4 requires actual confirmed actor profile"};state_.blocked=true;return false;
+    }
+    constexpr const char* mounts[]{"KSNEKO","KSROBO","KSUSAGI","KSINU","KSKAERU"};
+    constexpr const char* names[]{"neko.dic","robo.dic","usagi.dic","inu.dic","kaeru.dic"};
+    state_.actor_dictionary_path=std::string(mounts[actor])+"\\"+names[actor];
+    state_.next_resource=state_.actor_dictionary_path;
+    //Named synchronous native LoadMan adapter: source1A89C requests scene4,
+    //25438(actor+3) queues its mount;1C3C reads the real selected BPM before
+    //182F4->1AF20 can perform2E7C. No bootstrap prefix masquerades as a body.
+    state_.previous_scene=3;state_.current_scene=state_.next_scene=4;
+    state_.requested_bits=(state_.requested_bits&~(1u<<11))|(1u<<(actor+3));
+    state_.status=filesystem.LoadMember(std::string(mounts[actor])+".BPM",actor_package_);
+    if(!state_.status){state_.blocked=true;return false;}
+    try{
+        state_.actor_package_bytes=uint32_t(actor_package_.Describe().size);
+        actor_directory_=BpDirectory::Parse(actor_package_,actor_package_.Describe().size);
+        actor_dictionary_=actor_directory_.Open(names[actor]);
+        const auto bytes=actor_dictionary_.Describe().size;
+        if(!bytes||bytes>UINT32_MAX)throw std::runtime_error("actor dictionary empty/oversized");
+        state_.actor_dictionary_bytes=uint32_t(bytes);
+        for(uint32_t i=0;i<(std::min)(16u,uint32_t(bytes));++i)state_.actor_dictionary_prefix[i]=actor_dictionary_.ReadU8(i);
+        state_.actor_dictionary_ready=state_.actor_dictionary_live=true;++state_.opened_resources;
+        state_.owned_bits=(state_.owned_bits&~(1u<<11))|(1u<<(actor+3));state_.completed_bits=state_.owned_bits;
+        state_.load_state=6;
+        state_.status={GameFsCode::Unavailable,0,"Actual selected actor.dic borrowed after native scene4 mount/read;dictionary engine following1AF20 not implemented;no KSC execution"};
+    }catch(const std::exception& e){state_.status={GameFsCode::MalformedDirectory,0,e.what()};}
+    state_.blocked=true;return false;
 }
 } // namespace dokodemo::recovered

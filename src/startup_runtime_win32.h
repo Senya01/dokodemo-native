@@ -152,6 +152,7 @@ public:
     // window releases buttons; no synthetic key events are sent to Windows.
     recovered::ControllerSample PollControllerInput(bool window_focused);
     StartupRuntimeStatus InjectTestControllerInput(uint32_t buttons,bool focused);
+    StartupRuntimeStatus PostGameText(const recovered::GameTextEvent& event);
     bool CopyGameFrame(recovered::GameGraphicsFrame& out) const;
     bool RecordGameFramePresented(uint64_t generation, uint64_t sequence);
     bool DrawGraphicsDiagnosticFrame(); // explicit window-smoke image, not gameplay

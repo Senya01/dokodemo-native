@@ -1,6 +1,7 @@
 #include "game_scene_ui_native.h"
 #include "game_boot_native.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <new>
 #include <stdexcept>
@@ -16,12 +17,17 @@ bool GameDialogController::Begin(uint32_t mode, uint32_t selection) noexcept {
     state_.selection = selection;
     state_.confirmations = confirmations;
     gate_.Begin();
+    cancel_gate_.Begin();
     return true;
 }
 bool GameDialogController::Input(const GameInputFrame &frame) noexcept {
     if (state_.state != 1 || state_.mode == 2)
         return false;
-    if (!gate_.Observe(frame, Circle))
+    const bool circle=gate_.Observe(frame, Circle);
+    if(state_.mode==0&&cancel_gate_.Observe(frame,Cross)){
+        state_.result=2;state_.state=2;return true;
+    }
+    if (!circle)
         return false;
     state_.result = int32_t(state_.selection + 1);
     ++state_.confirmations;
@@ -117,6 +123,7 @@ GameFsStatus GameSceneUiBootstrap::Initialize(GameResourceSource &source, GameAr
         return {GameFsCode::Busy, 0, "scene/font ownership precondition"};
     arena_ = &arena;
     manager_ = &manager;
+    font_=&font;
     state_ = {};
     state_.live = true;
     try {
@@ -351,12 +358,15 @@ bool GameSceneUiBootstrap::HandleDialogInput(const GameInputFrame &frame) {
 GameSceneUiSnapshot GameSceneUiBootstrap::Snapshot() const {
     auto out = state_;
     out.transition = transition_.Snapshot();
+    out.editor=editor_.Snapshot();
     out.visible_roots = 0;
     for (const auto &clone : clones_)
         out.visible_roots += clone.VisibleRoots();
     return out;
 }
 bool GameSceneUiBootstrap::Close() {
+    editor_.Retire();font_=nullptr;
+    profile_confirmation_=false;
     std::vector<uint32_t>().swap(dialog_pixels_);
     dialog_width_ = dialog_height_ = 0;
     moving_.reset();
@@ -398,6 +408,123 @@ bool GameSceneUiBootstrap::Close() {
         state_.textures = state_.texture_pixels = 0;
     state_.borrowed_dictionaries = state_.mutable_dictionaries = state_.text_capacity_bytes = 0;
     return true;
+}
+GameFsStatus GameSceneUiBootstrap::BeginProfileConfirmation(){
+    if(!font_||!dialog_.Begin(0,0))return {GameFsCode::Busy,0,"TRC confirmation active/retired"};
+    //DA234 exact CP932:これでよろしいですか？; native panel adapter ofTRC.
+    const std::string question="\x82\xb1\x82\xea\x82\xc5\x82\xe6\x82\xeb\x82\xb5\x82\xa2\x82\xc5\x82\xb7\x82\xa9\x81\x48";
+    GameFontBitmap bitmap;auto status=font_->RasterizeCp932({question},320,bitmap,
+        static_cast<GameFontDrawRecord*>(text_buffers_[2]),1024);
+    if(!status)return status;
+    dialog_pixels_=std::move(bitmap.pixels);dialog_width_=bitmap.width;dialog_height_=bitmap.height;
+    profile_confirmation_=true;state_.storage_dialog=true;state_.dialog_state=0;state_.dialog_result=0;
+    return {};
+}
+bool GameSceneUiBootstrap::DrawProfileConfirmation(GameGraphics& graphics){
+    if(!profile_confirmation_)return true;
+    dialog_.Tick();const auto d=dialog_.Snapshot();
+    state_.dialog_state=d.state;state_.dialog_result=d.result;state_.dialog_progress=d.progress;
+    state_.awaiting_confirmation=d.state==1;
+    if(d.state==3){profile_confirmation_=false;state_.storage_dialog=false;return true;}
+    const auto w=(std::max)(1u,uint32_t(float(dialog_width_)*d.progress));
+    const auto h=(std::max)(1u,uint32_t(float(dialog_height_)*d.progress));
+    std::vector<uint32_t> pixels(size_t(w)*h);
+    for(uint32_t y=0;y<h;++y)for(uint32_t x=0;x<w;++x)
+        pixels[size_t(y)*w+x]=dialog_pixels_[size_t(uint64_t(y)*dialog_height_/h)*dialog_width_+uint64_t(x)*dialog_width_/w];
+    return graphics.FillRectangle(112,16,448,64,0xFFE9E3CE)&&graphics.DrawImage(pixels,w,h,128,24);
+}
+GameFsStatus GameSceneUiBootstrap::BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
+                                               uint32_t select_mode,int32_t minimum,int32_t maximum_value,
+                                               bool allow_cancel){
+    if(!state_.live||select_mode>5)return {GameFsCode::Busy,0,"editor ownership/mode"};
+    const uint32_t resource=select_mode?0u:1u;
+    constexpr uint32_t opens[]{17,3,11,5,7,9};
+    const uint32_t open=opens[select_mode],close=open+1;
+    if(!editor_.Begin(initial,maximum))return {GameFsCode::Busy,0,"invalid/active editor"};
+    editor_resource_=resource;editor_open_clip_=open;editor_close_clip_=close;
+    editor_min_=minimum;editor_max_=maximum_value;editor_cancel_=allow_cancel;
+    state_.editor_label=std::move(label);state_.select_adapter=select_mode!=0;
+    const auto root=select_mode?0u:9u;
+    auto& clone=clones_[resource];auto* c=clone.Control(0);
+    if(!c||!clone.Bind(root,open,0)||!clone.ShowRoot(root))
+        return {GameFsCode::Unavailable,0,"actual editor open clip/root unavailable"};
+    c->clip=open;c->frame=0;c->mode=c->active=1;
+    if(resource==1&&!clone.SetSourceCallback(42,0x222E0))
+        return {GameFsCode::Unavailable,0,"SOFTKEY glyph callback node42 missing"};
+    return {};
+}
+bool GameSceneUiBootstrap::HandleText(const GameTextEvent& event){
+    const auto before=editor_.Snapshot();
+    if(event.context!=before.context||!before.live||before.source_state==3)return false;
+    if(event.kind==GameTextKind::Cancel&&!editor_cancel_)return editor_.Reject("Source guided year cannot cancel");
+    if(state_.select_adapter&&before.source_state==1&&before.focused&&!before.composing){
+        if(event.kind==GameTextKind::Left||event.kind==GameTextKind::Right){
+            int32_t n=editor_min_;std::from_chars(before.staged.data(),before.staged.data()+before.staged.size(),n);
+            n+=(event.kind==GameTextKind::Right?1:-1);
+            if(n>editor_max_)n=editor_min_;if(n<editor_min_)n=editor_max_;
+            return editor_.SetStaged(std::to_string(n));
+        }
+        if(event.kind==GameTextKind::Confirm){
+            int32_t n=0;const auto parsed=std::from_chars(before.staged.data(),before.staged.data()+before.staged.size(),n);
+            if(parsed.ec!=std::errc{}||parsed.ptr!=before.staged.data()+before.staged.size()||n<editor_min_||n>editor_max_)
+                return editor_.Reject("Selection outside source range");
+        }
+    }
+    const auto accepted=editor_.Apply(event);
+    if(accepted&&before.source_state==1&&editor_.Snapshot().source_state==2){
+        auto& clone=clones_[editor_resource_];auto* c=clone.Control(0);
+        if(!c||!clone.Bind(editor_resource_?9u:0u,editor_close_clip_,0))return false;
+        c->clip=editor_close_clip_;c->frame=0;c->mode=c->active=1;
+    }
+    return accepted;
+}
+bool GameSceneUiBootstrap::TickEditor(){
+    const auto before=editor_.Snapshot();
+    if(!before.live||before.source_state==3)return true;
+    auto& clone=clones_[editor_resource_];std::string error;
+    if(!clone.Update(error))return false;
+    auto* c=clone.Control(0);if(!c)return false;
+    editor_.ControlCompleted(c->mode);
+    if(editor_.Snapshot().source_state==3){
+        clone.ShowRoot(editor_resource_?9u:0u,false);c->active=c->mode=0;
+    }
+    return true;
+}
+bool GameSceneUiBootstrap::DrawUiCallback(uint32_t pc,uint32_t,const GameUiMatrix& world,uint32_t,
+                                          GameGraphics& graphics,std::string& error){
+    if(pc!=0x222E0||!font_){error="Unknown/retired SOFTKEY callback";return false;}
+    const auto entry=editor_.Snapshot();if(entry.source_state==3)return true;
+    //222E0/221FC: original font,one16px advance per941C8 step,128x16 viewport.
+    const auto x=int32_t(240+world.tx),y=int32_t(136+world.ty);
+    const auto& value=entry.source_state==1?entry.staged:entry.source120;
+    std::vector<uint32_t> pixels(128*16,0);const auto* at=value.c_str();int32_t column=-(int32_t(entry.source_state==1?entry.units:0)>7?int32_t(entry.units-7)*16:0);
+    while(*at&&column<128){
+        const auto length=uint8_t(*at)<0x80?1u:2u;
+        GameFontBitmap glyph;const auto status=font_->RasterizeCp932({std::string(at,length)},32,glyph,
+              static_cast<GameFontDrawRecord*>(text_buffers_[1]),41,0xFF552F0D);
+        if(!status){error=status.detail;return false;}
+        for(uint32_t gy=0;gy<(std::min)(16u,glyph.height);++gy)
+            for(uint32_t gx=0;gx<glyph.width&&column+int32_t(gx)<128;++gx)
+                if(column+int32_t(gx)>=0)pixels[gy*128+uint32_t(column+int32_t(gx))]=glyph.pixels[gy*glyph.width+gx];
+        column+=16;at+=length;
+    }
+    return graphics.DrawImage(pixels,128,16,x,y);
+}
+bool GameSceneUiBootstrap::DrawEditor(GameGraphics& graphics){
+    const auto e=editor_.Snapshot();if(!e.live||e.source_state==3)return true;
+    std::string error;GameUiDrawStats stats;
+    if(!clones_[editor_resource_].Draw(graphics,stats,error,this))return false;
+    if(!state_.select_adapter)return true; //native instructions/errors live outside the game framebuffer
+    //Explicit Windows committed-text/choice adapter caption. This is not NJ
+    //conversion or the original dynamic SELECT row renderer.
+    std::vector<std::string> lines{state_.editor_label};
+    if(state_.select_adapter)lines.push_back(e.staged);
+    if(!e.error.empty())lines.push_back(e.error);
+    GameFontBitmap text;const auto status=font_->RasterizeCp932(lines,440,text,nullptr,0,0xFF202020);
+    if(!status)return false;
+    const int32_t y=state_.select_adapter?76:8;
+    if(!graphics.FillRectangle(12,y-4,468,y+int32_t(text.height)+4,0xFFF8F2D9))return false;
+    return graphics.DrawImage(text.pixels,text.width,text.height,20,y);
 }
 GameFsStatus GameSoundBank::Register(PackageView image) {
     if (state_.metadata_ready)

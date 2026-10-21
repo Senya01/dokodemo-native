@@ -47,6 +47,8 @@ add_library(dokodemo-core STATIC
     src/recovered/game_storage_native.cpp
     src/recovered/game_model_native.cpp
     src/recovered/game_title_native.cpp
+    src/recovered/game_text_native.cpp
+    src/recovered/game_profile_native.cpp
     src/recovered/package_storage_native.cpp
     src/recovered/audiocodec_module_native.cpp
     src/recovered/module_manager_native.cpp
@@ -123,6 +125,16 @@ if(DOKODEMO_GAME_BOOT_TESTS)
         target_compile_options(dokodemo-game-model-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
     endif()
     add_test(NAME game-model-tests COMMAND dokodemo-game-model-tests)
+    add_executable(dokodemo-game-text-tests tools/game_text_tests.cpp)
+    target_link_libraries(dokodemo-game-text-tests PRIVATE dokodemo-core)
+    if(WIN32)
+        target_sources(dokodemo-game-text-tests PRIVATE src/game_text_win32.cpp)
+    endif()
+    if(MSVC)
+        set_target_properties(dokodemo-game-text-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        target_compile_options(dokodemo-game-text-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+    endif()
+    add_test(NAME game-text-tests COMMAND dokodemo-game-text-tests)
     if(WIN32)
         add_executable(dokodemo-game-storage-tests tools/game_storage_tests.cpp src/game_storage_win32.cpp)
         target_link_libraries(dokodemo-game-storage-tests PRIVATE dokodemo-core)
@@ -245,7 +257,7 @@ target_compile_definitions(dokodemo-native PRIVATE UNICODE _UNICODE NOMINMAX WIN
 target_compile_options(dokodemo-native PRIVATE /W4 /EHsc /permissive- /Zc:__cplusplus /utf-8 /Brepro)
 target_include_directories(dokodemo-native PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 dokodemo_configure_prepared_codec(dokodemo-native)
-target_link_libraries(dokodemo-native PRIVATE dokodemo-core user32 gdi32 opengl32 shell32 ole32 uuid winmm advapi32 bcrypt ${DOKODEMO_EXTRA_LIBRARIES})
+target_link_libraries(dokodemo-native PRIVATE dokodemo-core user32 gdi32 opengl32 shell32 ole32 uuid winmm advapi32 bcrypt imm32 ${DOKODEMO_EXTRA_LIBRARIES})
 target_link_options(dokodemo-native PRIVATE /MACHINE:X64 /INCREMENTAL:NO /Brepro)
 set_target_properties(dokodemo-native PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 foreach(configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)

@@ -78,6 +78,10 @@ struct GameContentSnapshot {
     uint32_t title_model_bytes = 0, title_model_nodes = 0, title_model_materials = 0;
     std::vector<std::string> title_material_resources;
     GameTitleSnapshot title;
+    bool actor_dictionary_requested=false,actor_dictionary_ready=false,actor_dictionary_live=false;
+    uint32_t actor_package_bytes=0,actor_dictionary_bytes=0;
+    std::string actor_dictionary_path;
+    std::array<uint8_t,16> actor_dictionary_prefix{};
     std::string next_resource;
     GameFsStatus status;
 };
@@ -105,10 +109,12 @@ class GameContentBoot final : public GameResourceSource {
     GameFsStatus InitializeSceneResources(GameResourceSource &platform);
     GameFsStatus ShowUnavailableMemoryStick(uint32_t native_error);
     bool ProcessDialogInput(const GameInputFrame &frame);
+    bool ProcessText(const GameTextEvent& event){return scene_ui_.HandleText(event);}
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
     void SetTitleRng(RngNativeOwner& rng){title_rng_=&rng;}
+    void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
@@ -145,8 +151,13 @@ class GameContentBoot final : public GameResourceSource {
     std::shared_ptr<GameUiResource> title_ui_;
     GameUiInstance title_clone_;
     GameTitleScene title_;
+    PackageView actor_package_,actor_dictionary_;
+    BpDirectory actor_directory_;
+    bool TickActorDictionary(GameFilesystem&);
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;
+    int32_t calendar_year_=0;
+    std::array<uint32_t,7> calendar_{};
     GameResourceSource *platform_ = nullptr;
     GameContentSnapshot state_;
 };

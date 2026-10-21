@@ -2,6 +2,7 @@
 #include "game_model_native.h"
 #include "game_scene_ui_native.h"
 #include "rng_native.h"
+#include "game_profile_native.h"
 
 namespace dokodemo::recovered {
 class GameArena;
@@ -34,6 +35,7 @@ struct GameTitleSnapshot {
     float field_of_view = .34906587f, near_plane = 100, far_plane = 10400;
     std::array<float, 3> camera_position{{0, -4400, 560}}, camera_lookpoint{{0, -4399, 560}};
     std::array<GameTitleActorSnapshot, 10> actors;
+    GameProfileSnapshot profile;
 };
 // Later phase11 consumer33B90. Positions/animation counters are produced by
 // phase6 first. Only this function changes desired visibility/restart targets.
@@ -46,8 +48,10 @@ class GameTitleScene final : private GameUiCallbacks {
     GameFsStatus Initialize(GameResourceSource &, GameArena &, GameVmBoot &, NativeTitleLayout,
                             uint32_t source_profile_date);
     GameFsStatus TickAndDraw(GameGraphics &, GameTransition &);
-    GameFsStatus AttachMenu(GameUiInstance &, const GameFontResource &, RngNativeOwner &);
+    GameFsStatus AttachMenu(GameUiInstance &, const GameFontResource &, RngNativeOwner &,
+                           GameSceneUiBootstrap* scene_ui=nullptr,int32_t calendar_year=0);
     void Input(const GameInputFrame &frame) { input_.Observe(frame); }
+    void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;}
     GameTitleSnapshot Snapshot() const { return state_; }
     bool Close();
     ~GameTitleScene();
@@ -75,6 +79,13 @@ class GameTitleScene final : private GameUiCallbacks {
     std::array<uint32_t, 30> controls_{};
     uint32_t current_control_ = UINT32_MAX, prior_row_ = 1;
     bool switching_root_ = false;
+    GameSceneUiBootstrap* scene_ui_=nullptr;
+    int32_t calendar_year_=0;
+    std::array<uint32_t,7> calendar_{};
+    GameProfile profile_;
+    bool editor_waiting_=false,confirmation_waiting_=false,leaving_profile_=false;
+    bool confirmation_declined_=false;
+    GameFsStatus ProfileTick(GameTransition&);
     bool carousel_moving_ = false, selection_motion_ = false;
     std::string nickname_;
     std::array<std::shared_ptr<GameModelAsset>, 7> assets_;

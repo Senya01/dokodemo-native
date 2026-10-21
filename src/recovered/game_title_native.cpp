@@ -217,12 +217,13 @@ GameFsStatus GameTitleScene::ResetEntrance() {
     return {};
 }
 GameFsStatus GameTitleScene::AttachMenu(GameUiInstance &ui, const GameFontResource &font,
-                                        RngNativeOwner &rng) {
+                                        RngNativeOwner &rng,GameSceneUiBootstrap* scene_ui,int32_t calendar_year) {
     if (!state_.live || ui.Nodes().size() != 404 || !font.Snapshot().ready || !rng.Available())
         return {GameFsCode::Unavailable, 0, "TITLE menu requires actual UI,font and initialized RNG owners"};
     ui_ = &ui;
     font_ = &font;
     rng_ = &rng;
+    scene_ui_=scene_ui;calendar_year_=calendar_year;
     controls_.fill(UINT32_MAX);
     const auto control = [&](uint32_t clip, uint32_t frame) {
         auto *c = ui.AddControl(clip);
@@ -312,7 +313,7 @@ GameFsStatus GameTitleScene::SetupLayout() {
             state_.actors[i].visible = state_.actors[i].desired_visible = false;
         return {};
     }
-    if (state_.layout == 5) {
+    if (state_.layout == 5||state_.layout==4) {
         for (unsigned i = 0; i < 5; ++i) {
             auto &s = state_.actors[i];
             auto &a = actors_[i];
@@ -446,12 +447,63 @@ GameFsStatus GameTitleScene::MenuTick(GameTransition &fade) {
         }
     } else if (state_.layout == 3) {
         state_.softkey_requested = true;
-        state_.frontier_pc = 0x1FD80;
-        return {GameFsCode::Unavailable, 0,
-                "31CA0 requests1FD80(mode0,type1,actual nickname,auxnull);SOFTKEY editing/update/result "
-                "lifecycle unimplemented"};
+        if(!scene_ui_){state_.frontier_pc=0x1FD80;return {GameFsCode::Unavailable,0,"SOFTKEY owner absent from this session"};}
+        if(!editor_waiting_){
+            auto status=scene_ui_->BeginEditor(nickname_,4,"NICKNAME - Windows CP932 / Enter:OK Esc:Cancel");
+            if(!status)return status;editor_waiting_=true;
+        }else if(scene_ui_->Editor().source_state==3){
+            editor_waiting_=false;
+            if(const auto* name=scene_ui_->EditorResult()){
+                nickname_=*name;profile_.Nickname(*name);state_.profile=profile_.Snapshot();BeginRoot(4,fade);
+            }else BeginRoot(2,fade);
+        }
+    }else if(state_.layout==4){return ProfileTick(fade);
     }
     return {};
+}
+GameFsStatus GameTitleScene::ProfileTick(GameTransition& fade){
+    if(confirmation_waiting_){
+        const auto dialog=scene_ui_->Snapshot();
+        if(dialog.dialog_state!=3)return {};
+        confirmation_waiting_=false;
+        const bool yes=dialog.dialog_result==1;
+        if(!profile_.Confirm(yes,state_.selected_actor,calendar_))return {GameFsCode::Unavailable,0,"Incomplete profile confirmation"};
+        state_.profile=profile_.Snapshot();
+        if(yes){leaving_profile_=true;state_.state=2;fade.SetDuration(30);fade.CloseWipe();}
+        else {confirmation_declined_=true;input_.BeginContext();}
+        return {};
+    }
+    if(editor_waiting_){
+        if(scene_ui_->Editor().source_state!=3)return {};
+        std::string error;
+        if(!profile_.Result(scene_ui_->EditorResult(),calendar_year_,error))
+            return {GameFsCode::MalformedDirectory,0,error};
+        editor_waiting_=false;state_.profile=profile_.Snapshot();return {};
+    }
+    const auto field=profile_.Next();const auto p=profile_.Snapshot();
+    if(field==GameProfileField::Confirmation){
+        if(confirmation_declined_&&!input_.First(Circle))return {};
+        confirmation_declined_=false;auto status=scene_ui_->BeginProfileConfirmation();
+        if(status)confirmation_waiting_=true;return status;
+    }
+    std::string initial,label;uint32_t maximum=4,mode=0;int32_t lo=0,hi=0;bool cancel=true;
+    switch(field){
+        case GameProfileField::Nickname:initial=p.nickname;label="NICKNAME / CP932 max4";break;
+        case GameProfileField::Player:initial=p.player;label="PLAYER NAME / CP932 max4";break;
+        case GameProfileField::Gender:mode=1;lo=1;hi=2;initial=p.gender==1?"2":"1";
+            label="GENDER: 1=Female 2=Male / Left-Right Enter";cancel=p.present==7;break;
+        case GameProfileField::Year:mode=3;lo=calendar_year_-100;hi=calendar_year_;initial=std::to_string(p.year>0?p.year:1980);
+            label="BIRTH YEAR / digits or Left-Right Enter";cancel=p.zodiac!=-1;break;
+        case GameProfileField::Month:mode=4;lo=1;hi=12;initial=std::to_string(p.month>0?p.month:1);label="BIRTH MONTH / Esc:back to year";break;
+        case GameProfileField::Day:mode=5;lo=1;hi=GameProfile::Days(p.year,p.month);
+            initial=std::to_string(p.day>0?(std::min)(p.day,hi):1);label="BIRTH DAY / Esc:back to month";break;
+        case GameProfileField::Blood:mode=2;lo=1;hi=4;initial=std::to_string(p.blood>=0?p.blood+1:1);label="BLOOD: 1=A 2=B 3=AB 4=O";cancel=p.present==7;break;
+        case GameProfileField::Comment:maximum=13;initial=p.comment;label="COMMENT / CP932 max13";break;
+        default:return {GameFsCode::Unavailable,0,"Profile dispatcher field not implemented"};
+    }
+    profile_.Begin(field);state_.profile=profile_.Snapshot();
+    const auto status=scene_ui_->BeginEditor(initial,maximum,label,mode,lo,hi,cancel);
+    if(status)editor_waiting_=true;return status;
 }
 bool GameTitleScene::DrawUiCallback(uint32_t pc, uint32_t, const GameUiMatrix &world, uint32_t,
                                     GameGraphics &graphics, std::string &error) {
@@ -460,35 +512,59 @@ bool GameTitleScene::DrawUiCallback(uint32_t pc, uint32_t, const GameUiMatrix &w
         error = "unknown TITLE UI callback";
         return false;
     }
-    // Only80 has a reached producer.90/A0 remain empty;C0/C4/C8 andB4/B8/BC
-    // remain-1,so the other six complete source guards skip their text.
-    if (pc != 0x32D9C || nickname_.empty())
-        return true;
+    const auto p=profile_.Snapshot();std::string text;
+    if(pc==0x32D9C)text=nickname_;
+    else if(pc==0x32E80)text=p.player;
+    else if(pc==0x32F68&&p.gender!=-1)text=p.gender==2?"\x8f\x97":"\x92\x6a";
+    else if(pc==0x330B8&&p.year!=-1)text=std::to_string(p.year)+"/"+std::to_string(p.month)+"/"+std::to_string(p.day);
+    else if(pc==0x331A0&&p.zodiac!=-1){
+        constexpr const char* zodiac_labels[]{"\x82\xa8\x82\xd0\x82\xc2\x82\xb6\x8d\xc0","\x82\xa8\x82\xa4\x82\xb5\x8d\xc0",
+          "\x82\xd3\x82\xbd\x82\xb2\x8d\xc0","\x82\xa9\x82\xc9\x8d\xc0","\x82\xb5\x82\xb5\x8d\xc0",
+          "\x82\xa8\x82\xc6\x82\xdf\x8d\xc0","\x82\xc4\x82\xf1\x82\xd1\x82\xf1\x8d\xc0","\x82\xb3\x82\xbb\x82\xe8\x8d\xc0",
+          "\x82\xa2\x82\xc4\x8d\xc0","\x82\xe2\x82\xac\x8d\xc0","\x82\xdd\x82\xb8\x82\xaa\x82\xdf\x8d\xc0","\x82\xa4\x82\xa8\x8d\xc0"};
+        text=zodiac_labels[p.zodiac];
+    }
+    else if(pc==0x33288&&p.blood!=-1){constexpr const char* blood[]{"A","B","AB","O"};text=blood[p.blood];}
+    else if(pc==0x33370)text=p.comment;
+    if(text.empty())return true;
     if (!font_) {
         error = "TITLE callback font retired";
         return false;
     }
     GameFontBitmap bitmap;
-    auto status = font_->RasterizeCp932({nickname_}, 480, bitmap, static_cast<GameFontDrawRecord *>(text_),
-                                        1024, 0xFFFDFDFD);
+    const uint32_t source_row=pc==0x331A0?3u:uint32_t(std::find(std::begin(callbacks),std::end(callbacks),pc)-std::begin(callbacks));
+    const uint32_t color=p.present==source_row?0xFFFDFDFD:0xFF552F0D;
+    auto status = font_->RasterizeCp932({text}, 480, bitmap, static_cast<GameFontDrawRecord *>(text_),
+                                        1024, color);
     if (!status) {
         error = status.detail;
         return false;
     }
     const auto config = graphics.Snapshot().config;
+    float scale=1;
+    if(pc==0x33370){
+        scale=.75f;const auto width=bitmap.width*3/4;
+        std::vector<uint32_t> scaled(size_t(width)*bitmap.height);
+        for(uint32_t y=0;y<bitmap.height;++y)for(uint32_t x=0;x<width;++x)
+            scaled[size_t(y)*width+x]=bitmap.pixels[size_t(y)*bitmap.width+uint64_t(x)*bitmap.width/width];
+        bitmap.pixels=std::move(scaled);bitmap.width=width;
+    }
     // EC68 alignment1 uses actual XFT advance,not CP932 byte count.
     return graphics.DrawImage(bitmap.pixels, bitmap.width, bitmap.height,
-                              int32_t(float(config.width) / 2 + world.tx - float(bitmap.advance_width) / 2),
+                              int32_t(float(config.width) / 2 + world.tx - float(bitmap.advance_width)*scale / 2),
                               int32_t(float(config.height) / 2 + world.ty));
 }
 GameFsStatus GameTitleScene::TickAndDraw(GameGraphics &graphics, GameTransition &fade) {
     if (!state_.live)
         return {GameFsCode::Unavailable, 0, "TITLE not live"};
     try {
+        if(scene_ui_&&!scene_ui_->TickEditor())return {GameFsCode::Unavailable,0,"editor animation/source lease"};
         // 30C34 case2 waits on the actual D54C owner, resets335A4, then
         // 30E48 DA64 starts source fade1. No direct199DC fade call is invented.
         bool reset = false;
         if (state_.state == 2 && fade.Snapshot().state == 0) {
+            if(leaving_profile_){state_.state=3;state_.scene3_completed=true;state_.frontier_pc=0x1A89C;
+                return {};}
             if (ui_ && switching_root_) {
                 ui_->ShowRoot(state_.layout, false);
                 auto *current = ui_->Control(current_control_);
@@ -637,7 +713,15 @@ GameFsStatus GameTitleScene::TickAndDraw(GameGraphics &graphics, GameTransition 
             state_.ui_quads += stats.quads;
             state_.ui_callbacks += stats.callbacks;
             state_.visible_roots = ui_->VisibleRoots();
+            if(state_.layout==4){
+                //32B04 explicitly draws root18; it is not a visible external root.
+                if(!ui_->Draw(graphics,stats,error,this,{},0,UINT32_MAX,18))
+                    return {GameFsCode::Unavailable,0,error};
+                state_.ui_quads+=stats.quads;state_.ui_callbacks+=stats.callbacks;
+            }
         }
+        if(scene_ui_&&(!scene_ui_->DrawEditor(graphics)||!scene_ui_->DrawProfileConfirmation(graphics)))
+            return {GameFsCode::Unavailable,0,"editor/TRC glyph draw failed"};
         fade.Update();
         if (!fade.Draw(graphics) || !graphics.SwapBuffers())
             return {GameFsCode::Unavailable, 0, "TITLE fade/present failed"};
@@ -646,13 +730,14 @@ GameFsStatus GameTitleScene::TickAndDraw(GameGraphics &graphics, GameTransition 
         state_.frame_drawn = state_.pixel_writes > 0;
         // Scene3's1A89C still waitsCC3. Unrecovered menu/random-restart/input
         // consumers are not turned into a completed scene or guessed KSC call.
-        state_.frontier_pc = state_.softkey_requested ? 0x1FD80 : (state_.state == 1 ? 0x33B90 : 0x30EB0);
+        state_.frontier_pc = state_.layout>=3 ? (state_.layout==4?0x31D44:0x20E48) : (state_.state == 1 ? 0x33B90 : 0x30EB0);
         return {};
     } catch (const std::exception &e) {
         return {GameFsCode::Unavailable, 0, e.what()};
     }
 }
 bool GameTitleScene::Close() {
+    scene_ui_=nullptr;
     ui_ = nullptr;
     font_ = nullptr;
     rng_ = nullptr;
@@ -685,6 +770,7 @@ bool GameTitleScene::Close() {
     arena_ = nullptr;
     manager_ = nullptr;
     state_.live = false;
+    state_.profile.stored.live=false;
     state_.clones = 0;
     return true;
 }

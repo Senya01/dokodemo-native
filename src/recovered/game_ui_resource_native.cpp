@@ -286,10 +286,13 @@ bool GameUiInstance::Update(std::string &error) {
                 Need(!resource_->Clips()[c.clip].channels[5].count,
                      "B2A nonempty time mapping is not implemented");
                 if (c.mode == 1) {
-                    if (c.frame < resource_->Clips()[c.clip].field30)
+                    const auto end=resource_->Clips()[c.clip].field30;
+                    if(end&&c.frame<end-1)
                         ++c.frame;
-                    else
+                    else if(end&&c.frame==end-1){
+                        c.frame=end;c.active=1;
                         c.mode = 2;
+                    }
                 }
                 Need(c.mode == 1 || c.mode == 2, "UI control mode unsupported");
                 Apply(nodes_, *resource_, c.clip, c.frame, false);
@@ -324,7 +327,7 @@ bool GameUiInstance::SetSourceCallback(uint32_t node, uint32_t pc) {
 }
 bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::string &error,
                           GameUiCallbacks *callbacks, GameUiMatrix base, uint32_t first_group,
-                          uint32_t last_group) const {
+                          uint32_t last_group,int32_t explicit_root) const {
     stats = {};
     try {
         Need(resource_ && resource_->Image().Describe().readable, "UI draw source lease retired");
@@ -418,9 +421,11 @@ bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::s
                 draw(node.encoded_initial[0], parent, parent_color, inherited_group);
             path[index] = false;
         };
-        for (uint32_t root = 0; root < resource_->RootCount(); ++root)
-            if (nodes_[root].visible)
-                draw(root, base, 0x80808080, 0);
+        if(explicit_root>=0){
+            Need(uint32_t(explicit_root)<resource_->RootCount(),"manual UI root outside resource");
+            draw(uint32_t(explicit_root),base,0x80808080,0);
+        }else for (uint32_t root = 0; root < resource_->RootCount(); ++root)
+                if (nodes_[root].visible)draw(root, base, 0x80808080, 0);
         error.clear();
         return true;
     } catch (const std::exception &e) {
