@@ -313,6 +313,74 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
     ++state_.native_frames;
     return true;
 }
+bool GameChoiceController::Begin(std::vector<std::string> options,uint64_t context,uint64_t owner,uint32_t timeout){
+    if((state_.live&&state_.state!=3)||options.empty()||options.size()>32||!context||!owner)return false;
+    for(const auto& text:options)if(text.size()>1023||text.find('\0')!=std::string::npos)return false;
+    state_={};state_.live=true;state_.state=0;state_.context=context;state_.owner_generation=owner;
+    state_.remaining=timeout;state_.options=std::move(options);input_.BeginContext();return true;
+}
+bool GameChoiceController::Input(const GameInputFrame& frame){
+    if(frame.overflow_resync){input_.BeginContext();++state_.rejected_inputs;return false;}
+    if(frame.sequence<=sequence_){++state_.rejected_inputs;return false;}sequence_=frame.sequence;
+    if(!state_.live||state_.state!=1||frame.message_context!=state_.context||frame.message_owner_generation!=state_.owner_generation){
+        ++state_.rejected_inputs;return false;
+    }
+    input_.Observe(frame);return true;
+}
+void GameChoiceController::Tick(uint8_t mode,bool trc_idle){
+    if(!state_.live)return;
+    if(state_.state==0){if(mode!=1){state_.state=1;input_.BeginContext();}return;}
+    if(state_.state==2){if(mode!=1){state_.state=3;input_.BeginContext();}return;}
+    if(state_.state!=1)return;
+    input_.Tick();if(!trc_idle)return;
+    ++state_.active_updates;
+    const auto last=uint32_t(state_.options.size()-1);
+    const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2);
+    if(down){if(state_.row<last)++state_.row;else if(down==1)state_.row=0;}
+    else if(up){if(state_.row)--state_.row;else if(up==1)state_.row=last;}
+    state_.result=state_.row+1;
+    //10844 positive deadline policy1: expiry wins over same-tick Circle.
+    if(state_.remaining&&!--state_.remaining){state_.result=0;state_.timed_out=true;state_.state=2;return;}
+    if(input_.First(Circle)){++state_.confirmations;state_.state=2;}
+    //FFFC(0): Cross/Escape is deliberately not a result producer.
+}
+GameFsStatus GameSceneUiBootstrap::BeginChoice(std::vector<std::string> options,uint64_t context,uint64_t owner){
+    if(!state_.live||!font_||(editor_.Snapshot().live&&editor_.Snapshot().source_state!=3))return {GameFsCode::Busy,0,"SELECT owner busy/retired"};
+    if(!choice_.Begin(std::move(options),context,owner))return {GameFsCode::Busy,0,"SELECT request/options/context invalid"};
+    auto& gui=clones_[0];auto* main=gui.Control(0);auto* auxiliary=gui.Control(1);auto* cursor=gui.Control(2);
+    if(!main||!auxiliary||!cursor||!gui.Bind(2,13,0)||!gui.ShowRoot(2))return {GameFsCode::Unavailable,0,"SELECT mode0 root2/clip13 unavailable"};
+    main->clip=13;main->frame=0;main->mode=main->active=1;
+    auxiliary->clip=0;auxiliary->frame=uint32_t(choice_.Snapshot().options.size());auxiliary->mode=2;auxiliary->active=1;
+    cursor->clip=25;cursor->frame=1;cursor->mode=2;cursor->active=1;return {};
+}
+GameFsStatus GameSceneUiBootstrap::TickChoice(){
+    const auto before=choice_.Snapshot();if(!before.live||before.state==3)return {};
+    auto& gui=clones_[0];std::string error;if(!gui.Update(error))return {GameFsCode::Unavailable,0,error};
+    auto* main=gui.Control(0);if(!main)return {GameFsCode::Unavailable,0,"SELECT main control retired"};
+    choice_.Tick(main->mode,dialog_.Snapshot().state==3);const auto after=choice_.Snapshot();
+    if(before.state==1&&after.state==2){
+        if(!gui.Bind(2,14,0))return {GameFsCode::Unavailable,0,"SELECT close clip14 unavailable"};
+        main->clip=14;main->frame=0;main->mode=main->active=1;
+    }
+    if(after.state==3){gui.ShowRoot(2,false);main->mode=main->active=0;if(auto* auxiliary=gui.Control(1))auxiliary->mode=auxiliary->active=0;}
+    return {};
+}
+bool GameSceneUiBootstrap::DrawChoice(GameGraphics& graphics){
+    const auto choice=choice_.Snapshot();if(!choice.live||choice.state==3)return true;
+    if(!font_)return false;
+    //Named native SELECT text panel. Source row text and selected index are
+    //preserved;PSP dynamic glyph/layout/style matching remains separate.
+    int32_t y=128;
+    for(uint32_t i=0;i<choice.options.size();++i){
+        GameFontBitmap text;const auto drawn=font_->RasterizeCp932({choice.options[i]},420,text);
+        if(!drawn)return false;
+        const auto height=(std::max)(21u,text.height);
+        if(!graphics.FillRectangle(20,y-2,460,y+int32_t(height),i==choice.row?0xFFFFDC8C:0xFFF5E8CD,65535)
+           ||!graphics.DrawImage(text.pixels,text.width,text.height,30,y,0xFFFFFFFF,65535))return false;
+        y+=int32_t(height)+3;
+    }
+    return true;
+}
 GameFsStatus GameSceneUiBootstrap::ShowStorageDialog(const GameFontResource &font, uint32_t error) {
     if (!state_.constructors_returned || state_.storage_dialog)
         return {GameFsCode::Busy, 0, "TRC native dialog ownership/state"};
@@ -369,6 +437,7 @@ GameSceneUiSnapshot GameSceneUiBootstrap::Snapshot() const {
     return out;
 }
 bool GameSceneUiBootstrap::Close() {
+    choice_.Retire();
     editor_.Retire();font_=nullptr;
     profile_confirmation_=false;
     std::vector<uint32_t>().swap(dialog_pixels_);

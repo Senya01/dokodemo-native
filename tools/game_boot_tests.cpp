@@ -38,6 +38,22 @@ struct MemoryServices : GameMemoryServices {
     }
 };
 void ControllerTests() {
+    GameMessageInput message;
+    message.Begin(17,3);
+    const auto observed=[&](uint32_t keys,bool focus,uint64_t sequence,uint64_t context=17,uint64_t owner=3){
+        return message.Observe({keys,focus,true,sequence,0,context,owner});
+    };
+    Check(!observed(Circle,true,1)&&!observed(0,false,2)&&!observed(Circle,true,3),"message held/refocused-held cannot acknowledge");
+    Check(!observed(0,true,4)&&observed(Circle,true,5),"message current context release/fresh edge");
+    message.Begin(18,3);
+    Check(!observed(0,true,6)&&!observed(Circle,true,7)&&!message.Armed(),"queued old message release/press cannot arm successor");
+    Check(!observed(0,true,8,18,2)&&!observed(Circle,true,9,18,2),"retired message owner cannot arm live context");
+    Check(!observed(0,true,10,18)&&!observed(Circle,true,10,18),"duplicate sequence cannot consume edge");
+    Check(observed(Circle,true,11,18)&&!observed(Circle,true,12,18),"one edge only one context");
+    message.Stop();Check(!observed(0,true,13,18)&&!observed(Circle,true,14,18),"retired message context rejects late input");
+    message.Begin(19,3);Check(!observed(0,true,15,19)&&message.Armed(),"overflow fixture starts armed");
+    GameInputFrame resync;resync.overflow_resync=true;
+    Check(!message.Observe(resync)&&!message.Armed()&&!observed(Circle,true,16,19),"zero-sequence overflow must disarm before context/sequence rejection");
     GameMenuInput menu;
     menu.Observe({Circle, true, false, 1});
     menu.Tick();

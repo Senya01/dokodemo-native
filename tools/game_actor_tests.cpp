@@ -1,6 +1,7 @@
 #include "recovered/game_actor_script_native.h"
 #include "recovered/game_main_flow_native.h"
 #include "recovered/game_value_array_native.h"
+#include "game_choice_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -72,6 +73,27 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    GameChoiceRegressionChecks();
+    auto choice_program=Fixture({0x30,0,0x8E,'a',0,0x8E,'b',0,0x8B,0x21,2,0x31});
+    script::Vm choice_vm(choice_program);Check(choice_vm.start().status==script::Status::Running,"choice fixture entry");
+    const auto choice_event=choice_vm.run(20);
+    Check(choice_event.status==script::Status::Choice&&choice_vm.choice_waiting()&&choice_vm.display_state()==9
+        &&choice_vm.stack().empty()&&choice_vm.event_scope_depth()==1&&choice_vm.result().word==0,"697DC consumes operand span into owned pending state9/nesting,clears old result");
+    const auto choice_pc=choice_vm.pc();
+    Check(!choice_vm.complete_choice(1)&&choice_vm.pc()==choice_pc,"cannot publish before argument conversion");
+    auto choice_args=choice_vm.take_choice_arguments();Check(choice_args.size()==2&&choice_args[0].cp932=="a"&&choice_args[1].cp932=="b","all arguments are options in original order");
+    Check(choice_vm.run(20).status==script::Status::Waiting&&choice_vm.pc()==choice_pc,"pending SELECT cannot execute next caller branch");
+    Check(!choice_vm.complete_choice(3)&&choice_vm.choice_waiting(),"out of range selection leaves VM pending");
+    Check(choice_vm.complete_choice(2)&&choice_vm.result().word==0x20000002&&choice_vm.event_scope_depth()==0
+        &&choice_vm.display_state()==2&&!choice_vm.complete_choice(1),"683E8 publishes actual integer2 once and drains owned nesting");
+    Check(choice_vm.run(20).status==script::Status::Complete,"caller resumes only after choice result");
+    auto complement_program=Fixture({0x30,0,0x80,2,0xB4,0x70,0x31});script::Vm complement(complement_program);complement.start();
+    Check(complement.run().status==script::Status::Complete&&complement.result().word==0x2FFFFFFD,"B4 source integer bitwise complement retains tag2,not truth");
+    auto indirect_args_program=Fixture({0x30,0,0x80,7,0x8A,18,0,0,0x80,2,0x80,3,0x22,2,0x89,0xE0,0x70,0x31,
+        0x30,2,0x90,0,0,0x90,1,0,0xE0,0x70,0x31});
+    script::Vm indirect_args(indirect_args_program);indirect_args.start();
+    Check(indirect_args.run().status==script::Status::Complete&&indirect_args.result().word==0x2000000C,
+        "22 target below two arguments preserves caller7 and actual callee2+3,then returns12");
     GameRecordStore diary;GameRecordInput original_record{12,"\x83\x67\x83\x8D"};
     const GameRecordDate record_date{{2026,10,24}};
     Check(!diary.Capture71(record_date,&original_record),"uninitialized static-bank native owner is not invented");
@@ -370,6 +392,9 @@ void Focused(){
         gate.loader469=true;const auto returns=flow.Snapshot().outer_returns;
         flow.Input({0,true,false,1});flow.Input({Circle,true,false,2});Check(bool(flow.Tick(gate)),"stable469 blocksfreshCircle");
         Check(events.empty()&&flow.Snapshot().phase1C==0&&flow.Snapshot().outer_returns==returns,"UIclose/poll completion doesnotfabricate469zero or event");
+        gate.choice_busy48=true;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Cross,true,false,4});flow.Tick(gate);
+        Check(events.empty()&&flow.Snapshot().input_suppressed48,"state9 main owner48 suppresses source Cross event12");
+        gate.choice_busy48=false;flow.Tick(gate);Check(events.empty(),"held Cross cannot dispatch after SELECT clears48");
         //Separate gate0 fixture checks source input priority,not connected469 proof.
         gate.loader469=false;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Circle,true,false,4});
         Check(bool(flow.Tick(gate))&&events==std::vector<std::pair<uint32_t,int32_t>>{{0,0}}&&flow.Snapshot().phase1C==1,
@@ -412,7 +437,7 @@ void Focused(){
     auto raw_not=Fixture({0x30,0,0x80,0xFF,0xB1,0x70,0x38});script::Vm negate(raw_not);negate.start();
     Check(negate.run().status==script::Status::Complete&&negate.result().word==0x10000000,"B1 tests raw nonzero payload of negative integer");
 }
-void Selected(const char* path,bool with_main_flow=false){
+void Selected(const char* path,bool with_main_flow=false,bool after17=false){
     // Optional new-engine diagnostic,not connected-game proof. Exactly the
     // already source-selected package is read;no extraction or ISO bootstrap.
     std::ifstream f(path,std::ios::binary);Check(bool(f),"DATA.BP open");
@@ -636,6 +661,68 @@ void Selected(const char* path,bool with_main_flow=false){
             "actual event0 returns via1C,SGXrefusal leaves sourceFALSE,and nextreal KSC message17 appears");
         Check(bool(route.Update(inventory.Snapshot(),main_flow.Snapshot(),game,true))&&route.Snapshot().callback_returned,"real callbackreturn separatefrompost/admission");
         std::cout<<"MAIN_TEXT17=";for(unsigned char b:spoken_again.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+        if(after17){
+            auto target17=game.MessageTarget();const auto before_ack=game.Snapshot();
+            auto stale=target17;++stale.generation;
+            Check(!game.AcknowledgeMessage(&stale),"stale generation cannot acknowledge live message");
+            stale=target17;++stale.pc;Check(!game.AcknowledgeMessage(&stale),"stale PC cannot acknowledge live message");
+            stale=target17;++stale.message;Check(!game.AcknowledgeMessage(&stale),"old message identity cannot acknowledge successor");
+            stale=target17;stale.context.context_owner.reset();Check(!game.AcknowledgeMessage(&stale),"expired registry token refuses message mutation");
+            const auto after_refusal=game.Snapshot();
+            Check(after_refusal.pc==before_ack.pc&&after_refusal.call_depth==before_ack.call_depth
+                &&after_refusal.active_control_blocks==before_ack.active_control_blocks&&after_refusal.deadline_tick==before_ack.deadline_tick
+                &&after_refusal.operand_count==before_ack.operand_count&&after_refusal.message_acknowledgements==before_ack.message_acknowledgements,
+                "refused message targets preserve live frame/block/PC/deadline/operands");
+            GameButtonGate message_gate;message_gate.Begin();
+            Check(!message_gate.Observe({Circle,true,false,200},Circle),"message17 held interaction edge refuses");
+            Check(!message_gate.Observe({Circle,false,false,201},Circle)&&!message_gate.Observe({Circle,true,false,202},Circle),"message17 refocused-held refuses");
+            Check(!message_gate.Observe({0,true,false,203},Circle)&&message_gate.Observe({Circle,true,false,204},Circle)
+                  &&game.AcknowledgeMessage(&target17),"message17 separate release/fresh acknowledgement");
+            for(unsigned i=0;i<5000;++i){const auto status=tick_game();const auto next_state=game.Snapshot();
+                if(!status||next_state.awaiting_message||i==4999){
+                    std::cout<<"POST17 pc="<<std::hex<<next_state.pc<<std::dec<<" service="<<next_state.last_service
+                        <<" messages="<<next_state.messages<<" ack="<<next_state.message_acknowledgements<<" callback="<<next_state.callbacks_returned
+                        <<" depth="<<next_state.call_depth<<" command="<<next_state.runtime.requested_command<<" detail="<<status.detail<<" text=";
+                    for(unsigned char b:next_state.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';break;
+                }
+            }
+            for(unsigned prompt=18;prompt<=20&&game.Snapshot().awaiting_message;++prompt){
+                message_gate.Begin();Check(!message_gate.Observe({Circle,true,false,205+prompt*3},Circle),"newcontext cannot consume priorheld");
+                Check(!message_gate.Observe({0,true,false,206+prompt*3},Circle)&&message_gate.Observe({Circle,true,false,207+prompt*3},Circle)
+                      &&game.AcknowledgeMessage(),"explicit next source-selected diagnostic message edge");
+                for(unsigned i=0;i<5000;++i){const auto status=tick_game();const auto next_state=game.Snapshot();
+                    if(!status||next_state.awaiting_message||next_state.awaiting_choice||i==4999){
+                        std::cout<<"POST"<<prompt<<" pc="<<std::hex<<next_state.pc<<std::dec<<" service="<<next_state.last_service<<" messages="<<next_state.messages
+                            <<" ack="<<next_state.message_acknowledgements<<" command="<<next_state.runtime.requested_command<<" detail="<<status.detail<<" text=";
+                        for(unsigned char b:next_state.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';break;
+                    }
+                }
+            }
+            const auto choice_state=game.Snapshot();
+            Check(choice_state.awaiting_choice&&!choice_state.blocked&&choice_state.pc==0xAC11&&choice_state.choice_options.size()==3,"actual builtin33 preserves all three options and waits atsource9");
+            const auto target=game.ChoiceTarget();auto bad=target;++bad.request;
+            Check(!game.CompleteChoice(bad,2)&&game.Snapshot().choice_completions==0,"stale request cannot publish choice result");
+            Check(!game.CompleteChoice(target,4),"result outside three options cannot resume caller");
+            GameChoiceController selected_choice;Check(selected_choice.Begin(choice_state.choice_options,30,choice_state.generation),"explicit selected-data choice fixture");
+            selected_choice.Tick(2); //synthetic completed clip;actualclip completion is checked by window fixture
+            selected_choice.Input({0,true,true,1,0,30,choice_state.generation});selected_choice.Tick(2);
+            selected_choice.Input({Down,true,true,2,0,30,choice_state.generation});selected_choice.Tick(2);
+            selected_choice.Input({0,true,true,3,0,30,choice_state.generation});selected_choice.Tick(2);
+            selected_choice.Input({Circle,true,true,4,0,30,choice_state.generation});selected_choice.Tick(2);
+            Check(selected_choice.Snapshot().state==2&&selected_choice.Snapshot().result==2,"actualsecond option selected without autoack");
+            selected_choice.Tick(2);Check(bool(game.CompleteChoice(target,selected_choice.Snapshot().result)),"real owned VM accepts closed selection result2");
+            Check(!game.CompleteChoice(target,1),"completed context cannot publish another result");
+            for(unsigned i=0;i<5000;++i){const auto status=tick_game();const auto after_choice=game.Snapshot();
+                if(!status||after_choice.awaiting_message||after_choice.awaiting_choice||i==4999){
+                    std::cout<<"CHOICE_NEXT pc="<<std::hex<<after_choice.pc<<" result="<<after_choice.choice_result_word<<std::dec<<" messages="<<after_choice.messages<<" ack="<<after_choice.message_acknowledgements<<" command="<<after_choice.runtime.requested_command<<" callback="<<after_choice.callbacks_returned<<" detail="<<status.detail<<" text=";
+                    for(unsigned char b:after_choice.message)std::cout<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];std::cout<<'\n';
+                    Check(bool(status)&&after_choice.awaiting_message&&after_choice.messages==19&&after_choice.message_acknowledgements==18
+                        &&after_choice.pc==0xA88B&&after_choice.runtime.requested_command==51&&after_choice.choice_result_word==0x20000002
+                        &&after_choice.b4_calls>0&&after_choice.b4_operand_word>>28==2,
+                        "fixed selected-data route must reach actual response19/actor51 through finite integer B4,not timeout/anotherchoice/quota");break;
+                }
+            }
+        }
         route.Close();Check(!route.Input({0,true,false,109,generation})&&!route.Input({Circle,true,false,110,generation}),"retired native interaction rejects lateinput");
         main_flow.Close();
     }
@@ -654,6 +741,6 @@ void Selected(const char* path,bool with_main_flow=false){
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");
 }
 }
-int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"))Selected(argv[2],std::string(argv[1])=="--manager9-data");
+int main(int argc,char** argv){try{Focused();if(argc==3&&(std::string(argv[1])=="--selected-data"||std::string(argv[1])=="--manager9-data"||std::string(argv[1])=="--post17-data"))Selected(argv[2],std::string(argv[1])!="--selected-data",std::string(argv[1])=="--post17-data");
     std::cout<<"actor dictionary/native VM: trees,CP932,aliases,mutation,bounds,lifetime,frames/yield/errors PASS\n";return 0;
 }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -482,6 +482,8 @@ Event Vm::stop(const Command* cmd, const std::string& reason) {
 }
 Event Vm::start(const std::vector<Value>& arguments) { return start_at(program_.header().entrypoint, arguments); }
 Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
+    choice_arguments_.clear();choice_waiting_=choice_arguments_taken_=false;choice_count_=0;
+    b4_calls_=b4_operand_word_=b4_result_word_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
     calls_.clear(); result_ = {}; executed_ = 0;
@@ -529,7 +531,7 @@ Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
     if (!cmd || cmd->opcode < 0) return stop(cmd, "PC is not an executable command boundary");
-    if(!context_enabled_){Event paused;paused.status=Status::Waiting;paused.pc=paused.next_pc=pc_;return paused;}
+    if(!context_enabled_||choice_waiting_){Event paused;paused.status=Status::Waiting;paused.pc=paused.next_pc=pc_;return paused;}
     if(waiting_event_){Event waiting;waiting.status=Status::Waiting;waiting.pc=waiting.next_pc=pc_;return waiting;}
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
@@ -584,10 +586,18 @@ Event Vm::step() {
             uint32_t count = program_.operand(*cmd, 1, 1);
             if (frame_->size() > count) return stop(cmd, "Caller argument count exceeds reserved frame");
             frame_->resize(count); frame_reserved_ = true;
-        } else if(op==0x20||op==0x21||op==0x23) {
-            const auto argc=op==0x20?program_.operand(*cmd,1,1):0;
+        } else if(op==0x20||op==0x21||op==0x22||op==0x23) {
+            const auto argc=(op==0x20||op==0x22)?program_.operand(*cmd,1,1):0;
             uint32_t target=0;
-            if(op==0x23){
+            if(op==0x22){
+                //6DD38/674C0: target is BELOW argc operands. The typed call
+                //record owns the source return slot/gap;arguments keep their
+                //order and earlier caller operands survive the return.
+                if(argc>=stack_.size())return stop(cmd,"Indirect22 missing target/arguments");
+                const auto index=stack_.size()-argc-1;const auto function=stack_[index];
+                if(function.kind!=Value::Kind::Code||function.word>>28!=7)return stop(cmd,"Indirect22 requires actual tag7 callee");
+                target=function.word&0x0FFFFFFF;stack_.erase(stack_.begin()+index);
+            }else if(op==0x23){
                 //6DE00 moves/pops one tag7 callee and replaces it with return
                 //PC. Native call records own that returnPC. No674C0 argument
                 //relocation occurs:existing caller operands stay below the
@@ -766,6 +776,12 @@ Event Vm::step() {
             if((value.kind!=Value::Kind::Scalar&&value.kind!=Value::Kind::Timestamp)||(value.word>>28)>3)
                 throw std::runtime_error("B1 raw-payload truth outside finite scalar domain");
             stack_.push_back(boolean((value.word&0x0FFFFFFF)==0)); //71960;not ToNumber
+        } else if(op==0xB4){
+            //71AF0: unary bitwise complement,not Boolean negation.
+            const auto value=pop();const auto scalar=numeric(value);
+            auto value_out=Value::integer(int32_t((~uint32_t(scalar))&0x0FFFFFFF));
+            ++b4_calls_;b4_operand_word_=value.word;b4_result_word_=value_out.word;
+            stack_.push_back(value_out);
         } else if(op==0xB2||op==0xB3||op==0xB8||op==0xB9) {
             const auto value=pop();if(value.kind==Value::Kind::Unknown)throw std::runtime_error("Uninitialized truth operand");
             const bool nil=value.kind==Value::Kind::Scalar&&value.word>>28==0;
@@ -797,10 +813,19 @@ Event Vm::step() {
             wait_until_=clock_tick_+uint32_t(delta);++deadline_writes_;event.status=Status::Yield;
         } else if(op==0x8B) {
             const auto id=uint8_t(program_.operand(*cmd,1,1));const auto argc=program_.operand(*cmd,2,1);
-            if(argc>stack_.size()||!service_)return stop(cmd,"Unbound builtin/argument count;id="+std::to_string(id));
-            std::vector<Value> arguments(stack_.end()-argc,stack_.end());stack_.resize(stack_.size()-argc);
-            result_=service_(id,arguments);
-            if(waiting_event_)event.status=Status::Waiting;
+            if(argc>stack_.size())return stop(cmd,"Builtin argument count;id="+std::to_string(id));
+            if(id==0x21){
+                if(!argc||argc>32||event_depth_==UINT16_MAX)throw std::runtime_error("Native SELECT33 count/nesting budget");
+                choice_arguments_.assign(std::make_move_iterator(stack_.end()-argc),std::make_move_iterator(stack_.end()));
+                stack_.resize(stack_.size()-argc);result_={};
+                choice_count_=argc;choice_waiting_=true;choice_arguments_taken_=false;
+                ++event_depth_;display_state_=9;event.status=Status::Choice;
+            }else{
+                if(!service_)return stop(cmd,"Unbound builtin;id="+std::to_string(id));
+                std::vector<Value> arguments(stack_.end()-argc,stack_.end());stack_.resize(stack_.size()-argc);
+                result_=service_(id,arguments);
+                if(waiting_event_)event.status=Status::Waiting;
+            }
         } else if(op==0x65||op==0x67||op==0x6D) {
             const auto rhs=numeric(pop());const auto ref=pop();const auto lhs=numeric(load_reference(ref));
             const auto word=op==0x65?uint32_t(lhs)&uint32_t(rhs):op==0x67?uint32_t(lhs)|uint32_t(rhs):uint32_t(lhs)<<(uint32_t(rhs)&31);
@@ -902,6 +927,7 @@ Event Vm::run(uint32_t instruction_budget) {
     // Source74C84/74CA0 wrap interpreter execution in an event-drain scope.
     // The hard native quota below is separate from source ctx3C/ctx58 timing.
     ++event_depth_;
+    try{
     for (uint32_t i = 0; i < instruction_budget; ++i) {
         Event event = step();
         if (event.status != Status::Running) {if(event_depth_)--event_depth_;drain_callback();return event;}
@@ -911,5 +937,16 @@ Event Vm::run(uint32_t instruction_budget) {
     Event event;event.status=Status::HostYield;event.pc=event.next_pc=pc_;
     event.file_offset=pc_+28;const auto* cmd=program_.command(pc_);event.opcode=cmd?cmd->opcode:-1;
     return event;
+    }catch(const std::exception& error){return stop(program_.command(pc_),error.what());}
+}
+std::vector<Value> Vm::take_choice_arguments(){
+    if(!choice_waiting_||choice_arguments_taken_)throw std::runtime_error("SELECT arguments unavailable/already consumed");
+    choice_arguments_taken_=true;return std::move(choice_arguments_);
+}
+bool Vm::complete_choice(uint32_t result){
+    if(stopped_||!choice_waiting_||!choice_arguments_taken_||result>choice_count_)return false;
+    result_=Value::integer(int32_t(result));display_state_=2;choice_waiting_=false;
+    if(event_depth_)--event_depth_;
+    drain_callback();return true;
 }
 } // namespace dokodemo::script

@@ -11,6 +11,29 @@ void Check(bool value, const char *message) {
     if (!value)
         throw std::runtime_error(message);
 }
+void ChoiceTests(){
+    GameChoiceController choice;uint64_t sequence=0;
+    const auto input=[&](uint32_t keys,bool focus=true,uint64_t context=20,uint64_t owner=4){return choice.Input({keys,focus,true,++sequence,0,context,owner});};
+    Check(choice.Begin({"one","two","three"},20,4),"actual three option owning request");
+    Check(!input(Circle)&&choice.Snapshot().remaining==5400,"opening ignores prior input and timeout");
+    choice.Tick(1);Check(choice.Snapshot().state==0,"opening control still running");
+    choice.Tick(2);Check(choice.Snapshot().state==1&&choice.Snapshot().active_updates==0,"open completion enters edit without same tick deadline/input");
+    Check(!input(0,true,19)&&!input(Circle,true,19),"old sampled message cannot arm SELECT");
+    input(Circle);choice.Tick(2);Check(choice.Snapshot().state==1,"held prior Circle refuses");
+    input(0);choice.Tick(2);input(Cross);choice.Tick(2);Check(choice.Snapshot().state==1,"source cancelByte0 ignores Cross");
+    input(0);choice.Tick(2);input(Down);choice.Tick(2);Check(choice.Snapshot().row==1,"fresh Down chooses second source option");
+    for(unsigned i=0;i<14;++i){input(Down);choice.Tick(2);}Check(choice.Snapshot().row==2,"held repeat clamps at bottom");
+    input(0);choice.Tick(2);input(Down);choice.Tick(2);Check(choice.Snapshot().row==0,"fresh edge wraps at bottom");
+    input(0);choice.Tick(2);input(Circle,false);choice.Tick(2);input(Circle,true);choice.Tick(2);Check(choice.Snapshot().state==1,"refocused-held cannot select");
+    input(0);choice.Tick(2);input(Circle);choice.Tick(2);Check(choice.Snapshot().state==2&&choice.Snapshot().result==1,"fresh confirm chooses actual row but is not completion");
+    choice.Tick(1);Check(choice.Snapshot().state==2,"close control must really finish");
+    choice.Tick(2);Check(choice.Snapshot().state==3&&choice.Snapshot().confirmations==1,"closed SELECT publishes state3 once");
+    Check(choice.Begin({"a","b"},21,4,1),"separate explicit one-tick timeout fixture");
+    choice.Tick(2);const auto before=choice.Snapshot();choice.Tick(2,false);Check(choice.Snapshot().remaining==before.remaining,"nonidle TRC suspends deadline");
+    choice.Input({0,true,true,++sequence,0,21,4});choice.Input({Circle,true,true,++sequence,0,21,4});choice.Tick(2);
+    Check(choice.Snapshot().state==2&&choice.Snapshot().result==0&&choice.Snapshot().timed_out&&choice.Snapshot().confirmations==0,"expiry wins simultaneous confirm and returns zero");
+    choice.Retire();Check(!choice.Input({0,true,true,++sequence,0,21,4}),"retired SELECT rejects queued input");
+}
 void W(std::vector<uint8_t> &b, size_t at, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i)
         b.at(at + i) = uint8_t(value >> (8 * i));
@@ -420,6 +443,7 @@ void DialogInputTests() {
 }
 } // namespace
 int main() {
+    ChoiceTests();
     try {
         ImageTests();
         OwnerTests();

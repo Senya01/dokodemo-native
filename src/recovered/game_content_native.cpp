@@ -499,8 +499,10 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
         if(posted)return true;
         if(inventory_.Modal())return inventory_.Input(frame);
-        const bool accepted=state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle)
-                            &&actor_script_.AcknowledgeMessage();
+        if(state_.actor_script.awaiting_choice)return scene_ui_.HandleChoiceInput(frame);
+        const bool edge=actor_message_gate_.Observe(frame);
+        const bool accepted=state_.actor_script.awaiting_message&&edge&&actor_script_.AcknowledgeMessage(&actor_message_target_);
+        state_.actor_message_stale_inputs=actor_message_gate_.Rejected();
         state_.actor_message_input_armed=actor_message_gate_.Armed();
         return accepted;
     }
@@ -778,7 +780,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         //Existing modal scheduler remains paused until actual close/poll/
         //deferred retirement;this is not a recovered post32 wake producer.
         if(!inventory_.Modal()&&!before.inventory_requested){
-            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message;
+            GameMainFlowGate gate;gate.extension_busy=before.awaiting_message||before.awaiting_choice;
+            gate.choice_busy48=before.source_main_input_suppressed48;
             gate.manager_flag68=before.manager_flag68;
             gate.loader469=state_.source_loader469;gate.loader_state20=state_.load_state;
             gate.fade_state=scene_ui_.TitleTransitionOwner().Snapshot().state;
@@ -786,19 +789,32 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             if(!flow){state_.status=flow;state_.blocked=true;state_.frontier_pc=state_.main_flow.last_pc;return false;}
         }
         state_.status=actor_script_.Tick();state_.actor_script=actor_script_.Snapshot();
+        if(state_.status&&state_.actor_script.awaiting_choice){
+            if(actor_choice_target_.generation!=state_.actor_script.generation||actor_choice_target_.request!=state_.actor_script.choice_requests){
+                actor_choice_target_=actor_script_.ChoiceTarget();++state_.actor_message_contexts;
+                actor_message_gate_.Stop();state_.actor_message_input_armed=false;
+                state_.status=scene_ui_.BeginChoice(state_.actor_script.choice_options,state_.actor_message_contexts,state_.actor_script.generation);
+            }
+            if(state_.status)state_.status=scene_ui_.TickChoice();
+            state_.actor_choice=scene_ui_.Choice();
+            if(state_.status&&state_.actor_choice.state==3){
+                state_.status=actor_script_.CompleteChoice(actor_choice_target_,state_.actor_choice.result);
+                state_.actor_script=actor_script_.Snapshot();
+            }
+        }
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
         if(state_.status&&state_.actor_script.inventory_requests>inventory_.Snapshot().requests){
             state_.status=inventory_.Request(state_.actor_script.inventory_items,true);
-            actor_message_gate_.Begin();state_.actor_message_input_armed=false;
+            actor_message_gate_.Stop();state_.actor_message_input_armed=false;
         }
         if(state_.status&&inventory_.Modal())state_.status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
         if(state_.status&&inventory_.ClosedAndRetired()&&actor_script_.CanResumeInventory()){
             //NamedNativeModalSuspendResumeTriggeredOnlyByActualClose: original
             //post32 enable38 producer remains unrecovered. No frame/ack wake.
             state_.status=actor_script_.CompleteInventory(inventory_.Snapshot());
-            actor_message_gate_.Begin();state_.actor_script=actor_script_.Snapshot();
+            actor_message_gate_.Stop();state_.actor_script=actor_script_.Snapshot();
         }
         state_.inventory=inventory_.Snapshot();
         //1A9B4's stable469 is1 in BOTH pending and ready branches. Neither
@@ -810,7 +826,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         //an intermediate room-only front whileFONT is still being decoded.
         const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
             if(inventory_.Modal())return inventory_.Draw(surface,font_);
-            if(!state_.actor_script.awaiting_message)return {};
+            if(!state_.actor_script.awaiting_message&&!state_.actor_script.awaiting_choice)return {};
             std::string visible;
             for(unsigned char c:state_.actor_script.message){
                 if(c==0x16)continue; //NativeNoHighlight adaptation;rawrequest remains unchanged
@@ -826,6 +842,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.actor_message_glyphs=text.glyphs;state_.actor_message_ink_pixels=0;
             for(auto p:text.pixels)if(p>>24)++state_.actor_message_ink_pixels;
             ++state_.actor_message_draw_frames;
+            if(state_.actor_script.awaiting_choice&&!scene_ui_.DrawChoice(surface))return {GameFsCode::Unavailable,0,"Native SELECT text draw failed"};
             return {};
         });
         if(!rendered){state_.status=rendered;state_.blocked=true;return false;}
@@ -833,7 +850,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.actor_script.runtime=actor_runtime_.Snapshot();
         if(state_.actor_script.dictionary.imported){actor_dictionary_.Reset();state_.actor_dictionary_live=false;}
         if(state_.actor_script.awaiting_message&&(!before.awaiting_message||before.messages!=state_.actor_script.messages)){
-            actor_message_gate_.Begin();++state_.actor_message_contexts;state_.actor_message_input_armed=false;
+            ++state_.actor_message_contexts;actor_message_target_=actor_script_.MessageTarget();
+            actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);state_.actor_message_input_armed=false;
         }
         state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
         const auto script_ok=bool(state_.status);

@@ -119,7 +119,7 @@ struct Value {
     int32_t signed_integer() const;
 };
 
-enum class Status { Running, Message, Yield, HostYield, Waiting, Complete, Stopped };
+enum class Status { Running, Message, Choice, Yield, HostYield, Waiting, Complete, Stopped };
 struct Event {
     Status status = Status::Stopped;
     uint32_t pc = 0, next_pc = 0, file_offset = 0;
@@ -173,6 +173,15 @@ public:
     uint32_t queued_callbacks()const noexcept{return uint32_t(pending_callbacks_.size());}
     uint64_t deadline_tick()const noexcept{return wait_until_;}
     bool context_enabled()const noexcept{return context_enabled_;}
+    //697DC retains the arguments while state9 waits for the game SELECT
+    //consumer. Conversion transfers their ownership once;683E8 publishes
+    //the integer only after the real SELECT close producer reaches state3.
+    std::vector<Value> take_choice_arguments();
+    bool complete_choice(uint32_t result);
+    bool choice_waiting()const noexcept{return choice_waiting_;}
+    uint32_t b4_calls()const noexcept{return b4_calls_;}
+    uint32_t b4_operand_word()const noexcept{return b4_operand_word_;}
+    uint32_t b4_result_word()const noexcept{return b4_result_word_;}
     // Named native modal scheduler adapter. Called only after actual GUI close,
     // poll completion and teardown;original byte38 wake producer is unclosed.
     void resume_modal_context();
@@ -243,6 +252,10 @@ private:
     uint32_t root_returns_=0;
     Value last_random_;
     Value result_;
+    std::vector<Value> choice_arguments_;
+    bool choice_waiting_=false,choice_arguments_taken_=false;
+    uint32_t choice_count_=0;
+    uint32_t b4_calls_=0,b4_operand_word_=0,b4_result_word_=0;
     uint64_t executed_ = 0;
     uint64_t clock_tick_ = 0, timer_base_ = 0, wait_until_ = 0;
     uint32_t pc_ = 0, display_state_ = 0;

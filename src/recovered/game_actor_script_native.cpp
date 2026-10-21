@@ -370,7 +370,7 @@ GameFsStatus GameActorScript::Tick() {
     const bool repeat_eligible=event_eligible&&runtime_->Snapshot().command_repeat_ready258;
     if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
-    if(state_.completed||state_.awaiting_message)return {};
+    if(state_.completed||state_.awaiting_message||state_.awaiting_choice)return {};
     try {
         (void)script_image_.Describe(); // live backing required throughout use
         if(vm_->waiting_for_event()) {
@@ -390,13 +390,55 @@ GameFsStatus GameActorScript::Tick() {
             state_.message_actor_commands.push_back(runtime_?runtime_->Snapshot().requested_command:UINT32_MAX);
             state_.awaiting_message=true;
         }
+        if(event.status==script::Status::Choice){
+            state_.source_main_input_suppressed48=true; //1E620 source latch,not generic busy
+            auto values=vm_->take_choice_arguments();state_.choice_options.clear();
+            for(const auto& value:values){
+                Need(value.kind==Value::Kind::String,"SELECT33 reached text conversion domain not implemented");
+                Need(value.cp932.size()<=1023,"SELECT33 native checked1023-byte text extent");
+                state_.choice_options.push_back(value.cp932);
+            }
+            ++state_.choice_requests;state_.awaiting_choice=true;
+        }
         if(event.status==script::Status::Complete)state_.completed=true;
         return {};
     } catch(const std::exception& e) {state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
-bool GameActorScript::AcknowledgeMessage() {
+GameMessageTarget GameActorScript::MessageTarget()const{
+    Need(state_.live&&state_.awaiting_message&&vm_,"Message target needs live awaiting context");
+    return {state_.generation,state_.messages,state_.pc,vm_->context_value()};
+}
+bool GameActorScript::AcknowledgeMessage(const GameMessageTarget* expected) {
     if(!state_.live||!state_.awaiting_message)return false;
+    if(expected){
+        const auto owner=expected->context.context_owner.lock();
+        const auto current=vm_->context_value();
+        if(!owner||owner!=current.context_owner.lock()||expected->context.word!=current.word
+           ||expected->generation!=state_.generation||expected->message!=state_.messages||expected->pc!=state_.pc)return false;
+    }
     state_.awaiting_message=false;++state_.message_acknowledgements;return true;
+}
+GameChoiceTarget GameActorScript::ChoiceTarget()const{
+    Need(state_.live&&state_.awaiting_choice&&vm_&&vm_->choice_waiting(),"Choice target needs live state9 context");
+    return {state_.generation,state_.choice_requests,state_.pc,vm_->context_value()};
+}
+GameFsStatus GameActorScript::CompleteChoice(const GameChoiceTarget& expected,uint32_t result){
+    try{
+        const auto current=ChoiceTarget();const auto owner=expected.context.context_owner.lock();
+        Need(owner&&owner==current.context.context_owner.lock()&&expected.context.word==current.context.word
+             &&expected.generation==current.generation&&expected.request==current.request&&expected.pc==current.pc,
+             "SELECT completion target generation/registry/request changed");
+        Need(result<=state_.choice_options.size()&&vm_->complete_choice(result),"SELECT result outside actual option range");
+        //complete_choice may drain a queued event and temporarily replace
+        //VMresult with that callback's result. Retain the published value,
+        //not the result of a different currently executing context phase.
+        state_.awaiting_choice=false;++state_.choice_completions;state_.choice_result_word=script::Value::integer(int32_t(result)).word;
+        //1E508 publishes/drains first;only raw zero then emits owner event20.
+        //Positive user choice never emits this timeout/cleanup event.
+        if(result==0){const auto posted=PostMainFlowEvent(20,0);state_.source_main_input_suppressed48=false;return posted;}
+        state_.source_main_input_suppressed48=false;
+        return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameActorScript::CanResumeInventory()const{
     return state_.inventory_requested&&vm_&&!vm_->context_enabled()&&vm_->callbacks_returned()>0;
@@ -432,6 +474,7 @@ GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argume
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+        out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
         out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
         out.context_word=vm_->context_value().word;out.callback_depth=vm_->callback_depth();out.queued_callbacks=vm_->queued_callbacks();out.operand_count=uint32_t(vm_->stack().size());out.deadline_tick=vm_->deadline_tick();
         if(program_.header().local_count)out.owner_event_callback_word=vm_->read_slot(script::Table::Local,0).word;
@@ -444,6 +487,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
 void GameActorScript::Close() {
     state_=Snapshot();
     dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;sound_=nullptr;
-    state_.live=false;state_.awaiting_message=false;
+    state_.live=false;state_.awaiting_message=state_.awaiting_choice=false;
+    state_.source_main_input_suppressed48=false;
 }
 } // namespace dokodemo::recovered

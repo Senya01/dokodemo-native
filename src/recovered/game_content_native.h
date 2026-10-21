@@ -90,6 +90,8 @@ struct GameContentSnapshot {
     bool source_loader469=false; //17910 cold0;stable inventory poll1 persists
     GameInventorySnapshot inventory;
     uint32_t actor_message_contexts=0;
+    uint32_t actor_message_stale_inputs=0;
+    GameChoiceSnapshot actor_choice;
     bool actor_message_input_armed=false;
     uint32_t actor_message_draw_frames=0,actor_message_glyphs=0,actor_message_ink_pixels=0;
     std::string next_resource;
@@ -181,7 +183,9 @@ class GameContentBoot final : public GameResourceSource {
     bool actor_model_mounted_=false;
     GameFilesystem* game_filesystem_=nullptr;
     GameActorScript::ClockWord actor_clock_;
-    GameButtonGate actor_message_gate_;
+    GameMessageInput actor_message_gate_;
+    GameMessageTarget actor_message_target_;
+    GameChoiceTarget actor_choice_target_;
     bool TickActorDictionary(GameFilesystem&,GameGraphics&);
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;

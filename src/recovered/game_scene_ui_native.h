@@ -37,6 +37,26 @@ class GameTransition final {
 class GameArena;
 class GameVmBoot;
 class GameFontResource;
+struct GameChoiceSnapshot {
+    bool live=false,timed_out=false;
+    uint32_t state=3,row=0,result=0,remaining=0,active_updates=0,confirmations=0,rejected_inputs=0;
+    uint64_t context=0,owner_generation=0;
+    std::vector<std::string> options;
+};
+// Mode0 SELECT10884/10BCC: source counters,deadline priority and real clip
+// completion;dynamic row drawing uses the named NativeSelectTextPanel.
+class GameChoiceController {
+  public:
+    bool Begin(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t timeout=5400);
+    bool Input(const GameInputFrame&);
+    void Tick(uint8_t main_mode,bool trc_idle=true);
+    void Retire(){input_.BeginContext();state_.live=false;}
+    GameChoiceSnapshot Snapshot()const{return state_;}
+  private:
+    GameMenuInput input_;
+    GameChoiceSnapshot state_;
+    uint64_t sequence_=0;
+};
 struct GameDialogSnapshot {
     int32_t state = 3, result = 0;
     uint32_t mode = 1, selection = 0, confirmations = 0;
@@ -99,6 +119,11 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool DrawEditor(GameGraphics&);
     GameFsStatus BeginProfileConfirmation();
     bool DrawProfileConfirmation(GameGraphics&);
+    GameFsStatus BeginChoice(std::vector<std::string>,uint64_t context,uint64_t owner);
+    GameFsStatus TickChoice();
+    bool HandleChoiceInput(const GameInputFrame& frame){return choice_.Input(frame);}
+    bool DrawChoice(GameGraphics&);
+    GameChoiceSnapshot Choice()const{return choice_.Snapshot();}
     GameSceneUiSnapshot Snapshot() const;
     bool Close();
     ~GameSceneUiBootstrap();
@@ -127,6 +152,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     int32_t editor_min_=0,editor_max_=0;
     bool editor_cancel_=true;
     bool profile_confirmation_=false;
+    GameChoiceController choice_;
     bool DrawUiCallback(uint32_t,uint32_t,const GameUiMatrix&,uint32_t,GameGraphics&,std::string&)override;
 };
 

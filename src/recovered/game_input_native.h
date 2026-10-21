@@ -41,6 +41,8 @@ struct GameInputFrame {
     // Published Windows post-modal context at sampling time. Queued frames
     // from an earlier boundary cannot arm a newly created interaction.
     uint64_t interaction_generation = 0;
+    uint64_t message_context = 0, message_owner_generation = 0;
+    bool overflow_resync=false;
 };
 // One prompt consumes only a focused release followed by a fresh press. A held
 // button at prompt creation/refocus cannot confirm it or a following prompt.
@@ -56,6 +58,28 @@ class GameButtonGate {
 
   private:
     bool active_ = false, armed_ = false;
+};
+// Native message boundaries use the published context at sampling time.
+// A queued release/press for an older message cannot arm its successor.
+class GameMessageInput {
+  public:
+    void Begin(uint64_t context,uint64_t owner)noexcept{context_=context;owner_=owner;active_=true;gate_.Begin();}
+    void Stop()noexcept{active_=false;gate_.Stop();}
+    bool Observe(const GameInputFrame& frame)noexcept{
+        if(frame.overflow_resync){if(active_)gate_.Begin();++rejected_;return false;}
+        if(frame.sequence<=sequence_){++rejected_;return false;}
+        sequence_=frame.sequence;
+        if(!active_||frame.message_context!=context_||frame.message_owner_generation!=owner_){++rejected_;return false;}
+        if(!gate_.Observe(frame,Circle))return false;
+        Stop();return true;
+    }
+    bool Armed()const noexcept{return gate_.Armed();}
+    uint32_t Rejected()const noexcept{return rejected_;}
+  private:
+    GameButtonGate gate_;
+    bool active_=false;
+    uint64_t context_=0,owner_=0,sequence_=0;
+    uint32_t rejected_=0;
 };
 // Worker-owned native input sampler for source counter consumers such as94F90.
 // Raw queued frames are observed in order; counters advance once per game tick.

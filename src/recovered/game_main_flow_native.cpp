@@ -19,6 +19,10 @@ GameFsStatus GameMainFlow::Event(uint32_t id,int32_t arg){
 GameFsStatus GameMainFlow::Tick(const GameMainFlowGate& gate){
     if(!state_.live||!runtime_||!runtime_->OwnersLive())
         return {GameFsCode::Unavailable,0,"Main-flow owner retired"};
+    //1E4A0 sets this source main owner.byte48 for SELECT state9 and clears
+    //it after the completion bridge. Source prefix routes remain enabled
+    //outside that exact modal interval.
+    state_.input_suppressed48=gate.choice_busy48;
     input_.Tick();++state_.steps;state_.last_extension_busy=gate.extension_busy;
     state_.last_loader469=gate.loader469;state_.circle_counter=input_.Counter(Circle);
     auto current=runtime_->Snapshot();GameFsStatus status;
@@ -125,6 +129,7 @@ GameFsStatus GamePostModalInteraction::Update(const GameInventorySnapshot& inven
     return {};
 }
 bool GamePostModalInteraction::Input(const GameInputFrame& frame){
+    if(frame.overflow_resync){if(state_.eligible)input_.Begin();else input_.Stop();state_.armed=false;++state_.rejected;return false;}
     if(frame.sequence<=state_.last_sequence){++state_.rejected;return false;}
     state_.last_sequence=frame.sequence;
     if(!state_.eligible||!script_||frame.interaction_generation!=state_.generation){++state_.rejected;return false;}

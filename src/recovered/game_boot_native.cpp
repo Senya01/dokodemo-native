@@ -64,6 +64,7 @@ bool GameInputMailbox::Pop(GameInputFrame &frame) noexcept {
     if (resync_) {
         resync_ = false;
         frame = {};
+        frame.overflow_resync=true;
         return true;
     }
     if (!count_)

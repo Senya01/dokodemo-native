@@ -7,6 +7,7 @@
 namespace dokodemo::recovered {
 struct GameMainFlowGate {
     bool extension_busy=false,manager_switch_pending=false,manager_flag68=false,loader469=false;
+    bool choice_busy48=false;
     uint32_t loader_state20=6,fade_state=0;
 };
 struct GameMainFlowSnapshot {

@@ -15,6 +15,16 @@ struct GameOwnerEventTarget {
     uint64_t generation=0;
     script::Value context,callback;
 };
+struct GameMessageTarget {
+    uint64_t generation=0;
+    uint32_t message=0,pc=0;
+    script::Value context;
+};
+struct GameChoiceTarget {
+    uint64_t generation=0;
+    uint32_t request=0,pc=0;
+    script::Value context;
+};
 struct GameActorScriptSnapshot {
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
     uint64_t generation=0;
@@ -34,6 +44,11 @@ struct GameActorScriptSnapshot {
     uint32_t game28_queries=0,game28_result_word=0;
     uint32_t camera_setter_returns=0,camera_setter_result_word=0;
     uint32_t local_config_writes=0,message_acknowledgements=0;
+    bool awaiting_choice=false;
+    bool source_main_input_suppressed48=false;
+    uint32_t choice_requests=0,choice_completions=0,choice_result_word=0;
+    uint32_t b4_calls=0,b4_operand_word=0,b4_result_word=0;
+    std::vector<std::string> choice_options;
     uint32_t string_replace_calls=0;
     std::string last_replacement;
     std::vector<std::string> replacement_results;
@@ -89,7 +104,10 @@ class GameActorScript final {
                             const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
                             GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr,GameSoundBank* sound=nullptr);
     GameFsStatus Tick();
-    bool AcknowledgeMessage();
+    bool AcknowledgeMessage(const GameMessageTarget* expected=nullptr);
+    GameMessageTarget MessageTarget()const;
+    GameChoiceTarget ChoiceTarget()const;
+    GameFsStatus CompleteChoice(const GameChoiceTarget&,uint32_t result);
     bool CanResumeInventory()const;
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
