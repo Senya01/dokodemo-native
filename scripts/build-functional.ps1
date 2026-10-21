@@ -2,6 +2,7 @@
 param(
     [string]$OutputDirectory = 'build/functional',
     [string]$PreparedCodecRoot = '',
+    [string]$UserTablesDirectory = '',
     [switch]$Test
 )
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,8 @@ $configure = @('-S', $root, '-B', $output, '-G', 'Ninja',
     '-DDOKODEMO_CORE_TESTS=OFF', '-DDOKODEMO_GAME_BOOT_TESTS=ON',
     '-DDOKODEMO_MODULE_CONTROLS_SOURCE=', '-DDOKODEMO_BACKEND_CONTROLS_SOURCE=',
     ('-DCMAKE_CXX_COMPILER=' + $toolchain.compiler),
-    ('-DCMAKE_MAKE_PROGRAM=' + $ninja), ('-DDOKODEMO_FFMPEG_ROOT=' + $PreparedCodecRoot))
+    ('-DCMAKE_MAKE_PROGRAM=' + $ninja), ('-DDOKODEMO_FFMPEG_ROOT=' + $PreparedCodecRoot),
+    ('-DDOKODEMO_USER_TABLES_DIR=' + $UserTablesDirectory))
 $null = Invoke-DokodemoProcess -FilePath $cmake -Arguments $configure -WorkingDirectory $root -LogPath (Join-Path $output 'configure.log')
 $null = Invoke-DokodemoProcess -FilePath $cmake -Arguments @('--build', $output, '--target', 'dokodemo-native', 'dokodemo-game-boot-tests', 'dokodemo-game-graphics-tests', 'dokodemo-game-filesystem-tests', 'dokodemo-game-content-tests', 'dokodemo-game-scene-ui-tests', 'dokodemo-game-storage-tests', 'dokodemo-game-model-tests', 'dokodemo-game-text-tests', 'dokodemo-game-actor-tests', '--parallel', '2') -WorkingDirectory $root -LogPath (Join-Path $output 'build.log')
 if ($Test) {

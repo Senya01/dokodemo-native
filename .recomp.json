@@ -1,0 +1,18 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Doko Demo Issyo",
+  "system": "PSP",
+  "type": "port",
+  "original": {
+    "region": "Japan",
+    "revision": "1.01",
+    "serial": "UCJS10002"
+  },
+  "project": "dokodemo-native",
+  "status": "in-progress",
+  "targets": [
+    "Windows"
+  ],
+  "approach": "C++ reconstruction from the original PSP program with source-linked verification and a native Windows backend.",
+  "notes": "Native Windows source port in progress. A verified new-game route includes profile entry, room/actor animation, introductory dialogue and inventory browsing/cancellation. Full gameplay, audio mixing and original save import are incomplete. Original game files must be supplied by the user; none are distributed. Linux is unverified."
+}
