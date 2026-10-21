@@ -5,6 +5,7 @@
 #include "game_title_native.h"
 #include "game_actor_script_native.h"
 #include "game_main_flow_native.h"
+#include "game_returned_interaction_native.h"
 #include <array>
 #include <vector>
 
@@ -87,6 +88,7 @@ struct GameContentSnapshot {
     GameActorScriptSnapshot actor_script;
     GameMainFlowSnapshot main_flow;
     GamePostModalSnapshot post_modal;
+    GameReturnedInteractionSnapshot returned_interaction;
     bool source_loader469=false; //17910 cold0;stable inventory poll1 persists
     GameInventorySnapshot inventory;
     uint32_t actor_message_contexts=0;
@@ -169,6 +171,8 @@ class GameContentBoot final : public GameResourceSource {
     GameActorScript actor_script_;
     GameMainFlow main_flow_;
     GamePostModalInteraction post_modal_;
+    GameReturnedConversationInteraction returned_interaction_;
+    GameReturnedInteractionGate ReturnedGate()const;
     GameRecordStore records_;
     GameActorRuntime actor_runtime_;
     GameInventory inventory_;

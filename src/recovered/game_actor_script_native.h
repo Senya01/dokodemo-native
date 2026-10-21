@@ -38,6 +38,8 @@ struct GameActorScriptSnapshot {
     uint64_t native_clock_ticks=0;
     script::VmStateWitness vm_current;
     script::NormalReturnWitness normal_return;
+    script::NormalReturnWitness farewell_return;
+    uint32_t b3_calls=0,b3_pc=0,b3_operand_kind=0,b3_operand_word=0,b3_result_word=0;
     uint32_t builtin_calls=0,game_service_calls=0,last_service=UINT32_MAX;
     uint32_t last_service_argument_word=0,last_service_result_word=0;
     bool last_service_returned=false;
@@ -71,6 +73,7 @@ struct GameActorScriptSnapshot {
     uint32_t inventory_completions=0;
     uint32_t game71_calls=0,game71_result_word=0,record_clock_word=0,record_cell0_writes=0;
     uint32_t game3_calls=0,game3_result_word=0;
+    script::VmStateWitness game3_execution; // actual dispatch,not historical last_service
     uint32_t record_cell0_before=0,record_cell0_after=0;
     std::string record_input_text;
     GameRecordStoreSnapshot records;

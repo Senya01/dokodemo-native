@@ -498,6 +498,12 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
         if(!inventory_.Modal())main_flow_.Input(frame);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
         if(posted)return true;
+        // Recheck live owners before the queue call;the published input token
+        // must already have existed when this raw frame was sampled.
+        returned_interaction_.CheckInputOwners(actor_script_.Snapshot(),main_flow_.Snapshot(),ReturnedGate());
+        const bool returned_posted=returned_interaction_.Input(frame);
+        state_.returned_interaction=returned_interaction_.Snapshot();
+        if(returned_posted){state_.actor_script=actor_script_.Snapshot();return true;}
         if(inventory_.Modal())return inventory_.Input(frame);
         if(state_.actor_script.awaiting_choice)return scene_ui_.HandleChoiceInput(frame);
         const bool edge=actor_message_gate_.Observe(frame);
@@ -714,6 +720,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
     main_flow_.Close();state_.main_flow=main_flow_.Snapshot();
     inventory_.Close();state_.inventory=inventory_.Snapshot();
@@ -769,6 +776,19 @@ bool GameContentBoot::Close() {
     state_.sound_bank = sound_bank_.Snapshot();
     state_.closed = true;
     return true;
+}
+GameReturnedInteractionGate GameContentBoot::ReturnedGate()const{
+    GameReturnedInteractionGate gate;
+    const auto ui=scene_ui_.Snapshot();const auto choice=scene_ui_.Choice();
+    gate.ui_idle=ui.live&&!ui.storage_dialog&&!ui.awaiting_confirmation&&ui.dialog_state==3
+        &&(!ui.editor.live||ui.editor.source_state==3)&&choice.state==3&&!state_.closed&&!state_.blocked;
+    const auto inventory=inventory_.Snapshot();
+    gate.inventory_retired=inventory.phase==7&&!inventory.live&&!inventory.owner480&&!inventory.request14
+        &&!inventory.retirement_pending&&inventory.stateB2C==3&&inventory.loader468==1&&inventory.loader498==0
+        &&inventory.completed_polls>0&&inventory.retirements>0;
+    gate.old_post_modal_consumed=post_modal_.Snapshot().event_posted;
+    gate.source469=state_.source_loader469;gate.manager9=actor_runtime_.Snapshot().manager_request9;
+    gate.message_context=state_.actor_message_contexts;return gate;
 }
 bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
     if(state_.actor_dictionary_requested){
@@ -853,6 +873,10 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             ++state_.actor_message_contexts;actor_message_target_=actor_script_.MessageTarget();
             actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);state_.actor_message_input_armed=false;
         }
+        if(state_.status){
+            returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());
+            state_.returned_interaction=returned_interaction_.Snapshot();
+        }
         state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
         const auto script_ok=bool(state_.status);
         if(state_.actor_script.runtime.command_blocked){
@@ -912,6 +936,12 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){return actor_script_.PostMainFlowEvent(event,arg);});
             if(!state_.status)throw std::runtime_error(state_.status.detail);
             state_.main_flow=main_flow_.Snapshot();
+            state_.status=returned_interaction_.Initialize([this]{return actor_script_.OwnerEventTarget();},
+                [this](const GameOwnerEventTarget& target,int32_t& result){
+                    const auto status=actor_script_.PostMainFlowEvent(0,0,&target);
+                    result=actor_script_.Snapshot().owner_event_result;return status;
+                });
+            if(!state_.status)throw std::runtime_error(state_.status.detail);
             ++state_.opened_resources;state_.blocked=false;
             if(!graphics.Clear(0xFF000000,0)||!graphics.SwapBuffers())throw std::runtime_error("Scene4 clear failed");
             return true;

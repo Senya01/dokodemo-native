@@ -520,7 +520,8 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
-    frame_id_=++next_frame_id_;code_entry_=code_pc;++run_id_;last_normal_return_={};
+    frame_id_=++next_frame_id_;code_entry_=code_pc;++run_id_;normal_returns_={};
+    b3_calls_=b3_pc_=b3_operand_kind_=b3_operand_word_=b3_result_word_=0;
     calls_.clear(); result_ = {}; executed_ = 0;
     blocks_.clear(); blocks_entered_ = blocks_closed_ = switches_ = 0;
     opcode_cost_ = 1;
@@ -571,7 +572,7 @@ Event Vm::step() {
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
-    bool captured_normal_return=false;
+    size_t captured_normal_return=normal_returns_.size();
     try {
         int op = cmd->opcode;
         const auto pop = [&]() {
@@ -707,9 +708,9 @@ Event Vm::step() {
                 return stop(cmd,"Return through active block: source67548 unwind unresolved");
             if(calls_.empty()) { stopped_=true;event.status=Status::Complete; }
             else {
-                if(cmd->pc==return_probe_pc_){
-                    last_normal_return_={};last_normal_return_.sequence=++return_sequence_;
-                    last_normal_return_.opcode_pc=cmd->pc;last_normal_return_.before=current_witness();captured_normal_return=true;
+                for(size_t i=0;i<normal_returns_.size();++i)if(cmd->pc==return_probe_pcs_[i]){
+                    auto& trace=normal_returns_[i];trace={};trace.sequence=++return_sequence_;
+                    trace.opcode_pc=cmd->pc;trace.before=current_witness();captured_normal_return=i;break;
                 }
                 if(calls_.size()==1)++root_returns_;
                 auto saved=std::move(calls_.back());calls_.pop_back();
@@ -836,6 +837,7 @@ Event Vm::step() {
             const auto value=pop();if(value.kind==Value::Kind::Unknown)throw std::runtime_error("Uninitialized truth operand");
             const bool nil=value.kind==Value::Kind::Scalar&&value.word>>28==0;
             const bool zero=value.kind==Value::Kind::Scalar&&value.word==0x20000000;
+            if(op==0xB3){++b3_calls_;b3_pc_=cmd->pc;b3_operand_kind_=uint32_t(value.kind);b3_operand_word_=value.word;b3_result_word_=boolean(nil).word;}
             stack_.push_back(boolean(op==0xB2?!nil:op==0xB3?nil:op==0xB8?zero:!zero));
         } else if(op>=0xBA&&op<=0xBD) {
             const auto n=numeric(pop());
@@ -991,7 +993,9 @@ Event Vm::step() {
         }
         if (stack_.size() > 32767) return stop(cmd, "Native operand stack budget exceeded");
         ++executed_; pc_ = next;
-        if(captured_normal_return){last_normal_return_.after=current_witness();last_normal_return_.valid=last_normal_return_.before.valid&&last_normal_return_.after.valid;}
+        if(captured_normal_return<normal_returns_.size()){
+            auto& trace=normal_returns_[captured_normal_return];trace.after=current_witness();trace.valid=trace.before.valid&&trace.after.valid;
+        }
         if(op==0x0E)drain_callback();
         event.next_pc = pc_; return event;
     } catch (const std::exception& ex) { return stop(cmd, ex.what()); }

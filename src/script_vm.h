@@ -176,8 +176,17 @@ public:
     const std::vector<Value>& stack() const { return stack_; }
     uint32_t pc() const { return pc_; }
     VmStateWitness current_witness() const noexcept;
-    void trace_normal_return_at(uint32_t pc) noexcept { return_probe_pc_=pc;last_normal_return_={}; }
-    const NormalReturnWitness& last_normal_return() const noexcept { return last_normal_return_; }
+    void trace_normal_return_at(uint32_t pc, size_t slot=0) noexcept {
+        if(slot<normal_returns_.size()){return_probe_pcs_[slot]=pc;normal_returns_[slot]={};}
+    }
+    const NormalReturnWitness& last_normal_return(size_t slot=0) const noexcept {
+        return normal_returns_[slot<normal_returns_.size()?slot:0];
+    }
+    uint32_t b3_calls() const noexcept { return b3_calls_; }
+    uint32_t b3_pc() const noexcept { return b3_pc_; }
+    uint32_t b3_operand_kind() const noexcept { return b3_operand_kind_; }
+    uint32_t b3_operand_word() const noexcept { return b3_operand_word_; }
+    uint32_t b3_result_word() const noexcept { return b3_result_word_; }
     uint32_t display_state() const { return display_state_; }
     uint16_t display_count() const { return display_count_; }
     bool stopped() const { return stopped_; }
@@ -313,8 +322,10 @@ private:
     bool native_reserved_local_nil_ = false;
     Diagnostic last_error_;
     uint64_t next_frame_id_=0,frame_id_=0,run_id_=0,return_sequence_=0;
-    uint32_t code_entry_=0,return_probe_pc_=UINT32_MAX;
-    NormalReturnWitness last_normal_return_;
+    uint32_t code_entry_=0;
+    std::array<uint32_t,2> return_probe_pcs_{{UINT32_MAX,UINT32_MAX}};
+    std::array<NormalReturnWitness,2> normal_returns_{};
+    uint32_t b3_calls_=0,b3_pc_=0,b3_operand_kind_=0,b3_operand_word_=0,b3_result_word_=0;
     Value decode(uint32_t word) const;
     std::vector<Value>& slots(Table table);
     std::string expand(const Command& command) const;

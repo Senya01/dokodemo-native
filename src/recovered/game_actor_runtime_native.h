@@ -13,6 +13,14 @@ int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
                               uint32_t hour,uint32_t minute);
 std::array<int16_t,12> SceneClockEndpoints7398(uint32_t row);
 uint32_t SceneSeason709C(uint32_t month,uint32_t day);
+struct GameActorLoopFrame { uint32_t start=0,remaining=0; };
+struct GameActorLoopStep {
+  uint32_t pc=0,depth=0;
+  bool set_ready258=false,repeated=false;
+};
+// Source24300..24358: infinite repeat or final root pop produces258.
+// This does not complete the command or produce25E/VM54.
+GameActorLoopStep AdvanceActorLoop8021(std::vector<GameActorLoopFrame>& frames,uint32_t pc);
 struct GameActorRuntimeSnapshot {
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
@@ -150,8 +158,7 @@ private:
   GameModelClone actor_clone_;
   GameFsStatus PrepareActor();
   PackageView command_image_;
-  struct CommandLoop { uint32_t start=0,remaining=0; };
-  std::vector<CommandLoop> command_loops_;
+  std::vector<GameActorLoopFrame> command_loops_;
   PackageView coordinate_image_;
   bool coordinate_loaded_ = false;
   struct ActorChannel {

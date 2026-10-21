@@ -43,6 +43,7 @@ struct GameInputFrame {
     uint64_t interaction_generation = 0;
     uint64_t message_context = 0, message_owner_generation = 0;
     bool overflow_resync=false;
+    uint64_t returned_owner=0,returned_generation=0;
 };
 // One prompt consumes only a focused release followed by a fresh press. A held
 // button at prompt creation/refocus cannot confirm it or a following prompt.

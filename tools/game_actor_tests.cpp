@@ -5,6 +5,8 @@
 #include "game_message_scope_regressions.h"
 #include "game_post21_regressions.h"
 #include "game_return_witness_regressions.h"
+#include "game_post25_regressions.h"
+#include "game_returned_interaction_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -76,10 +78,25 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    GameReturnedInteractionRegressionChecks();
     GameChoiceRegressionChecks();
     GameMessageScopeRegressionChecks();
     GamePost21RegressionChecks();
     GameReturnWitnessRegressionChecks();
+    GamePost25RegressionChecks();
+    {
+        auto predicate=Fixture({0x30,1,0x90,0,0,0xB3,0x70,0x38});
+        std::vector<script::Value> inputs{script::Value::integer(0),script::Value::integer(1)};
+        script::Value nil;nil.kind=script::Value::Kind::Scalar;inputs.push_back(nil);
+        script::Value ref;ref.kind=script::Value::Kind::Reference;ref.table=script::Table::Global;inputs.push_back(ref);
+        for(size_t i=0;i<inputs.size();++i){script::Vm vm(predicate);vm.start({inputs[i]});
+            Check(vm.run().status==script::Status::Complete&&vm.result().word==(i==2?0x10000001u:0x10000000u),
+                  "raw B3 tag0 NIL predicate differs from integer0 and typed reference raw0");
+            Check(vm.b3_calls()==1&&vm.b3_pc()==5&&vm.b3_operand_word()==inputs[i].word
+                &&vm.b3_operand_kind()==uint32_t(inputs[i].kind)&&vm.b3_result_word()==vm.result().word,
+                  "B3 direct operand/result evidence retains native kind without fabricating a PSP reference word");
+        }
+    }
     {auto program=Fixture({0x30,1,0x90,0,0,0x70,0x38});script::Vm strict(program);strict.start();
         Check(strict.run().status==script::Status::Stopped,"standalone probe keeps unspecified frame slot Unknown");
         script::Vm owned(program);owned.native_reserved_local_nil(true);owned.start();

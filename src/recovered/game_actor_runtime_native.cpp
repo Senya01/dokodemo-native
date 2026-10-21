@@ -42,6 +42,16 @@ constexpr std::array<const char *, 14> Scene0Names{
 constexpr std::array<int32_t, 14> Scene0Stops{
     {1, 0, 3, 2, 5, 4, 7, 6, 9, 10, 8, 12, 13, 11}};
 } // namespace
+GameActorLoopStep AdvanceActorLoop8021(std::vector<GameActorLoopFrame>& frames,uint32_t pc) {
+  if(frames.empty())throw std::runtime_error("ASC8021 without live owning loop frame");
+  auto& frame=frames.back();
+  if(frame.remaining==1){
+    frames.pop_back();
+    return {pc+4,uint32_t(frames.size()),frames.empty(),false};
+  }
+  if(frame.remaining>1)--frame.remaining;
+  return {frame.start,uint32_t(frames.size()),frame.remaining==0,true};
+}
 std::array<int16_t,12> SceneClockEndpoints7398(uint32_t row) {
   static constexpr std::array<std::array<int16_t,12>,7> rows{{
     {{0,0,4,0,6,0,10,0,15,30,18,0}},{{0,0,3,50,5,50,10,0,15,40,18,10}},
@@ -728,12 +738,10 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       state_.command_repeat_ready258=false; //243A0 byte258=0
       state_.command_loop_depth=uint32_t(command_loops_.size());
     } else if(op==0x8021) {
-      if(command_loops_.empty())throw std::runtime_error("ASC8021 without live owning loop frame");
-      auto& frame=command_loops_.back();
-      if(frame.remaining==1){command_loops_.pop_back();state_.command_pc+=4;}
-      else {if(frame.remaining>1)--frame.remaining;else state_.command_repeat_ready258=true; //24304 byte258=1,NOT8000/25E
-        state_.command_pc=frame.start;++state_.command_loop_repeats;}
-      state_.command_loop_depth=uint32_t(command_loops_.size());
+      const auto step=AdvanceActorLoop8021(command_loops_,state_.command_pc);
+      state_.command_pc=step.pc;state_.command_loop_depth=step.depth;
+      if(step.set_ready258)state_.command_repeat_ready258=true;
+      if(step.repeated)++state_.command_loop_repeats;
     } else if (op == 0x8010) {
       if (size - at < 12)
         throw std::runtime_error("ASC8010 operand truncated");
