@@ -26,6 +26,7 @@ struct StartupRuntimeOptions {
     std::wstring native_save_root;
     bool storage_unavailable=false,storage_read_only=false;
     bool test_missing_device_prompt=false; // test-only negative IoDevctl path before real native autoload
+    recovered::NativeTitleLayout native_title_layout=recovered::NativeTitleLayout::CharacterEntrance;
 };
 inline constexpr uint32_t StartupNoCurrentModule = UINT32_MAX;
 struct StartupRuntimeEvent {

@@ -2,6 +2,7 @@
 #include "game_filesystem_native.h"
 #include "game_scene_ui_native.h"
 #include "game_storage_native.h"
+#include "game_title_native.h"
 #include <array>
 #include <vector>
 
@@ -76,6 +77,7 @@ struct GameContentSnapshot {
     uint32_t title_bytes = 0, title_slots = 0, title_nodes = 0, title_clips = 0, title_textures = 0;
     uint32_t title_model_bytes = 0, title_model_nodes = 0, title_model_materials = 0;
     std::vector<std::string> title_material_resources;
+    GameTitleSnapshot title;
     std::string next_resource;
     GameFsStatus status;
 };
@@ -105,6 +107,7 @@ class GameContentBoot final : public GameResourceSource {
     bool ProcessDialogInput(const GameInputFrame &frame);
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
+    void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
@@ -140,6 +143,8 @@ class GameContentBoot final : public GameResourceSource {
     BpDirectory title_directory_;
     std::shared_ptr<GameUiResource> title_ui_;
     GameUiInstance title_clone_;
+    GameTitleScene title_;
+    NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     GameResourceSource *platform_ = nullptr;
     GameContentSnapshot state_;
 };

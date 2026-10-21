@@ -485,6 +485,20 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
                                       GameGraphics &graphics) {
     if (state_.closed || !state_.scene_ui.live)
         return false;
+    if(state_.title_constructor_returned) {
+        if(state_.load_state==2) {
+            state_.previous_scene=state_.current_scene;state_.current_scene=state_.next_scene;
+            //Native phase0 folds the no-mount-delta transition into the
+            //scene3 handler.193C4->1A7A0->1A89C returns pending whileCC!=3;
+            //it does not release TITLE or produce a scene return.
+            state_.load_state=6;state_.scene_substate=0;
+        }
+        state_.status=title_.TickAndDraw(graphics,scene_ui_.TitleTransitionOwner());
+        state_.title=title_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
+        state_.frontier_pc=state_.title.frontier_pc;
+        state_.blocked=false;
+        return bool(state_.status);
+    }
     //Phase0 observes the previous phase6 result. Reaching TRC3 below does
     //not let CLoadMan consume completion in that same scheduler iteration.
     const auto prior_dialog_state=state_.scene_ui.dialog_state;
@@ -610,9 +624,14 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
                     state_.title_material_resources.push_back(state_.next_resource);
                 }
             state_.title_model_read = true;
-            state_.next_resource = "7F68C/80DA8 typed character transform,clone and draw consumer";
-            state_.status = {};
-            state_.blocked = true;
+            status=title_.Initialize(*this,*arena_,*manager_,title_layout_,StateWord(0x4C));
+            state_.title=title_.Snapshot();
+            if(!status){state_.status=status;return false;}
+            state_.title_constructor_returned=true;
+            state_.registered_records+=2;
+            state_.next_scene=3;state_.load_state=2;
+            state_.next_resource = "Scene3 waits titleCC3; remaining TITLE menu/input/random restart consumers unsupported";
+            state_.status = {};state_.blocked = false;state_.frontier_pc=0x30C34;
         } catch (const std::exception &e) {
             state_.status = {GameFsCode::MalformedDirectory, 0, e.what()};
             return false;
@@ -635,6 +654,8 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    if(!title_.Close())return false;
+    state_.title=title_.Snapshot();
     title_clone_.Close();
     title_ui_.reset();
     title_model_image_.Reset();

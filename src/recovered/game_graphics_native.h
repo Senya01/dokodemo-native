@@ -36,6 +36,7 @@ struct GameGraphicsSnapshot {
     uint32_t matrix_mode = 2;
     std::array<uint32_t, 4> matrix_depths{};
     uint64_t matrix_bytes = 0;
+    uint64_t mesh_triangles=0,clipped_triangles=0,textured_triangles=0,mesh_pixels=0;
 };
 struct GameGraphicsFrame {
     uint32_t width = 0, height = 0, stride = 0;
@@ -49,6 +50,20 @@ struct GameVertex {
     uint32_t color = 0xFFFFFFFF;
 };
 struct GameClipVertex { float x = 0, y = 0, z = 0; uint32_t color = 0xFFFFFFFF; };
+struct GameMeshVertex {
+    std::array<float,4> clip{{0,0,0,1}};
+    float u=0,v=0;
+    uint32_t color=0xFFFFFFFF;
+};
+struct GameTextureSpan {
+    const uint32_t* pixels=nullptr;
+    uint32_t width=0,height=0;
+    uint64_t count=0;
+};
+struct GameRasterPolicy {
+    bool two_sided=false,depth_test=true,depth_write=true;
+    bool blend=true,repeat=true;
+};
 using GameMatrix = std::array<float, 16>; // native column-major math
 class GameGraphics final {
 public:
@@ -57,6 +72,10 @@ public:
     bool FillRectangle(int32_t left, int32_t top, int32_t right, int32_t bottom,
                        uint32_t native_argb, uint16_t depth = 0);
     bool DrawTriangle(const std::array<GameVertex, 3>& vertices);
+    //Native homogeneous clipping/perspective interpolation, not GE commands.
+    //Texture storage is borrowed only for this call; the model owns its image.
+    bool DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices,GameTextureSpan texture={},
+                          GameRasterPolicy policy={});
     // Native radial alpha coverage for the source CF04 two-ring fade. Host
     // per-pixel math replaces its60-segment geometry, not a PSP GE interpreter.
     bool DrawRadialFade(float center_x, float center_y, float inner_radius, float outer_radius);
@@ -79,6 +98,7 @@ public:
 private:
     bool Inside(int32_t x, int32_t y) const noexcept;
     void Pixel(uint32_t x, uint32_t y, uint32_t argb, uint16_t depth) noexcept;
+    bool MeshPixel(uint32_t x,uint32_t y,uint32_t argb,uint16_t depth,const GameRasterPolicy& policy) noexcept;
     mutable std::mutex mutex_;
     GameGraphicsSnapshot state_;
     std::array<std::vector<uint32_t>, 2> color_;

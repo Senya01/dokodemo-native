@@ -128,6 +128,110 @@ bool GameGraphics::DrawTriangle(const std::array<GameVertex, 3>& v) {
     ++state_.draw_calls;
     return true;
 }
+bool GameGraphics::MeshPixel(uint32_t x,uint32_t y,uint32_t color,uint16_t depth,
+                             const GameRasterPolicy& policy) noexcept {
+    const auto at=size_t(y)*state_.config.stride+x;
+    const auto alpha=color>>24;
+    if(!alpha || (policy.depth_test && depth<depth_[at]))return false;
+    if(policy.blend && alpha<255) {
+        const auto dest=color_[back_][at];uint32_t mixed=0xFF000000;
+        for(unsigned shift=0;shift<24;shift+=8)
+            mixed|=((((color>>shift)&255)*alpha+((dest>>shift)&255)*(255-alpha)+127)/255)<<shift;
+        color=mixed;
+    }
+    color_[back_][at]=color;
+    if(policy.depth_write)depth_[at]=depth;
+    return true;
+}
+bool GameGraphics::DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices,GameTextureSpan texture,
+                                    GameRasterPolicy policy) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(!state_.live || (texture.pixels && (!texture.width||!texture.height||texture.width>4096||texture.height>4096
+        ||uint64_t(texture.width)*texture.height!=texture.count))
+        || (!texture.pixels && (texture.width||texture.height||texture.count)))return false;
+    struct Vertex {std::array<float,4> p,color;float u,v;};
+    std::vector<Vertex> polygon;polygon.reserve(12);
+    for(const auto& v:vertices) {
+        for(auto x:v.clip)if(!std::isfinite(x)||std::abs(x)>1e12f)return false;
+        if(!std::isfinite(v.u)||!std::isfinite(v.v)||std::abs(v.u)>1e8f||std::abs(v.v)>1e8f)return false;
+        Vertex p{v.clip,{},v.u,v.v};
+        for(unsigned j=0;j<4;++j)p.color[j]=float((v.color>>(8*j))&255);
+        polygon.push_back(p);
+    }
+    ++state_.mesh_triangles;
+    //Clip against the native OpenGL-style homogeneous frustum plus positiveW.
+    for(unsigned plane=0;plane<7 && !polygon.empty();++plane) {
+        const auto distance=[plane](const Vertex& v){
+            if(plane==6)return v.p[3]-0.00001f;
+            return v.p[3]+((plane&1)?-v.p[plane/2]:v.p[plane/2]);
+        };
+        std::vector<Vertex> next;next.reserve(12);
+        auto a=polygon.back();float da=distance(a);
+        for(const auto& b:polygon) {
+            const auto db=distance(b);
+            if((da>=0)!=(db>=0)) {
+                const auto t=da/(da-db);Vertex cut{};
+                for(unsigned j=0;j<4;++j){cut.p[j]=a.p[j]+(b.p[j]-a.p[j])*t;cut.color[j]=a.color[j]+(b.color[j]-a.color[j])*t;}
+                cut.u=a.u+(b.u-a.u)*t;cut.v=a.v+(b.v-a.v)*t;next.push_back(cut);
+            }
+            if(db>=0)next.push_back(b);
+            a=b;da=db;
+        }
+        polygon.swap(next);
+    }
+    if(polygon.size()<3)return true;
+    struct Screen {float x,y,z,invw,u,v;std::array<float,4> color;};
+    const auto screen=[this](const Vertex& v){
+        const auto inv=1/v.p[3];Screen s{};
+        s.x=(v.p[0]*inv+1)*float(state_.config.width)*.5f;
+        s.y=(1-v.p[1]*inv)*float(state_.config.height)*.5f;
+        s.z=v.p[2]*inv;s.invw=inv;s.u=v.u*inv;s.v=v.v*inv;
+        for(unsigned j=0;j<4;++j)s.color[j]=v.color[j]*inv;
+        return s;
+    };
+    const auto edge=[](const Screen& a,const Screen& b,float x,float y){return (b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x);};
+    for(size_t fan=2;fan<polygon.size();++fan) {
+        std::array<Screen,3> p{{screen(polygon[0]),screen(polygon[fan-1]),screen(polygon[fan])}};
+        const auto area=edge(p[0],p[1],p[2].x,p[2].y);
+        if(std::abs(area)<.00001f)continue;
+        if(!policy.two_sided && state_.config.cull_face && ((area<0)!=state_.config.front_face_counter_clockwise))continue;
+        ++state_.clipped_triangles;if(texture.pixels)++state_.textured_triangles;
+        const auto left=(std::max)(0,int(std::floor((std::min)({p[0].x,p[1].x,p[2].x}))));
+        const auto top=(std::max)(0,int(std::floor((std::min)({p[0].y,p[1].y,p[2].y}))));
+        const auto right=(std::min)(int(state_.config.width),int(std::ceil((std::max)({p[0].x,p[1].x,p[2].x}))));
+        const auto bottom=(std::min)(int(state_.config.height),int(std::ceil((std::max)({p[0].y,p[1].y,p[2].y}))));
+        for(int y=top;y<bottom;++y)for(int x=left;x<right;++x) {
+            if(!Inside(x,y))continue;
+            const auto a=edge(p[1],p[2],float(x)+.5f,float(y)+.5f)/area;
+            const auto b=edge(p[2],p[0],float(x)+.5f,float(y)+.5f)/area;
+            const auto c=1-a-b;
+            if(a<0||b<0||c<0)continue;
+            const auto denominator=a*p[0].invw+b*p[1].invw+c*p[2].invw;
+            if(denominator<=0)continue;
+            uint32_t texel=0xFFFFFFFF;
+            if(texture.pixels) {
+                auto u=(a*p[0].u+b*p[1].u+c*p[2].u)/denominator;
+                auto v=(a*p[0].v+b*p[1].v+c*p[2].v)/denominator;
+                if(policy.repeat){u-=std::floor(u);v-=std::floor(v);}
+                else {u=(std::clamp)(u,0.0f,1.0f);v=(std::clamp)(v,0.0f,1.0f);}
+                const auto tx=(std::min)(texture.width-1,uint32_t(u*float(texture.width)));
+                const auto ty=(std::min)(texture.height-1,uint32_t(v*float(texture.height)));
+                texel=texture.pixels[size_t(ty)*texture.width+tx];
+            }
+            uint32_t color=0;
+            for(unsigned j=0;j<4;++j) {
+                const auto channel=(a*p[0].color[j]+b*p[1].color[j]+c*p[2].color[j])/denominator;
+                const auto value=uint32_t(std::lround((std::clamp)(channel,0.0f,255.0f)));
+                color|=((value*((texel>>(8*j))&255)+127)/255)<<(8*j);
+            }
+            const auto z=(std::clamp)(a*p[0].z+b*p[1].z+c*p[2].z,-1.0f,1.0f);
+            const auto depth=uint16_t(std::lround((1-z)*.5f*65535));
+            if(MeshPixel(uint32_t(x),uint32_t(y),color,depth,policy))++state_.mesh_pixels;
+        }
+        ++state_.draw_calls;
+    }
+    return true;
+}
 bool GameGraphics::DrawRadialFade(float x, float y, float inner, float outer) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!state_.live || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(inner)

@@ -170,6 +170,12 @@ void ImageTests() {
           "checked GIM decode");
     Check(image.Pixels() == std::vector<uint32_t>({0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF}),
           "ABGR source to native ARGB");
+    auto mip=Gim();mip.resize(148);W(mip,20,132);W(mip,36,116);W(mip,52,100);W(mip,56,100);
+    W(mip,96,84);H(mip,106,2);W(mip,116,80);W(mip,144,0xFF808080);
+    Check(bool(image.DecodeGim(View(mip)))&&image.Width()==2&&image.Pixels()[0]==0xFFFF0000,
+          "all mip extents checked,native base-level sample retains actual pixels");
+    W(mip,116,1000);
+    Check(!image.DecodeGim(View(mip)),"unused lower mip still must have valid extent");
     for (unsigned bad = 0; bad < 4; ++bad) {
         auto b = Gim();
         if (bad == 0)

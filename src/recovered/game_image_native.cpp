@@ -58,22 +58,35 @@ Raster ReadRaster(const PackageView &image, const Block &block) {
                 h.height && h.width <= 4096 && h.height <= 4096 && uint64_t(h.width) * h.height <= 4194304 &&
                 h.bpp == bits[h.format] && !view.ReadLE32(36),
             "GIM raster format/domain");
-    // Native UI domain deliberately supports a single frame/mip. It never
-    // treats an unknown animation or compressed format as decoded success.
-    Require(view.ReadLE16(42) == 1 && view.ReadLE16(44) == 3 && view.ReadLE16(46) == 1 &&
+    //Native software sampling chooses frame0/mip0. Check every mip's
+    //extent first; this does not pretend to implement animated GIM frames.
+    const auto levels=view.ReadLE16(42);
+    Require(levels>=1&&levels<=16 && view.ReadLE16(44) == 3 && view.ReadLE16(46) == 1 &&
                 (h.level_type == 1 || h.level_type == 2),
-            "GIM multiple levels/frames unsupported");
+            "GIM animated frames/level type unsupported");
     const auto index = view.ReadLE32(24), begin = view.ReadLE32(28), end = view.ReadLE32(32);
-    Require(index >= 48 && uint64_t(index) + 4 <= begin && begin <= end && end <= view.Describe().size &&
+    Require(index >= 48 && uint64_t(index) + uint64_t(levels)*4 <= begin && begin <= end && end <= view.Describe().size &&
                 view.ReadLE32(index) == begin,
             "GIM raster offsets");
+    uint32_t base_end=end;
+    for(uint32_t level=0;level<levels;++level) {
+        const auto start=view.ReadLE32(index+level*4);
+        const auto stop=level+1<levels?view.ReadLE32(index+(level+1)*4):end;
+        Require(start>=begin&&stop>start&&stop<=end,"GIM mip offset order");
+        const auto w=h.level_type==2?h.width:(std::max)(1u,h.width>>level);
+        const auto height=h.level_type==2?h.height:(std::max)(1u,h.height>>level);
+        auto stride=Aligned((w*h.bpp+7)/8,h.pitch),rows=Aligned(height,h.rows_align);
+        if(h.order){stride=Aligned(stride,16);rows=Aligned(rows,8);}
+        Require(uint64_t(stride)*rows<=stop-start,"GIM mip extent truncated");
+        if(!level)base_end=stop;
+    }
     h.stride = Aligned((h.width * h.bpp + 7) / 8, h.pitch);
     h.rows = Aligned(h.height, h.rows_align);
     if (h.order) {
         h.stride = Aligned(h.stride, 16);
         h.rows = Aligned(h.rows, 8);
     }
-    Require(uint64_t(h.stride) * h.rows <= end - begin, "GIM raster data truncated");
+    Require(uint64_t(h.stride) * h.rows <= base_end - begin, "GIM raster data truncated");
     h.start = h.at + begin;
     h.end = h.at + end;
     return h;
