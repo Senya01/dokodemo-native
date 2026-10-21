@@ -9,9 +9,18 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
+#include <mutex>
+#include <thread>
 
 namespace dokodemo::script {
+struct NativeScriptContext {
+    Vm* vm=nullptr;
+    uint16_t slot=0;
+    std::thread::id thread;
+};
 namespace {
+std::mutex context_mutex;
+std::array<std::weak_ptr<NativeScriptContext>,8> context_registry;
 constexpr uint32_t missing = UINT32_MAX;
 struct LocatedError : std::runtime_error {
     Diagnostic location;
@@ -308,6 +317,66 @@ bool Dictionary::load_original_bytes(std::vector<uint8_t> data, const std::files
     } catch (const std::exception& ex) { error.reason = ex.what(); source_ = {}; records_.clear(); return false; }
 }
 
+Vm::~Vm(){if(context_)context_->vm=nullptr;}
+Value Vm::context_value(){
+    if(!context_){
+        std::lock_guard<std::mutex> lock(context_mutex);
+        for(uint16_t i=0;i<context_registry.size();++i)if(context_registry[i].expired()){
+            context_=std::make_shared<NativeScriptContext>();context_->vm=this;context_->slot=i;
+            context_->thread=std::this_thread::get_id();context_registry[i]=context_;break;
+        }
+        if(!context_)throw std::runtime_error("Native KSC eight-context registry exhausted");
+    }
+    Value value;value.kind=Value::Kind::Context;value.word=0x80000000u|context_->slot;value.context_owner=context_;return value;
+}
+int32_t Vm::post_callback(const Value& target,const Value& code,const Value& first,const Value& second){
+    if(target.kind!=Value::Kind::Context||target.word>>28!=8)throw std::runtime_error("Callback27 needs typed live context token");
+    const auto owner=target.context_owner.lock();
+    if(!owner||owner->thread!=std::this_thread::get_id()||!owner->vm)return -1;
+    if((target.word&0x0FFFFFFF)!=owner->slot)throw std::runtime_error("Callback context token/registry identity mismatch");
+    auto& vm=*owner->vm;
+    if(vm.stopped_)return -1;
+    const auto* command=vm.program_.command(code.word&0x0FFFFFFF);
+    if(code.kind!=Value::Kind::Code||code.word>>28!=7||!command||command->opcode!=0x30)
+        throw std::runtime_error("Callback27 target must be admitted frame prologue");
+    for(const auto* arg:{&first,&second}){
+        if(arg->kind==Value::Kind::Unknown)throw std::runtime_error("Uninitialized callback argument");
+        if(arg->kind==Value::Kind::Reference){
+            if(&vm!=this&&arg->table!=Table::Frame)throw std::runtime_error("Cross-context stable-table callback references not implemented");
+            (void)peek_reference(*arg);
+        }
+    }
+    PendingCallback callback{code.word&0x0FFFFFFF,first,second,context_value()};
+    if(vm.event_depth_||vm.event_envelope_){
+        if(vm.pending_callbacks_.size()==64)return 1; // checked native queue bound
+        vm.pending_callbacks_.push_back(std::move(callback));
+    }else vm.enter_callback(std::move(callback));
+    ++vm.callbacks_posted_;return 0;
+}
+void Vm::enter_callback(PendingCallback callback){
+    if(event_envelope_)throw std::runtime_error("Nested immediate native event envelope");
+    for(const auto* value:{&callback.first,&callback.second})
+        if(value->kind==Value::Kind::Reference&&value->table==Table::Frame&&value->frame_owner.expired())
+            throw std::runtime_error("Queued callback frame reference expired before dispatch");
+    auto saved=std::make_unique<EventEnvelope>();saved->pc=pc_;saved->reserved=frame_reserved_;
+    saved->enabled=context_enabled_;saved->waiting=waiting_event_;saved->signal=event_signal_;
+    const auto delta=uint32_t(wait_until_-clock_tick_)&0x7FFFFF;
+    saved->deadline_delta=int32_t(delta&0x400000?delta|0xFF800000:delta);
+    saved->result=std::move(result_);saved->stack=std::move(stack_);saved->frame=std::move(frame_);
+    saved->calls=std::move(calls_);saved->blocks=std::move(blocks_);event_envelope_=std::move(saved);
+    stack_.clear();calls_.clear();blocks_.clear();result_={};
+    frame_=std::make_shared<std::vector<Value>>(std::initializer_list<Value>{callback.first,callback.second,callback.caller});
+    frame_reserved_=false;pc_=callback.pc;context_enabled_=true;event_override_=false;waiting_event_=false;wait_until_=0;
+}
+void Vm::drain_callback(){
+    if(event_depth_||event_envelope_||pending_callbacks_.empty())return;
+    auto callback=std::move(pending_callbacks_.front());pending_callbacks_.pop_front();enter_callback(std::move(callback));
+}
+void Vm::resume_modal_context(){
+    if(!context_||context_->vm!=this||stopped_||event_envelope_||!pending_callbacks_.empty())
+        throw std::runtime_error("Modal resume needs live context and returned callback");
+    context_enabled_=true;
+}
 Value Value::integer(int32_t integer) {
     Value value; value.kind = Kind::Scalar; value.word = 0x20000000 | (static_cast<uint32_t>(integer) & 0x0FFFFFFF); return value;
 }
@@ -400,6 +469,8 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     blocks_.clear(); blocks_entered_ = blocks_closed_ = switches_ = 0;
     opcode_cost_ = 1;
     event_depth_=0;event_signal_=true;waiting_event_=false;
+    pending_callbacks_.clear();event_envelope_.reset();context_enabled_=true;event_override_=false;
+    callbacks_posted_=callbacks_returned_=0;
     timestamp_writes_=deadline_writes_=0;
     random_selections_=0;last_random_={};root_returns_=0;
     timer_base_ = clock_tick_; wait_until_ = 0;
@@ -439,6 +510,7 @@ Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
     if (!cmd || cmd->opcode < 0) return stop(cmd, "PC is not an executable command boundary");
+    if(!context_enabled_){Event paused;paused.status=Status::Waiting;paused.pc=paused.next_pc=pc_;return paused;}
     if(waiting_event_){Event waiting;waiting.status=Status::Waiting;waiting.pc=waiting.next_pc=pc_;return waiting;}
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
@@ -468,10 +540,23 @@ Event Vm::step() {
             if(event_depth_==UINT16_MAX)throw std::runtime_error("Event scope overflow");
             ++event_depth_;
         } else if(op==0x0E) {
-            // 6BB68 ->6B33C decrements positive source56. No callback is
-            // invented for an empty native queue. Unimplemented event enqueue
-            // services remain explicit boundaries before they can queue one.
+            //6BB68 ->6B33C. Drain after publishing this instruction's PC so
+            //the event envelope saves the actual following continuation.
             if(event_depth_)--event_depth_;
+        } else if(op==0x3A){
+            //6E43C: event return overrides restored enable38 with byte39=0.
+            if(!event_envelope_)return stop(cmd,"3A requires the reached event envelope");
+            event_override_=true;
+        } else if(op==0x32){
+            if(!event_envelope_||!calls_.empty()||!blocks_.empty())
+                return stop(cmd,"32 needs finite callback frame without abnormal active unwind");
+            auto saved=std::move(event_envelope_);
+            const bool enabled=event_override_?false:saved->enabled;
+            stack_=std::move(saved->stack);frame_=std::move(saved->frame);calls_=std::move(saved->calls);blocks_=std::move(saved->blocks);
+            result_=std::move(saved->result);frame_reserved_=saved->reserved;waiting_event_=saved->waiting;event_signal_=saved->signal;
+            wait_until_=saved->deadline_delta>0?clock_tick_+uint32_t(saved->deadline_delta):0;
+            context_enabled_=enabled;event_override_=false;
+            next=saved->pc;++callbacks_returned_;if(!enabled)event.status=Status::Yield;
         } else if (op == 0x30) {
             if (frame_reserved_) return stop(cmd, "Nested frame ABI unsupported");
             uint32_t count = program_.operand(*cmd, 1, 1);
@@ -741,6 +826,7 @@ Event Vm::step() {
             }
             event.has_branch_decision = true; event.branch_taken = take;
             if (take) next = target;
+        } else if(op==0x8C){stack_.push_back(context_value());
         } else if (op == 0x48 || op == 0x8E) {
             std::string text = expand(*cmd);
             if (op == 0x8E) stack_.push_back(Value::string(std::move(text)));
@@ -755,7 +841,9 @@ Event Vm::step() {
             return stop(cmd, reason);
         }
         if (stack_.size() > 32767) return stop(cmd, "Native operand stack budget exceeded");
-        ++executed_; pc_ = next; event.next_pc = pc_; return event;
+        ++executed_; pc_ = next;
+        if(op==0x0E)drain_callback();
+        event.next_pc = pc_; return event;
     } catch (const std::exception& ex) { return stop(cmd, ex.what()); }
 }
 Event Vm::run(uint32_t instruction_budget) {
@@ -764,9 +852,10 @@ Event Vm::run(uint32_t instruction_budget) {
     ++event_depth_;
     for (uint32_t i = 0; i < instruction_budget; ++i) {
         Event event = step();
-        if (event.status != Status::Running) {if(event_depth_)--event_depth_;return event;}
+        if (event.status != Status::Running) {if(event_depth_)--event_depth_;drain_callback();return event;}
     }
     if(event_depth_)--event_depth_;
+    drain_callback();
     Event event;event.status=Status::HostYield;event.pc=event.next_pc=pc_;
     event.file_offset=pc_+28;const auto* cmd=program_.command(pc_);event.opcode=cmd?cmd->opcode:-1;
     return event;

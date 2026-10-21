@@ -416,6 +416,13 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 ++state_.opened_resources;
                 return {};
             }
+            if(mount=="MOCHI"&&game_filesystem_){
+                if(!inventory_mounted_){
+                    const auto status=game_filesystem_->LoadMember("MOCHI.BPM",inventory_package_);if(!status)return status;
+                    inventory_directory_=BpDirectory::Parse(inventory_package_,inventory_package_.Describe().size);inventory_mounted_=true;
+                }
+                out=inventory_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
             if(mount=="BG_ROOM"&&game_filesystem_) {
                 // Named functional deferred mount: only the actual requested
                 // source31 package is read,with full checked extent/lease.
@@ -487,6 +494,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
     if(state_.actor_script.started){
+        if(inventory_.Modal())return inventory_.Input(frame);
         const bool accepted=state_.actor_script.awaiting_message&&actor_message_gate_.Observe(frame,Circle)
                             &&actor_script_.AcknowledgeMessage();
         state_.actor_message_input_armed=actor_message_gate_.Armed();
@@ -699,9 +707,11 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    inventory_.Close();state_.inventory=inventory_.Snapshot();
     actor_script_.Close();actor_message_gate_.Stop();state_.actor_message_input_armed=false;state_.actor_script=actor_script_.Snapshot();actor_clock_={};
     actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
+    inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
@@ -758,9 +768,22 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
+        if(state_.status&&state_.actor_script.inventory_requests>inventory_.Snapshot().requests){
+            state_.status=inventory_.Request(state_.actor_script.inventory_items,true);
+            actor_message_gate_.Begin();state_.actor_message_input_armed=false;
+        }
+        if(state_.status&&inventory_.Modal())state_.status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
+        if(state_.status&&inventory_.ClosedAndRetired()&&actor_script_.CanResumeInventory()){
+            //NamedNativeModalSuspendResumeTriggeredOnlyByActualClose: original
+            //post32 enable38 producer remains unrecovered. No frame/ack wake.
+            state_.status=actor_script_.CompleteInventory(inventory_.Snapshot());
+            actor_message_gate_.Begin();state_.actor_script=actor_script_.Snapshot();
+        }
+        state_.inventory=inventory_.Snapshot();
         //Publish ONCE,after both room and text. CopyGameFrame must never see
         //an intermediate room-only front whileFONT is still being decoded.
         const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+            if(inventory_.Modal())return inventory_.Draw(surface,font_);
             if(!state_.actor_script.awaiting_message)return {};
             std::string visible;
             for(unsigned char c:state_.actor_script.message){
@@ -780,6 +803,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             return {};
         });
         if(!rendered){state_.status=rendered;state_.blocked=true;return false;}
+        state_.inventory=inventory_.Snapshot();
         state_.actor_script.runtime=actor_runtime_.Snapshot();
         if(state_.actor_script.dictionary.imported){actor_dictionary_.Reset();state_.actor_dictionary_live=false;}
         if(state_.actor_script.awaiting_message&&(!before.awaiting_message||before.messages!=state_.actor_script.messages)){

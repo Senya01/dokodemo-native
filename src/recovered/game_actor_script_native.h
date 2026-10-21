@@ -1,6 +1,7 @@
 #pragma once
 #include "game_actor_dictionary_native.h"
 #include "game_actor_runtime_native.h"
+#include "game_inventory_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
 #include <map>
@@ -31,6 +32,13 @@ struct GameActorScriptSnapshot {
     std::string last_replacement;
     std::vector<std::string> replacement_results;
     uint32_t call_depth=0;
+    bool inventory_requested=false;
+    uint32_t inventory_requests=0,inventory_setter_result_word=0;
+    int32_t inventory_mode=0;
+    bool context_enabled=true;
+    uint32_t callbacks_posted=0,callbacks_returned=0;
+    uint32_t inventory_completions=0;
+    std::vector<GameInventoryItem> inventory_items;
     std::array<uint32_t,5> message_local_words{};
     std::array<uint32_t,3> intro_caller_words{};
     uint32_t clock_calls=0,last_clock_word=0,intro_clock_origin=0,intro_clock_expired=0;
@@ -66,6 +74,8 @@ class GameActorScript final {
                             GameActorRuntime* runtime=nullptr);
     GameFsStatus Tick();
     bool AcknowledgeMessage();
+    bool CanResumeInventory()const;
+    GameFsStatus CompleteInventory(const GameInventorySnapshot&);
     GameActorScriptSnapshot Snapshot() const;
     void Close();
   private:

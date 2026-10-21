@@ -32,8 +32,8 @@ class SelectedRoomResources final:public GameResourceSource {
     GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
         try {
             const auto split=path.find('\\');Check(split!=std::string::npos,"diagnostic mounted request");
-            auto mount=path.substr(0,split);if(mount=="data")mount="DATA";
-            Check(mount=="BG_ROOM"||mount=="NEKO"||mount=="DATA","diagnostic actual game mounts only");
+            auto mount=path.substr(0,split);for(auto& c:mount)if(c>='a'&&c<='z')c=char(c-'a'+'A');
+            Check(mount=="BG_ROOM"||mount=="NEKO"||mount=="DATA"||mount=="MOCHI","diagnostic actual game mounts only");
             auto& package=packages_[mount];
             if(!package.lease) {
                 file_.clear();file_.seekg(0,std::ios::end);const auto extent=uint64_t(file_.tellg());
@@ -70,11 +70,40 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    {auto registry_program=Fixture({0x30,0,0x38});std::vector<std::unique_ptr<script::Vm>> owners;
+        for(uint32_t i=0;i<8;++i){auto vm=std::make_unique<script::Vm>(registry_program);vm->start();Check(vm->context_value().word==0x80000000u+i,"eight distinct live source context identities");owners.push_back(std::move(vm));}
+        script::Vm ninth(registry_program);ninth.start();bool refused=false;try{(void)ninth.context_value();}catch(const std::exception&){refused=true;}
+        Check(refused,"registry exhaustion explicit,not context0 fallback");}
+    // Source27/32 owns a saved event envelope,not an ordinary return frame.
+    auto modal_program=Fixture({0x30,0,0x80,9,0x70,0x80,1,0x44,0x80,7,0x70,0x38,0x30,3,0x3A,0x32});
+    script::Vm modal(modal_program);modal.clock_tick(10);modal.start();
+    Check(modal.run().status==script::Status::Yield&&modal.result().signed_integer()==9,"modal original result/deadline");
+    const auto token=modal.context_value();script::Value callback;callback.kind=script::Value::Kind::Code;callback.word=0x7000000C;
+    Check(modal.post_callback(token,callback,script::Value::string("owned"),script::Value::integer(8))==0,"live typed registry callback admitted");
+    modal.clock_tick(12); //event time must not consume the saved signed23 wait
+    Check(modal.run().status==script::Status::Yield&&!modal.context_enabled()&&modal.callbacks_returned()==1
+          &&modal.pc()==8&&modal.result().signed_integer()==9,"3A32 restores result,PC,deadline and disables context");
+    modal.clock_tick(20);const auto frozen=modal.executed();Check(modal.run().status==script::Status::Waiting&&modal.executed()==frozen,"clock doesnot wake disabled modal context");
+    modal.resume_modal_context();Check(modal.run().status==script::Status::Complete&&modal.result().signed_integer()==7,"explicit close-policy resume preserves real continuation");
+    script::Value retired_context;
+    {script::Vm owner(modal_program);owner.start();retired_context=owner.context_value();}
+    Check(modal.post_callback(retired_context,callback,{}, {})==-1,"retired registry token cannot alias reused slot");
+    auto queued_program=Fixture({0x30,0,0x8B,0x27,0,0x80,1,0x44,0x38,0x30,3,0x3A,0x32});
+    script::Vm queued(queued_program);queued.start();
+    queued.host_service([&](uint8_t,const std::vector<script::Value>&){auto c=callback;c.word=0x70000009;
+        Check(queued.post_callback(queued.context_value(),c,script::Value::string("copied"),script::Value::integer(0))==0,"callback enqueued inside interpreter scope");
+        Check(queued.callbacks_returned()==0,"queued event cannot execute inside builtin argument cleanup");return script::Value::integer(42);});
+    const auto queued_first=queued.run();if(queued_first.status!=script::Status::Yield)std::cerr<<"queue first status="<<int(queued_first.status)<<" "<<queued_first.diagnostic.text()<<'\n';
+    Check(queued_first.status==script::Status::Yield&&queued.callbacks_returned()==0,"queued callback starts only after interpreter scope drains");
+    Check(queued.run().status==script::Status::Yield&&queued.callbacks_returned()==1&&queued.result().signed_integer()==42&&!queued.context_enabled(),"queued callback restores builtin result ownership");
+    queued.resume_modal_context();queued.clock_tick(2);Check(queued.run().status==script::Status::Complete,"queue return resumes original deadline");
     const auto replace=[](std::string source,std::string needle,std::string value){return GameStringReplace51({script::Value::string(source),script::Value::string(needle),script::Value::string(value)});};
     Check(replace("aaaaa","aa","b").cp932=="bba","51 advances past nonoverlapping source match");
     Check(replace("x/x","x","xx").cp932=="xx/xx","51 doesnot search newly inserted replacement");
     Check(replace("no match","absent","ignored").cp932=="no match"&&replace("delete","delete","").cp932.empty(),"51 owned unchanged and deletion results");
     const std::string cp932="\x83\x67\x83\x8D";
+    script::Value source_nil;source_nil.kind=script::Value::Kind::Scalar;
+    Check(GameStringReplace51({script::Value::string("$_OME"),script::Value::string("$_OME"),source_nil}).cp932=="\x83\x73\x81\x5B","75778 actual nil uses retained CP932 redaction string,not empty or identity");
     auto owned=replace("$_WORD/$_WORD","$_WORD",cp932);Check(owned.word>>28==6&&owned.cp932==cp932+"/"+cp932,"51 preserves raw multibyte replacement and owned tag");
     bool empty_refused=false;try{(void)replace("text","","value");}catch(const std::exception&){empty_refused=true;}
     Check(empty_refused,"51 explicit empty-needle trap refused,not identity success");
@@ -386,6 +415,58 @@ void Selected(const char* path){
     Check(!gift.blocked&&!gift.runtime.command_blocked&&gift.call_depth>0&&gift.message_acknowledgements==14,
           "introduction callback returns into actual gift function with live frame and input wait");
     std::cout<<"actual conversation15 messages14 acknowledgements,51results="<<gift.string_replace_calls<<" depth="<<gift.call_depth<<" PASS\n";
+    Check(game.AcknowledgeMessage(),"inventory probe separate acknowledgement15");
+    for(unsigned i=0;i<600;++i){auto status=game.Tick();const auto probe=game.Snapshot();
+        if(!status||(!probe.context_enabled&&probe.callbacks_returned)){
+            std::cout<<"inventory callback pc="<<std::hex<<probe.pc<<std::dec<<" requests="<<probe.inventory_requests<<" enabled="<<probe.context_enabled<<" returned="<<probe.callbacks_returned<<" detail="<<status.detail<<'\n';break;
+        }
+        if(!status||probe.awaiting_message)break;
+    }
+    const auto requested=game.Snapshot();
+    Check(!requested.blocked&&requested.inventory_requests==1&&requested.inventory_setter_result_word==0x10000000
+          &&requested.inventory_items.size()==170&&!requested.context_enabled&&requested.callbacks_returned==1,"actual41False and27/32 suspend after ack15");
+    GameInventory inventory;Check(bool(inventory.Request(requested.inventory_items)),"actual registered item rows request");
+    Check(bool(inventory.Tick(resources,transition)),"actual MOCHIMONO assets initialized");
+    Check(inventory.Snapshot().stateB2C==0&&inventory.Snapshot().loader468==0,"constructor3 reset to open0 cannot complete");
+    for(unsigned i=0;i<80&&inventory.Snapshot().phase!=3;++i){transition.Update();Check(bool(inventory.Tick(resources,transition)),"real open fade pending");}
+    auto gui=inventory.Snapshot();Check(gui.phase==3&&gui.stateB2C==1&&gui.loader469==1&&!gui.loader468
+        &&gui.selected_row==0&&gui.selected_id==27&&gui.selected_name==gift.replacement_results[0],"live source list identity/FONT text from registered cells");
+    uint64_t sequence=0;
+    const auto input=[&](uint32_t buttons,bool focused=true){GameInputFrame frame;frame.buttons=buttons;frame.focused=focused;frame.sequence=++sequence;
+        inventory.Input(frame);Check(bool(inventory.Tick(resources,transition)),"inventory real input phase");};
+    input(Cross);Check(inventory.Snapshot().phase==3,"held button at newcontext cannot close");
+    input(0);input(Right);Check(inventory.Snapshot().filter==2&&inventory.Snapshot().count==0,"source filter0 empty list safe cursor");
+    input(0);input(Right);Check(inventory.Snapshot().filter==3&&inventory.Snapshot().count==1,"category1 restores actual row");
+    input(0,false);input(Circle,false);input(Circle,true);Check(!inventory.Snapshot().actions,"unfocused and inherited refocus edge cannot open actions");
+    input(0);input(Circle);Check(inventory.Snapshot().actions&&inventory.Snapshot().action_opens==1,"Circle opens SELECT not inventory completion");
+    input(Cross);Check(inventory.Snapshot().actions,"new SELECT rejects inherited held edge");
+    input(0);input(Cross);Check(!inventory.Snapshot().actions&&inventory.Snapshot().action_cancels==1&&inventory.Snapshot().phase==3,"genuine SELECT cancel leaves inventory live and items unchanged");
+    input(0);input(Circle);for(unsigned i=0;i<4;++i){input(0);input(Down);}input(0);input(Circle);
+    Check(!inventory.Snapshot().actions&&inventory.Snapshot().select_result==5&&inventory.Snapshot().action_cancels==2,"actual fifth cancel label yields result5 without script item event");
+    input(0);input(Cross);Check(inventory.Snapshot().stateB2C==2&&inventory.Snapshot().loader468==0,"close request remains pending despite stable poll1");
+    for(unsigned i=0;i<4;++i)Check(bool(inventory.Tick(resources,transition)),"without fade progress cannot complete");
+    Check(inventory.Snapshot().stateB2C==2&&!inventory.Snapshot().loader468,"no frame quota auto-completion");
+    for(unsigned i=0;i<100&&inventory.Snapshot().phase!=6;++i){transition.Update();Check(bool(inventory.Tick(resources,transition)),"actual fade close to poll completion");}
+    gui=inventory.Snapshot();Check(gui.phase==6&&gui.stateB2C==3&&gui.loader468==1&&gui.loader469==1&&!gui.request14&&gui.loader498==0&&gui.live,"completed poll distinct from deferred retirement");
+    Check(!game.CompleteInventory(gui),"VM cannot resume before deferred destructor drains");
+    Check(bool(inventory.Tick(resources,transition))&&inventory.ClosedAndRetired(),"deferred GUI destructor releases resource owners");
+    Check(!inventory.Input({Cross,true,false,++sequence}),"retired GUI rejects late input");
+    Check(bool(game.CompleteInventory(inventory.Snapshot())),"native close-only modal wake");
+    for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto after=game.Snapshot();
+        if(!status||after.awaiting_message){std::cout<<"after inventory pc="<<std::hex<<after.pc<<std::dec<<" messages="<<after.messages<<" ack="<<after.message_acknowledgements<<" service="<<after.last_service<<" detail="<<status.detail<<'\n';break;}}
+    const auto after=game.Snapshot();Check(after.blocked&&after.context_enabled&&after.inventory_completions==1
+        &&after.pc==0xA1FE&&after.last_service==71&&!after.last_service_returned
+        &&after.string_replace_calls>gift.string_replace_calls&&after.error.find("id=71")!=std::string::npos,
+        "real post-inventory51 result reaches exact new GAME71 boundary,without forced return");
+    //Separate synthetic list fixture,not live-game item mutation evidence.
+    std::vector<GameInventoryItem> sort_items(3);for(uint32_t i=0;i<3;++i){auto& item=sort_items[i];item.row=i;item.id=int32_t(i);item.valid=true;item.category=int32_t(i);item.date_word=(i==0?10:i==1?30:20);item.name="fixture";}
+    Check(bool(inventory.Request(sort_items))&&bool(inventory.Tick(resources,transition)),"separate list source-domain fixture");
+    for(unsigned i=0;i<80&&inventory.Snapshot().phase!=3;++i){transition.Update();Check(bool(inventory.Tick(resources,transition)),"fixture open");}
+    for(unsigned i=0;i<4;++i){input(0);input(Right);}Check(inventory.Snapshot().filter==5&&inventory.Snapshot().filtered_rows==std::vector<uint32_t>({1,2,0}),"source descending dates preserve original row identities");
+    input(0);input(Down);input(0);input(Down);Check(inventory.Snapshot().selection==2,"navigate to list end");
+    for(unsigned i=0;i<15;++i)input(Down);Check(inventory.Snapshot().selection==2,"held repeat stops at boundary");
+    input(0);input(Down);Check(inventory.Snapshot().selection==0,"fresh first edge wraps at boundary");
+    inventory.Close();Check(!inventory.Input({Circle,true,false,++sequence}),"synthetic owner retired");
     game.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!game.AcknowledgeMessage(),"retired script rejects stale message acknowledgement");
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots

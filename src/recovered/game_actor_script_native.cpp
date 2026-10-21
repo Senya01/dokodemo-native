@@ -19,8 +19,14 @@ int32_t Number(const Value& value) {
 }
 script::Value GameStringReplace51(const std::vector<script::Value>& args) {
     Need(args.size()==3,"Builtin51 requires source,needle,replacement");
-    for(const auto& arg:args)Need(arg.kind==Value::Kind::String,"Builtin51 reached string-only conversion domain");
-    const auto& source=args[0].cp932;const auto& needle=args[1].cp932;const auto& replacement=args[2].cp932;
+    const auto text=[](const Value& arg)->std::string{
+        if(arg.kind==Value::Kind::String)return arg.cp932;
+        //757C0/757DC tags0/1 return PH0 E0760. Relocation-bound retained
+        //bytes8373815B00 are original CP932 "ピー",not an empty fallback.
+        if(arg.kind==Value::Kind::Scalar&&(arg.word>>28)<2)return "\x83\x73\x81\x5B";
+        throw std::runtime_error("Builtin51 unimplemented75778 conversion domain");
+    };
+    const auto source=text(args[0]),needle=text(args[1]),replacement=text(args[2]);
     Need(!needle.empty(),"Builtin51 empty needle: original7BF78 traps");
     constexpr size_t budget=1024*1024;
     Need(source.size()<=budget&&replacement.size()<=budget,"Builtin51 native owned-string budget");
@@ -114,6 +120,29 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(runtime_&&runtime_->Snapshot().live,"GAME40 requires live game-state word2A980");
         state_.source_flag2A980=runtime_->Snapshot().source_flag2A980!=0;
         ++state_.scene_flag_queries;auto value=False();if(state_.source_flag2A980)value.word|=1;return value;
+    }
+    case 41: {
+        Need(Number(arg)==0,"Reached GAME41 inventory mode0 only");
+        state_.inventory_mode=0;state_.inventory_requested=true;++state_.inventory_requests;
+        state_.inventory_setter_result_word=0x10000000;
+        const auto found=bindings_.find(35);Need(found!=bindings_.end(),"GAME41 needs actual GAME35 item registration");
+        const auto header=vm_->load_reference(found->second);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==170,"Inventory actual170 item rows");
+        state_.inventory_items.clear();
+        for(uint32_t i=0;i<170;++i){
+            const auto row=vm_->load_reference(vm_->indexed_reference(found->second,i));Need(row.kind==Value::Kind::Reference,"Inventory row reference");
+            const auto field=[&](uint32_t n){return vm_->load_reference(vm_->indexed_reference(row,n));};
+            const auto item_id=field(0);GameInventoryItem item;item.row=i;
+            if(item_id.word>>28!=0){
+                item.id=Number(item_id);item.valid=item.id>=0;
+                if(item.valid){const auto name=field(1),description=field(2);
+                    Need(name.kind==Value::Kind::String&&description.kind==Value::Kind::String,"Inventory real CP932 name and description");
+                    item.name=name.cp932;item.description=description.cp932;item.date_word=field(4).word&0x0FFFFFFF;
+                    item.category=Number(field(5))==1?2:((field(7).word>>28)==0?1:0);
+                }
+            }
+            state_.inventory_items.push_back(std::move(item));
+        }
+        return False(); //1C834 queues resource14;not a synchronous GUI result
     }
     case 43: {
         for(uint16_t i=0;i<3;++i)state_.intro_caller_words[i]=vm_->read_slot(script::Table::Frame,i).word;
@@ -219,7 +248,14 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
 Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     ++state_.builtin_calls;
     if(id==0xF0)return GameService(args);
-    if(id==0x51){auto value=GameStringReplace51(args);++state_.string_replace_calls;state_.last_replacement=value.cp932;state_.replacement_results.push_back(value.cp932);return value;}
+    if(id==0x27){Need(args.size()==4,"Builtin27 actual context,callback,two values ABI");
+        return Value::integer(vm_->post_callback(args[0],args[1],args[2],args[3]));}
+    if(id==0x51){
+        try{auto value=GameStringReplace51(args);++state_.string_replace_calls;state_.last_replacement=value.cp932;state_.replacement_results.push_back(value.cp932);return value;}
+        catch(const std::exception& e){std::ostringstream detail;detail<<e.what()<<" actual=";
+            for(const auto& a:args){detail<<std::hex<<a.word<<':';for(unsigned char b:a.cp932)detail<<"0123456789abcdef"[b>>4]<<"0123456789abcdef"[b&15];detail<<',';}
+            throw std::runtime_error(detail.str());}
+    }
     if(id==1){Need(args.size()==1&&args[0].kind!=Value::Kind::Unknown,"Builtin01 type query argc/value");return Value::integer(args[0].kind==Value::Kind::Reference?11:int32_t(args[0].word>>28));}
     if(id==0x22){
         Need(args.size()==2,"Builtin22 event request argc");
@@ -315,8 +351,20 @@ bool GameActorScript::AcknowledgeMessage() {
     if(!state_.live||!state_.awaiting_message)return false;
     state_.awaiting_message=false;++state_.message_acknowledgements;return true;
 }
+bool GameActorScript::CanResumeInventory()const{
+    return state_.inventory_requested&&vm_&&!vm_->context_enabled()&&vm_->callbacks_returned()>0;
+}
+GameFsStatus GameActorScript::CompleteInventory(const GameInventorySnapshot& gui){
+    try{
+        Need(state_.live&&CanResumeInventory()&&gui.generation==state_.inventory_requests,"Inventory stale or unready context resume");
+        Need(gui.phase==7&&!gui.live&&!gui.owner480&&!gui.request14&&gui.stateB2C==3&&gui.loader468==1&&gui.loader498==0&&gui.retirements>0,
+             "Native modal resume requires genuine close,poll completion and deferred retirement");
+        vm_->resume_modal_context();state_.inventory_requested=false;++state_.inventory_completions;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.dictionary=dictionary_.Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+        out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
         out.control_blocks_entered=vm_->control_blocks_entered();out.control_blocks_closed=vm_->control_blocks_closed();
         out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
         out.waiting_for_event=vm_->waiting_for_event();out.waiting_deadline=vm_->deadline_waiting();

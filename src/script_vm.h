@@ -6,11 +6,14 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <deque>
 #include "recovered/current_tables_native.h"
 
 // Restricted KSC v20030204 reader/interpreter. No PSP CPU, OS or GPU emulation.
 // Source tables and strings are data; reading them never emits dialogue.
 namespace dokodemo::script {
+class Vm;
+struct NativeScriptContext;
 
 struct Diagnostic {
     std::string reason;
@@ -101,7 +104,7 @@ private:
 };
 
 struct Value {
-    enum class Kind { Unknown, Scalar, String, Code, Reference, ArrayHeader, Timestamp, Opaque };
+    enum class Kind { Unknown, Scalar, String, Code, Reference, ArrayHeader, Timestamp, Opaque, Context };
     Kind kind = Kind::Unknown;
     uint32_t word = 0;          // preserve original tag/payload for scalar/opaque
     Table table = Table::Frame;
@@ -110,6 +113,7 @@ struct Value {
     // Native lifetime for references passed into a nested function. Global,
     // local and image-table references use the VM's stable typed tables.
     std::weak_ptr<std::vector<Value>> frame_owner;
+    std::weak_ptr<NativeScriptContext> context_owner;
     static Value integer(int32_t value);
     static Value string(std::string cp932);
     int32_t signed_integer() const;
@@ -131,6 +135,9 @@ struct Event {
 class Vm {
 public:
     explicit Vm(const Program& program) : program_(program) {}
+    ~Vm();
+    Vm(const Vm&)=delete;
+    Vm& operator=(const Vm&)=delete;
     // No default argument values are invented. Unprovided slots are Unknown.
     // GameActorScript supplies the recovered230EC/67FD4 argc2 caller. Other
     // standalone probes must explicitly provide their own admitted arguments.
@@ -157,6 +164,14 @@ public:
     void access_observer(std::function<void(const Value&,bool)> callback) { access_ = std::move(callback); }
     uint64_t executed() const noexcept { return executed_; }
     uint32_t call_depth() const noexcept { return uint32_t(calls_.size()); }
+    Value context_value();
+    int32_t post_callback(const Value& context,const Value& code,const Value& first,const Value& second);
+    bool context_enabled()const noexcept{return context_enabled_;}
+    // Named native modal scheduler adapter. Called only after actual GUI close,
+    // poll completion and teardown;original byte38 wake producer is unclosed.
+    void resume_modal_context();
+    uint32_t callbacks_posted()const noexcept{return callbacks_posted_;}
+    uint32_t callbacks_returned()const noexcept{return callbacks_returned_;}
     void clock_tick(uint64_t value) noexcept { clock_tick_ = value; }
     void random_source(std::function<uint32_t()> callback){random_=std::move(callback);}
     uint64_t random_selections() const noexcept{return random_selections_;}
@@ -193,6 +208,23 @@ private:
         std::weak_ptr<std::vector<Value>> frame;
     };
     std::vector<ControlBlock> blocks_;
+    struct PendingCallback {uint32_t pc=0;Value first,second,caller;};
+    struct EventEnvelope {
+        uint32_t pc=0;bool reserved=false,enabled=true,waiting=false,signal=true;
+        int32_t deadline_delta=0; //source packed signed23 relative deadline
+        Value result;
+        std::vector<Value> stack;
+        std::shared_ptr<std::vector<Value>> frame;
+        std::vector<CallFrame> calls;
+        std::vector<ControlBlock> blocks;
+    };
+    std::shared_ptr<NativeScriptContext> context_;
+    std::deque<PendingCallback> pending_callbacks_;
+    std::unique_ptr<EventEnvelope> event_envelope_;
+    bool context_enabled_=true,event_override_=false;
+    uint32_t callbacks_posted_=0,callbacks_returned_=0;
+    void enter_callback(PendingCallback callback);
+    void drain_callback();
     uint32_t blocks_entered_ = 0, blocks_closed_ = 0, switches_ = 0;
     int32_t opcode_cost_ = 1; // named native instruction-cost policy
     uint32_t event_depth_=0;

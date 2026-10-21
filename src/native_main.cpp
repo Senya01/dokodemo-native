@@ -53,7 +53,7 @@ struct Options {
     bool nativeTitleMenu=false;
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
-    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false;
+    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -74,7 +74,7 @@ Options ParseOptions() {
         else if(arg==L"--game-loop-window-test"){options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--scene-clock-window-test"){options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-position-window-test"){options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
-        else if(arg==L"--conversation-window-fixture"){options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--conversation-window-fixture"||arg==L"--inventory-window-fixture"){options.inventoryWindowFixture=arg==L"--inventory-window-fixture";options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--camera-message-window-test"){options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-channel-window-test"){options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
@@ -1429,6 +1429,24 @@ void WriteGameProfileValue(std::ostream& out,const dokodemo::recovered::GameProf
         <<",\"raw16_comment_hex\":"<<JsonString(StartupHexBytes(p.stored.source_comment.data(),16))<<",\"calendar\":[";
     for(size_t i=0;i<7;++i){if(i)out<<',';out<<p.stored.calendar[i];}out<<"]}}";
 }
+void WriteGameInventoryValue(std::ostream& out,const dokodemo::recovered::GameInventorySnapshot& s){
+    const auto b=[](bool v){return v?"true":"false";};
+    const auto hex=[](const std::string& v){return StartupHexBytes(reinterpret_cast<const uint8_t*>(v.data()),v.size());};
+    out<<"{\"live\":"<<b(s.live)<<",\"visible\":"<<b(s.visible)<<",\"actions\":"<<b(s.actions)
+       <<",\"requested\":"<<b(s.requested)<<",\"request14\":"<<b(s.request14)<<",\"owner480\":"<<b(s.owner480)
+       <<",\"generation\":"<<s.generation<<",\"phase\":"<<s.phase<<",\"stateB2C\":"<<s.stateB2C<<",\"stateB30\":"<<s.stateB30
+       <<",\"filter\":"<<s.filter<<",\"count\":"<<s.count<<",\"selection\":"<<s.selection<<",\"selected_row\":"<<s.selected_row<<",\"selected_id\":"<<s.selected_id
+       <<",\"selected_name_cp932_hex\":"<<JsonString(hex(s.selected_name))<<",\"selected_description_cp932_hex\":"<<JsonString(hex(s.selected_description))
+       <<",\"loader464\":"<<s.loader464<<",\"loader468\":"<<s.loader468<<",\"loader469\":"<<s.loader469<<",\"loader498\":"<<s.loader498
+       <<",\"requests\":"<<s.requests<<",\"opens\":"<<s.opens<<",\"close_requests\":"<<s.close_requests<<",\"close_completions\":"<<s.close_completions
+       <<",\"pending_polls\":"<<s.pending_polls<<",\"completed_polls\":"<<s.completed_polls<<",\"retirement_requests\":"<<s.retirement_requests<<",\"retirements\":"<<s.retirements
+       <<",\"navigation\":"<<s.navigation<<",\"action_opens\":"<<s.action_opens<<",\"action_cancels\":"<<s.action_cancels<<",\"select_result\":"<<s.select_result
+       <<",\"draw_frames\":"<<s.draw_frames<<",\"glyphs\":"<<s.glyphs<<",\"quads\":"<<s.quads<<",\"resource_nodes\":"<<s.resource_nodes<<",\"resource_clips\":"<<s.resource_clips<<",\"texture_count\":"<<s.texture_count
+       <<",\"action_frontier\":"<<s.action_frontier<<",\"item_award_implemented\":false,\"layout_policy\":\"NativeListLayoutAndCancelOnlySELECT;OriginalCB2A_GIM_FONT\",\"items\":[";
+    for(size_t i=0;i<s.items.size();++i){if(i)out<<',';const auto& v=s.items[i];out<<"{\"row\":"<<v.row<<",\"id\":"<<v.id<<",\"valid\":"<<b(v.valid)<<",\"category\":"<<v.category<<",\"date_word\":"<<v.date_word
+        <<",\"name_cp932_hex\":"<<JsonString(hex(v.name))<<",\"description_cp932_hex\":"<<JsonString(hex(v.description))<<'}';}
+    out<<"]}";
+}
 void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootObservation& boot) {
     const auto boolean = [](bool value) { return value ? "true" : "false"; };
     out << "{\"controller_setup_entered\":" << boolean(boot.controller_setup_entered)
@@ -1626,6 +1644,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
     }
     out<<"],\"profile\":";WriteGameProfileValue(out,boot.content.title.profile);out<<'}'
         << ",\"next_resource\":" << JsonString(boot.content.next_resource)
+        << ",\"inventory\":";WriteGameInventoryValue(out,boot.content.inventory);out
         << ",\"actor_dictionary_requested\":"<<boolean(boot.content.actor_dictionary_requested)
         << ",\"actor_message_contexts\":"<<boot.content.actor_message_contexts
         << ",\"actor_message_input_armed\":"<<boolean(boot.content.actor_message_input_armed)
@@ -1639,6 +1658,9 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"actor_dictionary_prefix_hex\":"<<JsonString(StartupHexBytes(boot.content.actor_dictionary_prefix.data(),16))
         << ",\"actor_script\":{\"live\":"<<boolean(boot.content.actor_script.live)
         <<",\"scene4_actor_geometry_implemented\":"<<boolean(boot.content.actor_script.runtime.actor_draw_frames>0)<<",\"source182F4_complete\":false"
+        <<",\"inventory_requested\":"<<boolean(boot.content.actor_script.inventory_requested)<<",\"inventory_requests\":"<<boot.content.actor_script.inventory_requests
+        <<",\"inventory_completions\":"<<boot.content.actor_script.inventory_completions<<",\"inventory_setter_result_word\":"<<boot.content.actor_script.inventory_setter_result_word
+        <<",\"context_enabled\":"<<boolean(boot.content.actor_script.context_enabled)<<",\"callbacks_posted\":"<<boot.content.actor_script.callbacks_posted<<",\"callbacks_returned\":"<<boot.content.actor_script.callbacks_returned
         <<",\"started\":"<<boolean(boot.content.actor_script.started)<<",\"completed\":"<<boolean(boot.content.actor_script.completed)
         <<",\"blocked\":"<<boolean(boot.content.actor_script.blocked)<<",\"awaiting_message\":"<<boolean(boot.content.actor_script.awaiting_message)
         <<",\"bytes\":"<<boot.content.actor_script.bytes<<",\"path\":"<<JsonString(boot.content.actor_script.path)
@@ -3973,6 +3995,7 @@ struct Application {
     unsigned messageTestStep=0;uint32_t messageTestWait=0;
     bool messageHeldRefused=false,messageFocusRefused=false,messageFreshAccepted=false;
     uint32_t conversationNextMessage=2,conversationInputStage=0,conversationWait=0;
+    uint32_t inventoryTestStep=0,inventoryTestWait=0;bool inventoryFilterEmpty=false,inventoryCancelObserved=false,inventoryPendingSaved=false,inventoryClosingSaved=false;
     bool profileNoObserved=false;
     std::vector<std::filesystem::path> images; size_t selected = 0; Image image;
     std::vector<unsigned char> displayPixels;
@@ -4424,10 +4447,26 @@ struct Application {
                 }else if(conversationInputStage==1&&phase>=conversationWait&&s.message_acknowledgements==s.messages-1){
                     button(0);conversationWait=phase+3;conversationInputStage=2;
                 }else if(conversationInputStage==2&&phase>=conversationWait&&c.actor_message_input_armed){
-                    if(s.messages==15){save(L"conversation-gift-offer");conversationInputStage=3;}
+                    if(s.messages==15){save(L"conversation-gift-offer");conversationInputStage=3;if(options.inventoryWindowFixture){button(Circle);inventoryTestStep=1;}}
                     else{button(Circle);++conversationNextMessage;conversationInputStage=0;}
                 }
             }
+        }
+        if(options.inventoryWindowFixture&&inventoryTestStep){
+            const auto& g=c.inventory;const auto phase=c.actor_script.runtime.actor_phases;
+            if(g.phase==2&&!inventoryPendingSaved){save(L"inventory-open-pending");inventoryPendingSaved=true;}
+            if(g.phase==4&&!inventoryClosingSaved){save(L"inventory-close-pending");inventoryClosingSaved=true;}
+            if(inventoryTestStep==1&&g.phase==3){save(L"inventory-open");button(0);inventoryTestWait=phase+4;inventoryTestStep=2;}
+            else if(inventoryTestStep==2&&phase>=inventoryTestWait){button(Right);inventoryTestStep=3;}
+            else if(inventoryTestStep==3&&g.filter==2){inventoryFilterEmpty=g.count==0;save(L"inventory-empty-filter");button(0);inventoryTestWait=phase+3;inventoryTestStep=4;}
+            else if(inventoryTestStep==4&&phase>=inventoryTestWait){button(Right);inventoryTestStep=5;}
+            else if(inventoryTestStep==5&&g.filter==3&&g.count>0){button(0);inventoryTestWait=phase+3;inventoryTestStep=6;}
+            else if(inventoryTestStep==6&&phase>=inventoryTestWait){button(Circle);inventoryTestStep=7;}
+            else if(inventoryTestStep==7&&g.actions){save(L"inventory-actions");button(0);inventoryTestWait=phase+3;inventoryTestStep=8;}
+            else if(inventoryTestStep==8&&phase>=inventoryTestWait){button(Cross);inventoryTestStep=9;}
+            else if(inventoryTestStep==9&&!g.actions&&g.action_cancels==1){inventoryCancelObserved=g.phase==3&&g.stateB2C==1;save(L"inventory-action-cancel");button(0);inventoryTestWait=phase+3;inventoryTestStep=10;}
+            else if(inventoryTestStep==10&&phase>=inventoryTestWait){button(Cross);inventoryTestStep=11;}
+            else if(inventoryTestStep==11&&g.phase==7&&c.actor_script.inventory_completions==1&&c.actor_script.blocked){save(L"inventory-next-consumer");button(0);inventoryTestStep=12;}
         }
         storageBoundaryPassed=softkeyStep==18&&profileNoObserved&&textCancelObserved&&textCloseObserved&&staleTextRefused&&playerCancelObserved
             &&birthdayBackObserved&&dayRejectedObserved&&title.scene3_completed&&title.state==3
@@ -4510,6 +4549,14 @@ struct Application {
                  &&c.actor_script.runtime.logical_xy==std::array<float,2>{{1830,-27}}
                  &&c.actor_script.runtime.event_requests==1&&!c.actor_script.blocked&&c.blocked&&c.status.code==GameFsCode::Unavailable):
                 (c.actor_script.last_opcode==0x18&&c.actor_script.pc==0x8DDB7&&c.blocked&&c.status.code==GameFsCode::Unavailable));
+        if(options.inventoryWindowFixture)storageBoundaryPassed=inventoryTestStep==12&&inventoryFilterEmpty&&inventoryCancelObserved&&inventoryPendingSaved&&inventoryClosingSaved
+            &&c.inventory.phase==7&&!c.inventory.live&&!c.inventory.owner480&&!c.inventory.request14&&c.inventory.stateB2C==3
+            &&c.inventory.loader468==1&&c.inventory.loader469==1&&c.inventory.loader498==0&&c.inventory.retirements==1
+            &&c.inventory.action_cancels==1&&c.inventory.action_frontier==0&&c.inventory.glyphs>0
+            &&c.actor_script.inventory_completions==1&&c.actor_script.context_enabled&&c.actor_script.callbacks_returned==1
+            &&c.actor_script.inventory_setter_result_word==0x10000000&&c.actor_script.message_acknowledgements==15
+            &&c.actor_script.blocked&&!c.actor_script.last_service_returned&&c.actor_script.last_service==71&&c.actor_script.pc==0xA1FE;
+
     }
     void StartupProbe() {
         messageVisible=false;
@@ -5000,6 +5047,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"game_loop_window_test\":"<<(options.gameLoopWindowTest?"true":"false")
                 << ",\"scene_clock_window_test\":"<<(options.sceneClockWindowTest?"true":"false")
                 << ",\"actor_position_window_test\":"<<(options.actorPositionWindowTest?"true":"false")
+                << ",\"inventory_window_fixture\":"<<(options.inventoryWindowFixture?"true":"false")
                 << ",\"conversation_window_fixture\":"<<(options.conversationWindowFixture?"true":"false")
                 << ",\"calendar_provenance\":"<<JsonString(options.conversationWindowFixture?"ExplicitTestCalendarStepPlus5MinutesAfterIntroOrigin;NotElapsedRTCProof":"WindowsLocalCivilClock")
                 << ",\"camera_message_window_test\":"<<(options.cameraWindowTest?"true":"false")
@@ -5016,7 +5064,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

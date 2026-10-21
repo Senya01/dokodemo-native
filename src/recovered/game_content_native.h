@@ -84,6 +84,7 @@ struct GameContentSnapshot {
     std::string actor_dictionary_path;
     std::array<uint8_t,16> actor_dictionary_prefix{};
     GameActorScriptSnapshot actor_script;
+    GameInventorySnapshot inventory;
     uint32_t actor_message_contexts=0;
     bool actor_message_input_armed=false;
     uint32_t actor_message_draw_frames=0,actor_message_glyphs=0,actor_message_ink_pixels=0;
@@ -114,7 +115,7 @@ class GameContentBoot final : public GameResourceSource {
     GameFsStatus InitializeSceneResources(GameResourceSource &platform);
     GameFsStatus ShowUnavailableMemoryStick(uint32_t native_error);
     bool ProcessDialogInput(const GameInputFrame &frame);
-    bool ProcessText(const GameTextEvent& event){return scene_ui_.HandleText(event);}
+    bool ProcessText(const GameTextEvent& event){return !inventory_.Modal()&&scene_ui_.HandleText(event);}
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
@@ -161,6 +162,10 @@ class GameContentBoot final : public GameResourceSource {
     BpDirectory actor_directory_;
     GameActorScript actor_script_;
     GameActorRuntime actor_runtime_;
+    GameInventory inventory_;
+    PackageView inventory_package_;
+    BpDirectory inventory_directory_;
+    bool inventory_mounted_=false;
     PackageView room_package_;
     BpDirectory room_directory_;
     bool room_mounted_=false;

@@ -46,6 +46,7 @@ add_library(dokodemo-core STATIC
     src/recovered/game_dictionary_native.cpp
     src/recovered/game_actor_dictionary_native.cpp
     src/recovered/game_actor_script_native.cpp
+    src/recovered/game_inventory_native.cpp
     src/recovered/game_actor_runtime_native.cpp
     src/recovered/game_position_native.cpp
     src/recovered/game_value_array_native.cpp
