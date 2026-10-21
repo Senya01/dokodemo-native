@@ -132,11 +132,11 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
                      (n.type == 0 || n.type == 1 || n.type == 3 || n.type == 4 || n.type == 5 || n.type==12),
                  "unimplemented model node type");
             if(n.type==12){
-                Need(n.typePayload.size()==12,"particle emitter descriptor extent");
+                Need(n.typePayload.size()==12,"type12 region descriptor extent");
                 ++stats.particle_emitters;
                 //7F0B8/80C14:owned four-field descriptor+common transform.
-                //8A394 updates hierarchy. External particle emission remains
-                //unimplemented; this node has no own triangle geometry.
+                //8A394 updates hierarchy;836F8/26B80 now supplies the reached
+                //region selector/shape consumer. No emission or own triangles.
             }
             if (n.hasCommon) {
                 Need(n.commonShorts[1] >= -1 && n.commonShorts[1] < int32_t(stats.nodes),

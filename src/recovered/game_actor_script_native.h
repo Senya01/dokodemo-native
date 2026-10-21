@@ -19,6 +19,8 @@ struct GameActorScriptSnapshot {
     uint32_t last_service_argument_word=0,last_service_result_word=0;
     bool last_service_returned=false;
     uint32_t scene_period_queries=0,scene_period_clock_word=0,scene_period_result_word=0;
+    uint32_t position_result_word=0;
+    uint32_t game28_queries=0,game28_result_word=0;
     int32_t scene_period=-1;
     uint32_t dictionary_game_reads=0,dictionary_game_writes=0;
     uint32_t array_query_calls=0,array_query_matches=0,array_actions=0;

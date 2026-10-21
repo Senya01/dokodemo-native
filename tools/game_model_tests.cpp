@@ -189,20 +189,22 @@ void GeometryAndRaster() {
     Check(!badasset.Decode(PackageStorage::Attach(badlease, badlease->b.size())) && !badasset.Live(),
           "malformed source never publishes a live model");
 }
-void ParticleDescriptor(){
+void Type12RegionDescriptor(){
     auto bytes=Fixture();Word(bytes,92,2);const auto node=bytes.size();W(bytes,0);H(bytes,12);
     for(auto v:{0,0,-1,255,0})H(bytes,v);
     for(const auto& row:std::array<GameVector4,4>{{{{3,4,5,1}},{{0,0,0,1}},{{0,0,0,1}},{{1,1,1,1}}}})
         for(auto v:row)F(bytes,v);
-    H(bytes,7);H(bytes,8);F(bytes,1.25f);F(bytes,2.5f);Word(bytes,node,uint32_t(bytes.size()/4));
+    H(bytes,1);H(bytes,1);F(bytes,1.25f);F(bytes,2.5f);Word(bytes,node,uint32_t(bytes.size()/4));
     auto lease=std::make_shared<Lease>(std::move(bytes));auto asset=std::make_shared<GameModelAsset>();
     Check(bool(asset->Decode(PackageStorage::Attach(lease,lease->b.size())))&&asset->Statistics().particle_emitters==1,
-          "type12 particle descriptor admission,not a guessed collider");
+          "type12 source region payload admission");
     GameModelClone a,b;Check(bool(a.Initialize(asset))&&bool(b.Initialize(asset)),"emitter fields copied to separate native clones");
-    Check(a.Pose()[1].emitter.first==7&&a.Pose()[1].emitter.second==8&&Near(a.Pose()[1].emitter.scalar0,1.25f),"exact12B emitter payload");
-    a.Pose()[1].emitter.first=99;Check(b.Pose()[1].emitter.first==7,"emitter descriptor clone ownership");
+    Check(a.Pose()[1].emitter.first==1&&a.Pose()[1].emitter.second==1&&Near(a.Pose()[1].emitter.scalar0,1.25f),"exact12B selector/shape/dimension payload");
+    a.Pose()[1].emitter.first=99;Check(b.Pose()[1].emitter.first==1,"type12 descriptor clone ownership");
     a.Pose()[0].position[0]=10;Check(bool(a.Update(ModelIdentity()))&&Near(a.Pose()[1].world[12],13),"emitter common parent transform propagated");
     Check(asset->Statistics().triangles==1,"particle descriptor creates no fabricated triangle/emission");
+    GamePositionRegions regions;Check(bool(regions.Build(b))&&regions.Lists()[1].size()==1,"compile actual cloned type12 selection");
+    Check(bool(regions.Build(a))&&regions.Lists()[1].empty(),"classifier uses current cloned field,not immutable source payload");
     lease->live=false;Check(!a.Update(ModelIdentity()),"retired emitter source refuses transform update");
 }
 std::vector<uint8_t> MotionFixture(bool unknown = false) {
@@ -411,12 +413,17 @@ void ActorChannelOrder(){
     Check(scene.Snapshot().last_completed_command==157&&scene.Snapshot().movement_completions==2
           &&scene.Snapshot().logical_xy==std::array<float,2>{{600,-300}}&&scene.WaitReady(),
           "mode3 completes only at the produced live target");
+    bool position=false;Check(bool(scene.QueryActorPosition(position))&&position
+          &&scene.Snapshot().position3B0==scene.Snapshot().actor_root&&scene.Snapshot().position_queries==1,
+          "C0A8 copies actual root into owned query point without changing actor40");
     int32_t slot=-1;Check(bool(scene.CreateModel(170,0,0,0,slot))&&bool(scene.BindCamera(1)),"synthetic scene render owners");
     GameGraphics graphics;Check(graphics.Initialize({})&&bool(scene.Draw(graphics)),"native following-camera frame");
     Check(scene.Snapshot().camera_position==GameVector4{{600,-4700,980,1}}
           &&scene.Snapshot().actor_position==GameVector4{{0,0,600,1}},"explicit native root follow never overwrites unproved source actor40");
     graphics.Close();
     scene.Close();Check(!scene.Snapshot().scene_model_live&&!scene.Snapshot().scene_controls&&!scene.WaitReady(),"scene controls retired with actor");
+    position=false;Check(!scene.QueryActorPosition(position)&&!position&&!scene.Snapshot().region_owners_live,
+          "retired scene cannot fabricate GAME19 return");
     period=-7;Check(!scene.QueryScenePeriod(12,0,period)&&period==-7,"retired scene clock cannot return successful period");
     GameActorRuntime no_season;source.season_missing=true;
     Check(bool(no_season.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))
@@ -430,6 +437,47 @@ void ActorChannelOrder(){
     Check(failed.Snapshot().command_blocked&&failed.Snapshot().channel_admissions==0&&!failed.WaitReady(),
           "missing DAK has no published control or ready signal");
     failed.Close();fade.Retire();
+}
+void PositionRegionTests(){
+    GamePositionRegions owner;bool inside=false;GameVector4 point{{0,0,7,1}},copy=point;
+    Check(!owner.ContainsSecond(point,inside)&&!inside,"unbuilt region owner refuses without result publication");
+    Check(bool(owner.Initialize({}))&&bool(owner.ContainsSecond(point,inside))&&inside,"source empty second list means true");
+    Check(bool(owner.FallbackSecond(point,copy))&&copy==point,"empty fallback preserves original value includingZ");
+    GameRegionInput a;a.node=74;a.selector=1;a.shape=1;a.first=10;a.second=20;
+    a.world[12]=30;a.world[13]=-5;
+    GameRegionInput b=a;b.node=75;b.world[12]=70;
+    Check(bool(owner.Initialize({a,b})),"two source-ordered owned quads");
+    a.world[12]=999;
+    Check(owner.Lists()[1][0].center[0]==30,"compiled regions own matrix-derived values");
+    for(const auto p:{GameVector4{{30,-5,0,1}},GameVector4{{40,0,900,1}},GameVector4{{20,-10,-900,1}}}){
+        inside=false;Check(bool(owner.ContainsSecond(p,inside))&&inside,"inclusive affine quad boundary ignores sourceZ");}
+    inside=true;Check(bool(owner.ContainsSecond({{40.01f,0,0,1}},inside))&&!inside,"outside all source quads is false");
+    Check(bool(owner.FallbackSecond({{50,-5,0,1}},copy))&&copy==GameVector4{{30,-5,0,1}},"equal center distance keeps first candidate,not nearest boundary");
+    auto blocker=b;blocker.selector=2;blocker.first=100;blocker.second=100;blocker.world[12]=30;
+    Check(bool(owner.Initialize({b,blocker}))&&bool(owner.FallbackSecond(point,copy))&&copy==GameVector4{{0,0,1,1}},"fully contained candidate is excluded from fallback");
+    // Partial overlap does not fully contain a candidate.
+    a.world[12]=30;blocker.first=10;blocker.second=10;
+    Check(bool(owner.Initialize({a,blocker}))&&bool(owner.FallbackSecond({{50,-5,0,1}},copy))&&copy==GameVector4{{30,-5,0,1}},"partial overlap cannot remove fallback candidate");
+    blocker.second=20;
+    Check(bool(owner.Initialize({a,blocker}))&&bool(owner.FallbackSecond(point,copy))&&copy==GameVector4{{0,0,1,1}},"no eligible fallback returns ownedP with affineZ1");
+    GameRegionInput circle;circle.node=1;circle.selector=1;circle.shape=2;circle.first=5;
+    Check(bool(owner.Initialize({circle})),"circle region");
+    inside=false;Check(bool(owner.ContainsSecond({{3,4,19,1}},inside))&&inside,"inclusive XY circle radius");
+    inside=true;Check(bool(owner.ContainsSecond({{3,4.01f,0,1}},inside))&&!inside,"outside circle refuses membership");
+    auto circular_blocker=circle;circular_blocker.selector=2;circular_blocker.first=10;
+    Check(bool(owner.Initialize({circle,circular_blocker}))&&bool(owner.FallbackSecond(point,copy))&&copy==GameVector4{{0,0,1,1}},"fully contained circle excluded");
+    circular_blocker.world[12]=12;
+    Check(bool(owner.Initialize({circle,circular_blocker}))&&bool(owner.FallbackSecond(point,copy))&&copy==GameVector4{{0,0,0,1}},"partial circle overlap is not containment");
+    circular_blocker.world=ModelIdentity();circular_blocker.first=5;
+    Check(bool(owner.Initialize({circle,circular_blocker}))&&bool(owner.FallbackSecond(point,copy))&&copy==GameVector4{{0,0,0,1}},"circle contact is not strict full containment");
+    GameRegionInput rotated=a;rotated.world=ModelIdentity();rotated.world[0]=0;rotated.world[1]=1;rotated.world[4]=-1;rotated.world[5]=0;
+    Check(bool(owner.Initialize({rotated})),"quad uses actual transformed basis");
+    inside=false;Check(bool(owner.ContainsSecond({{5,10,0,1}},inside))&&inside,"rotated source corner included");
+    auto bad=rotated;bad.shape=3;Check(!owner.Initialize({rotated,bad})&&!owner.Live(),"unsupported shape cannot publish partial owner");
+    bad=rotated;bad.world[0]=bad.world[1]=0;Check(!owner.Initialize({bad}),"degenerate compiled edge refuses");
+    std::vector<GameRegionInput> full(257,circle);Check(!owner.Initialize(full),"original256 region cap enforced");
+    Check(bool(owner.Initialize({circle})),"fresh owner after failure");owner.Close();
+    inside=true;Check(!owner.ContainsSecond(point,inside)&&inside,"retirement refuses without fabricated Boolean");
 }
 void TitleLifetimeAndFade() {
     uint32_t segment = 0;
@@ -664,9 +712,10 @@ int main() {
     try {
         MathAndSkin();
         GeometryAndRaster();
-        ParticleDescriptor();
+        Type12RegionDescriptor();
         Motion();
         ActorChannelOrder();
+        PositionRegionTests();
         TitleLifetimeAndFade();
         ArrivalBranchTests();
         TitleMenuLifecycle();

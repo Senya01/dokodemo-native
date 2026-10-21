@@ -182,7 +182,27 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
   status = ApplyScenePair(10);
   if (status)
     status = ApplyScenePair(13);
+  if(status) {
+    // 19EA0 compiles once from the actual scene clone; no per-frame fake
+    // list rebuild. Source26B30 owns three independent region arrays.
+    status=regions_.Build(scene_clone_);
+    if(status){state_.region_owners_live=true;
+      for(size_t i=0;i<3;++i)state_.region_counts[i]=uint32_t(regions_.Lists()[i].size());}
+  }
   return status;
+}
+GameFsStatus GameActorRuntime::QueryActorPosition(bool& result) {
+  if(!Live()||!state_.actor_model_live||!state_.region_owners_live)
+    return {GameFsCode::Unavailable,0,"GAME19 requires live actor/root and compiled scene regions"};
+  // C0A8/A420 copies the actual model root into3B0; the query never uses
+  // source actor40 or changes logical/model position on fallback.
+  state_.position3B0=state_.actor_root;
+  bool inside=false;auto status=regions_.ContainsSecond(state_.position3B0,inside);
+  if(!status)return status;
+  state_.position_result3C0=inside;++state_.position_queries;
+  if(!inside){status=regions_.FallbackSecond(state_.position3B0,state_.position3B0);
+    if(!status)return status;++state_.position_fallbacks;}
+  result=inside;return {};
 }
 GameFsStatus GameActorRuntime::ApplySceneLightToggle(int32_t value) {
   if(!Live()||!state_.scene_clock_ready)return {GameFsCode::Unavailable,0,"Light toggle scene owner unavailable"};
@@ -825,6 +845,7 @@ void GameActorRuntime::Close() {
   scene_controls_.clear();
   scene_clone_.Close();
   scene_asset_.reset();
+  regions_.Close();state_.region_owners_live=false;state_.region_counts={};
   state_.scene_model_live = false;
   state_.scene_controls = 0;
   state_.scene_playback = {};

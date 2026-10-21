@@ -297,21 +297,27 @@ void Selected(const char* path){
           &&s.runtime.scene_period_table52==2&&s.runtime.season_controls==7&&s.runtime.scene_light_nodes==4
           &&s.runtime.scene_light_color_writes>0&&s.runtime.scene_light_scalar_writes==2&&s.runtime.scene_light_vector_writes==2,
           "actual seasonal templates/clock row/light field consumers and typed GAME36 result");
-    Check(s.runtime.asc176_ready&&s.runtime.asc176_complete&&s.runtime.command_completions==3
+    Check(s.runtime.asc176_ready&&s.runtime.asc176_complete&&s.runtime.command_completions==4
           &&s.runtime.first_completed_commands[0]==176&&s.runtime.first_completed_commands[1]==153
-          &&s.runtime.first_completed_commands[2]==157&&s.runtime.last_completed_command==157
+          &&s.runtime.first_completed_commands[2]==157&&s.runtime.first_completed_commands[3]==178&&s.runtime.last_completed_command==178
           &&s.runtime.light_toggle_calls==1&&s.runtime.source_flag2A980==1&&s.source_flag2A980
           &&s.runtime.movement_completions==2&&s.runtime.movement_updates>2
           &&s.runtime.logical_xy==std::array<float,2>{{600,-300}}
           &&s.runtime.model_slots==uint32_t(std::count(s.service_ids.begin(),s.service_ids.end(),31u)),
           "real153 motions119/120 switch light and157 reaches coordinate16 without early ready");
-    Check(s.blocked&&s.last_service==19&&s.pc==0x8D8D0&&s.event_signals==3&&!s.waiting_for_event
+    Check(s.position_result_word==0x10000001u&&s.runtime.position_queries>=2
+          &&s.runtime.region_counts==std::array<uint32_t,3>{{1,2,14}}&&s.runtime.position_fallbacks==0
+          &&s.runtime.position3B0==GameVector4{{600,-300,0,1}}
+          &&s.game28_queries>0&&s.game28_result_word==0x10000000u&&s.runtime.source_flag2A97C==0,
+          "actual region compilation and Boolean GAME19/GAME28 outputs drive continuation");
+    Check(s.blocked&&s.last_service==44&&s.pc==0x297C&&s.event_signals==4&&!s.waiting_for_event
+          &&s.last_service_argument_word==0x20000001u&&s.runtime.angular_completions==3
           &&!s.last_service_returned&&!s.runtime.command_blocked,
-          "new semantic frontier is actual GAME19 position/check consumer,not old36 stop");
+          "actual178 turn/completion precedes reached GAME44 camera request,not old19 failure");
     Check(!game.Tick()&&!game.Tick(),"blocked VM stays stopped while independent controls remain live");
     const auto after_stop=game.Snapshot();
     Check(after_stop.pc==s.pc&&after_stop.instructions==s.instructions&&after_stop.event_signals==s.event_signals
-          &&after_stop.runtime.command_completions==3&&after_stop.runtime.actor_phases>s.runtime.actor_phases,
+          &&after_stop.runtime.command_completions==4&&after_stop.runtime.actor_phases>s.runtime.actor_phases,
           "semantic stop cannot fabricate VM completion;real native owners keep pumping");
     game.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots

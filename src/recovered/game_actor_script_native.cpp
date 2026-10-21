@@ -70,6 +70,16 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     case 27:
         Need(runtime_&&runtime_->Snapshot().live,"GAME27 needs live actor5C owner");
         return Value::integer(runtime_->Snapshot().source_field5C);
+    case 19: {
+        Need(runtime_!=nullptr,"GAME19 needs actual actor and region owners");
+        bool inside=false;const auto status=runtime_->QueryActorPosition(inside);Need(bool(status),status.detail.c_str());
+        auto value=False();if(inside)value.word|=1;state_.position_result_word=value.word;return value;
+    }
+    case 28: {
+        Need(runtime_&&runtime_->Snapshot().live,"GAME28 needs live source game-state word2A97C");
+        auto value=False();if(runtime_->Snapshot().source_flag2A97C)value.word|=1;
+        ++state_.game28_queries;state_.game28_result_word=value.word;return value;
+    }
     case 31: {
         Need(runtime_!=nullptr,"Render31 needs actual model slot owner");
         const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};

@@ -1,6 +1,7 @@
 #pragma once
 #include "game_filesystem_native.h"
 #include "game_model_native.h"
+#include "game_position_native.h"
 #include "game_scene_ui_native.h"
 
 namespace dokodemo::recovered {
@@ -18,6 +19,11 @@ struct GameActorRuntimeSnapshot {
   bool manager_request8 = false; // 1B188 zeroed6C owner,1C210 request
   int32_t active_command = -1, camera_mode = 0;
   int32_t source_field5C = 0; //9480/94F8 explicit produced base+4C
+  bool region_owners_live=false;
+  std::array<uint32_t,3> region_counts{};
+  uint32_t position_queries=0,position_fallbacks=0;
+  bool position_result3C0=false;
+  GameVector4 position3B0{{0,0,0,1}};
   int32_t source_field50 = 1, source_field54 = 0; // AC60 AD5C/AD64 stores
   uint32_t actor = 0, camera_bindings = 0, transition_requests = 0,
            loader_interval = 0;
@@ -54,6 +60,7 @@ struct GameActorRuntimeSnapshot {
   bool scene_model_live = false, asc176_ready = false, asc176_complete = false;
   bool scene_clock_ready=false,light_on_control_present=false;
   int32_t source_flag2A980=0;
+  int32_t source_flag2A97C=0; // actual24A2C reset;param6 remains checked unsupported
   uint32_t light_toggle_calls=0;
   bool movement_pending=false;
   std::array<float,2> movement_target{};
@@ -92,6 +99,7 @@ public:
   GameFsStatus BindCamera(int32_t mode);
   GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar);
   GameFsStatus QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result);
+  GameFsStatus QueryActorPosition(bool& result);
   GameFsStatus StartTransition();
   bool WaitReady() const;
   GameFsStatus SetField54(int32_t value);
@@ -144,6 +152,7 @@ private:
   };
   std::shared_ptr<GameModelAsset> scene_asset_;
   GameModelClone scene_clone_;
+  GamePositionRegions regions_;
   std::vector<SceneControl> scene_controls_,season_controls_;
   SceneControl light_on_control_;
   std::array<uint32_t,7> scene_calendar_{};

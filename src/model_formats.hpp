@@ -41,6 +41,9 @@ struct Geometry {
     std::array<int,2> secondaryCounts{};
     std::vector<PrimitiveStream> primitiveStreams;
 };
+// Historical type name retained for callers. Reached7F0B8/836F8/26B80:
+// first=region selector,second=shape,scalar0/1=dimensions/radius.
+// The earlier RTTI-only particle interpretation is superseded by this consumer.
 struct ParticleEmitterParameters {
     std::uint16_t first=0,second=0;
     float scalar0=0,scalar1=0;
