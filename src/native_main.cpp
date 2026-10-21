@@ -1491,7 +1491,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"import_callback_configured\":" << boolean(boot.content.import_callback_configured)
         << ",\"import_callback_registered\":" << boolean(boot.content.import_callback_registered)
         << ",\"import_callback_delivery\":\"UnavailableSgxNoSyntheticInterrupt\",\"import_registration_source_result\":null"
-        << ",\"driver_policy\":\"NativeColdLoadingPhase0Only\",\"general_game_loop\":false"
+        << ",\"driver_policy\":\"NativeColdLoadingAndFade\",\"general_game_loop\":false"
         << ",\"registered_records\":" << boot.content.registered_records
         << ",\"loading_ticks\":" << boot.content.loading_ticks << ",\"load_state\":" << boot.content.load_state
         << ",\"mount_state\":" << boot.content.mount_state
@@ -1504,6 +1504,37 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"closed\":" << boolean(boot.content.closed) << ",\"frontier_pc\":" << boot.content.frontier_pc
         << ",\"status\":" << JsonString(dokodemo::recovered::GameFsCodeName(boot.content.status.code))
         << ",\"detail\":" << JsonString(boot.content.status.detail)
+        << ",\"scene_substate\":" << boot.content.scene_substate
+        << ",\"opened_resources\":" << boot.content.opened_resources
+        << ",\"scene_ui\":{\"live\":" << boolean(boot.content.scene_ui.live)
+        << ",\"constructors_returned\":" << boolean(boot.content.scene_ui.constructors_returned)
+        << ",\"scene1_returned\":" << boolean(boot.content.scene_ui.scene1_returned)
+        << ",\"owners\":" << boot.content.scene_ui.owners << ",\"records\":" << boot.content.scene_ui.records
+        << ",\"ui_resources\":" << boot.content.scene_ui.ui_resources << ",\"ui_nodes\":" << boot.content.scene_ui.ui_nodes
+        << ",\"ui_clips\":" << boot.content.scene_ui.ui_clips << ",\"textures\":" << boot.content.scene_ui.textures
+        << ",\"texture_pixels\":" << boot.content.scene_ui.texture_pixels
+        << ",\"text_capacity_bytes\":" << boot.content.scene_ui.text_capacity_bytes
+        << ",\"borrowed_dictionaries\":" << boot.content.scene_ui.borrowed_dictionaries
+        << ",\"mutable_dictionaries\":" << boot.content.scene_ui.mutable_dictionaries
+        << ",\"visible_roots\":" << boot.content.scene_ui.visible_roots << ",\"native_frames\":" << boot.content.scene_ui.native_frames
+        << ",\"ui_render_implemented\":false,\"text_drawn\":" << boolean(boot.content.scene_ui.text_drawn) << ",\"mixer_implemented\":false"
+        << ",\"storage_dialog\":" << boolean(boot.content.scene_ui.storage_dialog)
+        << ",\"dialog_renderer\":\"NativeCenteredPanelAndSourceXftAdapter\""
+        << ",\"confirmation_implemented\":false,\"awaiting_confirmation\":" << boolean(boot.content.scene_ui.awaiting_confirmation)
+        << ",\"storage_error\":" << boot.content.scene_ui.storage_error << ",\"dialog_glyphs\":" << boot.content.scene_ui.dialog_glyphs
+        << ",\"dialog_progress\":" << boot.content.scene_ui.dialog_progress
+        << ",\"fade_state\":" << boot.content.scene_ui.transition.state
+        << ",\"fade_radius\":" << boot.content.scene_ui.transition.radius << '}'
+        << ",\"sound_bank\":{\"metadata_ready\":" << boolean(boot.content.sound_bank.metadata_ready)
+        << ",\"mixer_ready\":false,\"image_bytes\":" << boot.content.sound_bank.image_bytes
+        << ",\"chunks\":" << boot.content.sound_bank.chunks
+        << ",\"native_metadata_slot\":" << boot.content.sound_bank.native_metadata_slot
+        << ",\"pool_capacity\":" << boot.content.sound_bank.pool_capacity
+        << ",\"regions\":" << boolean(boot.content.sound_bank.regions) << ",\"waves\":" << boolean(boot.content.sound_bank.waves)
+        << ",\"sequences\":" << boolean(boot.content.sound_bank.sequences) << ",\"names\":" << boolean(boot.content.sound_bank.names) << '}'
+        << ",\"direct_file_io\":{\"file_live\":" << boolean(boot.scene_resource_io.file_live)
+        << ",\"file_bytes\":" << boot.scene_resource_io.file_bytes << ",\"read_calls\":" << boot.scene_resource_io.read_calls
+        << ",\"transferred_bytes\":" << boot.scene_resource_io.transferred_bytes << ",\"live_allocations\":" << boot.scene_resource_io.live_allocations << '}'
         << ",\"font\":{\"ready\":" << boolean(boot.content.font.ready)
         << ",\"image_bytes\":" << boot.content.font.image_bytes << ",\"texture_count\":" << boot.content.font.texture_count
         << ",\"texture_bytes\":" << boot.content.font.texture_bytes << ",\"auxiliary_div8\":" << boot.content.font.auxiliary_div8
@@ -1511,7 +1542,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"glyph_width\":" << boot.content.font.glyph_width << ",\"glyph_height\":" << boot.content.font.glyph_height
         << ",\"scale\":[" << boot.content.font.scale_x << ',' << boot.content.font.scale_y << ']'
         << ",\"spacing\":[" << boot.content.font.spacing_x << ',' << boot.content.font.spacing_y
-        << "],\"rendered_game_text\":false},\"title\":false,\"gameplay\":false}}";
+        << "],\"rendered_game_text\":" << boolean(boot.content.scene_ui.text_drawn) << "},\"title\":false,\"gameplay\":false}}";
 }
 
 void WriteAdhocValue(std::ostream& out,
@@ -3386,18 +3417,29 @@ bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
         || boot.source_audio_ready || boot.source_audio_initialization_result != -1 || !boot.b0c_returned
         || !boot.content.bb8_returned || !boot.content.state_reset || !boot.content.import_callback_configured
         || boot.content.import_callback_registered
-        || !boot.content.vsync_owner || !boot.content.loadman_owner || boot.content.registered_records != 6
-        || boot.content.loading_ticks != 6 || boot.content.load_state != 6 || boot.content.current_scene != 1
+        || !boot.content.vsync_owner || !boot.content.loadman_owner || boot.content.registered_records != 14
+        || boot.content.loading_ticks != 13 || boot.content.load_state != 6 || boot.content.current_scene != 2
         || boot.content.mount_state || boot.content.requested_bits != 1 || boot.content.owned_bits != 1
         || boot.content.completed_bits != 1 || !boot.content.package_mounted || !boot.content.font_ready
         || !boot.content.font.ready || !boot.content.blocked || boot.content.closed
-        || boot.content.frontier_pc != 0x18EE8 || boot.filesystem.loaded_members != 1
+        || boot.content.frontier_pc != 0x18FCC || boot.filesystem.loaded_members != 1
+        || !boot.content.scene_ui.live || !boot.content.scene_ui.constructors_returned || !boot.content.scene_ui.scene1_returned
+        || boot.content.scene_ui.owners != 5 || boot.content.scene_ui.ui_resources != 3 || boot.content.scene_ui.visible_roots != 1
+        || !boot.content.scene_ui.texture_pixels
+        || boot.content.scene_ui.borrowed_dictionaries != 7 || boot.content.scene_ui.mutable_dictionaries != 2
+        || boot.content.scene_ui.text_capacity_bytes != 91916 || boot.content.scene_ui.native_frames != 11
+        || !boot.content.scene_ui.storage_dialog || !boot.content.scene_ui.text_drawn || !boot.content.scene_ui.awaiting_confirmation
+        || boot.content.scene_ui.dialog_progress != 1 || !boot.content.scene_ui.dialog_glyphs || boot.content.scene_ui.storage_error != ERROR_NOT_SUPPORTED
+        || !boot.content.sound_bank.metadata_ready || boot.content.sound_bank.mixer_ready
+        || boot.content.sound_bank.native_metadata_slot != 63 || boot.content.scene_substate != 2
+        || !boot.scene_resource_io.file_live || boot.scene_resource_io.read_calls != 1 || boot.scene_resource_io.live_allocations != 1
+        || boot.scene_resource_io.transferred_bytes != boot.content.sound_bank.image_bytes
         || !boot.content.font.texture_count || !boot.content.font.texture_bytes
         || boot.content.font.glyph_width != 16 || boot.content.font.glyph_height != 16
-        || o.barrier_source_pc != 0x18EE8 || o.current_frontier_source_pc != 0x18EE8
+        || o.barrier_source_pc != 0x18FCC || o.current_frontier_source_pc != 0x18FCC
         || o.barrier_module_relative || o.current_frontier_module_relative
         || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier != "UnrecoveredSceneResourceConstructors") return false;
+        || o.barrier != "NativeStorageDialogAwaitingInput") return false;
     constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
     for (size_t i = 0; i < sizes.size(); ++i) {
         const auto& arena = boot.arenas[i];
@@ -3427,6 +3469,9 @@ bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation)
     if (observation.game_boot.content.vsync_owner || observation.game_boot.content.loadman_owner
         || observation.game_boot.content.font_ready || observation.game_boot.content.package_mounted
         || observation.game_boot.content.registered_records || !observation.game_boot.content.closed) return false;
+    if(observation.game_boot.content.scene_ui.live || observation.game_boot.content.scene_ui.owners
+        || observation.game_boot.content.sound_bank.metadata_ready || observation.game_boot.scene_resource_io.file_live
+        || observation.game_boot.scene_resource_io.live_allocations)return false;
     if (observation.game_boot.vm.arena_live || observation.game_boot.vm.arena_bytes
         || observation.game_boot.vm.timer_live || observation.game_boot.vm.timer_started || observation.game_boot.vm.manager_ready) return false;
     if (observation.game_boot.scene.workspaces_ready || observation.game_boot.scene.pools_ready
@@ -3663,8 +3708,10 @@ struct Application {
         startupObservation = nativeStartup->Observe();
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
-        else if (AtGameBootBoundary(startupObservation))
-            startupStatus = L"DATA.BPM и игровой FONT.XFT загружены. Следуют конструкторы сцены D54C; title/gameplay ещё не запущены. SGX sound недоступен.";
+        else if (AtGameBootBoundary(startupObservation)) {
+            startupStatus = L"Scene2: сообщение игры об отсутствии MemoryStick. Исходный FONT.XFT; нативная TRC-адаптация. Подтверждение/save workflow ещё не подключены; SGX mixer недоступен.";
+            status=L"Игровые строки и глифы FONT.XFT; рамка и перенос текста — нативная адаптация. Подтверждение пока не подключено.";
+        }
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
                 startupObservation.module_records.begin(), startupObservation.module_records.end(),
@@ -3747,7 +3794,7 @@ struct Application {
             if (result && result != static_cast<int>(GDI_ERROR)) {
                 renderedFrameGeneration = gameFrame.generation; renderedFrameSequence = gameFrame.sequence;
             }
-            Text(dc, gameFrame.diagnostic ? L"RENDERER TEST FRAME — не игровой контент" : L"Native game framebuffer — game draw producer ещё не подключён",
+            Text(dc, gameFrame.diagnostic ? L"RENDERER TEST FRAME — не игровой контент" : L"Native 480×272 — source font/dialog; nonmatching panel adapter",
                 {vx + 12, vy + vh - 30, vx + vw - 12, vy + vh - 6}, RGB(255,255,255), DT_LEFT | DT_TOP | DT_SINGLELINE);
         } else if (messageVisible) {
             // Isolated bytecode fixture on a neutral surface, with original XFT

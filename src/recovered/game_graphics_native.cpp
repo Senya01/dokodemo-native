@@ -128,6 +128,39 @@ bool GameGraphics::DrawTriangle(const std::array<GameVertex, 3>& v) {
     ++state_.draw_calls;
     return true;
 }
+bool GameGraphics::DrawRadialFade(float x, float y, float inner, float outer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!state_.live || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(inner)
+        || !std::isfinite(outer) || inner < 0 || outer < inner) return false;
+    for (uint32_t row = 0; row < state_.config.height; ++row) {
+        for (uint32_t col = 0; col < state_.config.width; ++col) {
+            if (!Inside(int32_t(col), int32_t(row))) continue;
+            const float dx = float(col) + 0.5f - x, dy = float(row) + 0.5f - y;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (distance <= inner && outer > inner) continue;
+            const float coverage = outer == inner ? 1.0f : (std::clamp)((distance - inner) / (outer - inner), 0.0f, 1.0f);
+            Pixel(col, row, uint32_t(std::lround(coverage * 255)) << 24, 0);
+        }
+    }
+    ++state_.draw_calls; return true;
+}
+bool GameGraphics::DrawImage(const std::vector<uint32_t>& pixels, uint32_t width, uint32_t height,
+                             int32_t left, int32_t top, uint32_t modulation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!state_.live || !width || !height || width > 4096 || height > 4096
+        || pixels.size() != size_t(width) * height || left < -1048576 || left > 1048576
+        || top < -1048576 || top > 1048576) return false;
+    for (uint32_t y=0;y<height;++y) for(uint32_t x=0;x<width;++x) {
+        const auto dx=left+int32_t(x),dy=top+int32_t(y);
+        if(!Inside(dx,dy))continue;
+        uint32_t color=0;
+        const auto original=pixels[size_t(y)*width+x];
+        for(unsigned shift=0;shift<32;shift+=8)
+            color|=((((original>>shift)&255)*((modulation>>shift)&255)+127)/255)<<shift;
+        Pixel(uint32_t(dx),uint32_t(dy),color,0);
+    }
+    ++state_.draw_calls;return true;
+}
 bool GameGraphics::ProjectClipVertex(const GameClipVertex& input, GameVertex& output) const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!state_.live || !std::isfinite(input.x) || !std::isfinite(input.y) || !std::isfinite(input.z)

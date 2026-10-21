@@ -27,8 +27,8 @@ struct Buffer final : PackageStorageLease {
 };
 class WindowsGameFileSource final : public GameFileSource {
 public:
-    WindowsGameFileSource(std::shared_ptr<WindowsStartupBackend> backend, std::wstring path)
-        : backend_(std::move(backend)), path_(std::move(path)) { buffers_.reserve(130); }
+    WindowsGameFileSource(std::shared_ptr<WindowsStartupBackend> backend, std::wstring path,uint32_t coordinate)
+        : backend_(std::move(backend)), path_(std::move(path)),next_coordinate_(coordinate) { buffers_.reserve(130); }
     ~WindowsGameFileSource() override { (void)Close(); }
     GameFsStatus Open() override {
         if (!backend_ || file_) return {GameFsCode::Busy, 0, "invalid/already open file owner"};
@@ -97,7 +97,7 @@ private:
 };
 }
 std::unique_ptr<recovered::GameFileSource> CreateWindowsGameFileSource(
-    std::shared_ptr<WindowsStartupBackend> backend, std::wstring path) {
-    return std::make_unique<WindowsGameFileSource>(std::move(backend), std::move(path));
+    std::shared_ptr<WindowsStartupBackend> backend, std::wstring path,uint32_t coordinate) {
+    return std::make_unique<WindowsGameFileSource>(std::move(backend), std::move(path),coordinate);
 }
 } // namespace dokodemo

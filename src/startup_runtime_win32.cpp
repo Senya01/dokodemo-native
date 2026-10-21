@@ -66,7 +66,7 @@ struct WindowsModuleInputLease final : recovered::NativeModuleInputLease {
 }
 
 struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
-    recovered::GameInputServices, recovered::GameMemoryServices {
+    recovered::GameInputServices, recovered::GameMemoryServices, recovered::GameResourceSource {
     std::unique_ptr<Impl> next_deferred_codec_cleanup;
     struct JoinedCleanupOwners {
         SRWLOCK lock=SRWLOCK_INIT;
@@ -118,6 +118,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameScene9DC game_scene;
     recovered::GameVmBoot game_vm;
     recovered::GameContentBoot game_content;
+    std::unique_ptr<recovered::GameFileSource> scene_sound_file;
     uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
@@ -1308,19 +1309,76 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             }
         }
         if (!game_content.Snapshot().blocked) throw NativeFailure{};
+        Emit("GameFontResourceInitialized", "NativeE364FontConsumer", 0x18EE0, 0, false,
+            0, 0, 0, "actual distant DATA.BPM member,nested FONT\\FONT.XFT borrowed image and checked texture views;completed before scene1 UI constructors");
+        const auto scene_status=game_content.InitializeSceneResources(*this);
+        if(!scene_status) {
+            Emit("GameSceneResourceFailure","NativeSceneResourceConsumers",0x18EE8,0,false,0,scene_status.native_error,0,scene_status.detail.c_str());
+            std::lock_guard<std::mutex> lock(metadata);state.game_boot.content=game_content.Snapshot();
+            FailLocked(Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_DATA));return StartupFlowStop::HostFailure;
+        }
+        Emit("GameScene1Constructors-return","NonMatchingNativeSceneOwners",0x18F38,0,false,0,0,0,
+            "actual CB2A/GIM/NJ consumers;five task owners,three independent UI clones,real text record capacity and two mutable dictionaries;hidden roots do not imply rendered UI;scene1 requests scene2,no KSC request");
+        for(uint32_t tick=0;tick<16 && !game_content.Snapshot().blocked;++tick) {
+            if(HostCancelled())return StartupFlowStop::HostCancelled;
+            if(!game_content.TickLoading(game_filesystem)) {
+                const auto failed=game_content.Snapshot();
+                Emit("GameScene2LoadingFailure","NativeLoadingPhase0",0x18FCC,0,false,0,failed.status.native_error,0,failed.status.detail.c_str());
+                std::lock_guard<std::mutex> lock(metadata);state.game_boot.content=failed;
+                FailLocked(Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_DATA));return StartupFlowStop::HostFailure;
+            }
+            if(!game_content.DrawColdFrame(game_graphics))throw NativeFailure{};
+            const auto content=game_content.Snapshot();
+            Emit("GameScene2LoadingTick","NativeLoadingPhase0AndFade",0x934D0,content.load_state,false,0,0,0,
+                "source scene2 transition with unchanged mount bits;actual native CF04 fade;all UI roots hidden,no visible96F20/callback or global animation success fabricated");
+            if(!content.blocked) {
+                const auto wait=WaitForSingleObject(cancel,16);if(wait==WAIT_OBJECT_0)return StartupFlowStop::HostCancelled;
+                if(wait!=WAIT_TIMEOUT)throw NativeFailure{};
+            }
+        }
+        if(!game_content.Snapshot().blocked)throw NativeFailure{};
+        //There is no PSP MemoryStick controller device on this native host.
+        //Report the named unavailable policy, not an invented IoDevctl API
+        //success. Source4E67C maps that negative result to its real dialog.
+        Emit("GameMemoryStickUnavailable","WindowsStorageDevicePolicy",0x4E67C,-1,false,0,ERROR_NOT_SUPPORTED,0,
+            "mscmhc0:02025806 has no native device backend;no successful media state fabricated");
+        const auto dialog_status=game_content.ShowUnavailableMemoryStick(ERROR_NOT_SUPPORTED);
+        if(!dialog_status) {
+            Emit("GameStorageDialogFailure","NativeTrcFontConsumer",0x4808C,0,false,0,dialog_status.native_error,0,dialog_status.detail.c_str());
+            throw NativeFailure{};
+        }
+        for(uint32_t frame=0;frame<5;++frame) {
+            if(HostCancelled())return StartupFlowStop::HostCancelled;
+            if(!game_content.DrawColdFrame(game_graphics))throw NativeFailure{};
+            const auto wait=WaitForSingleObject(cancel,16);if(wait==WAIT_OBJECT_0)return StartupFlowStop::HostCancelled;
+            if(wait!=WAIT_TIMEOUT)throw NativeFailure{};
+        }
+        Emit("GameStorageDialogDrawn","NativeTrcFontAdapter",0x4808C,0,false,0,0,0,
+            "actual sourceCP932 messages,941C8 glyph codes and live XFT palette/pixels;native centered panel/wrap/progress adaptation,not CB2A/VFPU matching;no autoack,SGX/mixer unsupported");
         std::lock_guard<std::mutex> lock(metadata);
         state.game_boot.content = game_content.Snapshot();
         state.game_boot.filesystem = game_filesystem.Snapshot();
-        EmitLocked("GameFontResourceInitialized", "NativeE364FontConsumer", 0x18EE0, 0, false,
-            0, 0, 0, "actual distant DATA.BPM member,nested FONT\\FONT.XFT borrowed image,typed texture/palette views and1/2 scales;no title,text draw or KSC executed");
-        state.barrier_source_pc = state.current_frontier_source_pc = 0x18EE8;
+        if(scene_sound_file)state.game_boot.scene_resource_io=scene_sound_file->Snapshot();
+        state.barrier_source_pc = state.current_frontier_source_pc = 0x18FCC;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        state.barrier = state.current_frontier = "UnrecoveredSceneResourceConstructors";
+        state.barrier = state.current_frontier = "NativeStorageDialogAwaitingInput";
         state.worker_state = "Blocked";
-        EmitLocked("UnrecoveredSceneResourceConstructors", "RecoveredGameCaller", 0x18EE8, 0, false,
-            0, 0, 0, "next alloc80/D54C then FA30/1F520/47784/3EF88 not entered;CLoadMan state6 paused inside18E34,no scene transition/title/gameplay fabricated");
+        EmitLocked("NativeStorageDialogAwaitingInput", "RecoveredGameCaller", 0x18FCC, 0, false,
+            0, 0, 0, "scene2 substate2 awaits real TRC/user completion;native missing-media dialog drawn;confirmation/save workflow not implemented or auto-completed;no KSC/title/gameplay");
         return StartupFlowStop::Unsupported;
+    }
+    recovered::GameFsStatus OpenResource(const std::string& path,recovered::PackageView& out) override {
+        constexpr const char* selected="/PSP_GAME/USRDIR/data/sound/se/SE_SYS.sgd";
+        if(path!=selected)return {recovered::GameFsCode::NotFound,0,"direct source resource not selected by recovered caller"};
+        if(scene_sound_file)return {recovered::GameFsCode::Busy,0,"sound file already acquired"};
+        //Retain before any fallible open/read. The source image outlives its
+        //metadata consumer and is retired only after both contexts join.
+        scene_sound_file=CreateWindowsGameFileSource(backend,options.media_root+L"/PSP_GAME/USRDIR/data/sound/se/SE_SYS.sgd",0x78000000);
+        auto status=scene_sound_file->Open();if(!status)return status;
+        const auto extent=scene_sound_file->Snapshot().file_bytes;
+        if(!extent || extent>64*1024*1024)return {recovered::GameFsCode::Bounds,0,"selected SGXD file extent exceeds native cap"};
+        return scene_sound_file->Read(0,uint32_t(extent),out);
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
     void BarrierPump() {
@@ -1433,6 +1491,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
                 0, 0, 0, "after both joins;font/package views,manager tasks andCVSync/CLoadMan owners retired before VM/scene/filesystem/arenas");
         }
         if (!content_closed) return CleanupFailure(ERROR_BUSY);
+        if(scene_sound_file) {
+            const auto closed=scene_sound_file->Close();
+            { std::lock_guard<std::mutex> lock(metadata);state.game_boot.scene_resource_io=scene_sound_file->Snapshot(); }
+            Emit("CloseSceneResourceFiles","HostLifecycle",0,closed?1:0,false,0,closed.native_error,0,
+                "after both joins and bank consumer retirement;SGXD input borrow/allocation/file released before parent arenas");
+            if(!closed)return CleanupFailure(closed.native_error);scene_sound_file.reset();
+        }
         const bool vm_closed = game_vm.Close();
         {
             std::lock_guard<std::mutex> lock(metadata);

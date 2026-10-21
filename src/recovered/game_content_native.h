@@ -1,5 +1,6 @@
 #pragma once
 #include "game_filesystem_native.h"
+#include "game_scene_ui_native.h"
 #include <array>
 #include <vector>
 
@@ -18,16 +19,40 @@ struct GameFontSnapshot {
     int32_t glyph_width = 0, glyph_height = 0;
     float scale_x = 1, scale_y = 1, spacing_x = 2, spacing_y = 2;
 };
+struct GameFontBitmap {
+    uint32_t width = 0, height = 0, glyphs = 0;
+    std::vector<uint32_t> pixels;
+};
+struct GameFontDrawRecord {
+    uint32_t page = 0;
+    uint8_t clut_mode = 0, zero = 0, field6 = 255, plane = 0;
+    float x = 0, y = 0;
+    uint32_t field10 = 0;
+    int16_t width = 0, height = 0;
+    float u = 0, v = 0, scale_x = 1, scale_y = 1;
+    uint32_t color = 0x8007182B;
+};
+static_assert(sizeof(GameFontDrawRecord) == 44, "source-sized native glyph record");
 // E364/937FC/9435C: live borrowed XFT image and typed native texture records.
 // No rendered text, GPU upload or invented title is implied by initialization.
 class GameFontResource final {
-public:
+  public:
     GameFsStatus Initialize(PackageView image);
-    const GameFontTexture* Texture(uint32_t index) const;
-    PackageView AuxiliaryData() const { return auxiliary_; }
-    GameFontSnapshot Snapshot() const { return state_; }
+    const GameFontTexture *Texture(uint32_t index) const;
+    PackageView AuxiliaryData() const {
+        return auxiliary_;
+    }
+    GameFontSnapshot Snapshot() const {
+        return state_;
+    }
+    // Finite native93CFC/E4D0 atlas consumer. Original XFT pixels/palette and
+    // 941C8 CP932 codes, with explicit native character wrapping at max_width.
+    GameFsStatus RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
+                                GameFontBitmap &out, GameFontDrawRecord *records = nullptr,
+                                uint32_t capacity = 0) const;
     void Close();
-private:
+
+  private:
     PackageView image_, auxiliary_;
     std::vector<GameFontTexture> textures_;
     GameFontSnapshot state_;
@@ -41,42 +66,65 @@ struct GameContentSnapshot {
     uint32_t requested_bits = 0, owned_bits = 0, completed_bits = 0;
     uint32_t package_bytes = 0, package_slots = 0, frontier_pc = 0;
     GameFontSnapshot font;
+    GameSceneUiSnapshot scene_ui;
+    GameSoundBankSnapshot sound_bank;
+    uint32_t scene_substate = 0, opened_resources = 0;
     GameFsStatus status;
 };
 // Nonmatching cold-loading driver. It runs the recovered phase0 state machines
 // in source order; synchronous native I/O replaces the PSP async file pump.
-// CVSync phases9..12, interrupt delivery and the general game loop are NOT
-// implemented by this bounded driver. Their descriptors remain metadata only.
-class GameContentBoot final {
-public:
+// The finite fade/hidden-control/TRC text adapter is connected explicitly;
+// general CVSync rendering, PSP interrupt delivery and the full loop remain
+// unsupported. No source-PC descriptor is treated as a successful callback.
+class GameContentBoot final : public GameResourceSource {
+  public:
     GameContentBoot() = default;
-    GameContentBoot(const GameContentBoot&) = delete;
-    GameContentBoot& operator=(const GameContentBoot&) = delete;
+    GameContentBoot(const GameContentBoot &) = delete;
+    GameContentBoot &operator=(const GameContentBoot &) = delete;
     ~GameContentBoot();
-    bool InitializeBB8(GameArena& arena, GameVmBoot& manager);
+    bool InitializeBB8(GameArena &arena, GameVmBoot &manager);
     bool Reset24994();
     bool ConfigureImportCallback5334C(); // unavailable native interrupt/sound policy, no fake registration
     uint32_t StateWord(uint32_t byte_offset) const;
     int32_t ResetLookupWord(uint32_t index) const;
     // One native loading tick; false means a real I/O/format/lifetime failure.
     // A successful font consumer stops BEFORE the next source constructor.
-    bool TickLoading(GameFilesystem& filesystem);
-    GameContentSnapshot Snapshot() const { return state_; }
-    const GameFontResource& Font() const { return font_; }
+    bool TickLoading(GameFilesystem &filesystem);
+    // Continue the same live font/package through all five reached scene1
+    // constructors. A platform source is only used for actual absolute files.
+    GameFsStatus InitializeSceneResources(GameResourceSource &platform);
+    GameFsStatus ShowUnavailableMemoryStick(uint32_t native_error);
+    GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
+    bool DrawColdFrame(GameGraphics &graphics);
+    GameContentSnapshot Snapshot() const {
+        return state_;
+    }
+    const GameFontResource &Font() const {
+        return font_;
+    }
     bool Close();
-private:
-    struct Vsync { uint32_t interval = 160; bool render = true, finish = true, paused = false; };
-    struct LoadMan { std::array<char, 35> configured_script{}; };
-    GameArena* arena_ = nullptr;
-    GameVmBoot* manager_ = nullptr;
-    Vsync* vsync_ = nullptr;
-    LoadMan* loadman_ = nullptr;
+
+  private:
+    struct Vsync {
+        uint32_t interval = 160;
+        bool render = true, finish = true, paused = false;
+    };
+    struct LoadMan {
+        std::array<char, 35> configured_script{};
+    };
+    GameArena *arena_ = nullptr;
+    GameVmBoot *manager_ = nullptr;
+    Vsync *vsync_ = nullptr;
+    LoadMan *loadman_ = nullptr;
     uint32_t vsync_task_ = UINT32_MAX, load_task_ = UINT32_MAX;
     std::array<uint8_t, 0x10B50> reset_bytes_{};
     std::array<int32_t, 28> reset_lookup_{};
     PackageView package_;
     BpDirectory directory_;
     GameFontResource font_;
+    GameSceneUiBootstrap scene_ui_;
+    GameSoundBank sound_bank_;
+    GameResourceSource *platform_ = nullptr;
     GameContentSnapshot state_;
 };
 } // namespace dokodemo::recovered

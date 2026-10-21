@@ -113,6 +113,7 @@ struct GameBootObservation {
     GameSceneSnapshot scene;
     GameVmBootSnapshot vm;
     GameContentSnapshot content;
+    GameFileIoSnapshot scene_resource_io;
     bool source_callback_stored = false, source_callback_callable = false;
     bool source_audio_ready = false, b0c_returned = false;
     int32_t source_audio_initialization_result = 0;
