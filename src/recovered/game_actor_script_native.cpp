@@ -174,11 +174,11 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
 }
 GameFsStatus GameActorScript::Tick() {
     if(!state_.live||!vm_)return {GameFsCode::Unavailable,0,"KSC owner not live"};
+    if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
     if(state_.completed||state_.awaiting_message)return {};
     try {
         (void)script_image_.Describe(); // live backing required throughout use
-        if(runtime_){const auto phase=runtime_->AdvanceActorFrame();Need(bool(phase),phase.detail.c_str());}
         if(vm_->waiting_for_event()) {
             if(!runtime_||!runtime_->WaitReady())return {};
             vm_->signal_event();++state_.event_signals;

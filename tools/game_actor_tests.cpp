@@ -230,12 +230,32 @@ void Selected(const char* path){
     RngNativeOwner rng;rng.ApplyInitializerTimeT32(1,1,"Explicit diagnostic RNG fixture,not actual connected game seed");
     GameTransition transition;Check(transition.Initialize({{0,0}}),"diagnostic transition owner");
     SelectedRoomResources resources(f);
+    PackageView scene_image;Check(bool(resources.OpenResource("BG_ROOM\\BG_ROOM\\model01.DVS",scene_image)),"actual scene DVS");
+    model::Bytes scene_bytes(size_t(scene_image.Describe().size));for(size_t i=0;i<scene_bytes.size();++i)scene_bytes[i]=scene_image.ReadU8(i);
+    const auto scene_data=model::parseDvs(scene_bytes);std::map<int,uint32_t> types;
+    for(const auto& node:scene_data.nodes)++types[node.type];for(const auto& row:types)std::cout<<"scene_node_type="<<row.first<<" count="<<row.second<<'\n';
+    std::map<int,uint32_t> modes,common_flags;for(const auto& node:scene_data.nodes){if(node.hasGeometry)++modes[node.geometry.mode];if(node.hasCommon)++common_flags[node.commonFlags];}
+    for(const auto& row:modes)std::cout<<"scene_geometry_mode="<<row.first<<" count="<<row.second<<'\n';
+    for(const auto& row:common_flags)std::cout<<"scene_common_flags="<<row.first<<" count="<<row.second<<'\n';
+    for(const auto name:{"fusuma_off.dak","tuzura_big_open.dak","tuzura_small_open.dak"}){
+        PackageView input;Check(bool(resources.OpenResource(std::string("BG_ROOM\\BG_ROOM\\")+name,input)),"selected active scene template");
+        model::Bytes bytes(size_t(input.Describe().size));for(size_t i=0;i<bytes.size();++i)bytes[i]=input.ReadU8(i);
+        const auto data=model::parseDak(bytes);
+        for(const auto& object:data.objects)for(const auto& section:object.sections){
+            std::cout<<"active_template="<<name<<" node="<<object.targetNodeIndex<<" type="<<section.type<<" sub="<<section.subtype<<" count="<<section.count<<" keys=";
+            for(auto word:section.keyWords)std::cout<<word<<',';std::cout<<'\n';
+        }
+    }
     GameActorRuntime runtime;Check(bool(runtime.Initialize(0,lease.View(),transition,&resources)),"source cold actor controls");
+    const auto scene_open=runtime.InitializeScene0();Check(bool(scene_open),scene_open.detail.c_str());
     GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[]{return 0x30D72E10u;},&rng,&runtime); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
-    for(unsigned i=0;i<20;++i){const auto status=game.Tick();const auto s=game.Snapshot();
+    for(unsigned i=0;i<220;++i){const auto status=game.Tick();const auto s=game.Snapshot();
+        if(i<6||i%20==0||!status)
         std::cout<<"tick="<<s.ticks<<" pc="<<s.pc<<" op="<<s.last_opcode<<" steps="<<s.instructions
-                 <<" imported="<<s.dictionary.imported<<" service="<<s.last_service<<" detail="<<status.detail<<'\n';
+                 <<" imported="<<s.dictionary.imported<<" service="<<s.last_service<<" command="<<s.runtime.command_pc
+                 <<" motion="<<s.runtime.channel_motion[0]<<" time="<<s.runtime.channels[0].time<<" pair3="<<s.runtime.scene_pair3_calls
+                 <<" signals="<<s.event_signals<<" detail="<<status.detail<<'\n';
         if(!status||s.awaiting_message||s.completed)break;
     }
     const auto s=game.Snapshot();std::cout<<"services=";for(auto id:s.service_ids)std::cout<<id<<',';std::cout<<'\n';
@@ -243,12 +263,20 @@ void Selected(const char* path){
         <<" writes="<<s.dictionary_game_writes<<" random="<<s.random_selections<<" root_returns="<<s.root_functions_returned<<'\n';
     std::cout<<"blocks="<<s.control_blocks_entered<<'/'<<s.control_blocks_closed<<" active="<<s.active_control_blocks
         <<" switches="<<s.switches<<" camera="<<s.runtime.camera_bindings<<" fades="<<s.runtime.transition_requests<<'\n';
-    Check(s.waiting_for_event&&s.pc==0x8DE3D&&s.runtime.event_requests==1&&s.event_signals==0
+    std::cout<<"asc176="<<s.runtime.asc176_ready<<'/'<<s.runtime.asc176_complete<<" runtimeError="<<s.runtime.command_error<<'\n';
+    Check(s.runtime.first_channel_motion==8&&s.runtime.scene_pair3_calls==1&&s.runtime.motion123_completions==1
+          &&s.runtime.asc176_ready&&s.event_signals>=1&&s.pc!=0x8DE3D
           &&s.runtime.actor_model_live&&!s.runtime.actor_request_pending&&!s.runtime.selected_extension_pending
-          &&s.runtime.command_blocked&&s.runtime.command_pc==20&&s.runtime.command_effects==2
-          &&s.runtime.logical_xy==std::array<float,2>{{1830,-27}}&&s.runtime.actor_math_mode==1&&s.runtime.pending_logical_motion==9
-          &&s.runtime.model_slots==7&&s.runtime.transition_requests==1&&!s.blocked,
-          "actual selected main loop reaches genuine pending actor176 wait beyond old18stop");
+          &&s.runtime.logical_xy==std::array<float,2>{{1830,-27}}&&s.runtime.angular_completions==1
+          &&s.runtime.model_slots==7&&s.runtime.transition_requests==1,
+          "actual8 handoff,pair3,motion123 end,ASCready and eligible VM54 resume");
+    Check(s.blocked&&s.last_service==36&&s.pc==0x8D7FB,"next actual service36 is an explicit semantic frontier");
+    Check(!game.Tick()&&!game.Tick(),"blocked VM stays stopped,not successful replay");
+    const auto after_unwind=game.Snapshot();
+    Check(after_unwind.pc==s.pc&&after_unwind.instructions==s.instructions&&after_unwind.event_signals==1
+          &&after_unwind.runtime.asc176_complete&&after_unwind.runtime.command_completions==1
+          &&after_unwind.runtime.command_pc==108&&after_unwind.runtime.command_effects==11,
+          "independent actor owner executes real8000 after8031 even while new VM consumer is blocked");
     game.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");

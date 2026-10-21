@@ -17,9 +17,12 @@ GameMatrix ModelInverseRigid(const GameMatrix &matrix);
 struct GameModelMaterial {
     uint16_t flags = 0;
     std::shared_ptr<GameImage> texture;
+    std::vector<std::pair<unsigned,std::shared_ptr<GameImage>>> secondary_textures;
 };
 struct GameModelStatistics {
     uint32_t nodes = 0, meshes = 0, vertices = 0, triangles = 0, weighted_vertices = 0, materials = 0;
+    uint32_t particle_emitters = 0; //descriptor/common transforms only,no spawning
+    uint32_t secondary_textures = 0; //owned source images;native diffuse-only shading
 };
 // 80384/80DA8: immutable source arrays/material images are shared; every clone
 // has independent pose/world/palette state. No PSP pointers or padding layouts.
@@ -56,6 +59,8 @@ struct GameModelPose {
         scale{{1, 1, 1, 1}};
     GameMatrix world{};
     int32_t material = -1;
+    float opacity=1,world_opacity=1;
+    model::ParticleEmitterParameters emitter;
 };
 class GameModelClone final {
   public:
@@ -87,6 +92,8 @@ class GameModelClone final {
 };
 struct GameMotionStatistics {
     uint32_t tracks = 0, keys = 0, duration = 0, approximate_curves = 0, null_callback_tracks = 0;
+    bool loop = false;
+    uint32_t deferred_sections = 0;
 };
 // 804F0/89E54: checked source key values and actual material selection. Native
 // slerp/piecewise-linear interpolation for known tangent curves is nonmatching;
@@ -105,5 +112,24 @@ class GameModelMotion final {
     PackageView image_;
     model::Dak data_;
     GameMotionStatistics stats_;
+};
+// Typed 88728/89954/89A88 control. Sampling precedes time advancement. A
+// looping channel never reports state2 merely because its duration elapsed.
+struct GamePlaybackState {
+    uint32_t state=1,time=0,sampled_time=0,duration=0,loops=0,samples=0;
+    bool loop=false;
+    int32_t stop_limit=-1,speed=4800;
+};
+class GameModelPlayback final {
+  public:
+    void Configure(uint32_t duration,bool loop);
+    void Start(uint32_t time=0);
+    void Stop() noexcept { state_.state=1; }
+    GameFsStatus Apply(const GameModelMotion&,GameModelClone&,uint32_t delta);
+    GamePlaybackState Snapshot() const noexcept { return state_; }
+    bool Complete() const noexcept { return state_.state==2; }
+    void Close() noexcept { state_={}; }
+  private:
+    GamePlaybackState state_;
 };
 } // namespace dokodemo::recovered

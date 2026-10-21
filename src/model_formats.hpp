@@ -41,6 +41,10 @@ struct Geometry {
     std::array<int,2> secondaryCounts{};
     std::vector<PrimitiveStream> primitiveStreams;
 };
+struct ParticleEmitterParameters {
+    std::uint16_t first=0,second=0;
+    float scalar0=0,scalar1=0;
+};
 struct Node {
     Range source, commonSource, uninterpreted;
     int type=0;
@@ -50,6 +54,8 @@ struct Node {
     // Preserved without assigning unproved TRS/hierarchy semantics.
     std::array<std::array<float,4>,4> commonVectors{};
     std::vector<float> optionalMatrix;
+    Bytes typePayload; // retained node-specific bytes,never native pointers
+    ParticleEmitterParameters emitter;
     Geometry geometry;
 };
 struct Dvs {

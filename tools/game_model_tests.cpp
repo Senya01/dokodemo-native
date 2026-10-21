@@ -1,6 +1,7 @@
 #include "recovered/game_boot_native.h"
 #include "recovered/game_model_native.h"
 #include "recovered/game_title_native.h"
+#include "recovered/game_actor_runtime_native.h"
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -188,6 +189,22 @@ void GeometryAndRaster() {
     Check(!badasset.Decode(PackageStorage::Attach(badlease, badlease->b.size())) && !badasset.Live(),
           "malformed source never publishes a live model");
 }
+void ParticleDescriptor(){
+    auto bytes=Fixture();Word(bytes,92,2);const auto node=bytes.size();W(bytes,0);H(bytes,12);
+    for(auto v:{0,0,-1,255,0})H(bytes,v);
+    for(const auto& row:std::array<GameVector4,4>{{{{3,4,5,1}},{{0,0,0,1}},{{0,0,0,1}},{{1,1,1,1}}}})
+        for(auto v:row)F(bytes,v);
+    H(bytes,7);H(bytes,8);F(bytes,1.25f);F(bytes,2.5f);Word(bytes,node,uint32_t(bytes.size()/4));
+    auto lease=std::make_shared<Lease>(std::move(bytes));auto asset=std::make_shared<GameModelAsset>();
+    Check(bool(asset->Decode(PackageStorage::Attach(lease,lease->b.size())))&&asset->Statistics().particle_emitters==1,
+          "type12 particle descriptor admission,not a guessed collider");
+    GameModelClone a,b;Check(bool(a.Initialize(asset))&&bool(b.Initialize(asset)),"emitter fields copied to separate native clones");
+    Check(a.Pose()[1].emitter.first==7&&a.Pose()[1].emitter.second==8&&Near(a.Pose()[1].emitter.scalar0,1.25f),"exact12B emitter payload");
+    a.Pose()[1].emitter.first=99;Check(b.Pose()[1].emitter.first==7,"emitter descriptor clone ownership");
+    a.Pose()[0].position[0]=10;Check(bool(a.Update(ModelIdentity()))&&Near(a.Pose()[1].world[12],13),"emitter common parent transform propagated");
+    Check(asset->Statistics().triangles==1,"particle descriptor creates no fabricated triangle/emission");
+    lease->live=false;Check(!a.Update(ModelIdentity()),"retired emitter source refuses transform update");
+}
 std::vector<uint8_t> MotionFixture(bool unknown = false) {
     std::vector<uint8_t> b{'D', 'A', 'K', 0};
     W(b, 0);
@@ -197,12 +214,17 @@ std::vector<uint8_t> MotionFixture(bool unknown = false) {
     const auto object = b.size();
     W(b, 0);
     H(b, 0);
-    H(b, 3);
+    H(b, unknown ? 1 : 3);
     for (const auto &row :
          std::array<GameVector4, 4>{{{{0, 0, 0, 1}}, {{0, 0, 0, 1}}, {{0, 0, 0, 1}}, {{1, 1, 1, 1}}}})
         for (auto v : row)
             F(b, v);
-    b.push_back(unknown ? 0x61 : 1);
+    if(unknown){
+        b.push_back(0x50);b.push_back(0);H(b,1);
+        for(uint32_t v:{0u,1u,2u,3u})W(b,v);
+        Word(b,object,uint32_t(b.size()/4));return b;
+    }
+    b.push_back(1);
     b.push_back(1);
     H(b, 2);
     for (auto v : {10.0f, 20.0f, 30.0f, 2.0f})
@@ -247,12 +269,35 @@ void Motion() {
     Check(Near(clone.Pose()[0].rotation[2], .38268f), "native shortest quaternion slerp");
     Check(bool(motion.Apply(clone, 160)) && Near(clone.Pose()[0].position[1], 22),
           "last key not a float time");
+    GameModelPlayback channel;
+    channel.Configure(motion.Statistics().duration,false);channel.Start();
+    Check(!channel.Complete()&&bool(channel.Apply(motion,clone,160))&&channel.Snapshot().sampled_time==0
+          &&channel.Snapshot().time==160&&!channel.Complete(),"admission/first actual pose is not channel completion");
+    Check(bool(channel.Apply(motion,clone,160))&&channel.Complete()&&channel.Snapshot().sampled_time==160
+          &&Near(clone.Pose()[0].position[1],22),"nonloop completes only after applying actual end pose");
+    clone.Pose()[0].position[1]=-123;
+    Check(bool(channel.Apply(motion,clone,160))&&channel.Complete()&&Near(clone.Pose()[0].position[1],22)
+          &&channel.Snapshot().time==160,"finished2 reapplies final pose without advancing");
+    channel.Start();Check(!channel.Complete()&&channel.Snapshot().time==0&&channel.Snapshot().loops==0,
+          "89954 restart clears elapsed time and loop count");
+    auto looping=MotionFixture();Word(looping,12,1);
+    auto looping_keys=std::make_shared<Lease>(std::move(looping));GameModelMotion loop;
+    Check(bool(loop.Decode(PackageStorage::Attach(looping_keys,looping_keys->b.size()),*asset)),"source file loop flag admitted");
+    GameModelPlayback loop_channel;loop_channel.Configure(160,true);loop_channel.Start();
+    for(unsigned i=0;i<7;++i)Check(bool(loop_channel.Apply(loop,clone,160))&&!loop_channel.Complete(),"loop duration never signals command ready");
+    Check(loop_channel.Snapshot().loops==6&&loop_channel.Snapshot().state==3,"source loop reset and continue increment");
+    loop_channel.Stop();const auto stopped=loop_channel.Snapshot().samples;
+    Check(bool(loop_channel.Apply(loop,clone,160))&&loop_channel.Snapshot().samples==stopped&&!loop_channel.Complete(),
+          "scene stop state1 is inactive,not finished2");
     keys->live = false;
     Check(!motion.Apply(clone, 0), "retired motion lease refused");
+    channel.Start();Check(!channel.Apply(motion,clone,160)&&!channel.Complete(),"expired motion cannot manufacture finished state");
     auto invalid = std::make_shared<Lease>(MotionFixture(true));
     GameModelMotion bad;
-    Check(!bad.Decode(PackageStorage::Attach(invalid, invalid->b.size()), *asset),
-          "unknown section not a success callback");
+    Check(bool(bad.Decode(PackageStorage::Attach(invalid, invalid->b.size()), *asset))&&bad.Statistics().deferred_sections==1,
+          "inactive unknown track retained,not executed at template admission");
+    const auto prior=clone.Pose()[0].position;
+    Check(!bad.Apply(clone,0)&&clone.Pose()[0].position==prior,"active unknown track refused before partial pose mutation");
 }
 struct TitleSource final : GameResourceSource {
     bool fail = false;
@@ -265,6 +310,79 @@ struct TitleSource final : GameResourceSource {
         return {};
     }
 };
+struct ActorSource final:GameResourceSource {
+    bool fail_motion=false;
+    bool scene_assets=false;
+    std::vector<std::string> requests;
+    GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
+        requests.push_back(path);std::vector<uint8_t> bytes;
+        if(path.find(".ASC")!=std::string::npos){
+            W(bytes,0x00435341);W(bytes,16);W(bytes,124);W(bytes,0);
+            for(unsigned i=0;i<=176;++i){
+                std::vector<uint8_t> payload;
+                if(i==0){for(unsigned n=0;n<124;++n){const auto name="m"+std::to_string(n);payload.insert(payload.end(),name.begin(),name.end());payload.push_back(0);}}
+                else if(i==176){for(uint32_t word:{0x8040u,1u,0x8030u,3u,9u,0x8030u,5u,0u,0x8030u,0u,1u,
+                    0x8030u,2u,90u,0x8030u,10u,3u,0x8010u,123u,4u,0x8031u,0x8000u})W(payload,word);}
+                else {W(payload,0x8010);W(payload,8);W(payload,8);}
+                W(bytes,0);W(bytes,16);W(bytes,uint32_t(payload.size()));W(bytes,0);bytes.insert(bytes.end(),payload.begin(),payload.end());
+            }
+        }else if(path.find(".DVS")!=std::string::npos)bytes=Fixture();
+        else if(path=="DATA\\SEQ\\sequence_coord.bin"){bytes.resize(80);Word(bytes,72,1830);Word(bytes,76,uint32_t(-27));}
+        else if(scene_assets&&path.find("BG_ROOM\\BG_ROOM\\") == 0){bytes=MotionFixture();}
+        else if(path.find("m8.DAK")!=std::string::npos){
+            if(fail_motion)return {GameFsCode::MissingFile,0,"synthetic actual motion8 failure"};
+            bytes=MotionFixture();Word(bytes,12,1);
+        }else if(path.find("m123.DAK")!=std::string::npos){bytes=MotionFixture();
+        }else return {GameFsCode::NotFound,0,"Explicit missing synthetic scene owner"};
+        auto lease=std::make_shared<Lease>(std::move(bytes));out=PackageStorage::Attach(lease,lease->b.size());return {};
+    }
+};
+void ActorChannelOrder(){
+    auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));GameTransition fade;Check(fade.Initialize({{0,0}}),"actor synthetic fade");
+    ActorSource source;GameActorRuntime actor;
+    Check(bool(actor.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(actor.RequestActorEvent(176,0)),"live ASC actor request");
+    Check(!actor.WaitReady(),"request/installation cannot signal VM54");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().command_effects==1&&!actor.WaitReady(),"first8040 only,not completion");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().pending_logical_motion==9&&actor.Snapshot().channel_admissions==0,
+          "coordinate effect precedes actual logical9 handoff");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().first_channel_motion==8&&actor.Snapshot().channel_admissions==2
+          &&actor.Snapshot().command_pc==32&&!actor.WaitReady(),"both real channels8 admitted before next ASC parameter");
+    for(unsigned i=0;i<35;++i)Check(bool(actor.AdvanceActorFrame()),"actor phase with looping motion and source angular gate");
+    auto state=actor.Snapshot();
+    Check(state.command_blocked&&state.command_frontier==0x6D6C&&state.command_pc==56&&state.command_effects==5,
+          "later motion cannot jump absent actual scene pair consumer");
+    Check(state.channels[0].loop&&state.channels[0].loops>0&&!state.actor_control_ready&&!actor.WaitReady()
+          &&state.angular_completions==1&&state.motion_samples>0,"loops/pose/rotation alone never command completion");
+    Check(state.effect_order[0]==0x8040&&state.effect_order[1]==0x8030&&state.effect_order[4]==0x8030,
+          "checked ASC operand effect order retained");
+    actor.Close();Check(!actor.WaitReady()&&actor.Snapshot().channel_motion[0]==-1,"channels retired before resources");
+    GameActorRuntime scene;source.scene_assets=true;
+    Check(bool(scene.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(scene.InitializeScene0()),"actual14-control scene typed owner");
+    Check(scene.Snapshot().scene_controls==14&&scene.Snapshot().scene_pair_calls==2
+          &&scene.Snapshot().scene_playback[10].state==3&&scene.Snapshot().scene_playback[13].state==3
+          &&scene.Snapshot().scene_playback[8].state==1&&scene.Snapshot().scene_playback[11].state==1,
+          "source startup pairs10/13 stop8/11 before start");
+    Check(bool(scene.RequestActorEvent(176,0)),"paired actual command owner");
+    for(unsigned i=0;i<55;++i)Check(bool(scene.AdvanceActorFrame()),"scene pair and nonloop command progression");
+    const auto completed=scene.Snapshot();
+    Check(completed.scene_pair3_calls==1&&completed.scene_last_pair==std::array<int32_t,2>{{3,2}}
+          &&completed.scene_playback[2].state==1&&completed.scene_playback[3].state==2,
+          "real pair3 stops2 and starts3,retained final pose");
+    Check(completed.asc176_ready&&completed.asc176_complete&&completed.command_completions==1&&scene.WaitReady()
+          &&completed.command_effects==9,"ready only after actual nonloop motion,end marker and root unwind");
+    int32_t slot=-1;Check(bool(scene.CreateModel(170,0,0,0,slot))&&bool(scene.BindCamera(1)),"synthetic scene render owners");
+    GameGraphics graphics;Check(graphics.Initialize({})&&bool(scene.Draw(graphics)),"native following-camera frame");
+    Check(scene.Snapshot().camera_position==GameVector4{{1830,-4427,980,1}}
+          &&scene.Snapshot().actor_position==GameVector4{{0,0,600,1}},"explicit native root follow never overwrites unproved source actor40");
+    graphics.Close();
+    scene.Close();Check(!scene.Snapshot().scene_model_live&&!scene.Snapshot().scene_controls&&!scene.WaitReady(),"scene controls retired with actor");
+    source.fail_motion=true;GameActorRuntime failed;Check(bool(failed.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))
+          &&bool(failed.RequestActorEvent(176,0)),"motion failure request owner");
+    for(unsigned i=0;i<3;++i)Check(bool(failed.AdvanceActorFrame()),"checked motion error phase");
+    Check(failed.Snapshot().command_blocked&&failed.Snapshot().channel_admissions==0&&!failed.WaitReady(),
+          "missing DAK has no published control or ready signal");
+    failed.Close();fade.Retire();
+}
 void TitleLifetimeAndFade() {
     uint32_t segment = 0;
     Check(TitleMovementStep(2, 4, segment) == 0 && segment == 1 && TitleMovementStep(2, 5, segment) == 52,
@@ -498,7 +616,9 @@ int main() {
     try {
         MathAndSkin();
         GeometryAndRaster();
+        ParticleDescriptor();
         Motion();
+        ActorChannelOrder();
         TitleLifetimeAndFade();
         ArrivalBranchTests();
         TitleMenuLifecycle();

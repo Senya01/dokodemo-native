@@ -129,8 +129,15 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
         stats.materials = uint32_t(parsed.materials.size());
         for (const auto &n : parsed.nodes) {
             Need(!n.unsupportedType &&
-                     (n.type == 0 || n.type == 1 || n.type == 3 || n.type == 4 || n.type == 5),
+                     (n.type == 0 || n.type == 1 || n.type == 3 || n.type == 4 || n.type == 5 || n.type==12),
                  "unimplemented model node type");
+            if(n.type==12){
+                Need(n.typePayload.size()==12,"particle emitter descriptor extent");
+                ++stats.particle_emitters;
+                //7F0B8/80C14:owned four-field descriptor+common transform.
+                //8A394 updates hierarchy. External particle emission remains
+                //unimplemented; this node has no own triangle geometry.
+            }
             if (n.hasCommon) {
                 Need(n.commonShorts[1] >= -1 && n.commonShorts[1] < int32_t(stats.nodes),
                      "model parent index");
@@ -164,14 +171,20 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
             GameModelMaterial material;
             material.flags = m.flags;
             for (const auto &ref : m.textures) {
-                Need(ref.roleBit == 1, "unimplemented model multitexture role");
+                Need(ref.roleBit == 1||ref.roleBit==2||ref.roleBit==4, "unimplemented model texture role");
                 Need(source && !ref.name.empty() && ref.name.size() < 32, "model texture source/name");
-                const auto status = source->TextureResource(prefix + ref.name + ".GIM", material.texture);
+                std::shared_ptr<GameImage> texture_image;
+                const auto status = source->TextureResource(prefix + ref.name + ".GIM", texture_image);
                 if (!status) {
                     auto failure = status;
                     failure.detail = prefix + ref.name + ".GIM: " + failure.detail;
                     return failure;
                 }
+                if(ref.roleBit==1)material.texture=std::move(texture_image);
+                else {material.secondary_textures.emplace_back(ref.roleBit,std::move(texture_image));++stats.secondary_textures;}
+                // Native diffuse-only lighting adapter. Secondary source
+                // images are actually loaded/owned;their PSP shading roles
+                // are retained but no reflective/normal effect is invented.
             }
             materials.push_back(std::move(material));
         }
@@ -197,6 +210,7 @@ GameFsStatus GameModelClone::Initialize(std::shared_ptr<const GameModelAsset> as
             p.rotation = node.commonVectors[1];
         }
         p.material = node.hasGeometry ? node.geometry.materialIndex : -1;
+        p.emitter=node.emitter;
     }
     auto status = Update(ModelIdentity());
     if (status)
@@ -219,11 +233,14 @@ GameFsStatus GameModelClone::Update(const GameMatrix &root) {
             const auto &node = asset_->Data().nodes[i];
             auto &pose = pose_[i];
             const auto local = ModelTRS(pose.position, pose.base_rotation, pose.rotation, pose.scale);
+            Need(std::isfinite(pose.opacity)&&pose.opacity>=0,"nonfinite/negative model opacity");
+            pose.world_opacity=pose.opacity;
             const auto parent = node.hasCommon ? node.commonShorts[1] : -1;
             if (parent >= 0) {
                 Need(size_t(parent) < pose_.size(), "model parent index");
                 update(size_t(parent));
                 pose.world = ModelMultiply(pose_[size_t(parent)].world, local);
+                pose.world_opacity*=pose_[size_t(parent)].world_opacity;
             } else
                 pose.world = ModelMultiply(root, local);
             visited[i] = 2;
@@ -271,6 +288,7 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
             const auto &n = asset_->Data().nodes[node];
             if (!n.hasGeometry || !n.geometry.vertexCount)
                 continue;
+            if(pose_[node].world_opacity<=0)continue;
             const auto &g = n.geometry;
             const auto material = pose_[node].material;
             Need(material >= -1 && material < int32_t(asset_->Materials().size()), "clone material index");
@@ -309,7 +327,7 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
                     // Explicit native PSP128-alpha -> opaque adaptation. RGB
                     // uses real geometry channels; no substitute textures/mesh.
                     v.color = uint32_t(c[0]) | uint32_t(c[1]) << 8 | uint32_t(c[2]) << 16 |
-                              uint32_t((std::min)(255u, uint32_t(c[3]) * 2)) << 24;
+                              uint32_t(float((std::min)(255u,uint32_t(c[3])*2))*(std::min)(1.0f,pose_[node].world_opacity)) << 24;
                     v.color = NativeColorFromPspAbgr(v.color);
                 }
                 vertices.push_back(v);
@@ -402,9 +420,10 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
             bytes[i] = image.ReadU8(i);
         auto data = model::parseDak(bytes);
         model::validateBinding(target.Data(), data);
-        Need(data.flags == 0, "unimplemented additive motion flags");
+        Need((data.flags & ~1u) == 0, "unimplemented additive/unknown motion flags");
         GameMotionStatistics stats;
         stats.duration = data.durationWord;
+        stats.loop = (data.flags & 1) != 0; //800B4 file1 -> control1000
         Need(stats.duration > 0, "motion zero duration");
         for (const auto &object : data.objects) {
             Need(object.targetNodeIndex >= 0 || object.sections.empty(),
@@ -416,7 +435,11 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
                 const bool quaternion = s.type == 2 && (s.subtype == 1 || s.subtype == 2);
                 const bool material = s.type == 0x30 && s.subtype == 0;
                 const bool callback = (s.type >= 0x40 && s.type <= 0x42);
-                Need(translation || quaternion || material || callback, "unimplemented motion section");
+                const bool opacity=s.type==0x50&&s.subtype==15&&s.count==1;
+                // Inactive scene controls own their original template without
+                // executing its tracks. A future active unsupported section
+                // is refused atomically in Apply,never a successful no-op.
+                if(!(translation||quaternion||material||callback||opacity)){++stats.deferred_sections;continue;}
                 Need(s.count >= 0 && s.count <= 65535 && s.components > 0 &&
                          s.keyWords.size() == size_t(s.count) * s.components,
                      "motion key extent");
@@ -435,6 +458,7 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
                         Need(s.keyWords.at(at + 1) == 255 ||
                                  s.keyWords.at(at + 1) < target.Materials().size(),
                              "motion material index");
+                    if(opacity)Need(FloatWord(s.keyWords.at(at+1))>=0,"motion opacity scalar");
                 }
                 ++stats.tracks;
                 stats.keys += uint32_t(s.count);
@@ -457,6 +481,7 @@ GameFsStatus GameModelMotion::Apply(GameModelClone &clone, uint32_t time) const 
     try {
         Need(image_.Describe().readable && clone.Asset() && clone.Asset()->Live(),
              "motion source lease retired");
+        Need(stats_.deferred_sections==0,"unimplemented reached active motion section");
         for (const auto &object : data_.objects) {
             if (object.targetNodeIndex < 0)
                 continue;
@@ -469,8 +494,13 @@ GameFsStatus GameModelMotion::Apply(GameModelClone &clone, uint32_t time) const 
             pose.base_rotation = {{0, 0, 0, 1}};
             pose.scale = {{1, 1, 1, 1}};
             for (const auto &s : object.sections) {
-                if (!s.count || s.type >= 0x40)
+                if (!s.count || (s.type >= 0x40&&s.type<=0x42))
                     continue; // source callback174/178 is null on this cold path
+                if(s.type==0x50){
+                    //89CA8->8A33C->8AE40:source common opacity1F8. The
+                    //reached scene clips have one constant float key at0.
+                    pose.opacity=FloatWord(s.keyWords.at(1));continue;
+                }
                 size_t key = 0;
                 while (key + 1 < size_t(s.count) && s.keyWords[(key + 1) * size_t(s.components)] <= time)
                     ++key;
@@ -506,5 +536,31 @@ GameFsStatus GameModelMotion::Apply(GameModelClone &clone, uint32_t time) const 
     } catch (const std::exception &e) {
         return Error(e);
     }
+}
+void GameModelPlayback::Configure(uint32_t duration,bool loop) {
+    if(!duration)throw std::invalid_argument("Playback needs nonzero actual duration");
+    state_={};state_.duration=duration;state_.loop=loop;
+}
+void GameModelPlayback::Start(uint32_t time) {
+    if(!state_.duration)throw std::logic_error("Playback template not admitted");
+    state_.time=time;state_.loops=0;state_.state=3;
+}
+GameFsStatus GameModelPlayback::Apply(const GameModelMotion& motion,GameModelClone& clone,uint32_t delta) {
+    if(state_.state==1)return {};
+    if(motion.Statistics().duration!=state_.duration||motion.Statistics().loop!=state_.loop)
+        return {GameFsCode::Unavailable,0,"Playback/template identity mismatch"};
+    const auto status=motion.Apply(clone,state_.time);if(!status)return status;
+    state_.sampled_time=state_.time;++state_.samples;
+    if(state_.state==2)return {}; //89ACC final pose stays an active consumer
+    if(state_.stop_limit>=0&&state_.time>=uint32_t(state_.stop_limit)){
+        state_.stop_limit=-1;state_.state=2;return {};
+    }
+    if(state_.time>=state_.duration){
+        if(!state_.loop){state_.state=2;return {};}
+        state_.time=0;++state_.loops;
+    }
+    const uint64_t next=uint64_t(state_.time)+uint64_t(delta)*uint32_t(state_.speed)/4800;
+    if(next>UINT32_MAX)return {GameFsCode::Unavailable,0,"Playback time overflow"};
+    state_.time=uint32_t(next);return {};
 }
 } // namespace dokodemo::recovered

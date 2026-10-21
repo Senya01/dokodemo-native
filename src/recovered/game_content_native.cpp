@@ -779,7 +779,12 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
                 state_.status={GameFsCode::Unavailable,0,"Native KSC message presentation failed"};state_.blocked=true;return false;
             }
         }
-        return script_ok;
+        // A stopped VM is a semantic frontier,not retirement of independent
+        // actor/render owners. Let their real pending phase (including ASC
+        // root unwind after8031) run;retain blocked/status/error unchanged.
+        // This Boolean reports a live host pump,never game-service success.
+        return script_ok||(state_.actor_script.blocked&&state_.actor_script.runtime.live
+                          &&!state_.actor_script.runtime.command_blocked);
     }
     state_.actor_dictionary_requested=true;
     const auto actor=state_.title.selected_actor;
@@ -814,6 +819,9 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         const auto script_image=actor_directory_.Open(scripts[actor]);
         game_filesystem_=&filesystem;
         state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this);
+        if(!state_.status)throw std::runtime_error(state_.status.detail);
+        state_.frontier_pc=0x19DD4;
+        state_.status=actor_runtime_.InitializeScene0();
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_);
