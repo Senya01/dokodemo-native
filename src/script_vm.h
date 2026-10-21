@@ -119,6 +119,33 @@ struct Value {
     int32_t signed_integer() const;
 };
 
+// Passive fixed-capacity evidence; contains no Value, pointer or owner lease.
+struct ValueWitness {
+    Value::Kind kind=Value::Kind::Unknown;
+    uint32_t word=0,table=0,index=0;
+    uint64_t cp932_bytes=0;
+    std::array<uint8_t,32> cp932_sha256{};
+};
+struct VmStateWitness {
+    bool valid=false,context_registered=false,event_envelope_present=false,stopped=false;
+    uint64_t run_id=0,frame_id=0,executed=0,clock_tick=0,deadline_tick=0;
+    int32_t relative_deadline23=0;
+    uint32_t current_pc=0,code_entry=0,context_word=0,call_depth=0,active_blocks=0,event_scope_depth=0,queued_callbacks=0;
+    uint32_t caller_entry=0,caller_call_pc=0,caller_return_pc=0;
+    uint64_t caller_frame_id=0,caller_stack_base=0;
+    uint64_t frame_cells=0,operand_cells=0;
+    uint32_t frame_captured=0,operands_captured=0;
+    std::array<char,65> code_sha256{};
+    ValueWitness result;
+    std::array<ValueWitness,16> frame_values{},operands{};
+};
+struct NormalReturnWitness {
+    bool valid=false;
+    uint64_t sequence=0;
+    uint32_t opcode_pc=0;
+    VmStateWitness before,after;
+};
+
 enum class Status { Running, Message, Choice, Yield, HostYield, Waiting, Complete, Stopped };
 struct Event {
     Status status = Status::Stopped;
@@ -148,6 +175,9 @@ public:
     Event run(uint32_t instruction_budget = 1000);
     const std::vector<Value>& stack() const { return stack_; }
     uint32_t pc() const { return pc_; }
+    VmStateWitness current_witness() const noexcept;
+    void trace_normal_return_at(uint32_t pc) noexcept { return_probe_pc_=pc;last_normal_return_={}; }
+    const NormalReturnWitness& last_normal_return() const noexcept { return last_normal_return_; }
     uint32_t display_state() const { return display_state_; }
     uint16_t display_count() const { return display_count_; }
     bool stopped() const { return stopped_; }
@@ -226,6 +256,8 @@ private:
         size_t stack_base = 0;
         bool reserved = false;
         std::shared_ptr<std::vector<Value>> values;
+        uint64_t frame_id=0;
+        uint32_t code_entry=0,call_pc=0;
     };
     std::vector<CallFrame> calls_;
     // Source18's six administrative cells have typed native ownership rather
@@ -239,6 +271,8 @@ private:
     struct PendingCallback {uint32_t pc=0;Value first,second,caller;bool include_caller=true;};
     struct EventEnvelope {
         uint32_t pc=0;bool reserved=false,enabled=true,waiting=false,signal=true;
+        uint64_t frame_id=0;
+        uint32_t code_entry=0;
         int32_t deadline_delta=0; //source packed signed23 relative deadline
         Value result;
         std::vector<Value> stack;
@@ -278,6 +312,9 @@ private:
     bool stopped_ = true, frame_reserved_ = false;
     bool native_reserved_local_nil_ = false;
     Diagnostic last_error_;
+    uint64_t next_frame_id_=0,frame_id_=0,run_id_=0,return_sequence_=0;
+    uint32_t code_entry_=0,return_probe_pc_=UINT32_MAX;
+    NormalReturnWitness last_normal_return_;
     Value decode(uint32_t word) const;
     std::vector<Value>& slots(Table table);
     std::string expand(const Command& command) const;

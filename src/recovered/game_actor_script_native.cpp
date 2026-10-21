@@ -55,6 +55,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         vm_->native_reserved_local_nil(true);
+        if(profile.actor==0)vm_->trace_normal_return_at(0x85438); // finite passive NEKO conversation witness
         vm_->host_service([this](uint8_t id,const std::vector<Value>& args){return Service(id,args);});
         vm_->random_source([this]{Need(rng_&&rng_->Available(),"Current game RNG not live");return rng_->NextC3234();});
         // Source67FD4 has argc2: (LoadMan4C8==0),0. This is the actual new-game
@@ -479,6 +480,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
         out.native_reserved_local_nil=vm_->native_reserved_local_nil();
+        out.vm_current=vm_->current_witness();out.normal_return=vm_->last_normal_return();
         out.context_enabled=vm_->context_enabled();out.callbacks_posted=vm_->callbacks_posted();out.callbacks_returned=vm_->callbacks_returned();
         out.context_word=vm_->context_value().word;out.callback_depth=vm_->callback_depth();out.queued_callbacks=vm_->queued_callbacks();out.operand_count=uint32_t(vm_->stack().size());out.deadline_tick=vm_->deadline_tick();
         if(program_.header().local_count)out.owner_event_callback_word=vm_->read_slot(script::Table::Local,0).word;

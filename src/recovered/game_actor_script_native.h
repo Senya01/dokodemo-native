@@ -36,6 +36,8 @@ struct GameActorScriptSnapshot {
     uint32_t scene_flag_queries=0,actor_flag_queries=0;
     uint32_t bytes=0,entry_pc=0,pc=0,last_opcode=0,ticks=0,yields=0,messages=0;
     uint64_t native_clock_ticks=0;
+    script::VmStateWitness vm_current;
+    script::NormalReturnWitness normal_return;
     uint32_t builtin_calls=0,game_service_calls=0,last_service=UINT32_MAX;
     uint32_t last_service_argument_word=0,last_service_result_word=0;
     bool last_service_returned=false;

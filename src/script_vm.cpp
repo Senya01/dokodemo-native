@@ -317,6 +317,37 @@ bool Dictionary::load_original_bytes(std::vector<uint8_t> data, const std::files
     } catch (const std::exception& ex) { error.reason = ex.what(); source_ = {}; records_.clear(); return false; }
 }
 
+VmStateWitness Vm::current_witness() const noexcept {
+    VmStateWitness w;
+    try {
+        w.run_id=run_id_;w.frame_id=frame_id_;w.executed=executed_;
+        w.current_pc=pc_;w.code_entry=code_entry_;w.stopped=stopped_;
+        w.clock_tick=clock_tick_;w.deadline_tick=wait_until_;
+        const auto delta=uint32_t(wait_until_-clock_tick_)&0x7FFFFFu;
+        w.relative_deadline23=int32_t(delta&0x400000u?delta|0xFF800000u:delta);
+        w.context_registered=bool(context_);w.context_word=context_?0x80000000u|context_->slot:0;
+        w.event_envelope_present=bool(event_envelope_);w.event_scope_depth=event_depth_;
+        w.call_depth=uint32_t(calls_.size());w.active_blocks=uint32_t(blocks_.size());w.queued_callbacks=uint32_t(pending_callbacks_.size());
+        const auto& identity=program_.source().sha256;
+        std::copy_n(identity.begin(),std::min<size_t>(64,identity.size()),w.code_sha256.begin());
+        if(!calls_.empty()){
+            const auto& c=calls_.back();w.caller_entry=c.code_entry;w.caller_call_pc=c.call_pc;
+            w.caller_return_pc=c.return_pc;w.caller_frame_id=c.frame_id;w.caller_stack_base=c.stack_base;
+        }
+        const auto value=[](const Value& v){
+            ValueWitness x;x.kind=v.kind;x.word=v.word;x.table=uint32_t(v.table);x.index=v.index;
+            if(v.kind==Value::Kind::String){x.cp932_bytes=v.cp932.size();x.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(v.cp932.data()),v.cp932.size());}
+            return x;
+        };
+        w.result=value(result_);w.frame_cells=frame_?frame_->size():0;w.operand_cells=stack_.size();
+        w.frame_captured=uint32_t(std::min<size_t>(16,size_t(w.frame_cells)));
+        w.operands_captured=uint32_t(std::min<size_t>(16,stack_.size()));
+        for(uint32_t i=0;i<w.frame_captured;++i)w.frame_values[i]=value((*frame_)[i]);
+        for(uint32_t i=0;i<w.operands_captured;++i)w.operands[i]=value(stack_[i]);
+        w.valid=true;
+    }catch(...){w.valid=false;} // evidence failure must never change VM semantics
+    return w;
+}
 Vm::~Vm(){if(context_)context_->vm=nullptr;}
 Value Vm::context_value(){
     if(!context_){
@@ -372,7 +403,7 @@ void Vm::enter_callback(PendingCallback callback){
     for(const auto* value:{&callback.first,&callback.second})
         if(value->kind==Value::Kind::Reference&&value->table==Table::Frame&&value->frame_owner.expired())
             throw std::runtime_error("Queued callback frame reference expired before dispatch");
-    auto saved=std::make_unique<EventEnvelope>();saved->pc=pc_;saved->reserved=frame_reserved_;
+    auto saved=std::make_unique<EventEnvelope>();saved->pc=pc_;saved->reserved=frame_reserved_;saved->frame_id=frame_id_;saved->code_entry=code_entry_;
     saved->enabled=context_enabled_;saved->waiting=waiting_event_;saved->signal=event_signal_;
     const auto delta=uint32_t(wait_until_-clock_tick_)&0x7FFFFF;
     saved->deadline_delta=int32_t(delta&0x400000?delta|0xFF800000:delta);
@@ -384,6 +415,7 @@ void Vm::enter_callback(PendingCallback callback){
     saved->calls=std::move(calls_);saved->blocks=std::move(blocks_);event_envelope_=std::move(saved);
     stack_.clear();calls_.clear();blocks_.clear();result_={};
     frame_=std::make_shared<std::vector<Value>>(std::initializer_list<Value>{callback.first,callback.second});
+    frame_id_=++next_frame_id_;code_entry_=callback.pc;
     if(callback.include_caller)frame_->push_back(std::move(callback.caller));
     frame_reserved_=false;pc_=callback.pc;context_enabled_=true;event_override_=false;waiting_event_=false;wait_until_=0;
 }
@@ -488,6 +520,7 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
+    frame_id_=++next_frame_id_;code_entry_=code_pc;++run_id_;last_normal_return_={};
     calls_.clear(); result_ = {}; executed_ = 0;
     blocks_.clear(); blocks_entered_ = blocks_closed_ = switches_ = 0;
     opcode_cost_ = 1;
@@ -538,6 +571,7 @@ Event Vm::step() {
     if (clock_tick_ < wait_until_) { Event waiting;waiting.status=Status::Yield;waiting.pc=waiting.next_pc=pc_;return waiting; }
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
+    bool captured_normal_return=false;
     try {
         int op = cmd->opcode;
         const auto pop = [&]() {
@@ -579,6 +613,7 @@ Event Vm::step() {
             auto saved=std::move(event_envelope_);
             const bool enabled=event_override_?false:saved->enabled;
             stack_=std::move(saved->stack);frame_=std::move(saved->frame);calls_=std::move(saved->calls);blocks_=std::move(saved->blocks);
+            frame_id_=saved->frame_id;code_entry_=saved->code_entry;
             result_=std::move(saved->result);frame_reserved_=saved->reserved;waiting_event_=saved->waiting;event_signal_=saved->signal;
             wait_until_=saved->deadline_delta>0?clock_tick_+uint32_t(saved->deadline_delta):0;
             context_enabled_=enabled;event_override_=false;
@@ -622,8 +657,8 @@ Event Vm::step() {
                 return stop(cmd,"Invalid script call/frame/argument bound");
             const auto begin=stack_.size()-argc;
             auto arguments=std::make_shared<std::vector<Value>>(stack_.begin()+begin,stack_.end());
-            stack_.resize(begin);calls_.push_back({next,begin,frame_reserved_,frame_});
-            frame_=std::move(arguments);frame_reserved_=false;next=target;
+            stack_.resize(begin);calls_.push_back({next,begin,frame_reserved_,frame_,frame_id_,code_entry_,cmd->pc});
+            frame_=std::move(arguments);frame_id_=++next_frame_id_;code_entry_=target;frame_reserved_=false;next=target;
         } else if(op==0x18) {
             // 6C578 saves the previous block context, target and pending
             // control cells,then CONTINUES. The target is not a branch here.
@@ -672,9 +707,14 @@ Event Vm::step() {
                 return stop(cmd,"Return through active block: source67548 unwind unresolved");
             if(calls_.empty()) { stopped_=true;event.status=Status::Complete; }
             else {
+                if(cmd->pc==return_probe_pc_){
+                    last_normal_return_={};last_normal_return_.sequence=++return_sequence_;
+                    last_normal_return_.opcode_pc=cmd->pc;last_normal_return_.before=current_witness();captured_normal_return=true;
+                }
                 if(calls_.size()==1)++root_returns_;
                 auto saved=std::move(calls_.back());calls_.pop_back();
                 stack_.resize(saved.stack_base);frame_=std::move(saved.values);
+                frame_id_=saved.frame_id;code_entry_=saved.code_entry;
                 frame_reserved_=saved.reserved;next=saved.return_pc;
             }
         } else if(op==0x38) { stopped_=true;event.status=Status::Complete;
@@ -951,6 +991,7 @@ Event Vm::step() {
         }
         if (stack_.size() > 32767) return stop(cmd, "Native operand stack budget exceeded");
         ++executed_; pc_ = next;
+        if(captured_normal_return){last_normal_return_.after=current_witness();last_normal_return_.valid=last_normal_return_.before.valid&&last_normal_return_.after.valid;}
         if(op==0x0E)drain_callback();
         event.next_pc = pc_; return event;
     } catch (const std::exception& ex) { return stop(cmd, ex.what()); }
