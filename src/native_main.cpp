@@ -1483,7 +1483,35 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
         << ",\"source_callback_callable\":" << boolean(boot.source_callback_callable)
         << ",\"source_audio_ready\":" << boolean(boot.source_audio_ready)
         << ",\"source_audio_initialization_result\":" << boot.source_audio_initialization_result
-        << ",\"b0c_returned\":" << boolean(boot.b0c_returned) << '}';
+        << ",\"b0c_returned\":" << boolean(boot.b0c_returned)
+        << ",\"content\":{\"vsync_owner\":" << boolean(boot.content.vsync_owner)
+        << ",\"loadman_owner\":" << boolean(boot.content.loadman_owner)
+        << ",\"bb8_returned\":" << boolean(boot.content.bb8_returned)
+        << ",\"state_reset\":" << boolean(boot.content.state_reset)
+        << ",\"import_callback_configured\":" << boolean(boot.content.import_callback_configured)
+        << ",\"import_callback_registered\":" << boolean(boot.content.import_callback_registered)
+        << ",\"import_callback_delivery\":\"UnavailableSgxNoSyntheticInterrupt\",\"import_registration_source_result\":null"
+        << ",\"driver_policy\":\"NativeColdLoadingPhase0Only\",\"general_game_loop\":false"
+        << ",\"registered_records\":" << boot.content.registered_records
+        << ",\"loading_ticks\":" << boot.content.loading_ticks << ",\"load_state\":" << boot.content.load_state
+        << ",\"mount_state\":" << boot.content.mount_state
+        << ",\"previous_scene\":" << boot.content.previous_scene << ",\"current_scene\":" << boot.content.current_scene
+        << ",\"next_scene\":" << boot.content.next_scene << ",\"requested_bits\":" << boot.content.requested_bits
+        << ",\"owned_bits\":" << boot.content.owned_bits << ",\"completed_bits\":" << boot.content.completed_bits
+        << ",\"package_mounted\":" << boolean(boot.content.package_mounted)
+        << ",\"package_bytes\":" << boot.content.package_bytes << ",\"package_slots\":" << boot.content.package_slots
+        << ",\"font_ready\":" << boolean(boot.content.font_ready) << ",\"blocked\":" << boolean(boot.content.blocked)
+        << ",\"closed\":" << boolean(boot.content.closed) << ",\"frontier_pc\":" << boot.content.frontier_pc
+        << ",\"status\":" << JsonString(dokodemo::recovered::GameFsCodeName(boot.content.status.code))
+        << ",\"detail\":" << JsonString(boot.content.status.detail)
+        << ",\"font\":{\"ready\":" << boolean(boot.content.font.ready)
+        << ",\"image_bytes\":" << boot.content.font.image_bytes << ",\"texture_count\":" << boot.content.font.texture_count
+        << ",\"texture_bytes\":" << boot.content.font.texture_bytes << ",\"auxiliary_div8\":" << boot.content.font.auxiliary_div8
+        << ",\"auxiliary_offset\":" << boot.content.font.auxiliary_offset
+        << ",\"glyph_width\":" << boot.content.font.glyph_width << ",\"glyph_height\":" << boot.content.font.glyph_height
+        << ",\"scale\":[" << boot.content.font.scale_x << ',' << boot.content.font.scale_y << ']'
+        << ",\"spacing\":[" << boot.content.font.spacing_x << ',' << boot.content.font.spacing_y
+        << "],\"rendered_game_text\":false},\"title\":false,\"gameplay\":false}}";
 }
 
 void WriteAdhocValue(std::ostream& out,
@@ -3356,10 +3384,20 @@ bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
         || !boot.vm.manager_ready || boot.vm.manager_slots != 16 || boot.vm.workspace_capacity != 32
         || !boot.source_callback_stored || boot.source_callback_callable
         || boot.source_audio_ready || boot.source_audio_initialization_result != -1 || !boot.b0c_returned
-        || o.barrier_source_pc != 0x1084 || o.current_frontier_source_pc != 0x1084
+        || !boot.content.bb8_returned || !boot.content.state_reset || !boot.content.import_callback_configured
+        || boot.content.import_callback_registered
+        || !boot.content.vsync_owner || !boot.content.loadman_owner || boot.content.registered_records != 6
+        || boot.content.loading_ticks != 6 || boot.content.load_state != 6 || boot.content.current_scene != 1
+        || boot.content.mount_state || boot.content.requested_bits != 1 || boot.content.owned_bits != 1
+        || boot.content.completed_bits != 1 || !boot.content.package_mounted || !boot.content.font_ready
+        || !boot.content.font.ready || !boot.content.blocked || boot.content.closed
+        || boot.content.frontier_pc != 0x18EE8 || boot.filesystem.loaded_members != 1
+        || !boot.content.font.texture_count || !boot.content.font.texture_bytes
+        || boot.content.font.glyph_width != 16 || boot.content.font.glyph_height != 16
+        || o.barrier_source_pc != 0x18EE8 || o.current_frontier_source_pc != 0x18EE8
         || o.barrier_module_relative || o.current_frontier_module_relative
         || o.barrier_source_module.owner || o.current_frontier_source_module.owner
-        || o.barrier != "UnrecoveredGameInitBB8") return false;
+        || o.barrier != "UnrecoveredSceneResourceConstructors") return false;
     constexpr std::array<uint32_t, 3> sizes{{0xB94000, 0x74E000, 0x46000}};
     for (size_t i = 0; i < sizes.size(); ++i) {
         const auto& arena = boot.arenas[i];
@@ -3386,6 +3424,9 @@ bool AtNativeModuleSequenceBoundary(const dokodemo::StartupObservation& observat
 #endif
 }
 bool NativeModuleSequenceClosed(const dokodemo::StartupObservation& observation) {
+    if (observation.game_boot.content.vsync_owner || observation.game_boot.content.loadman_owner
+        || observation.game_boot.content.font_ready || observation.game_boot.content.package_mounted
+        || observation.game_boot.content.registered_records || !observation.game_boot.content.closed) return false;
     if (observation.game_boot.vm.arena_live || observation.game_boot.vm.arena_bytes
         || observation.game_boot.vm.timer_live || observation.game_boot.vm.timer_started || observation.game_boot.vm.manager_ready) return false;
     if (observation.game_boot.scene.workspaces_ready || observation.game_boot.scene.pools_ready
@@ -3623,7 +3664,7 @@ struct Application {
         if (startupObservation.resources_closed) startupStatus = L"Нативный запуск: потоки завершены, ресурсы освобождены.";
         else if (!startupObservation.status) startupStatus = L"Нативный запуск: ошибка Windows-сервиса; подробности в журнале.";
         else if (AtGameBootBoundary(startupObservation))
-            startupStatus = L"DATA.BP, scene/camera и VM готовы; SGX sound недоступен. Следующий вызов — BB8; title/gameplay не запущены.";
+            startupStatus = L"DATA.BPM и игровой FONT.XFT загружены. Следуют конструкторы сцены D54C; title/gameplay ещё не запущены. SGX sound недоступен.";
         else if (AtNativeModuleSequenceBoundary(startupObservation))
             startupStatus = L"Запущено модулей: " + std::to_wstring(std::count_if(
                 startupObservation.module_records.begin(), startupObservation.module_records.end(),

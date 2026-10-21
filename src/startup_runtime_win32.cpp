@@ -117,6 +117,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameFilesystem game_filesystem;
     recovered::GameScene9DC game_scene;
     recovered::GameVmBoot game_vm;
+    recovered::GameContentBoot game_content;
     uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
     recovered::NativeModuleManager modules;
     std::unique_ptr<CallbackRecord> callback;
@@ -1118,6 +1119,22 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             "7CE28 setter stores the PPK controller;native typed reference,not a numeric PSP pointer");
         return {true, 0}; // setter result unused by1234
     }
+    recovered::ControllerSample PollGameController(bool focused) {
+        std::lock_guard<std::mutex> lock(metadata);
+        if (!state.game_boot.controller_setup_returned || state.closing || state.resources_closed) return {};
+        const auto down = [focused](int key) { return focused && (GetAsyncKeyState(key) & 0x8000) != 0; };
+        using namespace recovered;
+        uint32_t buttons = 0;
+        const std::pair<int, uint32_t> keys[] = {
+            {VK_UP, Up}, {VK_RIGHT, Right}, {VK_DOWN, Down}, {VK_LEFT, Left},
+            {VK_RETURN, recovered::Start}, {VK_BACK, Select}, {'Q', LTrigger}, {'E', RTrigger},
+            {'Z', Cross}, {'X', Circle}, {'A', Square}, {'S', Triangle}
+        };
+        for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
+        const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
+        const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
+        return controller.Update(buttons, x, y, GetTickCount64() * 1000);
+    }
     recovered::StartupFlowStop ContinueGameAfterModules() override {
         using recovered::StartupFlowStop;
         event_module_index = StartupNoCurrentModule;
@@ -1249,6 +1266,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         // success. B0C really ignores4A518's numeric result and continues.
         Emit("GameSoundInitializationUnavailable", "ExplicitDisabledNativeSgxPolicy", 0xB64, -1, false,
             0, 0, 0, "SGX source mixer/channels/threads not implemented;no API failure fabricated,no sound owners;resource-viewer playback is separate");
+        {
         std::lock_guard<std::mutex> lock(metadata);
         state.game_boot.scene = game_scene.Snapshot();
         state.game_boot.vm = game_vm.Snapshot();
@@ -1258,13 +1276,50 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         state.game_boot.b0c_returned = true;
         EmitLocked("GameB0CInitialization-return", "NonMatchingNativeGameBoot", 0xB70, 0, false,
             0, 0, 0, "filesystem/scene/VM/manager live;source audio unavailable-1 ignored as caller specifies;unused scalar unclaimed");
-        state.barrier_source_pc = state.current_frontier_source_pc = 0x1084;
+        }
+        if (!game_content.InitializeBB8(game_arenas[1], game_vm)
+            || !game_content.Reset24994() || !game_content.ConfigureImportCallback5334C()) throw NativeFailure{};
+        Emit("GameColdLoadingOwnersReady", "NonMatchingNativeGameBoot", 0x10A0, 0, false,
+            0, 0, 0, "BB8 native CVSync/CLoadMan owners+manager tasks;24994 explicit reset/defaults;5334C request recorded but interrupt/sound registration unavailable,no fabricated result or1424 invocation;configured neko path not opened");
+        for (uint32_t tick = 0; tick < 16 && !game_content.Snapshot().blocked; ++tick) {
+            if (HostCancelled()) return StartupFlowStop::HostCancelled;
+            // CVSync input service uses the SAME live Windows input owner as
+            // the window. It is a named native adaptation, not94D34 always1.
+            DWORD foreground_process = 0;
+            GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
+            (void)PollGameController(foreground_process == GetCurrentProcessId());
+            if (!game_content.TickLoading(game_filesystem)) {
+                std::lock_guard<std::mutex> lock(metadata);
+                state.game_boot.content = game_content.Snapshot();
+                state.game_boot.filesystem = game_filesystem.Snapshot();
+                const auto& status = state.game_boot.content.status;
+                EmitLocked("GameColdLoadingFailure", "NativeLoadingPhase0", 0x199DC, 0, false,
+                    0, status.native_error, 0, status.detail.c_str());
+                FailLocked(Failure(StartupRuntimeCode::HostFailure, status.native_error ? status.native_error : ERROR_INVALID_DATA));
+                return StartupFlowStop::HostFailure;
+            }
+            const auto content = game_content.Snapshot();
+            Emit("GameColdLoadingTick", "NativeLoadingPhase0", 0x934D0, content.load_state, false,
+                0, 0, 0, "native cold phase0 driver,CVSync before CLoadMan;real input and synchronous file completion;general phases9..12/PSP interrupts not emulated");
+            if (!content.blocked) {
+                const auto wait = WaitForSingleObject(cancel, 16);
+                if (wait == WAIT_OBJECT_0) return StartupFlowStop::HostCancelled;
+                if (wait != WAIT_TIMEOUT) throw NativeFailure{};
+            }
+        }
+        if (!game_content.Snapshot().blocked) throw NativeFailure{};
+        std::lock_guard<std::mutex> lock(metadata);
+        state.game_boot.content = game_content.Snapshot();
+        state.game_boot.filesystem = game_filesystem.Snapshot();
+        EmitLocked("GameFontResourceInitialized", "NativeE364FontConsumer", 0x18EE0, 0, false,
+            0, 0, 0, "actual distant DATA.BPM member,nested FONT\\FONT.XFT borrowed image,typed texture/palette views and1/2 scales;no title,text draw or KSC executed");
+        state.barrier_source_pc = state.current_frontier_source_pc = 0x18EE8;
         state.barrier_module_relative = state.current_frontier_module_relative = false;
         state.barrier_source_module = state.current_frontier_source_module = {};
-        state.barrier = state.current_frontier = "UnrecoveredGameInitBB8";
+        state.barrier = state.current_frontier = "UnrecoveredSceneResourceConstructors";
         state.worker_state = "Blocked";
-        EmitLocked("UnrecoveredGameInitBB8", "RecoveredGameCaller", 0x1084, 0, false,
-            0, 0, 0, "next main BB8 constructors3AC4/177F8 unimplemented;no BB8 return/title/gameplay fabricated");
+        EmitLocked("UnrecoveredSceneResourceConstructors", "RecoveredGameCaller", 0x18EE8, 0, false,
+            0, 0, 0, "next alloc80/D54C then FA30/1F520/47784/3EF88 not entered;CLoadMan state6 paused inside18E34,no scene transition/title/gameplay fabricated");
         return StartupFlowStop::Unsupported;
     }
     bool HostCancelled() const override { return codec_session->cancelled.load(); }
@@ -1370,6 +1425,14 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         }
         // Both contexts have ended. No thread can now access or wait on these objects.
         bool ok = true;
+        const bool content_closed = game_content.Close();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.game_boot.content = game_content.Snapshot();
+            EmitLocked("CloseGameContent", "HostLifecycle", 0, content_closed ? 1 : 0, false,
+                0, 0, 0, "after both joins;font/package views,manager tasks andCVSync/CLoadMan owners retired before VM/scene/filesystem/arenas");
+        }
+        if (!content_closed) return CleanupFailure(ERROR_BUSY);
         const bool vm_closed = game_vm.Close();
         {
             std::lock_guard<std::mutex> lock(metadata);
@@ -1779,24 +1842,7 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     return out;
 }
 recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_focused) {
-    auto& self = *impl_;
-    std::lock_guard<std::mutex> lock(self.metadata);
-    if (!self.state.game_boot.controller_setup_returned || self.state.closing || self.state.resources_closed)
-        return {};
-    const auto down = [window_focused](int key) {
-        return window_focused && (GetAsyncKeyState(key) & 0x8000) != 0;
-    };
-    using namespace recovered;
-    uint32_t buttons = 0;
-    const std::pair<int, uint32_t> keys[] = {
-        {VK_UP, Up}, {VK_RIGHT, Right}, {VK_DOWN, Down}, {VK_LEFT, Left},
-        {VK_RETURN, recovered::Start}, {VK_BACK, Select}, {'Q', LTrigger}, {'E', RTrigger},
-        {'Z', Cross}, {'X', Circle}, {'A', Square}, {'S', Triangle}
-    };
-    for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
-    const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
-    const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
-    return self.controller.Update(buttons, x, y, GetTickCount64() * 1000);
+    return impl_->PollGameController(window_focused);
 }
 bool StartupCoordinator::CopyGameFrame(recovered::GameGraphicsFrame& out) const {
     return impl_->game_graphics.CopyFront(out);

@@ -6,6 +6,7 @@
 #include "game_filesystem_native.h"
 #include "game_scene_native.h"
 #include "game_vm_boot_native.h"
+#include "game_content_native.h"
 
 namespace dokodemo::recovered {
 // Readable non-matching game boot. Source PCs identify the recovered caller;
@@ -111,6 +112,7 @@ struct GameBootObservation {
     GameFilesystemSnapshot filesystem;
     GameSceneSnapshot scene;
     GameVmBootSnapshot vm;
+    GameContentSnapshot content;
     bool source_callback_stored = false, source_callback_callable = false;
     bool source_audio_ready = false, b0c_returned = false;
     int32_t source_audio_initialization_result = 0;
