@@ -188,6 +188,7 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
             }
             materials.push_back(std::move(material));
         }
+        header_color_=image.ReadLE32(8);
         data_ = std::move(parsed);
         materials_ = std::move(materials);
         stats_ = stats;
@@ -211,7 +212,12 @@ GameFsStatus GameModelClone::Initialize(std::shared_ptr<const GameModelAsset> as
         }
         p.material = node.hasGeometry ? node.geometry.materialIndex : -1;
         p.emitter=node.emitter;
+        if(node.type==5)lights_.type5_nodes.push_back(uint32_t(i));
     }
+    lights_.present=!lights_.type5_nodes.empty();
+    // 80480/83024 sets template148.color14 from the actual DVS header;
+    // 80E50..58 copies it to the new owned clone's light-selection record.
+    if(lights_.present)lights_.packed_color14=asset_->HeaderColor();
     auto status = Update(ModelIdentity());
     if (status)
         for (const auto &p : pose_)
@@ -426,8 +432,8 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
         stats.loop = (data.flags & 1) != 0; //800B4 file1 -> control1000
         Need(stats.duration > 0, "motion zero duration");
         for (const auto &object : data.objects) {
-            Need(object.targetNodeIndex >= 0 || object.sections.empty(),
-                 "unimplemented global motion section");
+            // Global F1 has its own real light-selection target148.
+            // Other global sections stay deferred and refuse on activation.
             if (object.targetNodeIndex >= 0)
                 Need(object.transform.size() == 16, "motion base transform");
             for (const auto &s : object.sections) {
@@ -435,11 +441,16 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
                 const bool quaternion = s.type == 2 && (s.subtype == 1 || s.subtype == 2);
                 const bool material = s.type == 0x30 && s.subtype == 0;
                 const bool callback = (s.type >= 0x40 && s.type <= 0x42);
-                const bool opacity=s.type==0x50&&s.subtype==15&&s.count==1;
+                const bool opacity=s.type==0x50&&s.subtype==15;
+                const bool light_scalar=s.type==0x60&&s.subtype==15;
+                const bool light_vector=s.type==0x61&&s.subtype==15;
+                const bool light_color=s.type==0xF1&&s.subtype==15&&object.targetNodeIndex<0;
+                if(light_scalar||light_vector)Need(object.targetNodeIndex>=0&&
+                    target.Data().nodes.at(size_t(object.targetNodeIndex)).type==5,"light track target must be actual type5");
                 // Inactive scene controls own their original template without
                 // executing its tracks. A future active unsupported section
                 // is refused atomically in Apply,never a successful no-op.
-                if(!(translation||quaternion||material||callback||opacity)){++stats.deferred_sections;continue;}
+                if((object.targetNodeIndex<0&&!light_color)||!(translation||quaternion||material||callback||opacity||light_scalar||light_vector||light_color)){++stats.deferred_sections;continue;}
                 Need(s.count >= 0 && s.count <= 65535 && s.components > 0 &&
                          s.keyWords.size() == size_t(s.count) * s.components,
                      "motion key extent");
@@ -458,7 +469,16 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
                         Need(s.keyWords.at(at + 1) == 255 ||
                                  s.keyWords.at(at + 1) < target.Materials().size(),
                              "motion material index");
-                    if(opacity)Need(FloatWord(s.keyWords.at(at+1))>=0,"motion opacity scalar");
+                    if(opacity||light_scalar||light_vector||light_color) {
+                        const int dimensions=(light_vector||light_color)?3:1;
+                        for(int j=1;j<s.components;++j){
+                            const auto word=s.keyWords.at(at+size_t(j));
+                            // Actual seasonal opacity keys retain quiet-NaN
+                            // tangent sentinels. Values must still be finite.
+                            if(dimensions==1&&j>dimensions&&word==0x7FC00000u)continue;
+                            (void)FloatWord(word);
+                        }
+                    }
                 }
                 ++stats.tracks;
                 stats.keys += uint32_t(s.count);
@@ -477,14 +497,46 @@ GameFsStatus GameModelMotion::Decode(PackageView image, const GameModelAsset &ta
         return Error(e);
     }
 }
+namespace {
+GameVector4 NativeFloatCurve(const model::DakSection& s,uint32_t time,unsigned dimensions) {
+    Need(s.count>0&&dimensions<=3,"Native float curve dimensions/keys");
+    size_t key=0;
+    while(key+1<size_t(s.count)&&s.keyWords[(key+1)*size_t(s.components)]<=time)++key;
+    const auto at=key*size_t(s.components);GameVector4 value{{0,0,0,1}};
+    for(unsigned j=0;j<dimensions;++j)value[j]=FloatWord(s.keyWords.at(at+1+j));
+    if(key+1<size_t(s.count)&&time>s.keyWords[at]) {
+        const auto next=(key+1)*size_t(s.components);
+        // 88E0C..88E7C recognizes ONLY the current scalar OUT tangent's
+        // exact quiet-NaN bits and returns the left value unchanged.
+        const bool step=dimensions==1&&s.keyWords.at(at+3)==0x7FC00000u;
+        if(dimensions==1&&!step)Need(s.keyWords.at(next+2)!=0x7FC00000u,"Unrecovered scalar incoming-only NaN tangent");
+        const float t=step?0.0f:float(time-s.keyWords[at])/float(s.keyWords[next]-s.keyWords[at]);
+        for(unsigned j=0;j<dimensions;++j)value[j]+=(FloatWord(s.keyWords.at(next+1+j))-value[j])*t;
+    }
+    // Named NativeCurveApproximation:actual time/value/tangents are retained;
+    // this readable linear interpolation is not VFPU cubic matching.
+    return value;
+}
+}
 GameFsStatus GameModelMotion::Apply(GameModelClone &clone, uint32_t time) const {
     try {
         Need(image_.Describe().readable && clone.Asset() && clone.Asset()->Live(),
              "motion source lease retired");
         Need(stats_.deferred_sections==0,"unimplemented reached active motion section");
         for (const auto &object : data_.objects) {
-            if (object.targetNodeIndex < 0)
+            if (object.targetNodeIndex < 0) {
+                for(const auto& s:object.sections)if(s.type==0xF1&&s.count&&clone.Lights().present){
+                    const auto rgb=NativeFloatCurve(s,time,3);uint32_t packed=0xFF000000u;
+                    for(unsigned j=0;j<3;++j){
+                        // 8A284..308 writes low bytes after RGB*255 conversion.
+                        const auto value=std::trunc(rgb[j]*255.0f);
+                        Need(value>=float(INT32_MIN)&&double(value)<=double(INT32_MAX),"Global light color conversion bounds");
+                        packed|=uint32_t(uint8_t(int32_t(value)))<<(j*8);
+                    }
+                    clone.SetLightColor14(packed);
+                }
                 continue;
+            }
             Need(size_t(object.targetNodeIndex) < clone.Pose().size(), "motion clone binding");
             auto &pose = clone.Pose()[size_t(object.targetNodeIndex)];
             for (unsigned j = 0; j < 4; ++j) {
@@ -496,10 +548,12 @@ GameFsStatus GameModelMotion::Apply(GameModelClone &clone, uint32_t time) const 
             for (const auto &s : object.sections) {
                 if (!s.count || (s.type >= 0x40&&s.type<=0x42))
                     continue; // source callback174/178 is null on this cold path
-                if(s.type==0x50){
-                    //89CA8->8A33C->8AE40:source common opacity1F8. The
-                    //reached scene clips have one constant float key at0.
-                    pose.opacity=FloatWord(s.keyWords.at(1));continue;
+                if(s.type==0x50||s.type==0x60||s.type==0x61){
+                    const auto value=NativeFloatCurve(s,time,s.type==0x61?3:1);
+                    if(s.type==0x50)pose.opacity=(std::max)(0.0f,value[0]);
+                    if(s.type==0x60){pose.source210=value[0];pose.source210_written=true;}
+                    if(s.type==0x61){pose.source230=value;pose.source230_written=true;}
+                    continue;
                 }
                 size_t key = 0;
                 while (key + 1 < size_t(s.count) && s.keyWords[(key + 1) * size_t(s.components)] <= time)

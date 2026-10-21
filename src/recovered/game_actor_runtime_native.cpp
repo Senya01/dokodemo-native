@@ -42,6 +42,34 @@ constexpr std::array<const char *, 14> Scene0Names{
 constexpr std::array<int32_t, 14> Scene0Stops{
     {1, 0, 3, 2, 5, 4, 7, 6, 9, 10, 8, 12, 13, 11}};
 } // namespace
+std::array<int16_t,12> SceneClockEndpoints7398(uint32_t row) {
+  static constexpr std::array<std::array<int16_t,12>,7> rows{{
+    {{0,0,4,0,6,0,10,0,15,30,18,0}},{{0,0,3,50,5,50,10,0,15,40,18,10}},
+    {{0,0,3,40,5,40,10,0,15,50,18,20}},{{0,0,3,30,5,30,10,0,16,0,18,30}},
+    {{0,0,3,20,5,20,10,0,16,10,18,40}},{{0,0,3,10,5,10,10,0,16,20,18,50}},
+    {{0,0,3,0,5,0,10,0,16,30,19,0}}
+  }};
+  if(row>=rows.size())throw std::runtime_error("Unadmitted scene clock table index");
+  return rows[row];
+}
+uint32_t SceneSeason709C(uint32_t month,uint32_t day) {
+  if(month<1||month>12||day<1||day>31)throw std::runtime_error("Scene709C civil month/day unavailable");
+  static constexpr std::array<uint32_t,12> rows{{1,2,3,4,5,6,5,4,3,2,1,0}};
+  return rows[(month+12-(day>=7?1:2))%12];
+}
+int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
+                              uint32_t hour,uint32_t minute) {
+  if(hour>=24||minute>=60)
+    throw std::runtime_error("Scene7398 requires valid native civil hour/minute");
+  const int32_t now=int32_t(hour*60+minute);
+  // Both sides are multiplied by2 in7398;the common factor cancels.
+  for(unsigned i=0;i<5;++i) {
+    const int32_t begin=int32_t(endpoints[i*2])*60+endpoints[i*2+1];
+    const int32_t end=int32_t(endpoints[i*2+2])*60+endpoints[i*2+3];
+    if(now>=begin&&now<end)return i==0?5:int32_t(i)-1;
+  }
+  return 4;
+}
 GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameTransition &transition,
                                           GameResourceSource *resources) {
@@ -74,10 +102,13 @@ bool GameActorRuntime::Live() const {
     return false;
   }
 }
-GameFsStatus GameActorRuntime::InitializeScene0() {
+GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& calendar) {
   if (!Live() || !resources_ || state_.scene_model_live)
     return {GameFsCode::Unavailable, 0,
             "Scene4DC admission requires live fresh native owner"};
+  if(calendar[5]<1||calendar[5]>12||calendar[4]<1||calendar[4]>31||
+     calendar[3]>=24||calendar[2]>=60||calendar[1]>=60)
+    return {GameFsCode::Unavailable,0,"Scene seasonal initializer requires valid native civil calendar"};
   // 17C20 requests31/variant1 and explicitly sets selector0. 19DD4/5F58
   // constructs this owner BEFORE script startup. Native typed fields omit
   // unrelated effects owners; no claim of complete5F58/182F4 is made.
@@ -99,8 +130,41 @@ GameFsStatus GameActorRuntime::InitializeScene0() {
       return status;
     const auto stats = control.data.Statistics();
     control.playback.Configure(stats.duration, stats.loop);
-    controls.push_back(std::move(control));
+    control.present=true;controls.push_back(std::move(control));
   }
+  std::vector<SceneControl> seasons(7);SceneControl light_on;
+  for(unsigned i=0;i<7;++i){
+    PackageView image;
+    const auto path=std::string("BG_ROOM\\BG_ROOM\\light0")+char('1'+i)+".DAK";
+    status=resources_->OpenResource(path,image);
+    if(!status){if(status.code==GameFsCode::NotFound)continue;return status;}
+    status=seasons[i].data.Decode(std::move(image),*asset);if(!status)return status;
+    const auto stats=seasons[i].data.Statistics();seasons[i].playback.Configure(stats.duration,stats.loop);
+    seasons[i].present=true;
+  }
+  {
+    PackageView image;status=resources_->OpenResource("BG_ROOM\\BG_ROOM\\light_on.dak",image);
+    if(status){status=light_on.data.Decode(std::move(image),*asset);if(!status)return status;
+      const auto stats=light_on.data.Statistics();light_on.playback.Configure(stats.duration,stats.loop);light_on.present=true;}
+    else if(status.code!=GameFsCode::NotFound)return status;
+  }
+  scene_calendar_=calendar;
+  const auto season=SceneSeason709C(calendar[5],calendar[4]);
+  if(calendar[3]>=24||calendar[2]>=60||calendar[1]>=60)
+    return {GameFsCode::Unavailable,0,"Scene seasonal initializer needs real civil calendar"};
+  if(seasons[season].present){
+    if(seasons[season].data.Statistics().deferred_sections)
+      return {GameFsCode::Unavailable,0,"Reached seasonal light motion track not implemented"};
+    const auto time=calendar[3]*216000+calendar[2]*3600+calendar[1]*60;
+    seasons[season].playback.SetSpeed(30);seasons[season].playback.Start(time);
+    state_.scene_period_table52=season;
+  }
+  season_controls_=std::move(seasons);light_on_control_=std::move(light_on);
+  state_.manager_scene14=0; // actual17C84 ->1839C/1B2DC,not a BSS premise
+  state_.scene_clock_ready=true;
+  state_.light_on_control_present=light_on_control_.present;
+  for(size_t i=0;i<season_controls_.size();++i){state_.season_present[i]=season_controls_[i].present;
+    if(season_controls_[i].present)++state_.season_controls;}
   scene_asset_ = std::move(asset);
   scene_clone_ = std::move(clone);
   scene_controls_ = std::move(controls);
@@ -119,6 +183,35 @@ GameFsStatus GameActorRuntime::InitializeScene0() {
   if (status)
     status = ApplyScenePair(13);
   return status;
+}
+GameFsStatus GameActorRuntime::ApplySceneLightToggle(int32_t value) {
+  if(!Live()||!state_.scene_clock_ready)return {GameFsCode::Unavailable,0,"Light toggle scene owner unavailable"};
+  state_.source_flag2A980=value; // commandOwner38 points to this real game-state field
+  if(light_on_control_.present){
+    if(value){
+      if(light_on_control_.data.Statistics().deferred_sections)
+        return {GameFsCode::Unavailable,0,"Reached light_on motion unsupported"};
+      for(auto& c:season_controls_)if(c.present)c.playback.Stop();
+      light_on_control_.playback.Start(0);
+    }else{
+      light_on_control_.playback.Stop();
+      const auto season=SceneSeason709C(scene_calendar_[5],scene_calendar_[4]);
+      for(auto& c:season_controls_)if(c.present)c.playback.Stop();
+      if(season_controls_[season].present){
+        auto& c=season_controls_[season];
+        if(c.data.Statistics().deferred_sections)return {GameFsCode::Unavailable,0,"Reached seasonal motion unsupported"};
+        c.playback.SetSpeed(30);c.playback.Start(scene_calendar_[3]*216000+scene_calendar_[2]*3600+scene_calendar_[1]*60);
+        state_.scene_period_table52=season;
+      }
+    }
+  }
+  ++state_.light_toggle_calls;return {};
+}
+GameFsStatus GameActorRuntime::QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result) {
+  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready||state_.manager_scene14!=0)
+    return {GameFsCode::Unavailable,0,"GAME36 requires live selected scene0 manager/clock owner"};
+  try {scene_calendar_[3]=hour;scene_calendar_[2]=minute;result=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),hour,minute);return {};}
+  catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorRuntime::ApplyScenePair(uint32_t pair) {
   if (!state_.scene_model_live ||
@@ -143,6 +236,15 @@ GameFsStatus GameActorRuntime::ApplyScenePair(uint32_t pair) {
 GameFsStatus GameActorRuntime::UpdateScene() {
   if (!state_.scene_model_live)
     return {};
+  // Head-inserted newer controls precede the fourteen pair controls.
+  if(light_on_control_.present){
+    const auto status=light_on_control_.playback.Apply(light_on_control_.data,scene_clone_,160);if(!status)return status;
+    state_.light_on_playback=light_on_control_.playback.Snapshot();
+  }
+  for(size_t i=season_controls_.size();i-->0;){auto& c=season_controls_[i];if(!c.present)continue;
+    const auto status=c.playback.Apply(c.data,scene_clone_,160);if(!status)return status;
+    state_.season_playback[i]=c.playback.Snapshot();
+  }
   // 88728 inserts controls at clone-list HEAD:14 construction ->13..0.
   for (size_t n = scene_controls_.size(); n > 0; --n) {
     const auto i = n - 1;
@@ -152,6 +254,11 @@ GameFsStatus GameActorRuntime::UpdateScene() {
       return status;
     state_.scene_playback[i] = c.playback.Snapshot();
   }
+  state_.scene_light_nodes=uint32_t(scene_clone_.Lights().type5_nodes.size());
+  state_.scene_light_color14=scene_clone_.Lights().packed_color14;
+  state_.scene_light_color_writes=scene_clone_.Lights().color_writes;
+  state_.scene_light_scalar_writes=state_.scene_light_vector_writes=0;
+  for(const auto& p:scene_clone_.Pose()){if(p.source210_written)++state_.scene_light_scalar_writes;if(p.source230_written)++state_.scene_light_vector_writes;}
   return scene_clone_.Update(
       ModelIdentity()); // named native canonical world basis
 }
@@ -275,6 +382,7 @@ GameFsStatus GameActorRuntime::RequestActorEvent(int32_t first,
     command_image_ = std::move(command);
     state_.requested_command = first;
     state_.command_pc = state_.command_effects = state_.command_frontier = 0;
+    state_.effect_order={};
     state_.command_error.clear();
     state_.command_blocked = false;
     state_.command_ready = false;
@@ -297,9 +405,11 @@ GameFsStatus GameActorRuntime::BindActorMotion(int32_t motion, uint32_t blend) {
   if (motion < 0 || size_t(motion) >= actor_motion_names_.size())
     return {GameFsCode::Unavailable, 0,
             "Actor motion index outside actual ASC names"};
-  // B790 field50=1 and reached non-turn branch binds both channels. The
+  if(state_.source_field54!=0&&motion==LogicalMotion(9))
+    return {GameFsCode::Unavailable,0,"Directional neutral-motion aliases not yet admitted"};
+  // D7DD4[0] and[1] both select B89C;the reached non-turn branch binds both channels. The
   // finite native full-pose channels replace PSP per-node weight lists.
-  if (state_.source_field50 != 1)
+  if (state_.source_field50 != 0 && state_.source_field50 != 1)
     return {GameFsCode::Unavailable, 0,
             "Unimplemented reached actor channel mode"};
   std::array<ActorChannel, 2> pending;
@@ -411,10 +521,11 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
     if (state_.requested_command < 0)
       return {};
     if (state_.actor_request_pending) {
-      if (state_.requested_command != 176)
-        throw std::runtime_error("Unimplemented reached ASC command identity");
+      // The checked ASC grammar is shared by actually requested ordinal
+      // records. Each reached opcode/parameter still requires an implemented
+      // effect;an unknown instruction stops at its real ordinal/cursor.
       // B774 calls24700 before394 clears;1E824 then copies394 toext20.
-      state_.active_command = 176;
+      state_.active_command = state_.requested_command;
       state_.command_complete = state_.command_ready = false;
       state_.actor_request_pending = state_.selected_extension_pending = false;
     }
@@ -424,6 +535,23 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       if (!status)
         throw std::runtime_error(status.detail);
       state_.pending_logical_motion = -1;
+    }
+    if(state_.movement_pending){
+      const float dx=state_.movement_target[0]-state_.actor_root[0];
+      const float dy=state_.movement_target[1]-state_.actor_root[1];
+      const float distance=std::sqrt(dx*dx+dy*dy);
+      // Named native locomotion/math-mode adapter. No immediate teleport or
+      // frame quota:the already updated live model root must be within the
+      // actual A5A4 threshold2 before native mode4 can finish.
+      if(distance<2){
+        state_.logical_xy=state_.movement_target;state_.movement_pending=false;
+        state_.actor_math_mode=0;++state_.movement_completions;
+      }else{
+        const float step=(std::min)(256.0f,distance);
+        state_.logical_xy={{state_.actor_root[0]+dx*step/distance,state_.actor_root[1]+dy*step/distance}};
+        ++state_.movement_updates;
+      }
+      return {};
     }
     if (state_.angular_pending) {
       // Named native angular adapter:rotate the actual logical/root
@@ -483,6 +611,9 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       state_.command_complete = true;
       if (state_.active_command == 176)
         state_.asc176_complete = true;
+      state_.last_completed_command=state_.active_command;
+      if(state_.command_completions<state_.first_completed_commands.size())
+        state_.first_completed_commands[state_.command_completions]=state_.active_command;
       state_.active_command = -1;
       state_.requested_command = -1;
       state_.command_pc += 4;
@@ -492,7 +623,7 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
         throw std::runtime_error("Unimplemented/truncated reached ASC opcode");
       const auto parameter = command_image_.ReadLE32(at + 4);
       const auto value = int32_t(command_image_.ReadLE32(at + 8));
-      if (parameter == 3) {
+      if (parameter == 3 || parameter == 4 || parameter == 11) {
         if (value < 0)
           throw std::runtime_error("Negative ASC coordinate index");
         if (!coordinate_loaded_) {
@@ -505,16 +636,22 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
         const uint64_t coordinate = uint64_t(uint32_t(value)) * 8;
         if (coordinate_image_.Describe().size < coordinate + 8)
           throw std::runtime_error("ASC coordinate pair extent");
-        state_.logical_xy = {
-            {float(int32_t(coordinate_image_.ReadLE32(coordinate))),
-             float(int32_t(coordinate_image_.ReadLE32(coordinate + 4)))}};
-        state_.logical_heading = 3.14159265358979323846f;
-        state_.heading_known = true;
-        state_.actor_math_mode = 1;
+        const std::array<float,2> target{{float(int32_t(coordinate_image_.ReadLE32(coordinate))),
+                                       float(int32_t(coordinate_image_.ReadLE32(coordinate+4)))}};
+        if(parameter==3){
+          state_.logical_xy=target;state_.logical_heading=3.14159265358979323846f;
+          state_.heading_known=true;state_.actor_math_mode=1;
+        }else{
+          state_.movement_target=target;state_.movement_pending=true;
+          state_.actor_math_mode=parameter==4?3:4;state_.source_field50=0;
+        }
         // B720 applies the mode5 point then B744 queues logical9.
         // Do not skip its real motion8/channel handoff to later ASC ops.
         state_.pending_logical_motion = 9;
         state_.command_pc += 12;
+      } else if(parameter==8){
+        const auto status=ApplySceneLightToggle(value);if(!status)throw std::runtime_error(status.detail);
+        state_.command_pc+=12;
       } else if (parameter == 5) {
         state_.source_field58 = value;
         state_.command_pc += 12;
@@ -681,6 +818,10 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics) {
   return {};
 }
 void GameActorRuntime::Close() {
+  light_on_control_={};season_controls_.clear();
+  state_.scene_clock_ready=state_.light_on_control_present=false;
+  state_.scene_light_nodes=0;
+  state_.season_controls=0;state_.season_present={};state_.season_playback={};state_.light_on_playback={};
   scene_controls_.clear();
   scene_clone_.Close();
   scene_asset_.reset();
@@ -692,7 +833,7 @@ void GameActorRuntime::Close() {
   }
   state_.channel_motion = {{-1, -1}};
   state_.channels = {};
-  state_.command_wait_motion = state_.angular_pending = false;
+  state_.command_wait_motion = state_.angular_pending = state_.movement_pending = false;
   actor_clone_.Close();
   actor_asset_.reset();
   actor_asc_.Reset();

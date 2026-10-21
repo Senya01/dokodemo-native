@@ -4,12 +4,20 @@
 #include "game_scene_ui_native.h"
 
 namespace dokodemo::recovered {
+// 7398 compares five adjacent intervals from six signed16 (hour,minute)
+// endpoints. Native civil-clock validation is explicit; the source result
+// values are 5,0,1,2,3 and fallback4, not a success Boolean.
+int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
+                              uint32_t hour,uint32_t minute);
+std::array<int16_t,12> SceneClockEndpoints7398(uint32_t row);
+uint32_t SceneSeason709C(uint32_t month,uint32_t day);
 struct GameActorRuntimeSnapshot {
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
        command_ready = false;
   bool manager_request8 = false; // 1B188 zeroed6C owner,1C210 request
   int32_t active_command = -1, camera_mode = 0;
+  int32_t source_field5C = 0; //9480/94F8 explicit produced base+4C
   int32_t source_field50 = 1, source_field54 = 0; // AC60 AD5C/AD64 stores
   uint32_t actor = 0, camera_bindings = 0, transition_requests = 0,
            loader_interval = 0;
@@ -44,6 +52,20 @@ struct GameActorRuntimeSnapshot {
   GameVector4 actor_root{{0, 0, 0, 1}};
   float angular_target = 0;
   bool scene_model_live = false, asc176_ready = false, asc176_complete = false;
+  bool scene_clock_ready=false,light_on_control_present=false;
+  int32_t source_flag2A980=0;
+  uint32_t light_toggle_calls=0;
+  bool movement_pending=false;
+  std::array<float,2> movement_target{};
+  uint32_t movement_updates=0,movement_completions=0;
+  int32_t last_completed_command=-1;
+  std::array<int32_t,8> first_completed_commands{{-1,-1,-1,-1,-1,-1,-1,-1}};
+  uint32_t season_controls=0,scene_period_table52=0,manager_scene14=0;
+  std::array<bool,7> season_present{};
+  std::array<GamePlaybackState,7> season_playback{};
+  GamePlaybackState light_on_playback{};
+  uint32_t scene_light_nodes=0,scene_light_color14=0,scene_light_color_writes=0;
+  uint32_t scene_light_scalar_writes=0,scene_light_vector_writes=0;
   uint32_t scene_controls = 0, scene_pair_calls = 0, scene_pair3_calls = 0,
            scene_frames = 0;
   uint32_t scene_nodes = 0, scene_vertices = 0, scene_triangles = 0,
@@ -68,7 +90,8 @@ public:
                           GameTransition &transition,
                           GameResourceSource *resources = nullptr);
   GameFsStatus BindCamera(int32_t mode);
-  GameFsStatus InitializeScene0();
+  GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar);
+  GameFsStatus QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result);
   GameFsStatus StartTransition();
   bool WaitReady() const;
   GameFsStatus SetField54(int32_t value);
@@ -115,12 +138,16 @@ private:
   int32_t LogicalMotion(uint32_t record) const;
   GameFsStatus UpdateActorPose();
   struct SceneControl {
+    bool present=false;
     GameModelMotion data;
     GameModelPlayback playback;
   };
   std::shared_ptr<GameModelAsset> scene_asset_;
   GameModelClone scene_clone_;
-  std::vector<SceneControl> scene_controls_;
+  std::vector<SceneControl> scene_controls_,season_controls_;
+  SceneControl light_on_control_;
+  std::array<uint32_t,7> scene_calendar_{};
+  GameFsStatus ApplySceneLightToggle(int32_t value);
   GameFsStatus ApplyScenePair(uint32_t pair);
   GameFsStatus UpdateScene();
 };

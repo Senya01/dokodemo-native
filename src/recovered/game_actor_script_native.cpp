@@ -45,6 +45,14 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
 }
 Value GameActorScript::GameService(const std::vector<Value>& args) {
     Need(args.size()==2,"F0 expects actual service id and argument");
+    state_.last_service_argument_word=args[1].word;
+    state_.last_service_returned=false;
+    const auto result=DispatchGameService(args);
+    state_.last_service_result_word=result.word;state_.last_service_returned=true;
+    return result;
+}
+Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
+    Need(args.size()==2,"F0 expects actual service id and argument");
     const auto id=Number(args[0]);Need(id>=0&&id<=80,"F0 game service domain");
     ++state_.game_service_calls;state_.last_service=uint32_t(id);state_.service_ids.push_back(uint32_t(id));
     const auto& arg=args[1];
@@ -59,6 +67,9 @@ Value GameActorScript::GameService(const std::vector<Value>& args) {
     case 22:
         Need(runtime_&&runtime_->Snapshot().live,"Game22 requires actor owner");
         return Value::integer(runtime_->Snapshot().source_field54);
+    case 27:
+        Need(runtime_&&runtime_->Snapshot().live,"GAME27 needs live actor5C owner");
+        return Value::integer(runtime_->Snapshot().source_field5C);
     case 31: {
         Need(runtime_!=nullptr,"Render31 needs actual model slot owner");
         const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
@@ -66,6 +77,26 @@ Value GameActorScript::GameService(const std::vector<Value>& args) {
         int32_t slot=-1;const auto status=runtime_->CreateModel(resource,category,motion,float(x),slot);
         Need(bool(status),status.detail.c_str());return Value::integer(slot);
     }
+    case 36: {
+        Need(runtime_&&bool(clock_),"GAME36 needs live scene owner and native civil clock");
+        const auto clock=clock_();Need(clock>>28==3,"Scene clock provider must return actual minute timestamp");
+        const auto minute=(clock&0x0FFFFFFF)%1440;int32_t period=-1;
+        const auto status=runtime_->QueryScenePeriod(minute/60,minute%60,period);Need(bool(status),status.detail.c_str());
+        ++state_.scene_period_queries;state_.scene_period_clock_word=clock;state_.scene_period=period;state_.scene_period_result_word=Value::integer(period).word;
+        return Value::integer(period);
+    }
+    case 40: {
+        Need(runtime_&&runtime_->Snapshot().live,"GAME40 requires live game-state word2A980");
+        state_.source_flag2A980=runtime_->Snapshot().source_flag2A980!=0;
+        ++state_.scene_flag_queries;auto value=False();if(state_.source_flag2A980)value.word|=1;return value;
+    }
+    case 45: {
+        Need(runtime_&&runtime_->Snapshot().live,"GAME45 needs live actor command owner");
+        ++state_.actor_flag_queries;auto value=False();if(runtime_->Snapshot().command_flag25A)value.word|=1;return value;
+    }
+    case 23:
+        Need(runtime_&&runtime_->Snapshot().live,"GAME23 needs live actor50 owner");
+        return Value::integer(runtime_->Snapshot().source_field50);
     case 72: {
         Need(runtime_!=nullptr,"Camera72 needs live actor/camera owners");
         const auto bound=runtime_->BindCamera(Number(arg));Need(bool(bound),bound.detail.c_str());return False();
@@ -130,7 +161,22 @@ Value GameActorScript::GameService(const std::vector<Value>& args) {
         default:return False();
         }
     }
-    default:throw std::runtime_error("Unimplemented reached native game service id="+std::to_string(id));
+    default: {
+        std::ostringstream detail;detail<<"Unimplemented reached native game service id="<<id
+            <<" argKind="<<int(arg.kind)<<" raw="<<std::hex<<arg.word;
+        if(arg.kind==Value::Kind::Reference) {
+            const auto value=vm_->peek_reference(arg);
+            detail<<" table="<<int(arg.table)<<" index="<<arg.index<<" value="<<value.word;
+            if(value.kind==Value::Kind::ArrayHeader) {
+                const auto count=value.word&0xFFF;detail<<" fields=";
+                for(uint32_t i=0;i<count&&i<20;++i) {
+                    auto ref=arg;ref.index=uint16_t(uint32_t(arg.index)+1+i);
+                    const auto field=vm_->peek_reference(ref);detail<<field.word<<',';
+                }
+            }
+        }
+        throw std::runtime_error(detail.str());
+    }
     }
 }
 Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
@@ -174,13 +220,17 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
 }
 GameFsStatus GameActorScript::Tick() {
     if(!state_.live||!vm_)return {GameFsCode::Unavailable,0,"KSC owner not live"};
+    // 1E788 checks readiness before actor+8 and only then copies394->ext20.
+    // A flag produced by this actor phase is eligible on a later phase,not
+    // an immediate same-phase acknowledgement of a newly reached8031.
+    const bool event_eligible=vm_->waiting_for_event()&&runtime_&&runtime_->WaitReady();
     if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
     if(state_.completed||state_.awaiting_message)return {};
     try {
         (void)script_image_.Describe(); // live backing required throughout use
         if(vm_->waiting_for_event()) {
-            if(!runtime_||!runtime_->WaitReady())return {};
+            if(!event_eligible)return {};
             vm_->signal_event();++state_.event_signals;
         }
         ++state_.ticks;vm_->clock_tick(state_.ticks);
@@ -205,7 +255,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
         out.active_control_blocks=vm_->active_control_blocks();out.switches=vm_->switches_executed();
         out.waiting_for_event=vm_->waiting_for_event();out.waiting_deadline=vm_->deadline_waiting();
         out.source_timestamp_writes=vm_->timestamp_writes();out.source_deadline_writes=vm_->deadline_writes();
-    }if(runtime_)out.runtime=runtime_->Snapshot();return out;
+    }if(runtime_){out.runtime=runtime_->Snapshot();out.source_flag2A980=out.runtime.source_flag2A980!=0;}return out;
 }
 void GameActorScript::Close() {
     state_=Snapshot();

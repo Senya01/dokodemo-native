@@ -289,6 +289,23 @@ void Motion() {
     loop_channel.Stop();const auto stopped=loop_channel.Snapshot().samples;
     Check(bool(loop_channel.Apply(loop,clone,160))&&loop_channel.Snapshot().samples==stopped&&!loop_channel.Complete(),
           "scene stop state1 is inactive,not finished2");
+    std::vector<uint8_t> opacity{'D','A','K',0};W(opacity,2004072701);W(opacity,1);W(opacity,0);W(opacity,160);
+    const auto opacity_object=opacity.size();W(opacity,0);H(opacity,0);H(opacity,1);
+    for(const auto& row:std::array<GameVector4,4>{{{{0,0,0,1}},{{0,0,0,1}},{{0,0,0,1}},{{1,1,1,1}}}})
+        for(auto value:row)F(opacity,value);
+    opacity.push_back(0x50);opacity.push_back(15);H(opacity,2);
+    W(opacity,0);F(opacity,0);F(opacity,0);W(opacity,0x7FC00000);
+    W(opacity,160);F(opacity,1);W(opacity,0x7FC00000);F(opacity,0);
+    Word(opacity,opacity_object,uint32_t(opacity.size()/4));
+    auto alpha_keys=std::make_shared<Lease>(opacity);GameModelMotion alpha;
+    Check(bool(alpha.Decode(PackageStorage::Attach(alpha_keys,alpha_keys->b.size()),*asset))
+          &&bool(alpha.Apply(clone,80))&&clone.Pose()[0].opacity==0,
+          "exact88E0C outgoing quiet-NaN tangent holds left opacity,not a ramp");
+    Check(bool(alpha.Apply(clone,160))&&clone.Pose()[0].opacity==1,"opacity reaches next actual key");
+    Word(opacity,opacity_object+88,0); // first OUT tangent finite;next IN remains NaN
+    auto incoming_keys=std::make_shared<Lease>(opacity);GameModelMotion incoming;
+    Check(bool(incoming.Decode(PackageStorage::Attach(incoming_keys,incoming_keys->b.size()),*asset))
+          &&!incoming.Apply(clone,80),"unclosed incoming-only NaN does not become a fabricated scalar");
     keys->live = false;
     Check(!motion.Apply(clone, 0), "retired motion lease refused");
     channel.Start();Check(!channel.Apply(motion,clone,160)&&!channel.Complete(),"expired motion cannot manufacture finished state");
@@ -312,27 +329,31 @@ struct TitleSource final : GameResourceSource {
 };
 struct ActorSource final:GameResourceSource {
     bool fail_motion=false;
-    bool scene_assets=false;
+    bool scene_assets=false,season_missing=false;
     std::vector<std::string> requests;
     GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
         requests.push_back(path);std::vector<uint8_t> bytes;
+        if(season_missing&&path.find("BG_ROOM\\BG_ROOM\\light")==0)return {GameFsCode::NotFound,0,"Explicit missing optional season fixture"};
         if(path.find(".ASC")!=std::string::npos){
             W(bytes,0x00435341);W(bytes,16);W(bytes,124);W(bytes,0);
             for(unsigned i=0;i<=176;++i){
                 std::vector<uint8_t> payload;
                 if(i==0){for(unsigned n=0;n<124;++n){const auto name="m"+std::to_string(n);payload.insert(payload.end(),name.begin(),name.end());payload.push_back(0);}}
+                else if(i==153){for(uint32_t word:{0x8030u,5u,0u,0x8030u,11u,15u,0x8030u,2u,90u,
+                    0x8040u,1u,0x8010u,119u,8u,0x8030u,8u,1u,0x8010u,120u,8u,0x8040u,0u,0x8031u,0x8000u})W(payload,word);}
+                else if(i==157){for(uint32_t word:{0x8030u,5u,0u,0x8030u,0u,1u,0x8030u,4u,16u,0x8031u,0x8000u})W(payload,word);}
                 else if(i==176){for(uint32_t word:{0x8040u,1u,0x8030u,3u,9u,0x8030u,5u,0u,0x8030u,0u,1u,
                     0x8030u,2u,90u,0x8030u,10u,3u,0x8010u,123u,4u,0x8031u,0x8000u})W(payload,word);}
                 else {W(payload,0x8010);W(payload,8);W(payload,8);}
                 W(bytes,0);W(bytes,16);W(bytes,uint32_t(payload.size()));W(bytes,0);bytes.insert(bytes.end(),payload.begin(),payload.end());
             }
         }else if(path.find(".DVS")!=std::string::npos)bytes=Fixture();
-        else if(path=="DATA\\SEQ\\sequence_coord.bin"){bytes.resize(80);Word(bytes,72,1830);Word(bytes,76,uint32_t(-27));}
+        else if(path=="DATA\\SEQ\\sequence_coord.bin"){bytes.resize(136);Word(bytes,72,1830);Word(bytes,76,uint32_t(-27));Word(bytes,120,1820);Word(bytes,124,uint32_t(-627));Word(bytes,128,600);Word(bytes,132,uint32_t(-300));}
         else if(scene_assets&&path.find("BG_ROOM\\BG_ROOM\\") == 0){bytes=MotionFixture();}
         else if(path.find("m8.DAK")!=std::string::npos){
             if(fail_motion)return {GameFsCode::MissingFile,0,"synthetic actual motion8 failure"};
             bytes=MotionFixture();Word(bytes,12,1);
-        }else if(path.find("m123.DAK")!=std::string::npos){bytes=MotionFixture();
+        }else if(path.find("m123.DAK")!=std::string::npos||path.find("m119.DAK")!=std::string::npos||path.find("m120.DAK")!=std::string::npos){bytes=MotionFixture();
         }else return {GameFsCode::NotFound,0,"Explicit missing synthetic scene owner"};
         auto lease=std::make_shared<Lease>(std::move(bytes));out=PackageStorage::Attach(lease,lease->b.size());return {};
     }
@@ -357,7 +378,11 @@ void ActorChannelOrder(){
           "checked ASC operand effect order retained");
     actor.Close();Check(!actor.WaitReady()&&actor.Snapshot().channel_motion[0]==-1,"channels retired before resources");
     GameActorRuntime scene;source.scene_assets=true;
-    Check(bool(scene.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(scene.InitializeScene0()),"actual14-control scene typed owner");
+    Check(bool(scene.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(scene.InitializeScene0({{0,0,15,12,21,10,2026}})),"actual14-control scene typed owner");
+    int32_t period=-1;Check(bool(scene.QueryScenePeriod(15,49,period))&&period==2
+          &&scene.Snapshot().scene_period_table52==2&&scene.Snapshot().season_controls==7,
+          "actual optional presence admits month/day row2,not constructor row0");
+    Check(bool(scene.QueryScenePeriod(15,50,period))&&period==3,"scene-selected row2 endpoint used by GAME36");
     Check(scene.Snapshot().scene_controls==14&&scene.Snapshot().scene_pair_calls==2
           &&scene.Snapshot().scene_playback[10].state==3&&scene.Snapshot().scene_playback[13].state==3
           &&scene.Snapshot().scene_playback[8].state==1&&scene.Snapshot().scene_playback[11].state==1,
@@ -370,12 +395,35 @@ void ActorChannelOrder(){
           "real pair3 stops2 and starts3,retained final pose");
     Check(completed.asc176_ready&&completed.asc176_complete&&completed.command_completions==1&&scene.WaitReady()
           &&completed.command_effects==9,"ready only after actual nonloop motion,end marker and root unwind");
+    Check(bool(scene.RequestActorEvent(153,0))&&!scene.WaitReady(),"new switch request cannot inherit previous command readiness");
+    bool moved_without_ready=false;
+    for(unsigned i=0;i<70&&scene.Snapshot().command_completions<2;++i){
+        Check(bool(scene.AdvanceActorFrame()),"checked switch actor phase");
+        const auto moving=scene.Snapshot();if(moving.movement_pending&&moving.movement_updates){
+            moved_without_ready=true;Check(!scene.WaitReady()&&moving.actor_root[1]!=-627,"intermediate live movement is not command completion");}
+    }
+    Check(moved_without_ready&&scene.Snapshot().last_completed_command==153
+          &&scene.Snapshot().source_flag2A980==1&&scene.Snapshot().light_toggle_calls==1
+          &&scene.Snapshot().light_on_playback.samples>0&&scene.Snapshot().movement_completions==1,
+          "real motion end and parameter8 control/flag effects precede switch completion");
+    Check(bool(scene.RequestActorEvent(157,0))&&!scene.WaitReady(),"mode3 target request remains pending");
+    for(unsigned i=0;i<40&&scene.Snapshot().command_completions<3;++i)Check(bool(scene.AdvanceActorFrame()),"checked mode3 phase");
+    Check(scene.Snapshot().last_completed_command==157&&scene.Snapshot().movement_completions==2
+          &&scene.Snapshot().logical_xy==std::array<float,2>{{600,-300}}&&scene.WaitReady(),
+          "mode3 completes only at the produced live target");
     int32_t slot=-1;Check(bool(scene.CreateModel(170,0,0,0,slot))&&bool(scene.BindCamera(1)),"synthetic scene render owners");
     GameGraphics graphics;Check(graphics.Initialize({})&&bool(scene.Draw(graphics)),"native following-camera frame");
-    Check(scene.Snapshot().camera_position==GameVector4{{1830,-4427,980,1}}
+    Check(scene.Snapshot().camera_position==GameVector4{{600,-4700,980,1}}
           &&scene.Snapshot().actor_position==GameVector4{{0,0,600,1}},"explicit native root follow never overwrites unproved source actor40");
     graphics.Close();
     scene.Close();Check(!scene.Snapshot().scene_model_live&&!scene.Snapshot().scene_controls&&!scene.WaitReady(),"scene controls retired with actor");
+    period=-7;Check(!scene.QueryScenePeriod(12,0,period)&&period==-7,"retired scene clock cannot return successful period");
+    GameActorRuntime no_season;source.season_missing=true;
+    Check(bool(no_season.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))
+          &&bool(no_season.InitializeScene0({{0,0,0,12,21,10,2026}})),"explicit NotFound optional controls retain real constructor row0");
+    period=-1;Check(no_season.Snapshot().season_controls==0&&no_season.Snapshot().scene_period_table52==0
+          &&bool(no_season.QueryScenePeriod(15,40,period))&&period==3,"absent template cannot fabricate seasonal row2");
+    no_season.Close();source.season_missing=false;
     source.fail_motion=true;GameActorRuntime failed;Check(bool(failed.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))
           &&bool(failed.RequestActorEvent(176,0)),"motion failure request owner");
     for(unsigned i=0;i<3;++i)Check(bool(failed.AdvanceActorFrame()),"checked motion error phase");

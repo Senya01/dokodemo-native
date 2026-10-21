@@ -40,6 +40,7 @@ class GameModelAsset final {
     GameModelStatistics Statistics() const noexcept {
         return stats_;
     }
+    uint32_t HeaderColor() const noexcept { return header_color_; }
     bool Live() const noexcept {
         try {
             return image_.Describe().readable;
@@ -53,6 +54,7 @@ class GameModelAsset final {
     model::Dvs data_;
     std::vector<GameModelMaterial> materials_;
     GameModelStatistics stats_;
+    uint32_t header_color_=0;
 };
 struct GameModelPose {
     GameVector4 position{{0, 0, 0, 1}}, base_rotation{{0, 0, 0, 1}}, rotation{{0, 0, 0, 1}},
@@ -60,6 +62,11 @@ struct GameModelPose {
     GameMatrix world{};
     int32_t material = -1;
     float opacity=1,world_opacity=1;
+    // Reached8A214/8A1F4 outputs. The current native diffuse-only shader does
+    // not yet consume these source light parameters.
+    float source210=0;
+    GameVector4 source230{{0,0,0,1}};
+    bool source210_written=false,source230_written=false;
     model::ParticleEmitterParameters emitter;
 };
 class GameModelClone final {
@@ -76,7 +83,15 @@ class GameModelClone final {
     const GameModelAsset *Asset() const noexcept {
         return asset_.get();
     }
+    struct LightSelection {
+        std::vector<uint32_t> type5_nodes;
+        uint32_t packed_color14=0, color_writes=0;
+        bool present=false;
+    };
+    const LightSelection& Lights() const noexcept { return lights_; }
+    void SetLightColor14(uint32_t color) { if(lights_.present){lights_.packed_color14=color;++lights_.color_writes;} }
     void Close() {
+        lights_={};
         pose_.clear();
         inverse_bind_.clear();
         asset_.reset();
@@ -88,6 +103,7 @@ class GameModelClone final {
   private:
     std::shared_ptr<const GameModelAsset> asset_;
     std::vector<GameModelPose> pose_;
+    LightSelection lights_;
     std::vector<GameMatrix> inverse_bind_;
 };
 struct GameMotionStatistics {
@@ -125,6 +141,7 @@ class GameModelPlayback final {
     void Configure(uint32_t duration,bool loop);
     void Start(uint32_t time=0);
     void Stop() noexcept { state_.state=1; }
+    void SetSpeed(int32_t value) { if(value<0)throw std::invalid_argument("Negative native motion speed");state_.speed=value; }
     GameFsStatus Apply(const GameModelMotion&,GameModelClone&,uint32_t delta);
     GamePlaybackState Snapshot() const noexcept { return state_; }
     bool Complete() const noexcept { return state_.state==2; }

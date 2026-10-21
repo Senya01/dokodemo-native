@@ -69,6 +69,28 @@ std::vector<uint8_t> Dictionary(){
     std::copy(std::begin(text),std::end(text),b.begin()+24);return b;
 }
 void Focused(){
+    // Actual relocation-backed scene clock row0 at VA E45C8. Assert each
+    // boundary independently,including the early interval's special result5.
+    const std::array<int16_t,12> clock_row0{{0,0,4,0,6,0,10,0,15,30,18,0}};
+    for(const auto test: {std::array<uint32_t,3>{{0,0,5}},{{3,59,5}},{{4,0,0}},{{5,59,0}},
+                         {{6,0,1}},{{9,59,1}},{{10,0,2}},{{15,29,2}},{{15,30,3}},
+                         {{17,59,3}},{{18,0,4}},{{23,59,4}}})
+        Check(ClassifySceneClock7398(clock_row0,test[0],test[1])==int32_t(test[2]),
+              "source7398 actual row0 lower-inclusive/upper-exclusive boundary");
+    Check(SceneSeason709C(10,21)==2&&SceneSeason709C(10,6)==3&&SceneSeason709C(1,1)==0
+          &&SceneSeason709C(1,7)==1,"source709C seventh-day seasonal transition and January wrap");
+    for(uint32_t row=0;row<7;++row){
+        const auto points=SceneClockEndpoints7398(row);
+        Check(ClassifySceneClock7398(points,0,0)==5&&ClassifySceneClock7398(points,23,59)==4,
+              "all seven actual clock tables keep early/fallback results");
+        for(uint32_t edge=1;edge<6;++edge){
+            const auto minute=uint32_t(points[edge*2]*60+points[edge*2+1]);
+            Check(ClassifySceneClock7398(points,minute/60,minute%60)==int32_t(edge)-1,
+                  "all source clock rows transition at exact retained endpoint");
+        }
+    }
+    bool bad_clock=false;try{(void)ClassifySceneClock7398(clock_row0,24,0);}catch(const std::exception&){bad_clock=true;}
+    Check(bad_clock,"unavailable/invalid native civil clock cannot produce a scene period");
     auto p=Fixture({0x30,0,0x38},{0x90000001,0xB0000002,0x90000003,0x20000000,0,0,
                    0x90000003,0x20000001,0x20000000,0,0x90000003,0x20000000,0x20000001,0x20000004,0x90000001,0x20000309});
     script::Vm vm(p);Check(vm.start().status==script::Status::Running,"fixture starts");
@@ -246,16 +268,23 @@ void Selected(const char* path){
             for(auto word:section.keyWords)std::cout<<word<<',';std::cout<<'\n';
         }
     }
+    for(const auto name:{"light01.DAK","light02.DAK","light03.DAK","light04.DAK","light05.DAK","light06.DAK","light07.DAK","light_on.dak"}) {
+        PackageView input;Check(bool(resources.OpenResource(std::string("BG_ROOM\\BG_ROOM\\")+name,input)),"actual seasonal-light template");
+        model::Bytes bytes(size_t(input.Describe().size));for(size_t i=0;i<bytes.size();++i)bytes[i]=input.ReadU8(i);
+        const auto data=model::parseDak(bytes);
+        for(const auto& object:data.objects)for(const auto& section:object.sections)
+            std::cout<<"light_template="<<name<<" node="<<object.targetNodeIndex<<" type="<<section.type<<" sub="<<section.subtype<<" count="<<section.count<<'\n';
+    }
     GameActorRuntime runtime;Check(bool(runtime.Initialize(0,lease.View(),transition,&resources)),"source cold actor controls");
-    const auto scene_open=runtime.InitializeScene0();Check(bool(scene_open),scene_open.detail.c_str());
+    const auto scene_open=runtime.InitializeScene0(profile.calendar);Check(bool(scene_open),scene_open.detail.c_str());
     GameActorScript game;const auto opened=game.Initialize(directory.Open("neko.dic"),directory.Open("NEKO.KSC"),"KSNEKO\\NEKO.KSC",profile,[]{return 0x30D72E10u;},&rng,&runtime); // explicit diagnostic clock fixture
     Check(bool(opened),opened.detail.c_str());
-    for(unsigned i=0;i<220;++i){const auto status=game.Tick();const auto s=game.Snapshot();
+    for(unsigned i=0;i<600;++i){const auto status=game.Tick();const auto s=game.Snapshot();
         if(i<6||i%20==0||!status)
         std::cout<<"tick="<<s.ticks<<" pc="<<s.pc<<" op="<<s.last_opcode<<" steps="<<s.instructions
                  <<" imported="<<s.dictionary.imported<<" service="<<s.last_service<<" command="<<s.runtime.command_pc
                  <<" motion="<<s.runtime.channel_motion[0]<<" time="<<s.runtime.channels[0].time<<" pair3="<<s.runtime.scene_pair3_calls
-                 <<" signals="<<s.event_signals<<" detail="<<status.detail<<'\n';
+                 <<" signals="<<s.event_signals<<" requested="<<s.runtime.requested_command<<" period="<<s.scene_period<<" detail="<<status.detail<<'\n';
         if(!status||s.awaiting_message||s.completed)break;
     }
     const auto s=game.Snapshot();std::cout<<"services=";for(auto id:s.service_ids)std::cout<<id<<',';std::cout<<'\n';
@@ -264,19 +293,26 @@ void Selected(const char* path){
     std::cout<<"blocks="<<s.control_blocks_entered<<'/'<<s.control_blocks_closed<<" active="<<s.active_control_blocks
         <<" switches="<<s.switches<<" camera="<<s.runtime.camera_bindings<<" fades="<<s.runtime.transition_requests<<'\n';
     std::cout<<"asc176="<<s.runtime.asc176_ready<<'/'<<s.runtime.asc176_complete<<" runtimeError="<<s.runtime.command_error<<'\n';
-    Check(s.runtime.first_channel_motion==8&&s.runtime.scene_pair3_calls==1&&s.runtime.motion123_completions==1
-          &&s.runtime.asc176_ready&&s.event_signals>=1&&s.pc!=0x8DE3D
-          &&s.runtime.actor_model_live&&!s.runtime.actor_request_pending&&!s.runtime.selected_extension_pending
-          &&s.runtime.logical_xy==std::array<float,2>{{1830,-27}}&&s.runtime.angular_completions==1
-          &&s.runtime.model_slots==7&&s.runtime.transition_requests==1,
-          "actual8 handoff,pair3,motion123 end,ASCready and eligible VM54 resume");
-    Check(s.blocked&&s.last_service==36&&s.pc==0x8D7FB,"next actual service36 is an explicit semantic frontier");
-    Check(!game.Tick()&&!game.Tick(),"blocked VM stays stopped,not successful replay");
-    const auto after_unwind=game.Snapshot();
-    Check(after_unwind.pc==s.pc&&after_unwind.instructions==s.instructions&&after_unwind.event_signals==1
-          &&after_unwind.runtime.asc176_complete&&after_unwind.runtime.command_completions==1
-          &&after_unwind.runtime.command_pc==108&&after_unwind.runtime.command_effects==11,
-          "independent actor owner executes real8000 after8031 even while new VM consumer is blocked");
+    Check(s.scene_period==5&&s.scene_period_result_word==0x20000005u
+          &&s.runtime.scene_period_table52==2&&s.runtime.season_controls==7&&s.runtime.scene_light_nodes==4
+          &&s.runtime.scene_light_color_writes>0&&s.runtime.scene_light_scalar_writes==2&&s.runtime.scene_light_vector_writes==2,
+          "actual seasonal templates/clock row/light field consumers and typed GAME36 result");
+    Check(s.runtime.asc176_ready&&s.runtime.asc176_complete&&s.runtime.command_completions==3
+          &&s.runtime.first_completed_commands[0]==176&&s.runtime.first_completed_commands[1]==153
+          &&s.runtime.first_completed_commands[2]==157&&s.runtime.last_completed_command==157
+          &&s.runtime.light_toggle_calls==1&&s.runtime.source_flag2A980==1&&s.source_flag2A980
+          &&s.runtime.movement_completions==2&&s.runtime.movement_updates>2
+          &&s.runtime.logical_xy==std::array<float,2>{{600,-300}}
+          &&s.runtime.model_slots==uint32_t(std::count(s.service_ids.begin(),s.service_ids.end(),31u)),
+          "real153 motions119/120 switch light and157 reaches coordinate16 without early ready");
+    Check(s.blocked&&s.last_service==19&&s.pc==0x8D8D0&&s.event_signals==3&&!s.waiting_for_event
+          &&!s.last_service_returned&&!s.runtime.command_blocked,
+          "new semantic frontier is actual GAME19 position/check consumer,not old36 stop");
+    Check(!game.Tick()&&!game.Tick(),"blocked VM stays stopped while independent controls remain live");
+    const auto after_stop=game.Snapshot();
+    Check(after_stop.pc==s.pc&&after_stop.instructions==s.instructions&&after_stop.event_signals==s.event_signals
+          &&after_stop.runtime.command_completions==3&&after_stop.runtime.actor_phases>s.runtime.actor_phases,
+          "semantic stop cannot fabricate VM completion;real native owners keep pumping");
     game.Close();runtime.Close();transition.Retire();lease.live=false;
     Check(!runtime.Snapshot().live&&!runtime.Snapshot().actor_model_live&&!runtime.Snapshot().model_slots
           &&!runtime.Snapshot().actor_request_pending&&!runtime.Snapshot().selected_extension_pending,"selected actual actor/room owners retire");

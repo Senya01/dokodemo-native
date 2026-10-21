@@ -821,7 +821,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x19DD4;
-        state_.status=actor_runtime_.InitializeScene0();
+        state_.status=actor_runtime_.InitializeScene0(calendar_);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_);
