@@ -854,6 +854,7 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
         c.enabled_after=vm_->context_enabled();
         valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u)
             &&c.enabled_after==(c.event!=18);
+        c.return_pc=x.current_pc;c.return_opcode=t.opcode;
         c.restored=y;c.returned=valid;c.failed=!valid;
     }catch(...){c.failed=true;}
 }
@@ -1243,6 +1244,69 @@ GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& t
         vm_->resume_modal_context();notebook_self_before_={};state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::ReadMenuDiary(const GameOwnerEventTarget& expected,int32_t manager58,uint32_t mode,GameRecordImage& image,GameDiaryOpenInputs& in)const{
+    try{
+        Need(state_.live&&vm_&&!state_.blocked&&records_&&records_->Live()&&clock_&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Diary requires current GAME71 bank/context owner");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
+             "Diary current registered context/Local0 replaced");
+        Need(profile_.live&&profile_.actor<=4&&manager58==int32_t(profile_.actor),"Diary actual confirmed TITLE/LoadMan58 owner mismatch");
+        image=records_->Image();in.profile=profile_;in.manager58=manager58;in.mode=mode;
+        in.script_generation=state_.generation;in.run_id=vm_->current_witness().run_id;in.clock_word=clock_();
+        in.date=GameRecordDateFromClockWord(in.clock_word);in.hour=((in.clock_word&0x0FFFFFFF)%1440)/60;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::PrepareMenuDiary(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameRecordImage& before,const GameDiaryOpenInputs& inputs)const{
+    try{
+        Need(gui&&gui>state_.menu_diary_generation&&parent&&!state_.menu_diary_live&&!state_.menu_wordmemo_live
+             &&!state_.menu_notebook_live&&!state_.menu_inventory_live&&!state_.inventory_requested&&vm_&&vm_->context_enabled(),"Diary origin/generation already owned");
+        GameRecordImage current;GameDiaryOpenInputs actual;const auto read=ReadMenuDiary(target,inputs.manager58,inputs.mode,current,actual);Need(bool(read),read.detail.c_str());
+        Need(current.sha==before.sha&&inputs.script_generation==state_.generation&&inputs.run_id==actual.run_id
+             &&inputs.profile.source_nickname==profile_.source_nickname&&inputs.profile.source_player==profile_.source_player
+             &&inputs.profile.actor==profile_.actor,"Diary full bank/profile changed before request");
+        GameDiarySelection selected;(void)GameProjectDiaryOpen(before,inputs,selected);
+        Need(state_.menu_open_return.returned&&!state_.menu_open_return.failed&&state_.menu_open_return.menu_generation==parent,"Diary genuine opening callback missing");return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::BindMenuDiary(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameRecordImage& before,const GameDiaryOpenInputs& inputs,GameDiaryIo& io){
+    const auto checked=PrepareMenuDiary(target,gui,parent,before,inputs);if(!checked)return checked;
+    const auto manager=io.DiaryIo();if(!manager.live||!manager.owner||!manager.generation)return {GameFsCode::Unavailable,0,"Diary real IO owner missing at binding"};
+    GameDiarySelection selected;const auto approved=GameProjectDiaryOpen(before,inputs,selected);
+    diary_io_=&io;diary_io_at_bind_=manager;diary_inputs_=inputs;state_.diary_before=before.sha;state_.diary_approved=approved.sha;state_.diary_after={};
+    state_.menu_diary_generation=gui;state_.menu_diary_parent=parent;state_.menu_diary_live=true;++state_.menu_diary_requests;return {};
+}
+GameFsStatus GameActorScript::CheckMenuDiary(const GameOwnerEventTarget& expected,const GameDiarySnapshot& gui)const{
+    try{
+        Need(state_.live&&!state_.blocked&&vm_&&records_&&records_->Live()&&state_.menu_diary_live
+             &&gui.generation==state_.menu_diary_generation&&gui.lease.parent_generation==state_.menu_diary_parent
+             &&gui.lease.script_generation==state_.generation&&gui.lease.run_id==vm_->current_witness().run_id,"Diary current GUI/parent/script/bank identity mismatch");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,"Diary registered context/Local0 replaced");
+        const auto& pause=state_.menu_pause_return;
+        Need(pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_diary_parent&&!vm_->context_enabled()
+             &&!vm_->callback_depth()&&!vm_->queued_callbacks()&&GameWordMemoPausedOwnerExact(pause.restored,vm_->current_witness()),"Diary exact suspended18 caller/frame/deadline changed");
+        const auto io=diary_io_?diary_io_->DiaryIo():GameDiaryIoSnapshot{};
+        Need(io.live&&io.owner==diary_io_at_bind_.owner&&io.generation==diary_io_at_bind_.generation,"Diary bound IO/filesystem owner retired/replaced");
+        Need(!gui.failed&&(gui.opened_generation==0||gui.opened_generation==gui.generation),"Diary terminal failure or foreign Open generation");
+        Need(gui.before_sha==state_.diary_before&&gui.approved_sha==state_.diary_approved
+             &&records_->Image().sha==(gui.opened_generation==gui.generation?state_.diary_approved:state_.diary_before),"Diary source-approved whole typed bank changed");
+        Need(gui.inputs.profile.source_player==profile_.source_player&&gui.inputs.profile.source_nickname==profile_.source_nickname
+             &&gui.inputs.manager58==diary_inputs_.manager58&&gui.inputs.clock_word==diary_inputs_.clock_word&&gui.inputs.mode==diary_inputs_.mode,
+             "Diary source input/provenance replaced");return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::CompleteMenuDiary(const GameOwnerEventTarget& target,const GameDiarySnapshot& gui){
+    const auto checked=CheckMenuDiary(target,gui);if(!checked)return checked;
+    if(gui.opened_generation!=gui.generation||gui.phase!=7||gui.retired_generation!=gui.generation||gui.live||gui.owner47C||gui.request12||gui.retirement_pending
+       ||gui.text_owner||gui.nested_owner||gui.state154!=3||gui.loader469||!gui.opens||!gui.close_requests||!gui.close_completions||!gui.polls||!gui.retirement_requests||!gui.retirements)
+        return {GameFsCode::Unavailable,0,"Diary current-generation real close/poll/deferred+4 drain incomplete"};
+    state_.diary_after=records_->Image().sha;
+    vm_->resume_modal_context();state_.menu_diary_live=false;++state_.menu_diary_completions;return {};
+}
 GameFsStatus GameActorScript::ReadMenuWordMemo(const GameOwnerEventTarget& expected,GameWordMemoRows& out)const{
     try{
         Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Wordmemo read needs idle owning VM");
@@ -1261,7 +1325,7 @@ GameFsStatus GameActorScript::BindMenuWordMemo(const GameOwnerEventTarget& targe
     state_.menu_wordmemo_live=true;++state_.menu_wordmemo_requests;return {};
 }
 GameFsStatus GameActorScript::PrepareMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameWordMemoRows& rows)const{
-    if(!gui||gui<=state_.menu_wordmemo_generation||!parent||state_.menu_wordmemo_live||state_.menu_notebook_live
+    if(!gui||gui<=state_.menu_wordmemo_generation||!parent||state_.menu_diary_live||state_.menu_wordmemo_live||state_.menu_notebook_live
        ||state_.menu_inventory_live||state_.inventory_requested||!vm_||!vm_->context_enabled())
         return {GameFsCode::Unavailable,0,"Wordmemo origin/generation unavailable"};
     GameWordMemoRows current;const auto status=ReadMenuWordMemo(target,current);if(!status)return status;
@@ -1493,6 +1557,7 @@ void GameActorScript::Close() {
     state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
     state_=Snapshot();
     word_consumer_row_index_=UINT32_MAX;
+    diary_io_=nullptr;diary_io_at_bind_={};diary_inputs_={};
     dictionary_.Close();bindings_.clear();vm_.reset();program_={};script_image_.Reset();profile_={};clock_={};rng_=nullptr;runtime_=nullptr;records_=nullptr;sound_=nullptr;
     state_.live=false;state_.awaiting_message=state_.awaiting_choice=state_.awaiting_input=false;
     state_.source_main_input_suppressed48=false;

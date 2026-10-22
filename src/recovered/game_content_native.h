@@ -55,7 +55,8 @@ class GameFontResource final {
     // 941C8 CP932 codes, with explicit native character wrapping at max_width.
     GameFsStatus RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
                                 GameFontBitmap &out, GameFontDrawRecord *records = nullptr,
-                                uint32_t capacity = 0,uint32_t native_modulation=0xFF552F0D) const;
+                                uint32_t capacity = 0,uint32_t native_modulation=0xFF552F0D,
+                                uint32_t native_line_advance=23,uint32_t native_letter_spacing=2) const;
     void Close();
 
   private:
@@ -93,6 +94,9 @@ struct GameContentSnapshot {
     GameMainMenuSnapshot main_menu;
     GameNotebookSnapshot notebook;
     GameNotebookRows notebook_observed;
+    GameDiarySnapshot diary;
+    std::shared_ptr<const GameRecordImage> diary_observed,diary_current;
+    uint32_t main_menu_diary_requests=0,main_menu_diary_completions=0;
     GameWordMemoSnapshot wordmemo;
     GameWordMemoRows wordmemo_observed;
     uint32_t main_menu_wordmemo_requests=0,main_menu_wordmemo_completions=0;
@@ -127,7 +131,7 @@ struct GameContentSnapshot {
 // The finite fade/hidden-control/TRC text adapter is connected explicitly;
 // general CVSync rendering, PSP interrupt delivery and the full loop remain
 // unsupported. No source-PC descriptor is treated as a successful callback.
-class GameContentBoot final : public GameResourceSource {
+class GameContentBoot final : public GameResourceSource, public GameDiaryIo {
   public:
     GameContentBoot() = default;
     GameContentBoot(const GameContentBoot &) = delete;
@@ -155,6 +159,8 @@ class GameContentBoot final : public GameResourceSource {
     void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
     void SetSoundOutput(audio::Game73SelectedSink* sink){sound_bank_.SetSink(sink);}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
+    GameDiaryIoSnapshot DiaryIo()const override;
+    GameFsStatus RequestDiaryImage(const std::string&,std::shared_ptr<GameImage>&)override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
         auto out=state_;out.texture_cache_entries=TextureCacheSize();out.texture_cache_pixels=TextureCachePixels();
@@ -172,6 +178,8 @@ class GameContentBoot final : public GameResourceSource {
     };
     struct LoadMan {
         std::array<char, 35> configured_script{};
+        bool confirmed58=false;
+        int32_t actor58=-1;
     };
     GameArena *arena_ = nullptr;
     GameVmBoot *manager_ = nullptr;
@@ -198,6 +206,13 @@ class GameContentBoot final : public GameResourceSource {
     GameMainMenu main_menu_;
     GameNotebook notebook_;
     GameWordMemo wordmemo_;
+    GameDiary diary_;
+    PackageView diary_package_,diary_picture_package_;
+    BpDirectory diary_directory_,diary_picture_directory_;
+    bool diary_mounted_=false;
+    std::string diary_picture_stem_;
+    uint64_t diary_io_owner_=0,diary_io_requests_=0,diary_io_completed_=0;
+    uint32_t diary_io_pending_=0;
     uint64_t inventory469_generation_=0,inventory469_poll_=0;
     void PublishInventory469();
     GameButtonGate main_menu_entry_gate_;

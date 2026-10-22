@@ -57,6 +57,7 @@ add_library(dokodemo-core STATIC
     src/recovered/game_notebook_native.cpp
     src/recovered/game_notebook_self_native.cpp
     src/recovered/game_wordmemo_native.cpp
+    src/recovered/game_diary_native.cpp
     src/recovered/game_returned_interaction_native.cpp
     src/recovered/game_conversation_activation_native.cpp
     src/recovered/game_owned_conversation_native.cpp
@@ -168,6 +169,7 @@ if(DOKODEMO_GAME_BOOT_TESTS)
     if(MSVC)
         set_target_properties(dokodemo-game-actor-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
         target_compile_options(dokodemo-game-actor-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+        target_link_options(dokodemo-game-actor-tests PRIVATE /STACK:8388608)
     endif()
     add_test(NAME game-actor-tests COMMAND dokodemo-game-actor-tests)
     if(WIN32)
@@ -301,7 +303,9 @@ target_compile_options(dokodemo-native PRIVATE /W4 /EHsc /permissive- /Zc:__cplu
 target_include_directories(dokodemo-native PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 dokodemo_configure_prepared_codec(dokodemo-native)
 target_link_libraries(dokodemo-native PRIVATE dokodemo-core user32 gdi32 opengl32 shell32 ole32 uuid winmm advapi32 bcrypt imm32 ${DOKODEMO_EXTRA_LIBRARIES})
-target_link_options(dokodemo-native PRIVATE /MACHINE:X64 /INCREMENTAL:NO /Brepro)
+# Explicit Windows main/worker stack reserve for nested typed VM witnesses.
+# This changes host capacity, not game clocks, scheduling, records or permission.
+target_link_options(dokodemo-native PRIVATE /MACHINE:X64 /INCREMENTAL:NO /Brepro /STACK:8388608)
 set_target_properties(dokodemo-native PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 foreach(configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(dokodemo-native PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${configuration} "${CMAKE_BINARY_DIR}")

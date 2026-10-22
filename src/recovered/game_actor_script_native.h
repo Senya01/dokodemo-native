@@ -4,6 +4,7 @@
 #include "game_inventory_native.h"
 #include "game_notebook_native.h"
 #include "game_wordmemo_native.h"
+#include "game_diary_native.h"
 #include "game_inventory_mark_native.h"
 #include "game_inventory_placement_native.h"
 #include "game_record_native.h"
@@ -114,7 +115,7 @@ struct GameOrdinaryControlObservation {
 struct GameMenuCallbackSnapshot {
     bool pending=false,returned=false,failed=false;
     bool enabled_before=false,enabled_after=false;
-    uint32_t event=0,flag_before=0,flag_after=0;
+    uint32_t event=0,flag_before=0,flag_after=0,return_pc=0,return_opcode=0;
     uint8_t kind_before=0,kind_after=0;
     uint64_t menu_generation=0,receipt=0,callback_frame=0;
     script::VmStateWitness suspended,restored;
@@ -151,6 +152,10 @@ struct GameActorScriptSnapshot {
     uint64_t menu_wordmemo_generation=0,menu_wordmemo_parent=0;
     uint32_t menu_wordmemo_requests=0,menu_wordmemo_completions=0;
     GameWordMemoRows wordmemo_before,wordmemo_after;
+    bool menu_diary_live=false;
+    uint64_t menu_diary_generation=0,menu_diary_parent=0;
+    uint32_t menu_diary_requests=0,menu_diary_completions=0;
+    std::array<uint8_t,32> diary_before{},diary_approved{},diary_after{};
     GameFlow5EventSnapshot flow5_event;
     std::array<script::ValueWitness,4> flow5_guards{};
     bool flow5_guards_valid=false;
@@ -315,6 +320,11 @@ class GameActorScript final {
     GameFsStatus BindMenuNotebook(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameNotebookRows&);
     GameFsStatus CompleteMenuNotebook(const GameOwnerEventTarget&,const GameNotebookSnapshot&);
     GameFsStatus ReadMenuNotebookSelf(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameNotebookSelfImage&,bool for_preview=true)const;
+    GameFsStatus ReadMenuDiary(const GameOwnerEventTarget&,int32_t actual_manager58,uint32_t actual_mode,GameRecordImage&,GameDiaryOpenInputs&)const;
+    GameFsStatus PrepareMenuDiary(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameRecordImage&,const GameDiaryOpenInputs&)const;
+    GameFsStatus BindMenuDiary(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameRecordImage&,const GameDiaryOpenInputs&,GameDiaryIo&);
+    GameFsStatus CheckMenuDiary(const GameOwnerEventTarget&,const GameDiarySnapshot&)const;
+    GameFsStatus CompleteMenuDiary(const GameOwnerEventTarget&,const GameDiarySnapshot&);
     GameFsStatus ReadMenuWordMemo(const GameOwnerEventTarget&,GameWordMemoRows&)const;
     GameFsStatus BindMenuWordMemo(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameWordMemoRows&);
     GameFsStatus PrepareMenuWordMemo(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameWordMemoRows&)const;
@@ -354,6 +364,9 @@ class GameActorScript final {
     uint32_t notebook_self_registration_=0;
     uint32_t wordmemo_registration_at_bind_=0;
     GameProfileRecord profile_;
+    GameDiaryOpenInputs diary_inputs_;
+    GameDiaryIo* diary_io_=nullptr;
+    GameDiaryIoSnapshot diary_io_at_bind_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
     GameActorRuntime* runtime_=nullptr;

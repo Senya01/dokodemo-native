@@ -1,12 +1,14 @@
 #include "game_record_native.h"
 #include "game_profile_native.h"
+#include "core_hash.h"
 #include <algorithm>
 #include <stdexcept>
+#include <vector>
 
 namespace dokodemo::recovered {
 void GameRecordStore::ResetCold249D0(){
     const auto generation=state_.generation+1;state_={};state_.generation=generation;state_.live=true;
-    banks_={};names_={};markers_.fill(-1);
+    banks_={};names_={};markers_.fill(-1);lookup_.fill(-1);
 }
 GameRecordDate GameRecordDateFromClockWord(uint32_t word){
     if(word>>28!=3||(word&0x08000000))throw std::runtime_error("Record calendar needs positive current minute-tag clock");
@@ -42,4 +44,54 @@ int32_t GameRecordStore::Candidate71(const GameRecordDate& date)const{
     return -1;
 }
 GameRecordStoreSnapshot GameRecordStore::Snapshot()const{auto out=state_;out.bank0=banks_[0];return out;}
+std::array<uint8_t,32> GameHashRecordImage(const GameRecordImage& image){
+    std::vector<uint8_t> bytes;
+    const auto word=[&](uint32_t value){for(unsigned i=0;i<4;++i)bytes.push_back(uint8_t(value>>(8*i)));};
+    word(image.live);word(uint32_t(image.generation));word(uint32_t(image.generation>>32));
+    for(const auto& bank:image.banks){
+        for(const auto& row:bank.rows){bytes.push_back(row.flag);bytes.insert(bytes.end(),row.reserved.begin(),row.reserved.end());
+            word(uint32_t(row.value));bytes.insert(bytes.end(),row.payload.begin(),row.payload.end());
+            for(auto d:row.date)word(uint32_t(d));word(row.source_known_payload_bytes);}
+        bytes.insert(bytes.end(),bank.names.begin(),bank.names.end());word(uint32_t(bank.marker));
+    }
+    for(auto id:image.lookup)word(uint32_t(id));
+    return core::sha256(bytes.data(),bytes.size());
+}
+GameRecordImage GameRecordStore::Image()const{
+    GameRecordImage image;image.live=state_.live;image.generation=state_.generation;
+    for(size_t i=0;i<11;++i)image.banks[i]={banks_[i],names_[i],markers_[i]};
+    image.lookup=lookup_;
+    image.sha=GameHashRecordImage(image);return image;
+}
+bool GameRecordStore::Matches(const GameRecordImage& before)const{
+    return before.live&&before.sha==GameHashRecordImage(before)&&Image().sha==before.sha;
+}
+GameDiarySelection GameSelectDiary39824(GameRecordBank bank,const GameRecordDate& date,uint32_t hour,uint32_t mode){
+    if(hour>23)throw std::runtime_error("Diary current hour outside native calendar domain");
+    GameDiarySelection out;out.rows.fill(-1);out.lookup.fill(-1);
+    uint32_t candidate=0;
+    for(;candidate<28;++candidate){auto& row=bank.rows[candidate];if(row.value==-1||row.date==date)break;row.flag=1;}
+    if(candidate==28)candidate=27;
+    if(!(mode!=0&&hour<19)&&bank.rows[candidate].value!=-1)bank.rows[candidate].flag=1;
+    out.candidate=candidate;uint32_t lookup=0;
+    for(uint32_t i=0;i<28;++i){if(bank.rows[i].flag)out.lookup[lookup++]=bank.rows[i].value;
+        if(i==candidate){out.selection=out.count;out.rows[out.count++]=int32_t(i);}
+        else if(bank.rows[i].flag)out.rows[out.count++]=int32_t(i);}
+    out.bank=std::move(bank);return out;
+}
+GameFsStatus GameRecordStore::OpenDiary(const GameRecordImage& before,const std::array<uint8_t,16>& nickname,
+    const std::array<uint8_t,16>& player,int32_t manager58,const GameRecordDate& date,uint32_t hour,uint32_t mode,
+    GameDiarySelection& selection,GameRecordImage& approved){
+    try{
+        if(!Matches(before))throw std::runtime_error("Diary bank owner/image changed before source Open");
+        auto bank=before.banks[0];std::copy(nickname.begin(),nickname.end(),bank.names.begin());
+        std::copy(player.begin(),player.end(),bank.names.begin()+16);bank.marker=manager58;
+        auto next=GameSelectDiary39824(std::move(bank),date,hour,mode);
+        auto promoted=before;promoted.banks[0]=next.bank;promoted.lookup=next.lookup;promoted.sha=GameHashRecordImage(promoted);
+        // All allocations/copies and comparisons precede the noexcept typed publication.
+        selection=next;approved=promoted;
+        banks_[0]=next.bank.rows;names_[0]=next.bank.names;markers_[0]=next.bank.marker;lookup_=next.lookup;
+        return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 } // namespace dokodemo::recovered

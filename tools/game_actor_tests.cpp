@@ -83,6 +83,7 @@
 #include "game_notebook_slot_probe_regressions.h"
 #include "game_notebook_self_regressions.h"
 #include "game_wordmemo_regressions.h"
+#include "game_diary_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -490,6 +491,15 @@ GameFlow5RegressionChecks();
     ::GameNotebookSlotProbeRegressionChecks();
     ::GameNotebookSelfRegressionChecks();
     ::GameWordMemoRegressionChecks();
+    ::GameDiaryRegressionChecks();
+    {
+        GameFontResource font;GameFontBitmap bitmap;GameFontDrawRecord glyphs[2]{};
+        Check(bool(font.Initialize(dokodemo::diary_tests::Font())),"Diary spacing fixture FONT");
+        Check(bool(font.RasterizeCp932({"A\nB"},8,bitmap,glyphs,2,0xFFFFFFFF,3,1))
+              &&glyphs[1].y==3&&bitmap.height==6,"Diary source glyphheight1 plus gap2 newline");
+        Check(bool(font.RasterizeCp932({"A\nB"},8,bitmap,glyphs,2))
+              &&glyphs[1].y==23&&bitmap.height==46,"Default TRC line advance preserved");
+    }
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDecorateRegressionChecks();

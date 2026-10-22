@@ -1,4 +1,5 @@
 #include "game_content_native.h"
+#include <atomic>
 #include "game_boot_native.h"
 #include "game_primitives.h"
 #include "model_formats.hpp"
@@ -65,9 +66,10 @@ void GameFontResource::Close() {
 }
 GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
                                               GameFontBitmap &out, GameFontDrawRecord *records,
-                                              uint32_t capacity,uint32_t native_modulation) const {
+                                              uint32_t capacity,uint32_t native_modulation,uint32_t native_line_advance,
+                                              uint32_t native_letter_spacing) const {
     try {
-        if (!state_.ready || !max_width || max_width > 480)
+        if (!state_.ready || !max_width || max_width > 480 || native_line_advance < uint32_t(state_.glyph_height) || native_line_advance > 64 || native_letter_spacing > 16)
             return FormatFailure("font raster ownership/width");
         const auto type = image_.ReadU8(12);
         const auto format = image_.ReadLE32(28), palette_format = image_.ReadLE32(48);
@@ -94,7 +96,7 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
                 pos += glyph.consumed;
                 if (glyph.index == 10) {
                     x = 0;
-                    y += 23;
+                    y += native_line_advance;
                     continue;
                 }
                 if (glyph.index < 32 || uint32_t(uint16_t(glyph.index - 32)) >= glyph_count)
@@ -105,20 +107,20 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
                     return FormatFailure("source glyph width outside native atlas cell");
                 if (x + uint32_t(width) > max_width) {
                     x = 0;
-                    y += 23;
+                    y += native_line_advance;
                 }
                 if (y + uint32_t(state_.glyph_height) > 230 || placed.size() >= 1024)
                     return {GameFsCode::Bounds, 0, "TRC ten-line/1024-record native text cap"};
                 placed.push_back({index, x, y, uint32_t(width)});
-                x += uint32_t(width) + 2;
+                x += uint32_t(width) + native_letter_spacing;
                 advance_width=(std::max)(advance_width,x);
             }
             x = 0;
-            y += 23;
+            y += native_line_advance;
         }
         GameFontBitmap bitmap;
         bitmap.width = max_width;
-        bitmap.height = y ? y : 23;
+        bitmap.height = y ? y : native_line_advance;
         bitmap.glyphs = uint32_t(placed.size());
         bitmap.advance_width=advance_width;
         if (bitmap.height > 230)
@@ -191,6 +193,8 @@ GameContentBoot::~GameContentBoot() {
 bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     if (arena_)
         return false;
+    static std::atomic<uint64_t> next_diary_io{0};
+    diary_io_owner_=++next_diary_io;
     arena_ = &arena;
     manager_ = &manager;
     state_ = {};
@@ -418,6 +422,11 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 ++state_.opened_resources;
                 return {};
             }
+            if(mount=="ENIKKI"&&game_filesystem_){
+                if(!diary_mounted_){const auto status=game_filesystem_->LoadMember("ENIKKI.BPM",diary_package_);if(!status)return status;
+                    diary_directory_=BpDirectory::Parse(diary_package_,diary_package_.Describe().size);diary_mounted_=true;}
+                out=diary_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
             if(mount=="MTOMO"&&game_filesystem_){
                 // Actual resource9 ctor prefix selects this package; retain its
                 // parent backing independently of child clone/template teardown.
@@ -477,6 +486,27 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 0, e.what()};
     }
 }
+GameDiaryIoSnapshot GameContentBoot::DiaryIo()const{
+    const auto fs=game_filesystem_?game_filesystem_->Snapshot():GameFilesystemSnapshot{};
+    const bool live=loadman_&&state_.loadman_owner&&!state_.closed&&fs.mounted&&!fs.closed;
+    const auto pending=diary_io_pending_+uint32_t(state_.mount_state!=0);
+    return {live,live&&!pending&&diary_io_requests_==diary_io_completed_,diary_io_owner_,1,diary_io_requests_,diary_io_completed_,pending};
+}
+GameFsStatus GameContentBoot::RequestDiaryImage(const std::string& stem,std::shared_ptr<GameImage>& image){
+    if(!DiaryIo().live||stem!="d11_N")return {GameFsCode::Unavailable,0,"Unsupported actual diary image package owner/stem"};
+    ++diary_io_requests_;++diary_io_pending_;
+    GameFsStatus status;
+    try{
+        // Native synchronous2974/2E7C adapter: actual source-selected BPM and
+        // checked GIM backing. Its real completed read precedes2CA4 readiness.
+        if(diary_picture_stem_!=stem){
+            PackageView package;status=game_filesystem_->LoadMember("D11_N.BPM",package);
+            if(status){auto directory=BpDirectory::Parse(package,package.Describe().size);diary_picture_package_=std::move(package);diary_picture_directory_=std::move(directory);diary_picture_stem_=stem;}
+        }
+        if(status){PackageView raw=diary_picture_directory_.Open(stem+".GIM");auto decoded=std::make_shared<GameImage>();status=decoded->DecodeGim(std::move(raw));if(status)image=std::move(decoded);}
+    }catch(const std::exception& e){status={GameFsCode::MalformedDirectory,0,e.what()};}
+    --diary_io_pending_;if(status)++diary_io_completed_;return status;
+}
 GameFsStatus GameContentBoot::InitializeSceneResources(GameResourceSource &platform) {
     if (!state_.font_ready || state_.frontier_pc != 0x18EE8 || !arena_ || !manager_)
         return {GameFsCode::Unavailable, 0, "scene continuation requires live scene1 font/package"};
@@ -520,7 +550,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             auto loss=frame;loss.overflow_resync=true;
             post_modal_.Input(loss);state_.post_modal=post_modal_.Snapshot();
             if(state_.main_menu_phase){
-                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);
+                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);if(diary_.Modal())diary_.Input(loss);
             }
             else if(inventory_.Modal())inventory_.Input(loss);
             else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(loss);
@@ -535,6 +565,11 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
                ||frame.returned_owner!=lease.available_owner||frame.returned_generation!=lease.available_generation
                ||frame.sequence<=main_menu_last_sequence_)return false;
             main_menu_last_sequence_=frame.sequence;
+            if(state_.main_menu_phase==7&&diary_.Modal()){
+                if(!state_.main_menu_child_ready||diary_.Snapshot().phase!=3)return false;
+                auto checked=CheckMainMenuLease();if(checked)checked=actor_script_.CheckMenuDiary(main_menu_target_,diary_.Snapshot());
+                if(!checked){state_.status=checked;state_.blocked=true;return false;}return diary_.Input(frame);
+            }
             if(state_.main_menu_phase==7&&wordmemo_.Modal()){
                 if(!state_.main_menu_child_ready||wordmemo_.Snapshot().phase!=3)return false;
                 auto status=CheckMainMenuLease();
@@ -800,7 +835,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
-    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
+    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
@@ -813,6 +848,8 @@ bool GameContentBoot::Close() {
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
     notebook_directory_.Reset();notebook_package_.Reset();notebook_mounted_=false;
     wordmemo_directory_.Reset();wordmemo_package_.Reset();wordmemo_mounted_=false;
+    diary_directory_.Reset();diary_package_.Reset();diary_mounted_=false;
+    diary_picture_directory_.Reset();diary_picture_package_.Reset();diary_picture_stem_.clear();
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
@@ -963,6 +1000,18 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.Tick();
             if(status&&main_menu_.Snapshot().state78==3){
                 const auto result=main_menu_.Snapshot().result;status=main_flow_.PollMenuResult(result);
+                if(status&&result==6){
+                    GameRecordImage image;GameDiaryOpenInputs inputs;
+                    if(!loadman_||!loadman_->confirmed58)status={GameFsCode::Unavailable,0,"Diary raw LoadMan58 has no confirmed TITLE producer"};
+                    if(status)status=actor_script_.ReadMenuDiary(main_menu_target_,loadman_->actor58,StateWord(8),image,inputs);
+                    if(image.live)state_.diary_observed=std::make_shared<const GameRecordImage>(image);const auto actor=actor_script_.Snapshot();
+                    const GameNotebookLease lease{actor.generation,actor.vm_current.run_id,state_.actor_message_contexts,
+                        main_menu_.Snapshot().generation,main_menu_lease_.available_owner,main_menu_lease_.available_generation,state_.main_menu_input_epoch+1};
+                    if(status)status=actor_script_.PrepareMenuDiary(main_menu_target_,diary_.Snapshot().generation+1,main_menu_.Snapshot().generation,image,inputs);
+                    if(status)status=diary_.Request(image,inputs,lease);
+                    if(status){status=actor_script_.BindMenuDiary(main_menu_target_,diary_.Snapshot().generation,main_menu_.Snapshot().generation,image,inputs,*this);if(!status)diary_.Close();}
+                    if(status){++state_.main_menu_diary_requests;++state_.main_menu_input_epoch;state_.main_menu_child_ready=false;}
+                }
                 if(status&&result==4){
                     GameWordMemoRows rows;status=actor_script_.ReadMenuWordMemo(main_menu_target_,rows);state_.wordmemo_observed=rows;
                     const auto actor=actor_script_.Snapshot();
@@ -1020,7 +1069,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 5:
             if(actor_script_.Snapshot().menu_close_return.returned
                &&actor_script_.Snapshot().menu_close_return.menu_generation==main_menu_.Snapshot().generation){
-                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3||main_flow_.Snapshot().menu_result50==4){
+                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3||main_flow_.Snapshot().menu_result50==4||main_flow_.Snapshot().menu_result50==6){
                     int32_t queue=-1;status=actor_script_.PostMenuEvent(main_menu_target_,18,main_menu_.Snapshot().generation,queue);
                     if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event18 queue refused"};
                     if(status)state_.main_menu_phase=6;
@@ -1042,6 +1091,17 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             // callbacks; only subsequent cache pressure can evict those images.
             status=main_menu_.RetireClosedRender();
             if(!status)break;
+            if(main_flow_.Snapshot().menu_result50==6){
+                const auto before=diary_.Snapshot();status=actor_script_.CheckMenuDiary(main_menu_target_,before);
+                if(status)status=diary_.Tick(*this,*this,records_,scene_ui_.TitleTransitionOwner());const auto child=diary_.Snapshot();
+                if(status)status=actor_script_.CheckMenuDiary(main_menu_target_,child);
+                if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=12;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
+                if(child.phase!=3)state_.main_menu_child_ready=false;
+                if(status&&!state_.main_menu_child_ready&&child.phase==3){++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
+                    if(!diary_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"Diary ready input epoch refused"};}
+                if(status&&diary_.ClosedAndRetired()){status=actor_script_.CompleteMenuDiary(main_menu_target_,diary_.Snapshot());if(status){++state_.main_menu_diary_completions;finish();}}
+                break;
+            }
             if(main_flow_.Snapshot().menu_result50==4){
                 const auto before=wordmemo_.Snapshot();
                 status=actor_script_.CheckMenuWordMemo(main_menu_target_,before.generation,before.lease.parent_generation);
@@ -1117,15 +1177,16 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.actor_script=actor_script_.Snapshot();state_.main_flow=main_flow_.Snapshot();state_.main_menu=main_menu_.Snapshot();
     state_.inventory=inventory_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
     state_.notebook=notebook_.Snapshot();
-    state_.wordmemo=wordmemo_.Snapshot();
+    state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
     if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+        if(diary_.Modal())return diary_.Draw(surface,font_);
         if(wordmemo_.Modal())return wordmemo_.Draw(surface,font_);
         if(notebook_.Modal())return notebook_.Draw(surface,font_);
         return inventory_.Modal()?inventory_.Draw(surface,font_):main_menu_.Draw(surface);
     });
     state_.main_menu=main_menu_.Snapshot();
     state_.notebook=notebook_.Snapshot(); // publish actual post-draw empty batch/lease observations
-    state_.wordmemo=wordmemo_.Snapshot();
+    state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
         returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
@@ -1278,6 +1339,9 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
     }
     state_.actor_dictionary_requested=true;
     const auto actor=state_.title.selected_actor;
+    // Native confirmed TITLE24B94 -> LoadMan24B88 writer (19410/194D4).
+    // Separate from ASC actor.source_field58.
+    if(loadman_&&state_.title.profile.stored.live&&state_.title.profile.stored.actor==actor){loadman_->actor58=int32_t(actor);loadman_->confirmed58=true;}
     state_.frontier_pc=0x1AF20;
     if(actor>4||!state_.title.profile.stored.live||state_.title.profile.stored.actor!=actor){
         state_.status={GameFsCode::Unavailable,0,"scene4 requires actual confirmed actor profile"};state_.blocked=true;return false;
