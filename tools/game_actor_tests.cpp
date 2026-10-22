@@ -16,6 +16,10 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_owned_conversation_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_initial_common_regressions.h"
+#endif
 #include "game_input32_regressions.h"
 
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
@@ -29,6 +33,7 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_inventory_discard_regressions.h"
 #endif
+#include "game_kana_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -158,9 +163,17 @@ void StringLength53Checks(){
     for(char c='0';c<='z';++c)if((c<='9')||(c>='A'&&c<='Z')||c>='a')Check(GameStringLength53({Value::string(std::string(1,c))}).word==0x20000001,"Builtin53 all62 source-proved ASCII flags");
     Value nil;nil.kind=Value::Kind::Scalar;Check(GameStringLength53({nil}).word==0x20000000,"Builtin53 canonical NIL produces integer0, not NIL");
     Value ref;ref.kind=Value::Kind::Reference;
-    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{Value::integer(0)},{Value::string("sh irt")},{Value::string(std::string("\x82\xA0",2))},{Value::string("a"),Value::string("b")}}){
+    auto embedded=Value::string("AB");embedded.cp932.assign("A\0B",3); // forged invalid boundary, factory already refuses NUL
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{Value::integer(0)},{embedded},{Value::string("\x88")},{Value::string("a"),Value::string("b")}}){
         bool refused=false;try{(void)GameStringLength53(args);}catch(const std::exception&){refused=true;}Check(refused,"Builtin53 unsupported conversion/character/argc refuses");
     }
+    const std::array<uint8_t,32> source_mask{{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0xFE,0xFF,0xFF,0xFF,0,0,0,0,0,0,0,0,0xFF,0xFF,0xFF,0x7F}};
+    for(unsigned b=1;b<256;++b){
+        const bool two=(source_mask[b/8]>>(b%8))&1;std::string text(1,char(b));if(two)text.push_back('!');text.push_back('Z');
+        Check(GameStringLength53({Value::string(text)}).word==0x20000002u,"all256 source flag decisions preserve byte-step count");
+        if(two){bool refused=false;try{(void)GameStringLength53({Value::string(std::string(1,char(b)))});}catch(...){refused=true;}Check(refused,"all flagged truncated prefixes refuse");}
+    }
+    Check(GameStringLength53({Value::string("\x88\x9F\n!? \xA6")}).word==0x20000006u,"kanji halfwidth punctuation and control count independently of input admission");
     const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x53,1,0x89,0x51,0x94,0,0,0x70,0x38},{0});
     script::Vm vm(p);uint32_t calls=0;vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x53&&args.size()==1&&args[0].cp932=="shirt","Builtin53 real owned caller argument");++calls;return GameStringLength53(args);});
     vm.start({Value::string("shirt")});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().word==0x20000005&&vm.read_slot(Table::Global,0).word==0x20000005&&vm.stack().empty(),"Builtin53 real dispatcher result89/51 to preserved destination and exact consumer");
@@ -172,7 +185,7 @@ void AsciiPrefix71Checks(){
         const auto input=Value::string(std::string(1,c));const auto v=GameAsciiPrefix71({input});Check(v.kind==Value::Kind::Scalar&&v.word==0&&input.cp932==std::string(1,c),"Builtin71 proven ASCII branch returns Scalar NIL without editing input");
     }
     Value ref;ref.kind=Value::Kind::Reference;Value nil;nil.kind=Value::Kind::Scalar;
-    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{nil},{ref},{Value::string("")},{Value::string("SH IRT")},{Value::string(std::string("\x82\xA0",2))},{Value::string("S"),Value::string("H")}}){
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{nil},{ref},{Value::string("SH IRT")},{Value::string(std::string("\x88\x9F",2))},{Value::string("S"),Value::string("H")}}){
         bool refused=false;try{(void)GameAsciiPrefix71(args);}catch(const std::exception&){refused=true;}Check(refused,"Builtin71 unknown/nonASCII/empty/conversion domains refuse instead of arbitrary NIL");
     }
     const auto p=Fixture({0x30,1,0x80,9,0x70,0x95,0,0,0x90,0,0,0x8B,0x71,1,0x89,0x51,0x94,0,0,0x70,0x38},{0x20000009});
@@ -180,6 +193,30 @@ void AsciiPrefix71Checks(){
     vm.start({Value::string("SHIRT")});Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().kind==Value::Kind::Scalar&&vm.result().word==0&&vm.read_slot(Table::Global,0).kind==Value::Kind::Scalar&&vm.read_slot(Table::Global,0).word==0&&vm.read_slot(Table::Frame,0).cp932=="SHIRT"&&vm.stack().empty(),"Builtin71 genuine NIL result replaces old9 and goes through89/51 consumer; caller string retained");
 }
 
+void KanaSuffix72Checks(){
+    using script::Value;using script::Table;
+    const std::vector<std::pair<std::string,std::string>> cases{
+        {"",""},{"A",""},{"\x83\x41",""},{"\x82\xA0" "A",""},
+        {"\x82\xA0\x82\xA2\x82\xA4","\x82\xA4"},
+        {"\x82\x9F\x82\xC1\x81\x5B\x82\xF1","\x82\xF1"},
+        {"\x82\xC1\x81\x5B",""},{"\x82\xA0\x82\xC1\x81\x5B","\x82\xA0"}};
+    for(const auto& sample:cases){
+        auto input=Value::string(sample.first);const auto result=GameKanaSuffix72({input});
+        Check(input.cp932==sample.first,"Builtin72 leaves caller text unchanged");
+        if(sample.second.empty())Check(result.kind==Value::Kind::Scalar&&result.word==0,"Builtin72 actual NIL branch");
+        else Check(result.kind==Value::Kind::String&&result.word>>28==6&&result.cp932==sample.second,"Builtin72 last static text copied into native owning result");
+    }
+    for(const auto& args:std::vector<std::vector<Value>>{{},{Value{}},{Value::integer(0)},{Value::string(" ")},{Value::string("\x88\x9F")},{Value::string("a"),Value::string("b")}}){
+        bool refused=false;try{(void)GameKanaSuffix72(args);}catch(const std::exception&){refused=true;}
+        Check(refused,"Builtin72 unsupported conversion/domain refuses");
+    }
+    const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x72,1,0x89,0x51,0x94,0,0,0x70,0x38},{0});
+    script::Vm vm(p);uint32_t calls=0;
+    vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x72,"actual72 dispatcher");++calls;return GameKanaSuffix72(args);});
+    vm.start({Value::string("\x82\xA0\x82\xF1")});
+    Check(vm.run().status==script::Status::Complete&&calls==1&&vm.result().cp932=="\x82\xF1"
+          &&vm.read_slot(Table::Global,0).cp932=="\x82\xF1"&&vm.stack().empty(),"Builtin72 owning result survives real89/51 consumer");
+}
 void NilBytePair0DChecks(){
     using script::Value;using script::Table;
     Value nil;nil.kind=Value::Kind::Scalar;const auto code=GameNilBytePair0D({nil});
@@ -201,7 +238,7 @@ void AsciiClass70OwnerChecks(){
         Check(result.kind==Value::Kind::Scalar&&result.word==0x10000000&&input.cp932==std::string(1,c),"Builtin70 ASCII route reads live FALSE flag without mutating owned text");
     }
     Value ref;ref.kind=Value::Kind::Reference;Value nil;nil.kind=Value::Kind::Scalar;
-    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{nil},{Value::integer(0)},{Value::string("")},{Value::string("SH IRT")},{Value::string(std::string("\x82\xA0",2))},{Value::string("S"),Value::string("H")}})
+    for(auto args:std::vector<std::vector<Value>>{{},{Value{}},{ref},{nil},{Value::integer(0)},{Value::string("SH IRT")},{Value::string(std::string("\x88\x9F",2))},{Value::string("S"),Value::string("H")}})
         Check(refuses(args),"Builtin70 unsupported domain refuses instead of assuming the flag result");
     const auto p=Fixture({0x30,1,0x95,0,0,0x90,0,0,0x8B,0x70,1,0x89,0x51,0x94,0,0,0x70,0x38},{0x20000009});script::Vm vm(p);uint32_t calls=0;
     vm.host_service([&](uint8_t id,const std::vector<Value>& args){Check(id==0x70&&args.size()==1&&args[0].cp932=="SHIRT","Builtin70 reached real dispatch and retained caller argument");++calls;return owner.Query(args);});
@@ -339,11 +376,11 @@ GameInventoryDecorateRegressionChecks();
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDiscardRegressionChecks();
 #endif
-
+GameKanaRegressionChecks();
     OwnedCtxReferenceBranchChecks();
     AsciiClass70OwnerChecks();
     NilBytePair0DChecks();
-    AsciiPrefix71Checks();
+    AsciiPrefix71Checks();KanaSuffix72Checks();
     StringLength53Checks();
     BitwiseOrAndWordObservationChecks();
     GameInput32RegressionChecks();
@@ -356,6 +393,11 @@ GameNaturalLoopRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameOwnedConversationRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameInitialCommonRegressionChecks();
 #endif
 
     const std::array<int32_t,10> modes{{INT32_MIN,-1,0,1,2,3,4,5,6,INT32_MAX}};

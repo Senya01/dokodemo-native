@@ -17,6 +17,17 @@ int32_t Number(const Value& value) {
     Need((value.kind==Value::Kind::Scalar||value.kind==Value::Kind::Timestamp)&&value.word>>28<=3,"Native KSC service needs scalar value");
     const auto p=value.word&0x0FFFFFFF;return int32_t(p&0x08000000?p|0xF0000000:p);
 }
+uint8_t KanaPrefix(uint8_t trail) {
+    if(trail==0xC1)return 0;
+    if(trail<=0xA8)return uint8_t((trail+1u)&~1u);
+    switch(trail){
+    case 0xE1:case 0xE3:case 0xE5:case 0xEC:return uint8_t(trail+1);
+    case 0xEE:return 0xA2;
+    case 0xEF:return 0xA6;
+    case 0xF0:return 0xA8;
+    default:return trail;
+    }
+}
 }
 GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generation,uint32_t row) noexcept {
     GameWordRowObservation out;out.generation=generation;out.row=row;
@@ -44,7 +55,13 @@ GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generati
     return out;
 }
 script::Value GameNilBytePair0D(const std::vector<script::Value>& args){
-    Need(args.size()==1&&args[0].kind==Value::Kind::Scalar&&args[0].word==0,"Builtin0D conversion outside finite canonical NIL domain");
+    Need(args.size()==1,"Builtin0D argc");const auto& value=args[0];
+    if(value.kind==Value::Kind::String&&value.word>>28==6&&value.cp932.size()==2){
+        const auto lead=uint8_t(value.cp932[0]),trail=uint8_t(value.cp932[1]);
+        Need(lead==0x82&&trail>=0x9F&&trail<=0xF1&&KanaPrefix(trail)==trail,"Builtin0D outside finite prefix text domain");
+        return Value::integer(int32_t(lead)|(int32_t(trail)<<8));
+    }
+    Need(value.kind==Value::Kind::Scalar&&value.word==0,"Builtin0D conversion outside finite canonical NIL/prefix domain");
     //757D8 selects static E0760 for tag0. 69404/6940C LBU and69418 SLL8
     //pack the first two bytes83,73;686A4/685C0 publish tagged integer.
     return Value::integer(0x7383);
@@ -58,29 +75,69 @@ void GameAsciiClass70Owner::Close() noexcept {
 }
 script::Value GameAsciiClass70Owner::Query(const std::vector<script::Value>& args)const {
     Need(live_&&generation_!=0,"Builtin70 requires its current constructor-owned character flags");
-    Need(args.size()==1&&args[0].kind==Value::Kind::String&&args[0].word>>28==6&&!args[0].cp932.empty(),"Builtin70 outside finite nonempty owned-string domain");
-    for(unsigned char c:args[0].cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin70 character map outside finite alphanumeric ASCII domain");
+    Need(args.size()==1&&args[0].kind==Value::Kind::String&&args[0].word>>28==6,"Builtin70 outside finite owned-string domain");
+    const auto& text=args[0].cp932;Need(GameInput32TextAllowed(text),"Builtin70 character map outside finite Latin/kana domain");
     Need(current_.kind==Value::Kind::Scalar&&(current_.word==0x10000000||current_.word==0x10000001),"Builtin70 current flag outside finite constructor-owned domain");
-    //The relocated7C204 load reads1C94D0, not raw .data E5950.
-    //76A50/.ctors initializes encoded FALSE;7C2C0 returns low28!=0.
-    auto result=False();result.word|=uint32_t((current_.word&0x0FFFFFFF)!=0);return result;
+    Need(other_.kind==Value::Kind::Scalar&&(other_.word==0x10000000||other_.word==0x10000001),"Builtin70 other flag outside finite constructor-owned domain");
+    uint32_t mapped=0;bool scanned=true;
+    for(size_t at=0;at<text.size();at+=2){
+        const auto lead=uint8_t(text[at]);
+        if(lead==0x81)continue; // admitted815B only
+        if(lead!=0x82){scanned=false;break;}
+        if(KanaPrefix(uint8_t(text[at+1])))++mapped;
+    }
+    //7C27C/280 includes the pointer one byte beyond the last decoded unit.
+    //The two values are constructor-owned flags, not constant branch answers.
+    const auto& flag=scanned&&mapped&&text.size()+1<=31?other_:current_;
+    auto result=False();result.word|=uint32_t((flag.word&0x0FFFFFFF)!=0);return result;
 }
 script::Value GameAsciiPrefix71(const std::vector<script::Value>& args){
     Need(args.size()==1,"Builtin71 requires one string argument");const auto& value=args[0];
-    Need(value.kind==Value::Kind::String&&value.word>>28==6&&!value.cp932.empty(),"Builtin71 outside finite nonempty owned-string domain");
-    for(unsigned char c:value.cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin71 character map outside finite alphanumeric ASCII domain");
-    //First byte is neither81 nor82:7C300 BNEL executes v1=0; JR7C334
-    //executes7C338 v0=v1. Wrapper6A7DC therefore writes canonical NIL.
+    Need(value.kind==Value::Kind::String&&value.word>>28==6,"Builtin71 outside finite owned-string domain");
+    Need(GameInput32TextAllowed(value.cp932),"Builtin71 character map outside finite Latin/kana domain");
+    for(size_t at=0;at<value.cp932.size();at+=2){
+        const auto lead=uint8_t(value.cp932[at]);
+        if(lead==0x81)continue;
+        if(lead!=0x82)break;
+        const auto trail=KanaPrefix(uint8_t(value.cp932[at+1]));
+        if(trail){
+            //WindowsPrefixOwnedText: deep-copy the proved static text.
+            //Original tag5/static PSP pointer is not a KSC-pool address here.
+            std::string prefix;prefix.push_back('\x82');prefix.push_back(char(trail));
+            return Value::string(std::move(prefix));
+        }
+    }
     return Nil();
 }
 script::Value GameStringLength53(const std::vector<script::Value>& args){
     Need(args.size()==1,"Builtin53 character count requires one argument");const auto& value=args[0];
     if(value.kind==Value::Kind::Scalar&&value.word==0)return Value::integer(0);
     Need(value.kind==Value::Kind::String&&value.word>>28==6,"Builtin53 conversion outside finite owned-string domain");
-    for(unsigned char c:value.cp932)Need((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z'),"Builtin53 character table outside finite alphanumeric ASCII domain");
-    //E07CC table flags for every admitted byte have bit4 clear. Each7C000
-    //iteration consumes exactly one byte; no case or text conversion occurs.
-    return Value::integer(int32_t(value.cp932.size()&0x0FFFFFFF));
+    uint32_t count=0;
+    // All256 E07CC bit4 decisions:81..9F/E0..FE advance two bytes.
+    // Checked native string boundary rejects embedded NUL/truncated units;
+    // this byte counter does not expand the Input32 admission domain.
+    for(size_t at=0;at<value.cp932.size();++count){
+        const auto lead=uint8_t(value.cp932[at]);Need(lead!=0,"Builtin53 embedded NUL");
+        const size_t width=(lead>=0x81&&lead<=0x9F)||(lead>=0xE0&&lead<=0xFE)?2u:1u;
+        Need(width<=value.cp932.size()-at&&(width==1||value.cp932[at+1]!=0),"Builtin53 truncated flagged unit");at+=width;
+    }
+    return Value::integer(int32_t(count&0x0FFFFFFF));
+}
+script::Value GameKanaSuffix72(const std::vector<script::Value>& args){
+    Need(args.size()==1,"Builtin72 requires one string argument");const auto& value=args[0];
+    Need(value.kind==Value::Kind::String&&value.word>>28==6,"Builtin72 outside finite owned-string domain");
+    Need(GameInput32TextAllowed(value.cp932),"Builtin72 character map outside finite Latin/kana domain");
+    uint8_t last=0;
+    for(size_t at=0;at<value.cp932.size();at+=2){
+        const auto lead=uint8_t(value.cp932[at]);
+        if(lead==0x81)continue;
+        if(lead!=0x82)return Nil();
+        const auto trail=KanaPrefix(uint8_t(value.cp932[at+1]));if(trail)last=trail;
+    }
+    if(!last)return Nil();
+    std::string suffix;suffix.push_back('\x82');suffix.push_back(char(last));
+    return Value::string(std::move(suffix));
 }
 script::Value GameStringReplace51(const std::vector<script::Value>& args) {
     Need(args.size()==3,"Builtin51 requires source,needle,replacement");
@@ -381,11 +438,18 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     }
     if(id==0x53){
         auto value=GameStringLength53(args);
-        if(!state_.string_length53_calls){
+        if(args[0].kind==Value::Kind::String&&!GameInput32TextAllowed(args[0].cp932)){
+            if(!state_.string_length53_extended_calls){state_.string_length53_extended_pc=vm_->pc();state_.string_length53_extended_input=args[0].cp932;state_.string_length53_extended_result=value.word;}
+            ++state_.string_length53_extended_calls;
+        }
+        if(vm_->pc()==0x1584){ // actual display-length producer; earlier scenario counters are unrelated
             const auto current=vm_->current_witness();
             if(current.frame_captured&&current.frame_values[0].kind==Value::Kind::Scalar&&current.frame_values[0].word>>28==2){
                 const auto row=current.frame_values[0].word&0x0FFFFFFF;
-                if(row<600&&ObserveWordRow(row).valid){word_consumer_row_index_=row;state_.word_consumer_source_pc=current.current_pc;
+                const auto observed=ObserveWordRow(row);
+                const auto input_hash=args[0].kind==Value::Kind::String?core::sha256(reinterpret_cast<const uint8_t*>(args[0].cp932.data()),args[0].cp932.size()):std::array<uint8_t,32>{};
+                if(row<600&&observed.valid&&args[0].kind==Value::Kind::String&&observed.fields[1].kind==Value::Kind::String
+                   &&observed.fields[1].cp932_bytes==args[0].cp932.size()&&observed.fields[1].cp932_sha256==input_hash){word_consumer_row_index_=row;state_.word_consumer_source_pc=current.current_pc;
                     state_.word_consumer_source_entry=current.code_entry;state_.word_consumer_source_frame_id=current.frame_id;}
             }
         }
@@ -395,7 +459,13 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     }
     if(id==0x71){
         auto value=GameAsciiPrefix71(args);++state_.string_prefix71_calls;state_.string_prefix71_pc=vm_->pc();
-        state_.string_prefix71_input=args[0].cp932;state_.string_prefix71_result_word=value.word;state_.string_prefix71_result_kind=uint32_t(value.kind);return value;
+        state_.string_prefix71_input=args[0].cp932;state_.string_prefix71_result_word=value.word;state_.string_prefix71_result_kind=uint32_t(value.kind);
+        state_.string_prefix71_result_text=value.cp932;return value;
+    }
+    if(id==0x72){
+        auto value=GameKanaSuffix72(args);++state_.string_suffix72_calls;state_.string_suffix72_pc=vm_->pc();
+        state_.string_suffix72_input=args[0].cp932;state_.string_suffix72_result_word=value.word;state_.string_suffix72_result_kind=uint32_t(value.kind);
+        state_.string_suffix72_result_text=value.cp932;return value;
     }
     if(id==0x0D){
         auto value=GameNilBytePair0D(args);++state_.nil_code0d_calls;state_.nil_code0d_pc=vm_->pc();state_.nil_code0d_result_word=value.word;return value;
@@ -408,8 +478,9 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     if(id==0x22){
         Need(args.size()==2,"Builtin22 event request argc");
         Need(runtime_!=nullptr,"Builtin22 needs actual actor command owner");
+        state_.actor22_pc=vm_->pc();state_.actor22_command_word=args[0].word;state_.actor22_parameter_word=args[1].word;
         const auto begun=runtime_->RequestActorEvent(Number(args[0]),Number(args[1]));Need(bool(begun),begun.detail.c_str());
-        ++state_.actor22_calls;state_.actor22_pc=vm_->pc();state_.actor22_command_word=args[0].word;state_.actor22_parameter_word=args[1].word;
+        ++state_.actor22_calls;
         vm_->clear_event_signal();return Value::integer(0);
     }
     if(id==0x23){Need(args.empty(),"Builtin23 wait argc");vm_->wait_for_event();return Nil();}
@@ -759,15 +830,34 @@ GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argume
         ++state_.owner_event_calls;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
-GameFsStatus GameActorScript::PostConversationInteraction(const GameOwnerEventTarget& target,uint64_t origin,int32_t& result){
+GameFsStatus GameActorScript::PostConversationInteraction(const GameOwnerEventTarget& target,uint64_t origin,bool owned_dispatch,int32_t& result){
     if(!vm_||!origin)return {GameFsCode::Unavailable,0,"Conversation transaction needs its live source activation"};
     const auto before=vm_->current_witness();const auto previous=owned_conversation_.Snapshot(*vm_);
     const auto main=before.code_entry==0x8DDB5?before.frame_id:previous.main_frame;
-    if(!vm_->owns_active_frame(main,0x8DDB5)||(previous.accepted&&(!previous.completed||!previous.dispatch_ready)))
+    if(!vm_->owns_active_frame(main,0x8DDB5)
+       ||(owned_dispatch?(!previous.accepted||!previous.completed||!previous.dispatch_ready)
+                         :(before.code_entry!=0x8DDB5||before.call_depth!=1)))
         return {GameFsCode::Unavailable,0,"Conversation transaction has no current owning main frame"};
     const auto status=PostMainFlowEvent(0,0,&target);result=state_.owner_event_result;
-    if(status&&result==0&&!owned_conversation_.Begin(before,state_.generation,origin,vm_->last_callback_receipt(),main))
-        return {GameFsCode::Unavailable,0,"Accepted conversation event could not bind its source receipt"};
+    if(status&&result==0){
+        owned_conversation_.SupersedePostModal();
+        if(!owned_conversation_.Begin(before,state_.generation,origin,vm_->last_callback_receipt(),main))
+            return {GameFsCode::Unavailable,0,"Accepted conversation event could not bind its source receipt"};
+    }
+    return status;
+}
+GameFsStatus GameActorScript::PostPostModalInteraction(const GameOwnerEventTarget& target,uint64_t post,uint64_t inventory,
+                                                     uint64_t sequence,int32_t& result){
+    result=-1;
+    if(!vm_||!post||!inventory||!sequence||owned_conversation_.State().accepted)
+        return {GameFsCode::Unavailable,0,"Post-modal transaction needs its unclaimed owning input"};
+    const auto before=vm_->current_witness();const auto main=vm_->unique_active_frame(0x8DDB5);
+    const bool observe=main&&!before.event_envelope_present&&!before.queued_callbacks
+        &&target.callback.kind==script::Value::Kind::Code&&target.callback.word==0x7008DA28u;
+    const auto status=PostMainFlowEvent(0,0,&target);result=state_.owner_event_result;
+    if(status&&result==0&&observe&&!owned_conversation_.BeginPostModal(before,state_.generation,post,inventory,sequence,vm_->last_callback_receipt(),main)){
+        ++state_.post_modal_observation_refusals;owned_conversation_.SupersedePostModal();
+    }
     return status;
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {

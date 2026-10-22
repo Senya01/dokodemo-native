@@ -6,6 +6,12 @@
 #include <vector>
 
 namespace dokodemo::recovered {
+// Finite Input32 mode0 domain:62 ASCII alphanumeric,83 hiragana,
+//83 katakana and CP932815B. Other source14E44 outcomes/fallbacks refuse.
+bool GameInput32TextAllowed(std::string_view) noexcept;
+// Source14E44/14F90 direct-success subset. Text is never rewritten;
+//auxiliary is assigned only on success. Native editor limit is8 units.
+bool GameInput32Normalize(std::string_view text,std::string& auxiliary);
 // The source20A30 bound counts calls to941C8,not bytes or UTF16 code units.
 // Windows text is accepted only where strict CP932 and source-decoder boundaries
 // agree. Unsupported single-byte nonASCII cannot silently eat the next letter.

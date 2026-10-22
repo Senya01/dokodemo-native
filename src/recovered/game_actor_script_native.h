@@ -12,18 +12,23 @@ namespace dokodemo::recovered {
 //6A350/7BF18 reached string-only ABI. Bytewise,nonoverlapping replacement;
 //empty needle is refused (original explicitly traps),result owns its bytes.
 script::Value GameStringReplace51(const std::vector<script::Value>&);
-//6A5DC ->7C000 finite alphanumeric ASCII character count. Other character
-//table domains and75778 numeric formatting remain explicitly unsupported.
+//6A5DC ->7C000 byte count using all256 source E07CC bit4 entries.
+//Checked NUL/extent boundaries;75778 numeric formatting is unsupported.
 script::Value GameStringLength53(const std::vector<script::Value>&);
-//6A780 ->7C2D8: proven NONEMPTY alphanumeric ASCII branch returns literal NIL.
-//Other inputs/character-map branches are unavailable, not fallback NIL values.
+//Historical API names retain ASCII callers. Latin/kana direct branches now
+//include empty owned strings; WindowsPrefixOwnedText deep-copies a proved
+//static prefix instead of fabricating its original tag5/pool-relative address.
 script::Value GameAsciiPrefix71(const std::vector<script::Value>&);
-//693E4: finite canonical-NIL75778 path points to E0760 bytes83,73; read
-//little-endian byte pair and return integer7383. Other conversions refused.
+//6A7E4 ->7C360: LAST mapped prefix, or NIL if any non-kana unit occurs.
+//Same WindowsPrefixOwnedText adapter as71; source static tag5 is qualified.
+script::Value GameKanaSuffix72(const std::vector<script::Value>&);
+//693E4: canonical NIL maps to E0760 bytes83,73 -> integer7383.
+//A proved two-byte kana-map result is packed little-endian while its native
+//owning bytes remain live. Other75778 conversions are refused.
 script::Value GameNilBytePair0D(const std::vector<script::Value>&);
 //76A50 static-constructor defaults, owned for this native script lifetime.
-//Only the reached nonempty alphanumeric ASCII7C1EC branch is implemented.
-//No interface fabricates later aliased PSP global writes or CP932 results.
+//Finite229-unit7C1EC scan includes empty strings and the83-entry hira map.
+//No interface fabricates later aliased PSP global writes.
 class GameAsciiClass70Owner final {
   public:
     void Begin(uint64_t generation) noexcept;
@@ -88,6 +93,7 @@ struct GameWordRowObservation {
 GameWordRowObservation GameObserveWordRow(const script::Vm&,uint64_t generation,uint32_t row) noexcept;
 struct GameActorScriptSnapshot {
     GameOwnedConversationSnapshot owned_conversation;
+    uint64_t post_modal_observation_refusals=0;
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
     uint64_t generation=0;
     bool autoload_imported=false,profile_loaded_marker=false,manager_flag68=false;
@@ -134,8 +140,12 @@ struct GameActorScriptSnapshot {
     uint32_t string_replace_calls=0;
     uint32_t string_length53_calls=0,string_length53_pc=0,string_length53_result_word=0;
     std::string string_length53_input;
+    uint32_t string_length53_extended_calls=0,string_length53_extended_pc=0,string_length53_extended_result=0;
+    std::string string_length53_extended_input;
     uint32_t string_prefix71_calls=0,string_prefix71_pc=0,string_prefix71_result_word=0,string_prefix71_result_kind=0;
-    std::string string_prefix71_input;
+    std::string string_prefix71_input,string_prefix71_result_text;
+    uint32_t string_suffix72_calls=0,string_suffix72_pc=0,string_suffix72_result_word=0,string_suffix72_result_kind=0;
+    std::string string_suffix72_input,string_suffix72_result_text;
     uint32_t nil_code0d_calls=0,nil_code0d_pc=0,nil_code0d_result_word=0;
     bool ascii_class70_live=false;
     uint64_t ascii_class70_generation=0;
@@ -209,7 +219,9 @@ class GameActorScript final {
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
-    GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,int32_t& queue_result);
+    GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,bool owned_dispatch,int32_t& queue_result);
+    GameFsStatus PostPostModalInteraction(const GameOwnerEventTarget&,uint64_t post_modal_generation,
+                                         uint64_t inventory_generation,uint64_t input_sequence,int32_t& queue_result);
     GameActorScriptSnapshot Snapshot() const;
     GameWordRowObservation ObserveWordRow(uint32_t row)const noexcept;
     void Close();

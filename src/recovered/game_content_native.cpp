@@ -527,13 +527,11 @@ bool GameContentBoot::ProcessText(const GameTextEvent& event){
     if(state_.closed||inventory_.Modal())return false;
     if(state_.actor_script.awaiting_input&&GameInput32KeyboardActivity(scene_ui_.Editor(),event))
         state_.actor_input_remaining=9000;
-    //Named WindowsInput32Ascii:raw14E44/14F90 proves these finite mappings.
-    //Other CP932 auxiliary normalization remains an explicit unsupported
-    //domain;existing title/profile editors retain their own accepted domain.
+    //WindowsInput32LatinKana229:source14E44/14F90 direct-success subset.
+    //Unknown/drop/fallback characters refuse;profile editors keep their domain.
     if(state_.actor_script.awaiting_input&&event.kind==GameTextKind::Commit){
         if(event.bytes>event.text.size())return false;
-        for(uint32_t i=0;i<event.bytes;++i){const auto c=uint8_t(event.text[i]);
-            if(!((c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')))return false;}
+        if(!GameInput32TextAllowed(std::string_view(event.text.data(),event.bytes)))return false;
     }
     return scene_ui_.HandleText(event);
 }
@@ -858,13 +856,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             const auto finished=scene_ui_.Editor();
             if(state_.status&&finished.live&&finished.source_state==3&&finished.result_ready){
                 const auto* borrowed=scene_ui_.EditorResult();
-                const std::string text=borrowed?*borrowed:std::string();std::string aux=text;
-                bool supported=true;
-                for(auto& c:aux){
-                    if(c>='a'&&c<='z')c=char(c-'a'+'A');
-                    else if(!((c>='A'&&c<='Z')||(c>='0'&&c<='9')))supported=false;
-                }
-                if(!supported)state_.status={GameFsCode::Unavailable,0,"Input32 auxiliary normalization outside finite ASCII domain"};
+                const std::string text=borrowed?*borrowed:std::string();std::string aux;
+                if(!GameInput32Normalize(text,aux))state_.status={GameFsCode::Unavailable,0,"Input32 auxiliary normalization outside finite Latin/kana domain"};
                 else state_.status=actor_script_.CompleteInput(actor_input_target_,text,aux,state_.actor_input_timed_out);
                 state_.actor_script=actor_script_.Snapshot();
             }
@@ -995,7 +988,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.main_flow=main_flow_.Snapshot();
             state_.status=returned_interaction_.Initialize([this]{return actor_script_.OwnerEventTarget();},
                 [this](const GameOwnerEventTarget& target,int32_t& result){
-                    return actor_script_.PostConversationInteraction(target,returned_interaction_.Snapshot().activation.id,result);
+                    const auto activation=returned_interaction_.Snapshot().activation;
+                    return actor_script_.PostConversationInteraction(target,activation.id,activation.kind==GameConversationProofKind::OwnedMain,result);
                 });
             if(!state_.status)throw std::runtime_error(state_.status.detail);
             ++state_.opened_resources;state_.blocked=false;

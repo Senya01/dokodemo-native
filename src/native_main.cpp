@@ -54,7 +54,7 @@ struct Options {
     uint32_t testRngSeedWord=0;
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
-    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false;
+    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false,kanaWindowFixture=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
 };
 Options ParseOptions() {
@@ -75,7 +75,7 @@ Options ParseOptions() {
         else if(arg==L"--game-loop-window-test"){options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--scene-clock-window-test"){options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-position-window-test"){options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
-        else if(arg==L"--conversation-window-fixture"||arg==L"--inventory-window-fixture"||arg==L"--inventory-actions-window-fixture"||arg==L"--decorate-window-fixture"||arg==L"--putaway-window-fixture"||arg==L"--discard-window-fixture"||arg==L"--game71-window-fixture"||arg==L"--manager9-window-fixture"||arg==L"--post17-window-fixture"||arg==L"--post19-window-fixture"||arg==L"--post21-window-fixture"||arg==L"--post24-window-fixture"||arg==L"--post25-window-fixture"||arg==L"--post26-window-fixture"||arg==L"--post28-window-fixture"||(arg==L"--conversation-activation-window-fixture"||arg==L"--repeat-conversation-window-fixture"||arg==L"--play-conversation-window-fixture"||arg==L"--sound-conversation-window-fixture")){options.discardWindowFixture=arg==L"--discard-window-fixture";options.putawayWindowFixture=arg==L"--putaway-window-fixture"||options.discardWindowFixture;options.decorateWindowFixture=arg==L"--decorate-window-fixture"||options.putawayWindowFixture;options.inventoryActionWindowFixture=arg==L"--inventory-actions-window-fixture"||options.decorateWindowFixture;options.soundWindowFixture=arg==L"--sound-conversation-window-fixture";options.playWindowFixture=arg==L"--play-conversation-window-fixture"||options.soundWindowFixture;options.repeatWindowFixture=arg==L"--repeat-conversation-window-fixture"||options.playWindowFixture;options.activationWindowFixture=arg==L"--conversation-activation-window-fixture"||options.repeatWindowFixture;options.post28WindowFixture=arg==L"--post28-window-fixture"||options.activationWindowFixture;options.post26WindowFixture=arg==L"--post26-window-fixture"||options.post28WindowFixture;options.post25WindowFixture=arg==L"--post25-window-fixture"||options.post26WindowFixture;options.post24WindowFixture=arg==L"--post24-window-fixture"||options.post25WindowFixture;options.post21WindowFixture=arg==L"--post21-window-fixture"||options.post24WindowFixture;options.post19WindowFixture=arg==L"--post19-window-fixture"||options.post21WindowFixture;options.post17WindowFixture=arg==L"--post17-window-fixture"||options.post19WindowFixture;options.manager9WindowFixture=arg==L"--manager9-window-fixture"||options.post17WindowFixture;options.game71WindowFixture=arg==L"--game71-window-fixture"||options.manager9WindowFixture||options.inventoryActionWindowFixture;options.inventoryWindowFixture=arg!=L"--conversation-window-fixture";options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--kana-word-window-fixture"||arg==L"--conversation-window-fixture"||arg==L"--inventory-window-fixture"||arg==L"--inventory-actions-window-fixture"||arg==L"--decorate-window-fixture"||arg==L"--putaway-window-fixture"||arg==L"--discard-window-fixture"||arg==L"--game71-window-fixture"||arg==L"--manager9-window-fixture"||arg==L"--post17-window-fixture"||arg==L"--post19-window-fixture"||arg==L"--post21-window-fixture"||arg==L"--post24-window-fixture"||arg==L"--post25-window-fixture"||arg==L"--post26-window-fixture"||arg==L"--post28-window-fixture"||(arg==L"--conversation-activation-window-fixture"||arg==L"--repeat-conversation-window-fixture"||arg==L"--play-conversation-window-fixture"||arg==L"--sound-conversation-window-fixture")){options.kanaWindowFixture=arg==L"--kana-word-window-fixture";options.discardWindowFixture=arg==L"--discard-window-fixture";options.putawayWindowFixture=arg==L"--putaway-window-fixture"||options.discardWindowFixture;options.decorateWindowFixture=arg==L"--decorate-window-fixture"||options.putawayWindowFixture;options.inventoryActionWindowFixture=arg==L"--inventory-actions-window-fixture"||options.decorateWindowFixture;options.soundWindowFixture=arg==L"--sound-conversation-window-fixture";options.playWindowFixture=arg==L"--play-conversation-window-fixture"||options.soundWindowFixture;options.repeatWindowFixture=arg==L"--repeat-conversation-window-fixture"||options.playWindowFixture;options.activationWindowFixture=arg==L"--conversation-activation-window-fixture"||options.repeatWindowFixture;options.post28WindowFixture=arg==L"--post28-window-fixture"||options.activationWindowFixture||options.kanaWindowFixture;options.post26WindowFixture=arg==L"--post26-window-fixture"||options.post28WindowFixture;options.post25WindowFixture=arg==L"--post25-window-fixture"||options.post26WindowFixture;options.post24WindowFixture=arg==L"--post24-window-fixture"||options.post25WindowFixture;options.post21WindowFixture=arg==L"--post21-window-fixture"||options.post24WindowFixture;options.post19WindowFixture=arg==L"--post19-window-fixture"||options.post21WindowFixture;options.post17WindowFixture=arg==L"--post17-window-fixture"||options.post19WindowFixture;options.manager9WindowFixture=arg==L"--manager9-window-fixture"||options.post17WindowFixture;options.game71WindowFixture=arg==L"--game71-window-fixture"||options.manager9WindowFixture||options.inventoryActionWindowFixture;options.inventoryWindowFixture=arg!=L"--conversation-window-fixture";options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--camera-message-window-test"){options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-channel-window-test"){options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
@@ -1872,18 +1872,28 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
        <<",\"ctx_reference_first_index\":"<<boot.content.actor_script.ctx_reference_first_index
        <<",\"ctx_reference_policy\":\"NativeOwnedCtx28ReferencePresence;NoPSPAddressOrOtherDomainClaim\"";
     out<<",\"string_length53_calls\":"<<boot.content.actor_script.string_length53_calls<<",\"string_length53_pc\":"<<boot.content.actor_script.string_length53_pc
+       <<",\"string_length53_extended_calls\":"<<boot.content.actor_script.string_length53_extended_calls
+       <<",\"string_length53_extended_pc\":"<<boot.content.actor_script.string_length53_extended_pc
+       <<",\"string_length53_extended_result\":"<<boot.content.actor_script.string_length53_extended_result
+       <<",\"string_length53_extended_input_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.string_length53_extended_input.data()),boot.content.actor_script.string_length53_extended_input.size()))
        <<",\"string_length53_result_word\":"<<boot.content.actor_script.string_length53_result_word<<",\"string_length53_input_cp932_hex\":"
        <<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.string_length53_input.data()),boot.content.actor_script.string_length53_input.size()));
     out<<",\"string_prefix71_calls\":"<<boot.content.actor_script.string_prefix71_calls<<",\"string_prefix71_pc\":"<<boot.content.actor_script.string_prefix71_pc
        <<",\"string_prefix71_result_word\":"<<boot.content.actor_script.string_prefix71_result_word<<",\"string_prefix71_result_kind\":"<<boot.content.actor_script.string_prefix71_result_kind
        <<",\"string_prefix71_input_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.string_prefix71_input.data()),boot.content.actor_script.string_prefix71_input.size()));
+    const auto& kana=boot.content.actor_script;
+    out<<",\"string_prefix71_result_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(kana.string_prefix71_result_text.data()),kana.string_prefix71_result_text.size()))
+       <<",\"string_suffix72_calls\":"<<kana.string_suffix72_calls<<",\"string_suffix72_pc\":"<<kana.string_suffix72_pc
+       <<",\"string_suffix72_result_word\":"<<kana.string_suffix72_result_word<<",\"string_suffix72_result_kind\":"<<kana.string_suffix72_result_kind
+       <<",\"string_suffix72_input_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(kana.string_suffix72_input.data()),kana.string_suffix72_input.size()))
+       <<",\"string_suffix72_result_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(kana.string_suffix72_result_text.data()),kana.string_suffix72_result_text.size()));
     out<<",\"nil_code0d_calls\":"<<boot.content.actor_script.nil_code0d_calls<<",\"nil_code0d_pc\":"<<boot.content.actor_script.nil_code0d_pc
        <<",\"nil_code0d_result_word\":"<<boot.content.actor_script.nil_code0d_result_word;
     out<<",\"ascii_class70_live\":"<<(boot.content.actor_script.ascii_class70_live?"true":"false")
        <<",\"ascii_class70_generation\":"<<boot.content.actor_script.ascii_class70_generation
        <<",\"ascii_class70_current_word\":"<<boot.content.actor_script.ascii_class70_current_word
        <<",\"ascii_class70_other_word\":"<<boot.content.actor_script.ascii_class70_other_word
-       <<",\"ascii_class70_policy\":\"NativeScriptLifetimeOwner;Source76A50ConstructorDefaults;NoLaterAliasWriterOrCP932Claim\""
+       <<",\"ascii_class70_policy\":\"NativeScriptLifetimeOwner;Source76A50ConstructorDefaults;LatinKana229;NoLaterAliasWriterClaim\""
        <<",\"ascii_class70_calls\":"<<boot.content.actor_script.ascii_class70_calls<<",\"ascii_class70_pc\":"<<boot.content.actor_script.ascii_class70_pc
        <<",\"ascii_class70_result_word\":"<<boot.content.actor_script.ascii_class70_result_word
        <<",\"ascii_class70_input_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.ascii_class70_input.data()),boot.content.actor_script.ascii_class70_input.size()));
@@ -1905,6 +1915,9 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
     out<<",\"vm_current\":";WriteVmStateWitness(out,boot.content.actor_script.vm_current);
     out<<",\"game3_execution\":";WriteVmStateWitness(out,boot.content.actor_script.game3_execution);
     {const auto& o=boot.content.actor_script.owned_conversation;out<<",\"owned_conversation\":{\"policy\":\"AcceptedEvent0;SourceCommonOwner;OneSuccessor;NotPSP1CUnwind\"";
+        out<<",\"observation_refusals\":"<<boot.content.actor_script.post_modal_observation_refusals;
+        out<<",\"origin\":"<<unsigned(o.origin)<<",\"post_modal_generation\":"<<o.post_modal_generation;
+        out<<",\"inventory_generation\":"<<o.inventory_generation<<",\"input_sequence\":"<<o.input_sequence;
         out<<",\"receipt\":"<<o.receipt;
         out<<",\"origin_activation\":"<<o.origin_activation;
         out<<",\"generation\":"<<o.generation;
@@ -2002,7 +2015,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
        <<",\"actor_model_vertices\":"<<runtime.actor_model_vertices<<",\"actor_model_triangles\":"<<runtime.actor_model_triangles
        <<",\"actor_request_pending\":"<<boolean(runtime.actor_request_pending)
        <<",\"selected_extension_pending\":"<<boolean(runtime.selected_extension_pending)
-       <<",\"event_requests\":"<<runtime.event_requests<<",\"requested_command\":"<<runtime.requested_command
+       <<",\"event_requests\":"<<runtime.event_requests<<",\"event_pending_replacements\":"<<runtime.event_pending_replacements<<",\"requested_command\":"<<runtime.requested_command
        <<",\"asc_executor_implemented\":false,\"asc_partial_executor_implemented\":true,\"actor_model_drawn\":"<<boolean(runtime.actor_draw_frames>0)
        <<",\"command_blocked\":"<<boolean(runtime.command_blocked)<<",\"command_pc\":"<<runtime.command_pc
        <<",\"command_effects\":"<<runtime.command_effects<<",\"command_frontier\":"<<runtime.command_frontier
@@ -4074,16 +4087,21 @@ bool AtGameBootBoundary(const dokodemo::StartupObservation& o) {
 }
 // A running game's completion is not the immutable boot-resource oracle.
 // Input admission remains in the existing conversation owner, not this fixture.
-bool AtOwnedGameplayBoundary(const dokodemo::StartupObservation& o){
+bool AtOwnedGameplayBoundary(const dokodemo::StartupObservation& o,bool initial_completed=false){
     const auto& b=o.game_boot;const auto& c=b.content;const auto& a=c.actor_script;
     const auto& r=c.returned_interaction;const auto& own=a.owned_conversation;
+    const auto& activation=r.activation;
+    const bool initial=initial_completed&&r.admitted&&r.returned&&activation.live&&!activation.revoked&&!activation.consumed
+        &&activation.body_completed&&activation.returned&&activation.main_consumed
+        &&(activation.kind==dokodemo::recovered::GameConversationProofKind::Legacy85438
+           ||activation.kind==dokodemo::recovered::GameConversationProofKind::Topic2B483);
+    const bool owned=own.completed&&!own.failed&&own.main_live&&own.dispatch_ready
+        &&activation.kind==dokodemo::recovered::GameConversationProofKind::OwnedMain&&activation.owned_receipt==own.receipt;
     if(!o.status||!o.reached_100C||!b.memory_initialization_succeeded||!b.graphics.live||!b.graphics.frame_sequence
        ||!b.filesystem.mounted||!b.scene.returned_9dc||!b.vm.manager_ready||!c.font_ready||c.closed
        ||!c.scene_ui.live||!c.scene_ui.scene1_returned||!c.status||c.blocked||!a.live||a.blocked
        ||!a.vm_current.valid||!a.vm_current.context_registered||a.vm_current.stopped
-       ||!r.live||!r.eligible||r.armed||r.event_posted||!own.completed||own.failed||!own.main_live||!own.dispatch_ready
-       ||r.activation.kind!=dokodemo::recovered::GameConversationProofKind::OwnedMain
-       ||r.activation.owned_receipt!=own.receipt)return false;
+       ||!r.live||!r.eligible||(!initial_completed&&r.armed)||r.event_posted||(!initial&&!owned))return false;
     if(o.module_records.size()!=9||o.module_observations.size()!=9)return false;
     for(size_t i=0;i<9;++i){const auto& record=o.module_records[i];const auto& item=o.module_observations[i];
         if(record.state!=dokodemo::recovered::NativeModuleState::Started||!record.input_live||!item.record_live
@@ -4355,6 +4373,10 @@ struct Application {
     unsigned repeatEditorStep=0;uint32_t repeatEditorBaseline=0;uint64_t repeatEditorWait=0;
     unsigned playStep=0,playCycles=0;uint64_t playGeneration=0,playOrigin=0,playReceipt=0,playWait=0;
     uint32_t playPosted=0;bool playPassed=false;
+    unsigned kanaStep=0,kanaUiStep=0,kanaSeekStep=0,kanaSeekCount=0;uint64_t kanaWait=0;
+    uint64_t kanaSeekGeneration=0;uint32_t kanaSeekPosted=0;
+    uint32_t kanaInputBefore=0,kanaAckBefore=0,kanaChoiceBefore=0;
+    bool kanaPassed=false,kanaHeldRefused=false,kanaClosing=false,kanaWordPassed=false,kanaEchoSeen=false;
     bool soundRenderedCaptured=false,soundDrainedCaptured=false;
     bool post29ChoiceHeldRefused=false,post29ChoiceClosingObserved=false,post29NextHeldRefused=false;
     bool profileNoObserved=false;
@@ -4744,6 +4766,98 @@ struct Application {
         }
         if((options.post28WindowFixture||options.inventoryActionWindowFixture)&&c.actor_script.started&&c.blocked&&!c.status){
             save(L"post28-first-content-failure");storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);return;
+        }
+        //Feature automation uses the existing editor/message/SELECT owners.
+        if(options.kanaWindowFixture&&c.post_modal.event_posted){
+            const auto& a=c.actor_script;const auto phase=a.runtime.actor_phases;
+            const std::string word="\x82\xD0\x82\xB4"; // hiza
+            const auto fail=[&](const wchar_t* n){save(n);storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);};
+            if(!kanaStep&&a.awaiting_input){kanaInputBefore=a.input_completions;kanaStep=1;kanaUiStep=0;kanaWait=phase+180;}
+            if(kanaPassed){storageBoundaryPassed=true;return;}
+            if(!kanaStep){
+                const auto& r=c.returned_interaction;
+                if(r.revoked){fail(L"kana-initial-owner-refused");return;}
+                if(!kanaSeekStep&&r.eligible){
+                    kanaSeekGeneration=r.generation;kanaSeekPosted=r.posted;++kanaSeekCount;
+                    if(kanaSeekCount>8){fail(L"kana-offered-input-observation-limit");return;}
+                    save(L"kana-source-ready");button(0);kanaWait=phase+3;kanaSeekStep=1;kanaUiStep=0;
+                }else if(kanaSeekStep==1&&phase>=kanaWait&&r.armed){
+                    if(!r.eligible||r.generation!=kanaSeekGeneration||r.posted!=kanaSeekPosted){fail(L"kana-seek-owner-changed");return;}
+                    button(Circle);kanaWait=phase+300;kanaSeekStep=2;
+                }else if(kanaSeekStep==2&&r.posted==kanaSeekPosted+1){
+                    if(r.generation!=kanaSeekGeneration||!r.event_posted||r.queue_result!=0){fail(L"kana-seek-post-refused");return;}
+                    save(L"kana-source-posted");button(0);kanaSeekStep=0;kanaWait=phase+300;
+                }
+                if(!kanaSeekStep&&!kanaUiStep&&a.awaiting_message&&c.actor_message_glyphs){
+                    kanaAckBefore=a.message_acknowledgements;button(0);kanaWait=phase+3;kanaUiStep=1;
+                }else if(kanaUiStep==1&&phase>=kanaWait&&c.actor_message_input_armed){
+                    button(Circle);kanaWait=phase+300;kanaUiStep=2;
+                }else if(kanaUiStep==2&&a.message_acknowledgements==kanaAckBefore+1){
+                    button(0);kanaUiStep=0;kanaWait=phase+300;
+                }else if(!kanaSeekStep&&!kanaUiStep&&a.awaiting_choice&&c.actor_choice.state==1){
+                    kanaChoiceBefore=a.choice_completions;button(0);kanaWait=phase+3;kanaUiStep=3;
+                }else if(kanaUiStep==3&&phase>=kanaWait){
+                    button(Circle);kanaWait=phase+300;kanaUiStep=4;
+                }else if(kanaUiStep==4&&!a.awaiting_choice&&a.choice_completions==kanaChoiceBefore+1){
+                    button(0);kanaUiStep=0;kanaWait=phase+300;
+                }
+                if(!kanaWait)kanaWait=phase+300;
+                if(phase>=kanaWait+300){fail(L"kana-next-offered-consumer-frontier");return;}
+                return;
+            }
+            if(a.awaiting_input&&a.input_mode!=0){fail(L"kana-input-mode-frontier");return;}
+            if(kanaStep==1&&e.live&&e.source_state==1&&e.focused){
+                save(L"kana-input-open");button(Circle);kanaWait=phase+5;kanaStep=2;
+            }else if(kanaStep==2&&phase>=kanaWait){
+                kanaHeldRefused=a.awaiting_input&&a.input_completions==kanaInputBefore&&e.staged==a.input_initial;
+                save(L"kana-input-held");if(!kanaHeldRefused){fail(L"kana-input-held-refused");return;}
+                button(0);PostText(GameTextKind::Home);for(unsigned i=0;i<8;++i)PostText(GameTextKind::Delete);
+                CommitUnicode(L"\u3072\u3056");kanaWait=phase+3;kanaStep=3;
+            }else if(kanaStep==3&&phase>=kanaWait&&e.staged==word){
+                save(L"kana-input-typed");if(!PostText(GameTextKind::Confirm)){fail(L"kana-confirm-refused");return;}
+                kanaWait=phase+180;kanaStep=4;
+            }else if(kanaStep==4){
+                if(e.source_state==2&&!kanaClosing){kanaClosing=true;save(L"kana-input-closing");}
+                if(!a.awaiting_input&&a.input_completions==kanaInputBefore+1){
+                    if(a.input_text!=word||a.input_auxiliary!=word||a.input_timed_out){fail(L"kana-input-result-refused");return;}
+                    save(L"kana-input-result");button(0);kanaWait=phase+300;kanaStep=5;
+                }
+            }
+            if(kanaStep==5){
+                const auto& row=a.word_consumer_row;
+                const std::array<uint8_t,32> expected_word_sha{0x70,0x8F,0xF6,0xF6,0x68,0x52,0xA8,0xD6,0xCC,0x6D,0xA0,0xD0,0x23,0x3B,0xB8,0x89,0x8E,0xC1,0x72,0x4B,0xC1,0xB2,0xD4,0xAD,0x58,0x97,0x6E,0xD4,0x19,0x38,0x5F,0x8B};
+                const bool proof=row.valid&&row.generation==a.generation&&row.run_id==a.vm_current.run_id&&row.code_sha256==a.vm_current.code_sha256
+                    &&row.fields[1].kind==dokodemo::script::Value::Kind::String&&row.fields[2].kind==dokodemo::script::Value::Kind::String
+                    &&row.fields[1].cp932_bytes==word.size()&&row.fields[2].cp932_bytes==word.size()
+                    &&row.fields[1].cp932_sha256==expected_word_sha&&row.fields[2].cp932_sha256==expected_word_sha
+                    &&row.fields[3].kind==dokodemo::script::Value::Kind::Scalar&&row.fields[3].word==0x20000002u
+                    &&row.fields[18].kind==dokodemo::script::Value::Kind::Scalar&&row.fields[18].word==0x2000D082u
+                    &&row.fields[0].kind==dokodemo::script::Value::Kind::Scalar&&row.fields[0].word>>28==2&&(row.fields[0].word&0x5000u)==0x5000u
+                    &&a.string_prefix71_result_text=="\x82\xD0"&&a.string_suffix72_result_text=="\x82\xB4"
+                    &&a.string_suffix72_input==word&&a.ascii_class70_result_word==0x10000001u;
+                if(proof&&!kanaWordPassed){kanaWordPassed=true;save(L"kana-word-row");}
+                if(c.returned_interaction.eligible&&!a.awaiting_message&&!a.awaiting_choice&&!a.awaiting_input){
+                    if(!kanaWordPassed||!kanaEchoSeen||!kanaHeldRefused||!kanaClosing){fail(L"kana-owner-consumer-frontier");return;}
+                    kanaPassed=storageBoundaryPassed=true;save(L"kana-available-idle");button(0);return;
+                }
+                if(!kanaUiStep&&a.awaiting_message&&c.actor_message_glyphs){
+                    if(a.message.find(word)!=std::string::npos){kanaEchoSeen=true;save(L"kana-word-font");}
+                    kanaAckBefore=a.message_acknowledgements;button(0);kanaWait=phase+3;kanaUiStep=1;
+                }else if(kanaUiStep==1&&phase>=kanaWait&&c.actor_message_input_armed){
+                    button(Circle);kanaWait=phase+300;kanaUiStep=2;
+                }else if(kanaUiStep==2&&a.message_acknowledgements==kanaAckBefore+1){
+                    button(0);kanaUiStep=0;kanaWait=phase+300;
+                }else if(!kanaUiStep&&a.awaiting_choice&&c.actor_choice.state==1){
+                    save(L"kana-choice-menu");kanaChoiceBefore=a.choice_completions;button(0);kanaWait=phase+3;kanaUiStep=3;
+                }else if(kanaUiStep==3&&phase>=kanaWait){
+                    button(Circle);kanaWait=phase+300;kanaUiStep=4;
+                }else if(kanaUiStep==4&&!a.awaiting_choice&&a.choice_completions==kanaChoiceBefore+1){
+                    save(L"kana-choice-result");button(0);kanaUiStep=0;kanaWait=phase+300;
+                }
+                if(a.awaiting_input){kanaInputBefore=a.input_completions;kanaStep=1;kanaUiStep=0;kanaWait=phase+180;}
+            }
+            if(phase>=kanaWait+300){fail(L"kana-feature-observation-limit");return;}
+            return;
         }
         //A live RNG/clock branch may reach a supported SELECT before the old
         //numbered route. Explore that actual UI with fresh edges; never give
@@ -6020,11 +6134,12 @@ struct Application {
             if(options.softkeyWindowTest)SoftkeyTestTick(c);
         }
         if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
-            && (options.playWindowFixture?AtOwnedGameplayBoundary(startupObservation):AtNativeModuleSequenceBoundary(startupObservation))
+            && ((options.playWindowFixture||options.kanaWindowFixture)?AtOwnedGameplayBoundary(startupObservation,options.kanaWindowFixture):AtNativeModuleSequenceBoundary(startupObservation))
             && (!options.inventoryActionWindowFixture || inventoryActionPassed)
             && (!options.decorateWindowFixture || decorationPassed)
             && (!options.putawayWindowFixture || modelRemovalPassed)
             && (!options.discardWindowFixture || discardPassed)
+            && (!options.kanaWindowFixture || kanaPassed)
             && (!options.repeatWindowFixture || repeatPassed)
             && (!options.playWindowFixture || playPassed)
             && (!options.soundWindowFixture || SelectedGameSoundDrained(startupObservation))
@@ -6152,10 +6267,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && (!options.decorateWindowFixture || app.decorationPassed)
                 && (!options.putawayWindowFixture || app.modelRemovalPassed)
                 && (!options.discardWindowFixture || app.discardPassed)
+                && (!options.kanaWindowFixture || app.kanaPassed)
                 && (!options.repeatWindowFixture || app.repeatPassed)
                 && (!options.playWindowFixture || app.playPassed)
                 && (!options.soundWindowFixture || (SelectedGameSoundDrained(app.startupObservation)&&app.startupObservation.native_audio.actor_joined&&app.startupObservation.native_audio.handles_closed&&app.startupObservation.native_audio.com_references_released))
-                && (!options.storageWindowTest || app.storageBoundaryPassed) && NativeModuleSequenceClosed(app.startupObservation,!options.playWindowFixture)
+                && (!options.storageWindowTest || app.storageBoundaryPassed) && NativeModuleSequenceClosed(app.startupObservation,!(options.playWindowFixture||options.kanaWindowFixture))
                 && app.startupObservation.module_uid > 0
                 && app.startupObservation.module_load_returned && app.startupObservation.module_start_returned
                 && app.startupObservation.module_start_result == 0
@@ -6187,7 +6303,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"repeat_interaction_passed\":" << (app.repeatPassed?"true":"false")
                 << ",\"play_interaction_passed\":" << (app.playPassed?"true":"false")
                 << ",\"play_completed_cycles\":" << app.playCycles
-                << ",\"requires_complete_diagnostic_history\":" << (options.playWindowFixture?"false":"true")
+                << ",\"requires_complete_diagnostic_history\":" << ((options.playWindowFixture||options.kanaWindowFixture)?"false":"true")
                 << ",\"diagnostic_history_dropped\":" << app.startupObservation.dropped_events
                 << ",\"title_menu_window_test\":" << (options.titleMenuWindowTest?"true":"false")
                 << ",\"softkey_window_test\":"<<(options.softkeyWindowTest?"true":"false")
@@ -6240,6 +6356,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"manager9_next_message_held_refused\":"<<(app.managerNextHeldRefused?"true":"false")
                 << ",\"inventory_actions_window_fixture\":"<<(options.inventoryActionWindowFixture?"true":"false")
                 << ",\"inventory_actions_passed\":"<<(app.inventoryActionPassed?"true":"false")
+                << ",\"kana_word_window_fixture\":"<<(options.kanaWindowFixture?"true":"false")<<",\"kana_word_passed\":"<<(app.kanaPassed?"true":"false")<<",\"kana_held_refused\":"<<(app.kanaHeldRefused?"true":"false")<<",\"kana_closing_observed\":"<<(app.kanaClosing?"true":"false")<<",\"kana_consumer_passed\":"<<(app.kanaWordPassed?"true":"false")<<",\"kana_echo_seen\":"<<(app.kanaEchoSeen?"true":"false")<<",\"kana_offered_interactions\":"<<app.kanaSeekCount
                 << ",\"discard_window_fixture\":"<<(options.discardWindowFixture?"true":"false")<<",\"discard_passed\":"<<(app.discardPassed?"true":"false")<<",\"discard_cancel_passed\":"<<(app.discardCancelPassed?"true":"false")<<",\"discard_held_passed\":"<<(app.discardHeldPassed?"true":"false")
                 << ",\"putaway_window_fixture\":"<<(options.putawayWindowFixture?"true":"false")<<",\"model_removal_passed\":"<<(app.modelRemovalPassed?"true":"false")
                 << ",\"decoration_window_fixture\":"<<(options.decorateWindowFixture?"true":"false")<<",\"decoration_passed\":"<<(app.decorationPassed?"true":"false")
@@ -6260,7 +6377,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.discardWindowFixture?"ActualPlacedDiscard16AfterTRCCancelAndFreshYes;AllVMRowCellsNIL;NaturalModelRetirement;NotFilesOrSave":options.putawayWindowFixture?"ActualPlacedEvent14AfterReal13;VMReadback;NaturalModelDisableRetainThenDestruction;NotSaveOrFullGame":options.decorateWindowFixture?"ActualEvent13SourcePlacement;OwnedRoomModel;VMWriteReadback;RealInventoryRetirement;NotSaveOrFullGame":options.inventoryActionWindowFixture?"ActualItemMarkAndUnmarkViaOwnedEvent15And14;VMField5;DisplayReadback;NoAwardOrNetwork;NormalInventoryRetirement;NotFullGame":options.soundWindowFixture?"SelectedGAME73BankSequenceWave;ReferenceADSR;NativeOutputDrain;NotAudibleOrFirmwareMatching":options.playWindowFixture?"ContinuedOwnedConversationsFromGeneration3;RealUI;No469Clear;NotFullGame":options.repeatWindowFixture?"SourceOwnedCommonConversation;TwoAcceptedEvent0CyclesAndFreshSuccessor;SafePhase1Dispatch;No469Clear;NotFullGame":options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;NaturalDeadlineResumeAndRepeatedOwnedLoop;TimedIdle;NoSourceWakeOrTokenRearm;NotFullGame":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.kanaWindowFixture?"ActualInput32Kana229;SourceWordClassPrefixSuffixCountAndVMRow;FreshOwnerReturn;NotNJSaveOrMatching":options.discardWindowFixture?"ActualPlacedDiscard16AfterTRCCancelAndFreshYes;AllVMRowCellsNIL;NaturalModelRetirement;NotFilesOrSave":options.putawayWindowFixture?"ActualPlacedEvent14AfterReal13;VMReadback;NaturalModelDisableRetainThenDestruction;NotSaveOrFullGame":options.decorateWindowFixture?"ActualEvent13SourcePlacement;OwnedRoomModel;VMWriteReadback;RealInventoryRetirement;NotSaveOrFullGame":options.inventoryActionWindowFixture?"ActualItemMarkAndUnmarkViaOwnedEvent15And14;VMField5;DisplayReadback;NoAwardOrNetwork;NormalInventoryRetirement;NotFullGame":options.soundWindowFixture?"SelectedGAME73BankSequenceWave;ReferenceADSR;NativeOutputDrain;NotAudibleOrFirmwareMatching":options.playWindowFixture?"ContinuedOwnedConversationsFromGeneration3;RealUI;No469Clear;NotFullGame":options.repeatWindowFixture?"SourceOwnedCommonConversation;TwoAcceptedEvent0CyclesAndFreshSuccessor;SafePhase1Dispatch;No469Clear;NotFullGame":options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;NaturalDeadlineResumeAndRepeatedOwnedLoop;TimedIdle;NoSourceWakeOrTokenRearm;NotFullGame":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

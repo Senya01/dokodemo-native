@@ -80,7 +80,12 @@ bool GameConversationActivation::HistoryMatches(const GameActorScriptSnapshot& s
     if(state_.kind==GameConversationProofKind::OwnedMain){
         const auto& o=s.owned_conversation;
         return o.accepted&&!o.failed&&o.completed&&o.receipt==owned_completion_.receipt
-            &&o.origin_activation==owned_completion_.origin_activation&&o.main_frame==owned_completion_.main_frame
+            &&o.generation==owned_completion_.generation&&o.run_id==owned_completion_.run_id
+            &&o.context_word==owned_completion_.context_word&&o.code_sha256==owned_completion_.code_sha256
+            &&o.suspended_frame==owned_completion_.suspended_frame&&o.accepted_executed==owned_completion_.accepted_executed
+            &&o.origin==owned_completion_.origin&&o.origin_activation==owned_completion_.origin_activation
+            &&o.post_modal_generation==owned_completion_.post_modal_generation&&o.inventory_generation==owned_completion_.inventory_generation
+            &&o.input_sequence==owned_completion_.input_sequence&&o.main_frame==owned_completion_.main_frame
             &&o.owner_frame==owned_completion_.owner_frame&&o.cleanup_frame==owned_completion_.cleanup_frame
             &&o.owner_executed==owned_completion_.owner_executed&&o.game3_executed==owned_completion_.game3_executed
             &&o.completed_executed==owned_completion_.completed_executed&&SameValue(o.owner_result,owned_completion_.owner_result);
@@ -89,15 +94,27 @@ bool GameConversationActivation::HistoryMatches(const GameActorScriptSnapshot& s
     if(state_.returned&&!SameReturn(s.farewell_return,farewell_return_))return false;
     return true;
 }
+void GameConversationActivation::PublishOwned(const GameActorScriptSnapshot& s,uint64_t context,uint64_t origin){
+    const auto& own=s.owned_conversation;Begin(GameConversationProofKind::OwnedMain,s);
+    owned_completion_=own;state_.owned_receipt=last_owned_receipt_=own.receipt;owned_pending_receipt_=0;
+    state_.origin_activation=origin;state_.body_bound=state_.body_completed=state_.returned=state_.main_consumed=true;
+    state_.message_context=context;state_.body_frame=own.owner_frame;state_.body_caller_frame=own.main_frame;
+    state_.body_caller_entry=0x8DDB5;state_.body_caller_pc=0x8DF2D;
+    state_.game3_calls=s.game3_calls;state_.game3_pc=0x8D9B5;
+}
 void GameConversationActivation::Observe(const GameActorScriptSnapshot& s,uint64_t context){
     if(!state_.live)return;
     if(!HistoryMatches(s)){Fail("Conversation activation owner or frozen completion history changed");return;}
     const auto& v=s.vm_current;const auto& r=s.normal_return;
     const auto& own=s.owned_conversation;
-    if(owned_pending_receipt_&&(!own.accepted||own.origin_activation!=state_.id||own.receipt!=owned_pending_receipt_)){
+    if(owned_pending_receipt_&&(!own.accepted||own.origin!=GameConversationOrigin::Returned||own.origin_activation!=state_.id||own.receipt!=owned_pending_receipt_)){
         Fail("Pending owned conversation receipt disappeared or changed origin");return;
     }
-    if(state_.consumed&&own.accepted&&own.origin_activation==state_.id){
+    const bool complete=own.phase_written&&own.callback_returned&&own.owner_started&&own.owner_returned
+        &&own.cleanup_started&&own.game3&&own.completed&&own.owner_return_pc==0x8DF2D&&own.cleanup_return_pc==0x8E029
+        &&own.owner_executed>own.callback_executed&&own.game3_executed>own.owner_executed
+        &&own.completed_executed>own.game3_executed;
+    if(state_.consumed&&own.accepted&&own.origin==GameConversationOrigin::Returned&&own.origin_activation==state_.id){
         if(!owned_pending_receipt_)owned_pending_receipt_=own.receipt;
         if(own.receipt!=owned_pending_receipt_||own.receipt<=last_owned_receipt_||own.failed
            ||own.generation!=state_.script_generation||own.run_id!=state_.run_id||own.code_sha256!=v.code_sha256){
@@ -106,17 +123,8 @@ void GameConversationActivation::Observe(const GameActorScriptSnapshot& s,uint64
         // This pending source transaction excludes unrelated Topic/Legacy
         // history. A successor is earned only by its complete common owner.
         if(!own.completed)return;
-        if(!own.phase_written||!own.callback_returned||!own.owner_started||!own.owner_returned
-           ||!own.cleanup_started||!own.game3||own.owner_return_pc!=0x8DF2D||own.cleanup_return_pc!=0x8E029
-           ||own.owner_executed<=own.callback_executed||own.game3_executed<=own.owner_executed
-           ||own.completed_executed<=own.game3_executed){Fail("Owned conversation completion is incomplete");return;}
-        const auto origin=state_.id;Begin(GameConversationProofKind::OwnedMain,s);
-        owned_completion_=own;state_.owned_receipt=last_owned_receipt_=own.receipt;owned_pending_receipt_=0;
-        state_.origin_activation=origin;state_.body_bound=state_.body_completed=state_.returned=state_.main_consumed=true;
-        state_.message_context=context; // retain the actual published input context across later Update calls
-        state_.body_frame=own.owner_frame;state_.body_caller_frame=own.main_frame;
-        state_.body_caller_entry=0x8DDB5;state_.body_caller_pc=0x8DF2D;
-        state_.game3_calls=s.game3_calls;state_.game3_pc=0x8D9B5;return;
+        if(!complete){Fail("Owned conversation completion is incomplete");return;}
+        PublishOwned(s,context,state_.id);return;
     }
     const bool may_begin=!state_.id||state_.consumed;
     if(may_begin&&Live(s)&&s.awaiting_message&&!s.awaiting_choice&&s.pc==0x2B462
@@ -138,6 +146,23 @@ void GameConversationActivation::Observe(const GameActorScriptSnapshot& s,uint64
         state_.body_frame=r.before.frame_id;state_.body_caller_frame=r.after.frame_id;state_.body_sequence=r.sequence;
         last_body_frame_=r.before.frame_id;last_body_sequence_=r.sequence;
         state_.body_caller_entry=r.after.code_entry;state_.body_caller_pc=r.after.current_pc;BindFarewell(s,context);
+    }
+    // The optional initial observer never blocks or supersedes Legacy/Topic.
+    // Its only fallback is the first activation, from the same accepted post.
+    if(!state_.id&&!initial_ineligible_){
+        if(initial_receipt_&&(!own.accepted||own.origin!=GameConversationOrigin::PostModal||own.receipt!=initial_receipt_))initial_ineligible_=true;
+        if(own.accepted&&own.origin==GameConversationOrigin::PostModal){
+            if(!initial_receipt_){initial_receipt_=own.receipt;initial_origin_=own;}
+            if(own.post_modal_generation!=initial_origin_.post_modal_generation||own.inventory_generation!=initial_origin_.inventory_generation
+               ||own.input_sequence!=initial_origin_.input_sequence||own.main_frame!=initial_origin_.main_frame
+               ||own.suspended_frame!=initial_origin_.suspended_frame||own.accepted_executed!=initial_origin_.accepted_executed
+               ||own.generation!=initial_origin_.generation||own.run_id!=initial_origin_.run_id
+               ||own.context_word!=initial_origin_.context_word||own.code_sha256!=initial_origin_.code_sha256)initial_ineligible_=true;
+            if(own.failed||!own.receipt||own.origin_activation||!own.post_modal_generation||!own.inventory_generation||!own.input_sequence
+               ||own.generation!=s.generation||own.run_id!=v.run_id||own.code_sha256!=v.code_sha256
+               ||own.context_word!=v.context_word)initial_ineligible_=true;
+            if(!initial_ineligible_&&complete&&own.main_live&&Live(s))PublishOwned(s,context,0);
+        }
     }
     if(!state_.id||state_.consumed)return;
     if(state_.body_bound&&!state_.body_completed&&!SameReturn(r,prior_body_)){

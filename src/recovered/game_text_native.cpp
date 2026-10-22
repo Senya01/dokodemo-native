@@ -3,6 +3,33 @@
 #include "game_primitives.h"
 
 namespace dokodemo::recovered {
+namespace {
+bool Input32Unit(std::string_view text,size_t& at,uint32_t& unit) noexcept{
+    const auto first=uint8_t(text[at++]);unit=first;
+    if(first<0x80)return (first>='0'&&first<='9')||(first>='A'&&first<='Z')||(first>='a'&&first<='z');
+    if(at==text.size())return false;
+    unit=(uint32_t(first)<<8)|uint8_t(text[at++]);
+    return unit==0x815B||(unit>=0x829F&&unit<=0x82F1)
+        ||(unit>=0x8340&&unit<=0x837E)||(unit>=0x8380&&unit<=0x8393);
+}
+}
+bool GameInput32TextAllowed(std::string_view text) noexcept{
+    for(size_t at=0;at<text.size();){uint32_t unit=0;if(!Input32Unit(text,at,unit))return false;}
+    return true;
+}
+bool GameInput32Normalize(std::string_view text,std::string& auxiliary){
+    std::string result;uint32_t count=0;
+    for(size_t at=0;at<text.size();){
+        uint32_t unit=0;if(!Input32Unit(text,at,unit)||++count>8)return false;
+        if(unit>='a'&&unit<='z')unit-=0x20;
+        else if(unit>=0x8340&&unit<=0x837E)unit-=0xA1;
+        else if(unit>=0x8380&&unit<=0x8393)unit-=0xA2;
+        if(result.empty()&&(unit==0x815B||unit==0x82C1))continue;
+        if(unit>=0x100)result.push_back(char(unit>>8));
+        result.push_back(char(unit&0xFF));
+    }
+    auxiliary=std::move(result);return true;
+}
 bool GameNameBuffer::Replace(std::string candidate, uint32_t cursor) {
     std::vector<size_t> offsets{0};
     for (size_t at = 0; at < candidate.size();) {

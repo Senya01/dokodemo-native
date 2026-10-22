@@ -592,6 +592,12 @@ bool Vm::active_call_matches(uint64_t caller,uint32_t entry,uint32_t pc,uint32_t
     }
     return false;
 }
+uint64_t Vm::unique_active_frame(uint32_t entry)const noexcept{
+    if(stopped_||event_envelope_||!context_||context_->vm!=this||context_->thread!=std::this_thread::get_id())return 0;
+    uint64_t id=code_entry_==entry?frame_id_:0;
+    for(const auto& f:calls_)if(f.code_entry==entry){if(id)return 0;id=f.frame_id;}
+    return id;
+}
 Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }

@@ -434,6 +434,51 @@ struct ActorSource final:GameResourceSource {
         auto lease=std::make_shared<Lease>(std::move(bytes));out=PackageStorage::Attach(lease,lease->b.size());return {};
     }
 };
+void ActorPendingReplacement(){
+    // Synthetic ASC/model owners; tests the source single pending slot,
+    // not connected gameplay or additional opcode/effect coverage.
+    auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));GameTransition fade;
+    Check(fade.Initialize({{0,0}}),"pending actor fade");ActorSource source;GameActorRuntime actor;
+    Check(bool(actor.Initialize(0,PackageStorage::Attach(lease,16),fade,&source)),"pending actor owner");
+    Check(bool(actor.RequestActorEvent(176,0))&&bool(actor.RequestActorEvent(153,0)),"second positive request overwrites pending slot");
+    const auto pending=actor.Snapshot();
+    Check(pending.active_command==-1&&pending.requested_command==153&&pending.actor_request_pending
+          &&pending.selected_extension_pending&&pending.event_requests==2&&pending.event_pending_replacements==1
+          &&pending.command_pc==0&&pending.command_effects==0&&!actor.WaitReady(),"no active command or fake ready before natural owner pass");
+    Check(!actor.RequestActorEvent(9999,0)&&!actor.RequestActorEvent(-1,0)&&!actor.RequestActorEvent(0,0)&&!actor.RequestActorEvent(176,1)
+          &&actor.Snapshot().requested_command==153&&actor.Snapshot().event_requests==2,"bad replacement preserves accepted pending owner");
+    Check(bool(actor.AdvanceActorFrame()),"natural owner consumes latest153");const auto active=actor.Snapshot();
+    Check(active.active_command==153&&!active.actor_request_pending&&active.command_pc==12&&active.command_effects==1
+          &&active.command_completions==0,"only latest pending command starts on natural phase");
+    Check(bool(actor.RequestActorEvent(176,0))&&bool(actor.RequestActorEvent(157,0)),"replace again while old command active");
+    const auto replaced=actor.Snapshot();
+    Check(replaced.requested_command==157&&replaced.active_command==active.active_command
+          &&replaced.command_pc==active.command_pc&&replaced.command_effects==active.command_effects
+          &&replaced.effect_order==active.effect_order&&replaced.command_ready==active.command_ready
+          &&replaced.command_repeat_ready258==active.command_repeat_ready258&&replaced.channel_admissions==active.channel_admissions
+          &&replaced.command_completions==0&&replaced.event_pending_replacements==2&&!actor.WaitReady(),"pending writes retain active cursor flags motion and completion");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().active_command==157
+          &&actor.Snapshot().command_pc==12&&actor.Snapshot().command_effects==1
+          &&actor.Snapshot().command_completions==0,"natural next phase resets cursor for157 without completing153");
+    Check(bool(actor.RequestActorEvent(176,0))&&bool(actor.AdvanceActorFrame())&&actor.Snapshot().command_flag25A,
+          "176 first8040 produces true25A");
+    Check(bool(actor.RequestActorEvent(157,0))&&actor.Snapshot().command_flag25A,
+          "pending request retains active25A");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().active_command==157&&!actor.Snapshot().command_flag25A,
+          "natural24700 clears old25A before157 first8030");
+    Check(bool(actor.RequestActorEvent(176,0)),"pending owner before close");actor.Close();
+    Check(!actor.RequestActorEvent(153,0)&&!actor.WaitReady()&&!actor.Snapshot().actor_request_pending,"close retires pending and active owners");
+    GameActorRuntime moving;
+    Check(bool(moving.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(moving.RequestActorEvent(153,0))
+          &&bool(moving.AdvanceActorFrame())&&bool(moving.AdvanceActorFrame()),"nontrivial old movement fixture");
+    const auto old=moving.Snapshot();
+    Check(old.movement_pending&&old.pending_logical_motion==9&&!moving.RequestActorEvent(176,0)
+          &&moving.Snapshot().active_command==old.active_command&&moving.Snapshot().command_pc==old.command_pc
+          &&moving.Snapshot().event_requests==old.event_requests&&!moving.Snapshot().actor_request_pending,
+          "unrecovered physical-mode interruption refuses transactionally; no new command waits behind old mode");
+    moving.Close();
+    fade.Retire();
+}
 void ActorChannelOrder(){
     auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));GameTransition fade;Check(fade.Initialize({{0,0}}),"actor synthetic fade");
     ActorSource source;GameActorRuntime actor;
@@ -790,6 +835,7 @@ int main() {
         Type12RegionDescriptor();
         Motion();
         ActorChannelOrder();
+        ActorPendingReplacement();
         PositionRegionTests();
         TitleLifetimeAndFade();
         ArrivalBranchTests();

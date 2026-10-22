@@ -23,10 +23,16 @@ bool Return(const script::FrameTransition& t,uint64_t frame,uint32_t entry,uint3
 bool GameOwnedConversation::Begin(const script::VmStateWitness& s,uint64_t gen,uint64_t origin,uint64_t receipt,uint64_t main)noexcept{
     if(!gen||!origin||!main||receipt<=last_receipt_||!s.valid||!s.context_registered||s.stopped
        ||s.event_envelope_present||s.queued_callbacks||(state_.accepted&&!state_.completed&&!state_.failed))return false;
-    state_={};state_.accepted=true;state_.receipt=last_receipt_=receipt;
+    state_={};state_.origin=GameConversationOrigin::Returned;state_.accepted=true;state_.receipt=last_receipt_=receipt;
     state_.generation=gen;state_.origin_activation=origin;state_.run_id=s.run_id;
     state_.context_word=s.context_word;state_.code_sha256=s.code_sha256;state_.main_frame=main;
     state_.suspended_frame=s.frame_id;state_.accepted_executed=s.executed;suspended_=s;return true;
+}
+bool GameOwnedConversation::BeginPostModal(const script::VmStateWitness& s,uint64_t gen,uint64_t post,uint64_t inventory,
+                                         uint64_t sequence,uint64_t receipt,uint64_t main)noexcept{
+    if(post_modal_claimed_||!post||!inventory||!sequence||!Begin(s,gen,post,receipt,main))return false;
+    post_modal_claimed_=true;state_.origin=GameConversationOrigin::PostModal;state_.origin_activation=0;
+    state_.post_modal_generation=post;state_.inventory_generation=inventory;state_.input_sequence=sequence;return true;
 }
 bool GameOwnedConversation::Owner(const script::VmStateWitness& v)const noexcept{
     return v.valid&&v.context_registered&&!v.stopped&&v.run_id==state_.run_id
@@ -103,13 +109,19 @@ GameOwnedConversationSnapshot GameOwnedConversation::Snapshot(const script::Vm& 
     // Actual phase1 continuation returns13856 ->138A9 -> main8DEEA,
     // then jumps8E063, bypassing the phase-resetting conversation cleanup.
     // Frame liveness alone is not permission from an arbitrary nested wait.
-    if(out.main_live&&out.completed&&!v.queued_callbacks)try{
+    out.dispatch_ready=out.main_live&&out.completed&&DispatchReady(vm,out.main_frame);
+    return out;
+}
+bool GameOwnedConversation::DispatchReady(const script::Vm& vm,uint64_t main)noexcept{
+    const auto v=vm.current_witness();
+    if(!v.valid||v.stopped||!v.context_registered||v.event_envelope_present||v.queued_callbacks
+       ||vm.frame_observer_failed()||!vm.owns_active_frame(main,0x8DDB5))return false;
+    try{
         const auto phase=vm.read_slot(script::Table::Global,0x9A76);
-        out.dispatch_ready=phase.kind==script::Value::Kind::Scalar&&phase.word==0x20000001
+        return phase.kind==script::Value::Kind::Scalar&&phase.word==0x20000001
             &&v.code_entry==0x1383D&&v.current_pc==0x13856&&v.caller_entry==0x1387B
             &&v.caller_call_pc==0x138A5&&v.caller_return_pc==0x138A9
-            &&vm.active_call_matches(out.main_frame,0x8DDB5,0x8DEE6,0x8DEEA,v.caller_frame_id,0x1387B);
-    }catch(...){out.dispatch_ready=false;}
-    return out;
+            &&vm.active_call_matches(main,0x8DDB5,0x8DEE6,0x8DEEA,v.caller_frame_id,0x1387B);
+    }catch(...){return false;}
 }
 }

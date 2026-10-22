@@ -188,6 +188,7 @@ public:
     bool frame_observer_failed()const noexcept{return frame_observer_failed_;}
     uint64_t last_callback_receipt()const noexcept{return next_callback_receipt_;}
     bool owns_active_frame(uint64_t frame_id,uint32_t entry)const noexcept;
+    uint64_t unique_active_frame(uint32_t entry)const noexcept;
     bool active_call_matches(uint64_t caller,uint32_t entry,uint32_t pc,uint32_t resume,
                              uint64_t callee,uint32_t callee_entry)const noexcept;
     void trace_normal_return_at(uint32_t pc, size_t slot=0,uint32_t alternate_pc=UINT32_MAX) noexcept {

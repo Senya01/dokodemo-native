@@ -86,6 +86,7 @@ struct GameActorRuntimeSnapshot {
   int32_t requested_command = -1;
   bool actor_request_pending = false, selected_extension_pending = false;
   uint32_t event_requests = 0;
+  uint32_t event_pending_replacements = 0;
   bool command_blocked = false, command_flag25A = false, heading_known = false;
   uint32_t command_pc = 0, command_effects = 0, actor_phases = 0,
            actor_math_mode = 0, command_frontier = 0;
@@ -190,6 +191,7 @@ private:
   GameModelClone actor_clone_;
   GameFsStatus PrepareActor();
   PackageView command_image_;
+  PackageView pending_command_image_;
   std::vector<GameActorLoopFrame> command_loops_;
   PackageView coordinate_image_;
   bool coordinate_loaded_ = false;

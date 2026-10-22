@@ -136,8 +136,9 @@ bool GamePostModalInteraction::Input(const GameInputFrame& frame){
     const bool edge=input_.Observe(frame,Circle);state_.armed=input_.Armed();
     if(!edge)return false;
     state_.fresh_input=true;return_baseline_=script_->Snapshot().callbacks_returned;
-    const auto status=script_->PostMainFlowEvent(0,0,&target_);
-    if(!status||script_->Snapshot().owner_event_result!=0){
+    int32_t result=-1;
+    const auto status=script_->PostPostModalInteraction(target_,state_.generation,state_.inventory_generation,frame.sequence,result);
+    if(!status||result!=0){
         state_.error=status?"Post-modal owned event queue refused admission":status.detail;
         state_.eligible=false;input_.Stop();++state_.rejected;return false;
     }

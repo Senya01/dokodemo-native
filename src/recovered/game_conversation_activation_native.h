@@ -38,12 +38,16 @@ class GameConversationActivation final {
     void Begin(GameConversationProofKind,const GameActorScriptSnapshot&);
     void Fail(std::string);
     void BindFarewell(const GameActorScriptSnapshot&,uint64_t);
+    void PublishOwned(const GameActorScriptSnapshot&,uint64_t context,uint64_t origin);
     GameConversationActivationSnapshot state_;
     script::VmStateWitness body_wait_,farewell_wait_;
     script::NormalReturnWitness prior_body_,body_return_,prior_farewell_,farewell_return_;
     uint64_t last_body_frame_=0,last_body_sequence_=0,last_farewell_frame_=0;
     uint64_t owned_pending_receipt_=0,last_owned_receipt_=0;
+    uint64_t initial_receipt_=0;
+    bool initial_ineligible_=false;
     GameOwnedConversationSnapshot owned_completion_;
+    GameOwnedConversationSnapshot initial_origin_;
     uint32_t farewell_ack_=0;
 };
 }

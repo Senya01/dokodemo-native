@@ -544,22 +544,17 @@ GameFsStatus GameActorRuntime::RequestActorEvent(int32_t first,
   if (!prepared)
     return prepared;
   try {
-    if (first < 0 || second != 0)
+    if (first <= 0 || second != 0)
       throw std::runtime_error(
           "Actor event outside reached positive-command/zero-followup domain");
-    if (state_.actor_request_pending || state_.selected_extension_pending)
-      throw std::runtime_error("Actor event already pending");
+    if(state_.movement_pending||state_.angular_pending||state_.pending_logical_motion>=0)
+      throw std::runtime_error("Actor replacement during an active pose operation is outside the finite native contract");
     auto command = AscRecord(actor_asc_, uint32_t(first));
-    command_image_ = std::move(command);
-    command_loops_.clear();state_.command_loop_depth=0;
-    state_.command_repeat_ready258=false;
-    state_.command_wait_motion=false;
+    // B1D4 writes the same pending38C/390/394 fields on every call.
+    // Validation precedes the replacement; the active24700 owner is untouched.
+    pending_command_image_ = std::move(command);
+    if(state_.actor_request_pending)++state_.event_pending_replacements;
     state_.requested_command = first;
-    state_.command_pc = state_.command_effects = state_.command_frontier = 0;
-    state_.effect_order={};
-    state_.command_error.clear();
-    state_.command_blocked = false;
-    state_.command_ready = false;
     state_.actor_request_pending = state_.selected_extension_pending = true;
     ++state_.event_requests;
     return {}; // B1D4/1DF00 queue request;no fabricated completion signal
@@ -721,7 +716,7 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
   const auto camera=UpdateCamera();if(!camera)return camera;
   if(state_.intro_live){std::string error;if(!intro_clone_.Update(error))return {GameFsCode::Unavailable,0,error};
     ++state_.intro_updates;for(uint32_t i=0;i<3;++i)state_.intro_controls[i]=*intro_clone_.Control(i);}
-  if (state_.command_blocked)
+  if (state_.command_blocked&&!state_.actor_request_pending)
     return UpdateActorPose();
   try {
     ++state_.actor_phases;
@@ -735,6 +730,12 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       // records. Each reached opcode/parameter still requires an implemented
       // effect;an unknown instruction stops at its real ordinal/cursor.
       // B774 calls24700 before394 clears;1E824 then copies394 toext20.
+      command_image_=std::move(pending_command_image_);
+      command_loops_.clear();state_.command_loop_depth=0;
+      state_.command_repeat_ready258=false;state_.command_wait_motion=false;
+      state_.command_flag25A=false; //24730 clears25A only on natural installation
+      state_.command_pc=state_.command_effects=state_.command_frontier=0;state_.effect_order={};
+      state_.command_error.clear();state_.command_blocked=false;
       state_.active_command = state_.requested_command;
       state_.command_complete = state_.command_ready = false;
       state_.actor_request_pending = state_.selected_extension_pending = false;
@@ -1100,6 +1101,7 @@ void GameActorRuntime::Close() {
   actor_asset_.reset();
   actor_asc_.Reset();
   command_image_.Reset();
+  pending_command_image_.Reset();
   command_loops_.clear();state_.command_loop_depth=0;
   state_.command_repeat_ready258=false;
   coordinate_image_.Reset();
