@@ -32,6 +32,7 @@ struct GameRoomModelSlotSnapshot {
   float source_x=0;
   int32_t anchor_node=-1;
   GameMatrix native_root=ModelIdentity();
+  uint64_t asset_identity=0,clone_identity=0,draw_frames=0,draw_pixel_writes=0;
 };
 // Source24300..24358: infinite repeat or final root pop produces258.
 // This does not complete the command or produce25E/VM54.
@@ -45,6 +46,7 @@ struct GameModelRetirementWitness {
   bool asset_owner_expired=false,clone_owner_cleared=false;
 };
 struct GameActorRuntimeSnapshot {
+  uint64_t owner_epoch=0;
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
        command_ready = false,command_repeat_ready258=false;
@@ -73,6 +75,7 @@ struct GameActorRuntimeSnapshot {
   uint32_t model_slots = 0, model_nodes = 0, model_vertices = 0,
            model_triangles = 0;
   uint32_t model_publications=0,model_updates=0,model_retire_requests=0,model_retirements=0;
+  uint64_t model_asset_acquisitions=0,model_clone_initializations=0;
   std::array<GameRoomModelSlotSnapshot,100> room_models{};
   uint64_t room_owner_phases=0;
   uint32_t model_retirement_history_dropped=0;

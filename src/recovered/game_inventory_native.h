@@ -15,8 +15,15 @@ struct GameInventoryItem {
 };
 enum class GameInventoryOrigin:uint32_t { Script41,MainMenu5 };
 struct GameInventoryActionDescriptor {uint32_t event=0,source_result=0;const char* label=nullptr;};
-uint32_t GameInventoryActionCount(GameInventoryOrigin,bool home)noexcept;
-GameInventoryActionDescriptor GameInventoryActionAt(GameInventoryOrigin,bool home,uint32_t index)noexcept;
+uint32_t GameInventoryActionCount(GameInventoryOrigin,bool home,bool placement=false)noexcept;
+GameInventoryActionDescriptor GameInventoryActionAt(GameInventoryOrigin,bool home,uint32_t index,bool placement=false)noexcept;
+std::array<uint8_t,32> GameInventoryItemsHash(const std::vector<GameInventoryItem>&);
+struct GameInventoryActionCertificate {
+    bool valid=false;uint64_t generation=0,receipt=0;uint32_t event=0,row=0;
+    std::array<uint8_t,32> before_display{},after_display{},approved_image{};
+    std::array<uint32_t,170> mutable_fields{};
+};
+using GameInventoryCompletionVerify=std::function<bool(const GameInventoryActionCertificate&)>;
 struct GameInventoryActionAdmission {
     GameFsStatus status;int32_t queue_result=-1;uint64_t receipt=0;
 };
@@ -24,6 +31,7 @@ using GameInventoryActionDispatch=std::function<GameInventoryActionAdmission(uin
 struct GameInventorySnapshot {
     GameInventoryOrigin origin=GameInventoryOrigin::Script41;
     bool live=false,requested=false,visible=false,actions=false,retirement_pending=false;
+    bool placement_enabled=false;
     bool request14=false,owner480=false,input_focused=false;
     uint64_t generation=0;
     uint64_t retired_generation=0;
@@ -50,8 +58,8 @@ struct GameInventorySnapshot {
 //confirmation precedes16;NativeInventoryTRCXYesZNo is a nonmatching panel/input adapter.
 class GameInventory final {
   public:
-    GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={},GameInventoryOrigin origin=GameInventoryOrigin::Script41);
-    GameFsStatus CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items);
+    GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={},GameInventoryOrigin origin=GameInventoryOrigin::Script41,bool placement=false,GameInventoryCompletionVerify verify={});
+    GameFsStatus CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items,const GameInventoryActionCertificate* certificate=nullptr);
     GameFsStatus Tick(GameResourceSource&,GameTransition&);
     bool Input(const GameInputFrame&);
     GameFsStatus Draw(GameGraphics&,const GameFontResource&);
@@ -68,6 +76,7 @@ class GameInventory final {
     GameTransition* transition_=nullptr;
     bool home_=true;
     GameInventoryActionDispatch dispatch_;
+    GameInventoryCompletionVerify verify_;
     GameFsStatus DispatchAction(uint32_t event,int32_t row);
     void Rebuild();
     void Select();

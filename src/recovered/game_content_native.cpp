@@ -917,9 +917,11 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                     status=post_modal_.RetireConsumedInventory();state_.post_modal=post_modal_.Snapshot();
                     std::vector<GameInventoryItem> items;
                     if(status)status=actor_script_.ReadMenuInventory(main_menu_target_,items);
-                    if(status)status=inventory_.Request(std::move(items),true,[this](uint64_t generation,uint32_t event,int32_t row){
+                    if(status)status=inventory_.Request(std::move(items),actor_runtime_.Snapshot().manager_scene14==0,[this](uint64_t generation,uint32_t event,int32_t row){
                         return actor_script_.PostMenuInventoryAction(main_menu_target_,generation,event,row);
-                    },GameInventoryOrigin::MainMenu5);
+                    },GameInventoryOrigin::MainMenu5,actor_script_.MenuPlacementAvailable(),[this](const GameInventoryActionCertificate& c){
+                        return actor_script_.ValidateMenuInventoryCertificate(main_menu_target_,c);
+                    });
                     if(status)status=actor_script_.BindMenuInventory(main_menu_target_,inventory_.Snapshot().generation,main_menu_.Snapshot().generation);
                     if(status){
                         ++state_.main_menu_inventory_requests;++state_.main_menu_input_epoch;
@@ -967,7 +969,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
             if(status&&inventory_.Snapshot().action_pending&&actor_script_.Snapshot().inventory_action.completed){
                 const auto actor=actor_script_.Snapshot();const auto& action=actor.inventory_action;
-                status=inventory_.CompleteAction(action.generation,action.receipt,actor.inventory_items);
+                status=inventory_.CompleteAction(action.generation,action.receipt,actor.inventory_items,&action.certificate);
                 if(status)++state_.main_menu_input_epoch;
             }
             if(status&&!state_.main_menu_child_ready&&inventory_.Snapshot().phase==3){

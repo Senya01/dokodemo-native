@@ -3,6 +3,7 @@
 #include "game_actor_runtime_native.h"
 #include "game_inventory_native.h"
 #include "game_inventory_mark_native.h"
+#include "game_inventory_placement_native.h"
 #include "game_record_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
@@ -51,7 +52,7 @@ struct GameInventoryModelService {
     int32_t slot=-1,resource=-1,category=0,selector=0,x=0;
 };
 struct GameInventoryActionSnapshot {
-    bool pending=false,returned=false,completed=false,failed=false,menu_origin=false;
+    bool pending=false,returned=false,completed=false,failed=false,menu_origin=false,placement=false;
     uint64_t generation=0,receipt=0,callback_frame=0;
     uint32_t event=0,row=0,completions=0,row_table=0,row_index=0,row_header=0;
     int32_t item_id=-1;std::array<uint32_t,3> before_words{},after_words{};
@@ -69,6 +70,8 @@ struct GameInventoryActionSnapshot {
     uint32_t nil6_returns=0,flag_returns=0,protected_writes=0;
     uint64_t nil6_return_executed=0,flag_store_executed=0,flag_return_executed=0;
     std::array<GameInventoryModelService,64> model_services{};
+    GameInventoryActionCertificate certificate;
+    std::string proof_error;
     script::VmStateWitness suspended,restored;
 };
 struct GameOwnerEventTarget {
@@ -95,6 +98,9 @@ struct GameWordRowObservation {
     std::array<script::ValueWitness,19> fields{};
 };
 GameWordRowObservation GameObserveWordRow(const script::Vm&,uint64_t generation,uint32_t row) noexcept;
+// A disabled owning32 return is an expected terminal callback boundary.
+// Other modal/complete/yield events cannot be stepped across by the menu pump.
+bool GameMenuCallbackBoundaryAccepted(const script::Event&,bool restored32,bool disabled)noexcept;
 // Current source R-prefix guards, captured without executing script reads.
 // No pointer, owner lease, callback or permission is created by this evidence.
 struct GameOrdinaryControlObservation {
@@ -116,6 +122,9 @@ struct GameActorScriptSnapshot {
     GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return;
     GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
     GameInventoryMarkSnapshot menu_mark;
+    GameInventoryPlacementSnapshot menu_placement;
+    std::vector<GameInventoryModelEffect> menu_model_effects;
+    std::vector<GameInventorySourceStore> menu_source_stores;
     bool menu_inventory_live=false;
     uint64_t inventory_gui_generation=0;
     uint64_t menu_inventory_parent_generation=0;
@@ -257,6 +266,8 @@ class GameActorScript final {
     GameFsStatus BindScriptInventory(uint64_t gui_generation,uint32_t script_request);
     GameFsStatus ReadMenuInventory(const GameOwnerEventTarget&,std::vector<GameInventoryItem>&);
     GameFsStatus BindMenuInventory(const GameOwnerEventTarget&,uint64_t gui_generation,uint64_t menu_generation);
+    bool MenuPlacementAvailable()const;
+    bool ValidateMenuInventoryCertificate(const GameOwnerEventTarget&,const GameInventoryActionCertificate&)const;
     GameFsStatus CompleteMenuInventory(const GameOwnerEventTarget&,const GameInventorySnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
@@ -285,6 +296,7 @@ class GameActorScript final {
     GameAsciiClass70Owner ascii_class70_;
     GameOwnedConversation owned_conversation_;
     GameInventoryMarkChain menu_mark_;
+    GameInventoryPlacementProof menu_placement_;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;

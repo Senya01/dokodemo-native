@@ -12,6 +12,11 @@ struct GameInventoryRowsObservation {
 };
 struct GameInventoryRowShape {
     uint32_t table=0,index=0,header=0,flag_offset=0,model_offset=0;
+    std::vector<uint32_t> cell_offsets;
+};
+struct GameInventorySourceStore {
+    uint32_t row=0,field=0,pc=0,entry=0,word=0;
+    uint64_t executed=0;
 };
 // Owned canonical typed bytes. No VM reference/context/frame lease escapes.
 struct GameInventoryRowsImage {
@@ -33,6 +38,10 @@ class GameInventoryMarkChain final {
   public:
     void Begin(GameInventoryRowsImage);
     void CheckBefore(const GameInventoryRowsImage&,uint32_t event,uint32_t row)const;
+    void CheckPlacementBefore(const GameInventoryRowsImage&,uint32_t event,uint32_t row)const;
+    void CommitPlacement(const GameInventoryRowsImage&,uint32_t event,uint32_t row,uint64_t receipt,
+                         const std::vector<GameInventorySourceStore>&);
+    bool LocateCell(uint32_t table,uint32_t index,uint32_t& row,uint32_t& field)const;
     void Commit(const GameInventoryRowsImage&,uint32_t event,uint32_t row,uint64_t receipt,uint32_t store_pc,uint32_t stores);
     bool Matches(const GameInventoryRowsImage&)const noexcept;
     bool OwnsCell(uint32_t table,uint32_t index)const noexcept;

@@ -1,6 +1,7 @@
 #include "game_actor_runtime_native.h"
 #include "game_model_resources_native.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <stdexcept>
 
@@ -37,6 +38,7 @@ GameFsStatus GameActorRuntime::UpdateRoomModels(){
   return {};
 }
 namespace {
+std::atomic<uint64_t> next_room_owner_epoch{0};
 PackageView AscRecord(const PackageView &image, uint32_t index) {
   const auto size = image.Describe().size;
   if (size < 32 || image.ReadLE32(0) != 0x00435341 || image.ReadLE32(4) != 16 ||
@@ -122,6 +124,7 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameResourceSource *resources) {
   Close();
   state_ = {};
+  state_.owner_epoch=next_room_owner_epoch.fetch_add(1,std::memory_order_relaxed)+1;
   try {
     if (actor >= 5 || !selection.Describe().readable ||
         !transition.Snapshot().live)
@@ -703,7 +706,7 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
     state_.model_nodes-=statistics.nodes;state_.model_vertices-=statistics.vertices;
     state_.model_triangles-=statistics.triangles;state_.motion_templates-=uint32_t(slot.motions.size());
     slot.clone.Close();slot.motions.clear();slot.asset.reset();slot.active=false;
-    owner.active=false;owner.retirement=0;--state_.model_slots;++state_.model_retirements;
+    owner.active=false;owner.retirement=0;owner.asset_identity=owner.clone_identity=0;--state_.model_slots;++state_.model_retirements;
     if(record!=state_.model_retirement_history.end()){
       record->destroyed_phase=state_.room_owner_phases;record->asset_owner_expired=slot.retirement_watch.expired();
       record->clone_owner_cleared=slot.clone.Asset()==nullptr&&slot.motions.empty();
@@ -965,6 +968,8 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   slot.active = true;slot.retirement_watch.reset();slot.retirement_request=0;
   //Finite native connection of source node ownership and source scalar X.
   state_.room_models[index]={true,0,++state_.model_publications,resource,category,motion,x,anchor,root};
+  state_.room_models[index].asset_identity=++state_.model_asset_acquisitions;
+  state_.room_models[index].clone_identity=++state_.model_clone_initializations;
   const auto statistics = slot.asset->Statistics();
   ++state_.model_slots;
   state_.model_nodes += statistics.nodes;
@@ -1038,9 +1043,12 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   const auto prior_pixels = graphics.Snapshot().mesh_pixels;
   for (size_t i=0;i<models_.size();++i)
     if (const auto& slot=models_[i];slot.active&&state_.room_models[i].retirement<2) {
+      const auto pixels=graphics.Snapshot().mesh_pixels;
       const auto status = slot.clone.Draw(graphics, camera);
       if (!status)
         return status;
+      ++state_.room_models[i].draw_frames;
+      state_.room_models[i].draw_pixel_writes+=graphics.Snapshot().mesh_pixels-pixels;
     }
   if (state_.scene_model_live) {
     const auto status = scene_clone_.Draw(graphics, camera);
@@ -1125,7 +1133,7 @@ void GameActorRuntime::Close() {
     slot.active = false;
   }
   state_.model_slots = 0;
-  for(auto& owner:state_.room_models){owner.active=false;owner.retirement=0;}
+  for(auto& owner:state_.room_models){owner.active=false;owner.retirement=0;owner.asset_identity=owner.clone_identity=0;}
   selection_.Reset();
   transition_ = nullptr;
   resources_ = nullptr;

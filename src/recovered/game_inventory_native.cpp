@@ -1,4 +1,5 @@
 #include "game_inventory_native.h"
+#include "core_hash.h"
 #include "game_content_native.h"
 #include <algorithm>
 #include <stdexcept>
@@ -7,37 +8,67 @@ namespace dokodemo::recovered {
 namespace {
 void Need(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 }
-uint32_t GameInventoryActionCount(GameInventoryOrigin origin,bool home)noexcept{return origin==GameInventoryOrigin::MainMenu5?3u:(home?5u:3u);}
-GameInventoryActionDescriptor GameInventoryActionAt(GameInventoryOrigin origin,bool home,uint32_t index)noexcept{
+std::array<uint8_t,32> GameInventoryItemsHash(const std::vector<GameInventoryItem>& items){
+    std::vector<uint8_t> bytes;
+    const auto word=[&](uint32_t n){for(uint32_t i=0;i<4;++i)bytes.push_back(uint8_t(n>>(8*i)));};
+    const auto text=[&](const std::string& s){word(uint32_t(s.size()));bytes.insert(bytes.end(),s.begin(),s.end());};
+    word(uint32_t(items.size()));for(const auto& i:items){word(i.row);word(uint32_t(i.id));word(uint32_t(i.category));word(i.valid?1u:0u);word(i.date_word);
+        for(auto x:i.source_words)word(x);for(auto x:i.source_kinds)word(x);for(auto x:i.control_words)word(x);for(auto x:i.control_kinds)word(x);text(i.name);text(i.description);}
+    return core::sha256(bytes.data(),bytes.size());
+}
+uint32_t GameInventoryActionCount(GameInventoryOrigin origin,bool home,bool placement)noexcept{return origin==GameInventoryOrigin::MainMenu5?(home&&placement?4u:3u):(home?5u:3u);}
+GameInventoryActionDescriptor GameInventoryActionAt(GameInventoryOrigin origin,bool home,uint32_t index,bool placement)noexcept{
     static constexpr const char* labels[]={"\x82\xA8\x95\x94\x89\xAE\x82\xC9\x82\xA9\x82\xB4\x82\xE9",
         "\x82\xB5\x82\xDC\x82\xC1\x82\xC4\x82\xA8\x82\xAD",
         "\x83\x76\x83\x8C\x83\x5B\x83\x93\x83\x67\x8C\xF0\x8A\xB7\x82\xC9\x8E\x67\x82\xA4",
         "\x82\xB7\x82\xC4\x82\xBF\x82\xE1\x82\xA4","\x82\xE2\x82\xC1\x82\xCF\x83\x84\x83\x81"};
-    static constexpr uint32_t events[]={13,14,15,16,0},finite[]={2,1,4};
-    if(index>=GameInventoryActionCount(origin,home))return {};
+    static constexpr uint32_t events[]={13,14,15,16,0},finite[]={2,1,4},placed[]={0,1,2,4};
+    if(index>=GameInventoryActionCount(origin,home,placement))return {};
     // Named WindowsFiniteMenuMarkProjection: source labels/results retained,
     // visible order contains only admitted15/14/Cancel for this origin.
-    const auto source=origin==GameInventoryOrigin::MainMenu5?finite[index]:index+(home?0u:2u);
+    const auto source=origin==GameInventoryOrigin::MainMenu5?(home&&placement?placed[index]:finite[index]):index+(home?0u:2u);
     return {events[source],origin==GameInventoryOrigin::MainMenu5?source+1:index+1,labels[source]};
 }
-GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context,GameInventoryActionDispatch dispatch,GameInventoryOrigin origin){
+GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context,GameInventoryActionDispatch dispatch,GameInventoryOrigin origin,bool placement,GameInventoryCompletionVerify verify){
     if(origin!=GameInventoryOrigin::Script41&&origin!=GameInventoryOrigin::MainMenu5)return {GameFsCode::Bounds,0,"Inventory request origin unavailable"};
     if(Modal())return {GameFsCode::Busy,0,"Inventory resource14 already pending"};
+    if(origin==GameInventoryOrigin::MainMenu5&&placement&&(!home_context||!verify))return {GameFsCode::Unavailable,0,"Placement inventory requires home and owning completion verifier"};
     if(items.size()>170)return {GameFsCode::Bounds,0,"Native inventory170-row admission"};
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory row index/provenance mismatch"};
     const auto generation=state_.generation+1;
     const auto requests=state_.requests+1,retired=state_.retirements;
     discard_dialog_.Retire();state_={};state_.generation=generation;state_.requests=uint32_t(requests);state_.retirements=retired;
     state_.origin=origin;state_.items=std::move(items);state_.requested=state_.request14=true;
+    state_.placement_enabled=origin==GameInventoryOrigin::MainMenu5&&home_context&&placement;
     state_.loader498=origin==GameInventoryOrigin::MainMenu5?0:2;state_.phase=1;
-    home_=home_context;dispatch_=std::move(dispatch);input_.BeginContext();return {};
+    home_=home_context;dispatch_=std::move(dispatch);verify_=std::move(verify);input_.BeginContext();return {};
 }
-GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items){
+GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items,const GameInventoryActionCertificate* certificate){
     if(!state_.live||state_.phase!=3||!state_.action_pending||generation!=state_.generation||receipt!=state_.action_receipt)
         return {GameFsCode::Unavailable,0,"Inventory action completion owner/receipt changed"};
     if(items.size()!=state_.items.size())return {GameFsCode::Bounds,0,"Inventory action row set replaced"};
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory action row identity"};
     if(state_.origin==GameInventoryOrigin::MainMenu5){
+        if(state_.action_row<0||size_t(state_.action_row)>=state_.items.size())return {GameFsCode::Bounds,0,"Menu action row extent"};
+        const bool placement=state_.action_event==13||(state_.action_event==14&&state_.items.at(size_t(state_.action_row)).source_words[1]!=0);
+        if(placement){
+            if(!state_.placement_enabled||!certificate||!certificate->valid||certificate->generation!=generation||certificate->receipt!=receipt
+               ||certificate->event!=state_.action_event||certificate->row!=uint32_t(state_.action_row)
+               ||certificate->before_display!=GameInventoryItemsHash(state_.items)||certificate->after_display!=GameInventoryItemsHash(items)
+               ||certificate->approved_image==std::array<uint8_t,32>{}||!verify_||!verify_(*certificate))return {GameFsCode::Unavailable,0,"Placement refresh lacks actor receipt/image certificate"};
+            for(size_t i=0;i<items.size();++i){const auto& old=state_.items[i];const auto& n=items[i];const auto mask=certificate->mutable_fields[i];
+                if(n.id!=old.id||n.valid!=old.valid||n.date_word!=old.date_word||n.name!=old.name||n.description!=old.description
+                   ||n.control_words[0]!=old.control_words[0]||n.control_kinds[0]!=old.control_kinds[0]||(mask&~0x3E0u))
+                    return {GameFsCode::Unavailable,0,"Placement refresh protected display identity"};
+                for(uint32_t f=5;f<=9;++f){const auto at=f<=7?f-5:f-7;
+                    const auto word=f<=7?n.source_words[at]:n.control_words[at],prior=f<=7?old.source_words[at]:old.control_words[at];
+                    const auto kind=f<=7?n.source_kinds[at]:n.control_kinds[at],prior_kind=f<=7?old.source_kinds[at]:old.control_kinds[at];
+                    if(!(mask&(1u<<f))&&(word!=prior||kind!=prior_kind))return {GameFsCode::Unavailable,0,"Placement refresh unapproved field delta"};
+                }
+                const auto category=(n.source_words[0]&0xFFFFFFF)==1?2:((n.source_words[2]>>28)==0?1:0);
+                if(n.valid&&n.category!=category)return {GameFsCode::Unavailable,0,"Placement refresh category mismatch"};
+            }
+        }else{
         if((state_.action_event!=14&&state_.action_event!=15)||state_.action_row<0||size_t(state_.action_row)>=items.size())
             return {GameFsCode::Unavailable,0,"Menu mark completion event/row replaced"};
         for(size_t i=0;i<items.size();++i){auto expected=state_.items[i];
@@ -49,14 +80,16 @@ GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,
                ||actual.source_kinds!=expected.source_kinds||actual.control_words!=expected.control_words||actual.control_kinds!=expected.control_kinds
                ||actual.category!=expected.category)return {GameFsCode::Unavailable,0,"Menu mark GUI refresh changed protected item identity/data"};
         }
+        }
     }
     state_.items=std::move(items);state_.action_pending=false;++state_.action_completions;
     Rebuild();input_.BeginContext();return {};
 }
 GameFsStatus GameInventory::DispatchAction(uint32_t event,int32_t row){
     if(state_.origin==GameInventoryOrigin::MainMenu5){
-        if((event!=14&&event!=15)||row<0||size_t(row)>=state_.items.size()
-           ||state_.items[size_t(row)].source_kinds[1]!=uint8_t(script::Value::Kind::Scalar)||state_.items[size_t(row)].source_words[1]!=0){
+        if(row<0||size_t(row)>=state_.items.size()||(event!=13&&event!=14&&event!=15)
+           ||state_.items[size_t(row)].source_kinds[1]!=uint8_t(script::Value::Kind::Scalar)
+           ||(event==13&&!state_.placement_enabled)||(state_.items[size_t(row)].source_words[1]!=0&&(!state_.placement_enabled||event!=14))){
             ++state_.unsupported_actions;input_.BeginContext();return {};
         }
     }
@@ -66,7 +99,7 @@ GameFsStatus GameInventory::DispatchAction(uint32_t event,int32_t row){
     if(!admitted.status)return admitted.status;
     if(admitted.queue_result==1){state_.actions=true;state_.stateB30=1;return {};}
     if(admitted.queue_result!=0||!admitted.receipt)return {GameFsCode::Unavailable,0,"Inventory action queue did not accept its owner"};
-    state_.select_result=int32_t(GameInventoryActionAt(state_.origin,home_,state_.action_selection).source_result);state_.action_pending=true;state_.action_receipt=admitted.receipt;state_.action_event=event;
+    state_.select_result=int32_t(GameInventoryActionAt(state_.origin,home_,state_.action_selection,state_.placement_enabled).source_result);state_.action_pending=true;state_.action_receipt=admitted.receipt;state_.action_event=event;
     state_.action_row=row;++state_.action_events;state_.actions=false;state_.stateB30=0;
     return {};
 }
@@ -148,13 +181,13 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
             }else{
             input_.Tick();
             if(state_.actions){
-                const uint32_t count=GameInventoryActionCount(state_.origin,home_);
+                const uint32_t count=GameInventoryActionCount(state_.origin,home_,state_.placement_enabled);
                 if(input_.Repeat(Down,10,2)){state_.action_selection=(state_.action_selection+1)%count;++state_.navigation;}
                 else if(input_.Repeat(Up,10,2)){state_.action_selection=(state_.action_selection+count-1)%count;++state_.navigation;}
                 else if(input_.First(Cross)||(input_.First(Circle)&&state_.action_selection==count-1)){
-                    state_.select_result=input_.First(Cross)?0:int32_t(GameInventoryActionAt(state_.origin,home_,count-1).source_result);state_.actions=false;state_.stateB30=0;++state_.action_cancels;input_.BeginContext();
+                    state_.select_result=input_.First(Cross)?0:int32_t(GameInventoryActionAt(state_.origin,home_,count-1,state_.placement_enabled).source_result);state_.actions=false;state_.stateB30=0;++state_.action_cancels;input_.BeginContext();
                 }else if(input_.First(Circle)){
-                    const auto event=GameInventoryActionAt(state_.origin,home_,state_.action_selection).event;
+                    const auto event=GameInventoryActionAt(state_.origin,home_,state_.action_selection,state_.placement_enabled).event;
                     if(event==16&&state_.origin==GameInventoryOrigin::Script41){
                         Need(discard_dialog_.Begin(0,0),"Inventory TRC confirmation already active");
                         state_.discard_row=state_.selected_row;state_.discard_item_id=state_.selected_id;
@@ -189,7 +222,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
 }
 void GameInventory::Close(){
     discard_dialog_.Retire();state_.discard_confirmation=false;state_.discard_dialog_state=3;
-    clone_.Close();resource_.reset();input_.BeginContext();transition_=nullptr;dispatch_={};state_.action_pending=false;
+    clone_.Close();resource_.reset();input_.BeginContext();transition_=nullptr;dispatch_={};verify_={};state_.action_pending=false;
     state_.live=state_.owner480=state_.visible=state_.actions=state_.requested=state_.request14=state_.retirement_pending=false;
     state_.phase=7;state_.loader464=state_.loader498=0;
 }
@@ -219,11 +252,11 @@ GameFsStatus GameInventory::Draw(GameGraphics& graphics,const GameFontResource& 
     if(!state_.selected_description.empty()){const auto status=text({state_.selected_description},26,174,426);if(!status)return status;}
     if(state_.actions){
         // Source labels and finite origin mapping are shared with input.
-        const auto count=GameInventoryActionCount(state_.origin,home_);
+        const auto count=GameInventoryActionCount(state_.origin,home_,state_.placement_enabled);
         if(!graphics.FillRectangle(110,44,468,224,0xFFFDF5DF,65535))return {GameFsCode::Unavailable,0,"Inventory SELECT panel"};
         for(uint32_t i=0;i<count;++i){const auto y=52+int32_t(i)*30;
             if(i==state_.action_selection)graphics.FillRectangle(114,y-1,464,y+25,0xFFE3C996,65535);
-            const auto status=text({GameInventoryActionAt(state_.origin,home_,i).label},120,y,340);if(!status)return status;
+            const auto status=text({GameInventoryActionAt(state_.origin,home_,i,state_.placement_enabled).label},120,y,340);if(!status)return status;
         }
     }
     if(state_.discard_confirmation){

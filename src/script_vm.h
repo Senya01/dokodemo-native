@@ -188,6 +188,10 @@ public:
     bool frame_observer_failed()const noexcept{return frame_observer_failed_;}
     uint64_t last_callback_receipt()const noexcept{return next_callback_receipt_;}
     bool owns_active_frame(uint64_t frame_id,uint32_t entry)const noexcept;
+    // Passive queries used by stable-data proofs. They do not resolve reads,
+    // register a context, invoke access observers or retain an owner.
+    bool reference_belongs_to_frame(const Value&,uint64_t frame_id)const noexcept;
+    bool stable_value_owner(const Value&)const noexcept;
     uint64_t unique_active_frame(uint32_t entry)const noexcept;
     bool active_call_matches(uint64_t caller,uint32_t entry,uint32_t pc,uint32_t resume,
                              uint64_t callee,uint32_t callee_entry)const noexcept;

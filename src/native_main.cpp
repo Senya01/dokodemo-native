@@ -54,7 +54,7 @@ struct Options {
     uint32_t testRngSeedWord=0;
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
-    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false,kanaWindowFixture=false,gameplayWindowFixture=false,continuationWindowFixture=false,mainMenuWindowFixture=false,menuInventoryWindowFixture=false,menuMarkWindowFixture=false;
+    bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false,kanaWindowFixture=false,gameplayWindowFixture=false,continuationWindowFixture=false,mainMenuWindowFixture=false,menuInventoryWindowFixture=false,menuMarkWindowFixture=false,menuPlaceWindowFixture=false;
     std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot,fixtureChoiceHistory;
 };
 Options ParseOptions() {
@@ -75,7 +75,7 @@ Options ParseOptions() {
         else if(arg==L"--game-loop-window-test"){options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--scene-clock-window-test"){options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-position-window-test"){options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
-        else if(arg==L"--menu-mark-window-fixture"||arg==L"--menu-inventory-window-fixture"||arg==L"--main-menu-window-fixture"||arg==L"--continue-gameplay-window-fixture"||arg==L"--gameplay-window-fixture"||arg==L"--kana-word-window-fixture"||arg==L"--conversation-window-fixture"||arg==L"--inventory-window-fixture"||arg==L"--inventory-actions-window-fixture"||arg==L"--decorate-window-fixture"||arg==L"--putaway-window-fixture"||arg==L"--discard-window-fixture"||arg==L"--game71-window-fixture"||arg==L"--manager9-window-fixture"||arg==L"--post17-window-fixture"||arg==L"--post19-window-fixture"||arg==L"--post21-window-fixture"||arg==L"--post24-window-fixture"||arg==L"--post25-window-fixture"||arg==L"--post26-window-fixture"||arg==L"--post28-window-fixture"||(arg==L"--conversation-activation-window-fixture"||arg==L"--repeat-conversation-window-fixture"||arg==L"--play-conversation-window-fixture"||arg==L"--sound-conversation-window-fixture")){options.menuMarkWindowFixture=arg==L"--menu-mark-window-fixture";options.menuInventoryWindowFixture=options.menuMarkWindowFixture||arg==L"--menu-inventory-window-fixture";options.mainMenuWindowFixture=arg==L"--main-menu-window-fixture"||options.menuInventoryWindowFixture;options.continuationWindowFixture=arg==L"--continue-gameplay-window-fixture"||options.mainMenuWindowFixture;options.gameplayWindowFixture=arg==L"--gameplay-window-fixture"||options.continuationWindowFixture;options.kanaWindowFixture=arg==L"--kana-word-window-fixture"||options.gameplayWindowFixture;options.discardWindowFixture=arg==L"--discard-window-fixture";options.putawayWindowFixture=arg==L"--putaway-window-fixture"||options.discardWindowFixture;options.decorateWindowFixture=arg==L"--decorate-window-fixture"||options.putawayWindowFixture;options.inventoryActionWindowFixture=arg==L"--inventory-actions-window-fixture"||options.decorateWindowFixture;options.soundWindowFixture=arg==L"--sound-conversation-window-fixture";options.playWindowFixture=arg==L"--play-conversation-window-fixture"||options.soundWindowFixture;options.repeatWindowFixture=arg==L"--repeat-conversation-window-fixture"||options.playWindowFixture;options.activationWindowFixture=arg==L"--conversation-activation-window-fixture"||options.repeatWindowFixture;options.post28WindowFixture=arg==L"--post28-window-fixture"||options.activationWindowFixture||options.kanaWindowFixture;options.post26WindowFixture=arg==L"--post26-window-fixture"||options.post28WindowFixture;options.post25WindowFixture=arg==L"--post25-window-fixture"||options.post26WindowFixture;options.post24WindowFixture=arg==L"--post24-window-fixture"||options.post25WindowFixture;options.post21WindowFixture=arg==L"--post21-window-fixture"||options.post24WindowFixture;options.post19WindowFixture=arg==L"--post19-window-fixture"||options.post21WindowFixture;options.post17WindowFixture=arg==L"--post17-window-fixture"||options.post19WindowFixture;options.manager9WindowFixture=arg==L"--manager9-window-fixture"||options.post17WindowFixture;options.game71WindowFixture=arg==L"--game71-window-fixture"||options.manager9WindowFixture||options.inventoryActionWindowFixture;options.inventoryWindowFixture=arg!=L"--conversation-window-fixture";options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
+        else if(arg==L"--menu-place-window-fixture"||arg==L"--menu-mark-window-fixture"||arg==L"--menu-inventory-window-fixture"||arg==L"--main-menu-window-fixture"||arg==L"--continue-gameplay-window-fixture"||arg==L"--gameplay-window-fixture"||arg==L"--kana-word-window-fixture"||arg==L"--conversation-window-fixture"||arg==L"--inventory-window-fixture"||arg==L"--inventory-actions-window-fixture"||arg==L"--decorate-window-fixture"||arg==L"--putaway-window-fixture"||arg==L"--discard-window-fixture"||arg==L"--game71-window-fixture"||arg==L"--manager9-window-fixture"||arg==L"--post17-window-fixture"||arg==L"--post19-window-fixture"||arg==L"--post21-window-fixture"||arg==L"--post24-window-fixture"||arg==L"--post25-window-fixture"||arg==L"--post26-window-fixture"||arg==L"--post28-window-fixture"||(arg==L"--conversation-activation-window-fixture"||arg==L"--repeat-conversation-window-fixture"||arg==L"--play-conversation-window-fixture"||arg==L"--sound-conversation-window-fixture")){options.menuPlaceWindowFixture=arg==L"--menu-place-window-fixture";options.menuMarkWindowFixture=arg==L"--menu-mark-window-fixture";options.menuInventoryWindowFixture=options.menuPlaceWindowFixture||options.menuMarkWindowFixture||arg==L"--menu-inventory-window-fixture";options.mainMenuWindowFixture=arg==L"--main-menu-window-fixture"||options.menuInventoryWindowFixture;options.continuationWindowFixture=arg==L"--continue-gameplay-window-fixture"||options.mainMenuWindowFixture;options.gameplayWindowFixture=arg==L"--gameplay-window-fixture"||options.continuationWindowFixture;options.kanaWindowFixture=arg==L"--kana-word-window-fixture"||options.gameplayWindowFixture;options.discardWindowFixture=arg==L"--discard-window-fixture";options.putawayWindowFixture=arg==L"--putaway-window-fixture"||options.discardWindowFixture;options.decorateWindowFixture=arg==L"--decorate-window-fixture"||options.putawayWindowFixture;options.inventoryActionWindowFixture=arg==L"--inventory-actions-window-fixture"||options.decorateWindowFixture;options.soundWindowFixture=arg==L"--sound-conversation-window-fixture";options.playWindowFixture=arg==L"--play-conversation-window-fixture"||options.soundWindowFixture;options.repeatWindowFixture=arg==L"--repeat-conversation-window-fixture"||options.playWindowFixture;options.activationWindowFixture=arg==L"--conversation-activation-window-fixture"||options.repeatWindowFixture;options.post28WindowFixture=arg==L"--post28-window-fixture"||options.activationWindowFixture||options.kanaWindowFixture;options.post26WindowFixture=arg==L"--post26-window-fixture"||options.post28WindowFixture;options.post25WindowFixture=arg==L"--post25-window-fixture"||options.post26WindowFixture;options.post24WindowFixture=arg==L"--post24-window-fixture"||options.post25WindowFixture;options.post21WindowFixture=arg==L"--post21-window-fixture"||options.post24WindowFixture;options.post19WindowFixture=arg==L"--post19-window-fixture"||options.post21WindowFixture;options.post17WindowFixture=arg==L"--post17-window-fixture"||options.post19WindowFixture;options.manager9WindowFixture=arg==L"--manager9-window-fixture"||options.post17WindowFixture;options.game71WindowFixture=arg==L"--game71-window-fixture"||options.manager9WindowFixture||options.inventoryActionWindowFixture;options.inventoryWindowFixture=arg!=L"--conversation-window-fixture";options.conversationWindowFixture=options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--camera-message-window-test"){options.cameraWindowTest=options.actorPositionWindowTest=options.sceneClockWindowTest=options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--actor-channel-window-test"){options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
@@ -1438,6 +1438,12 @@ void WriteGameProfileValue(std::ostream& out,const dokodemo::recovered::GameProf
         <<",\"raw16_comment_hex\":"<<JsonString(StartupHexBytes(p.stored.source_comment.data(),16))<<",\"calendar\":[";
     for(size_t i=0;i<7;++i){if(i)out<<',';out<<p.stored.calendar[i];}out<<"]}}";
 }
+void WriteRoomModelValue(std::ostream& out,const dokodemo::recovered::GameRoomModelSlotSnapshot& m){
+    out<<"{\"active\":"<<(m.active?"true":"false")<<",\"retirement\":"<<m.retirement<<",\"generation\":"<<m.generation
+       <<",\"resource\":"<<m.resource<<",\"category\":"<<m.category<<",\"selector\":"<<m.selector<<",\"source_x\":"<<m.source_x<<",\"anchor_node\":"<<m.anchor_node
+       <<",\"asset_identity\":"<<m.asset_identity<<",\"clone_identity\":"<<m.clone_identity<<",\"draw_frames\":"<<m.draw_frames<<",\"draw_pixel_writes\":"<<m.draw_pixel_writes<<",\"native_root\":[";
+    for(size_t i=0;i<m.native_root.size();++i){if(i)out<<',';out<<m.native_root[i];}out<<"]}";
+}
 void WriteGameInventoryValue(std::ostream& out,const dokodemo::recovered::GameInventorySnapshot& s){
     const auto b=[](bool v){return v?"true":"false";};
     const auto hex=[](const std::string& v){return StartupHexBytes(reinterpret_cast<const uint8_t*>(v.data()),v.size());};
@@ -1455,8 +1461,8 @@ void WriteGameInventoryValue(std::ostream& out,const dokodemo::recovered::GameIn
        <<",\"discard_confirmation\":"<<b(s.discard_confirmation)<<",\"discard_prompts\":"<<s.discard_prompts<<",\"discard_cancelled\":"<<s.discard_cancelled<<",\"discard_accepted\":"<<s.discard_accepted
        <<",\"discard_dialog_state\":"<<s.discard_dialog_state<<",\"discard_result\":"<<s.discard_result<<",\"discard_row\":"<<s.discard_row<<",\"discard_item_id\":"<<s.discard_item_id
        <<",\"action_event\":"<<s.action_event<<",\"action_row\":"<<s.action_row<<",\"action_events\":"<<s.action_events<<",\"action_completions\":"<<s.action_completions
-       <<",\"item_actions_implemented\":"<<b(true)<<",\"item_action_events\":"<<(s.origin==dokodemo::recovered::GameInventoryOrigin::Script41?"[13,14,15,16]":"[14,15]")
-       <<",\"action_frontier\":"<<s.action_frontier<<",\"item_award_implemented\":false,\"layout_policy\":\"NativeListLayout;Script41_Actions13_14_15_16;MainMenu5_NIL6Mark14_15OnlyOthersNonfatal;NativeInventoryTRCXYesZNo;OriginalCB2A_GIM_FONT\",\"items\":[";
+       <<",\"placement_enabled\":"<<b(s.placement_enabled)<<",\"item_actions_implemented\":"<<b(true)<<",\"item_action_events\":"<<(s.origin==dokodemo::recovered::GameInventoryOrigin::Script41?"[13,14,15,16]":s.placement_enabled?"[13,14,15]":"[14,15]")
+       <<",\"action_frontier\":"<<s.action_frontier<<",\"item_award_implemented\":false,\"layout_policy\":\"NativeListLayout;Script41_Actions13_14_15_16;MainMenu5_NIL6Mark14_15OrHomeGateReceiptBoundPlacement13Placed14;OtherActionsNonfatal;NativeInventoryTRCXYesZNo;OriginalCB2A_GIM_FONT\",\"items\":[";
     for(size_t i=0;i<s.items.size();++i){if(i)out<<',';const auto& v=s.items[i];out<<"{\"row\":"<<v.row<<",\"id\":"<<v.id<<",\"valid\":"<<b(v.valid)<<",\"category\":"<<v.category<<",\"date_word\":"<<v.date_word
         <<",\"name_cp932_hex\":"<<JsonString(hex(v.name))<<",\"description_cp932_hex\":"<<JsonString(hex(v.description));
         if(v.valid)out<<",\"source5_7_words\":["<<v.source_words[0]<<','<<v.source_words[1]<<','<<v.source_words[2]<<"],\"source5_7_kinds\":["<<unsigned(v.source_kinds[0])<<','<<unsigned(v.source_kinds[1])<<','<<unsigned(v.source_kinds[2])<<']';out<<'}';}
@@ -1923,6 +1929,24 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
        <<",\"event\":"<<mark.event<<",\"row\":"<<mark.row<<",\"receipt\":"<<mark.receipt<<",\"store_pc\":"<<mark.store_pc
        <<",\"initial_sha256\":"<<JsonString(StartupHexBytes(mark.initial_sha256.data(),mark.initial_sha256.size()))
        <<",\"verified_sha256\":"<<JsonString(StartupHexBytes(mark.verified_sha256.data(),mark.verified_sha256.size()))<<'}';
+    const auto& placement=boot.content.actor_script.menu_placement;
+    out<<",\"menu_placement\":{\"bound\":"<<boolean(placement.bound)<<",\"pending\":"<<boolean(placement.pending)<<",\"returned\":"<<boolean(placement.returned)
+       <<",\"flag_returned\":"<<boolean(placement.flag_returned)<<",\"callback_returned\":"<<boolean(placement.callback_returned)<<",\"event\":"<<placement.event<<",\"row\":"<<placement.row
+       <<",\"source_return_pc\":"<<placement.source_return_pc<<",\"source_return_executed\":"<<placement.source_return_executed<<",\"receipt\":"<<placement.receipt
+       <<",\"stores\":"<<placement.stores<<",\"auxiliary_stores\":"<<placement.auxiliary_stores<<",\"services\":"<<placement.services<<",\"completions\":"<<placement.completions<<",\"source_stores\":[";
+    {bool first=true;for(const auto& x:boot.content.actor_script.menu_source_stores){if(!first)out<<',';first=false;
+        out<<"{\"row\":"<<x.row<<",\"field\":"<<x.field<<",\"pc\":"<<x.pc<<",\"entry\":"<<x.entry<<",\"word\":"<<x.word<<",\"executed\":"<<x.executed<<'}';}}
+    out<<"],\"model_effects\":[";
+    {bool first=true;for(const auto& x:boot.content.actor_script.menu_model_effects){if(!first)out<<',';first=false;
+        out<<"{\"service\":"<<x.service<<",\"pc\":"<<x.pc<<",\"entry\":"<<x.entry<<",\"executed\":"<<x.executed<<",\"receipt\":"<<x.receipt<<",\"frame\":"<<x.frame
+           <<",\"result_word\":"<<x.result_word<<",\"result_stored\":"<<boolean(x.result_stored)<<",\"row_table\":"<<x.row_table<<",\"row_index\":"<<x.row_index
+           <<",\"slot\":"<<x.slot<<",\"resource\":"<<x.resource<<",\"category\":"<<x.category<<",\"selector\":"<<x.selector<<",\"x\":"<<x.x<<",\"generation\":"<<x.generation
+           <<",\"retirement_request\":"<<x.retirement_request<<",\"helper_return_executed\":"<<x.helper_return_executed<<",\"helper_return_pc\":"<<x.helper_return_pc
+           <<",\"argument_kind\":"<<x.argument_kind<<",\"argument_word\":"<<x.argument_word<<",\"argument_table\":"<<x.argument_table<<",\"argument_index\":"<<x.argument_index
+           <<",\"runtime_epoch\":"<<x.runtime_epoch<<",\"owner_phase\":"<<x.owner_phase<<",\"before_counts\":[";
+        for(size_t i=0;i<x.before_counts.size();++i){if(i)out<<',';out<<x.before_counts[i];}out<<"],\"after_counts\":[";
+        for(size_t i=0;i<x.after_counts.size();++i){if(i)out<<',';out<<x.after_counts[i];}out<<"],\"before\":";WriteRoomModelValue(out,x.before);out<<",\"after\":";WriteRoomModelValue(out,x.after);out<<'}';}}
+    out<<"]}";
     const auto& controls=boot.content.actor_script.ordinary_controls;
     out<<",\"ordinary_controls\":{\"valid\":"<<(controls.valid?"true":"false")
        <<",\"generation\":"<<controls.generation<<",\"run_id\":"<<controls.run_id<<",\"error_code\":"<<controls.error_code<<",\"values\":[";
@@ -1946,7 +1970,7 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
        <<",\"ascii_class70_input_cp932_hex\":"<<JsonString(StartupHexBytes(reinterpret_cast<const uint8_t*>(boot.content.actor_script.ascii_class70_input.data()),boot.content.actor_script.ascii_class70_input.size()));
     {const auto& a=boot.content.actor_script.inventory_action;
         out<<",\"inventory_action\":{\"pending\":"<<boolean(a.pending)<<",\"returned\":"<<boolean(a.returned)<<",\"completed\":"<<boolean(a.completed)<<",\"failed\":"<<boolean(a.failed)
-           <<",\"menu_origin\":"<<boolean(a.menu_origin)<<",\"flag_store_count\":"<<a.flag_store_count<<",\"flag_store_pc\":"<<a.flag_store_pc<<",\"flag_store_word\":"<<a.flag_store_word
+           <<",\"placement\":"<<boolean(a.placement)<<",\"proof_error\":"<<JsonString(a.proof_error)<<",\"menu_origin\":"<<boolean(a.menu_origin)<<",\"flag_store_count\":"<<a.flag_store_count<<",\"flag_store_pc\":"<<a.flag_store_pc<<",\"flag_store_word\":"<<a.flag_store_word
            <<",\"nil6_returns\":"<<a.nil6_returns<<",\"flag_returns\":"<<a.flag_returns<<",\"protected_writes\":"<<a.protected_writes
            <<",\"nil6_return_executed\":"<<a.nil6_return_executed<<",\"flag_store_executed\":"<<a.flag_store_executed<<",\"flag_return_executed\":"<<a.flag_return_executed
            <<",\"generation\":"<<a.generation<<",\"receipt\":"<<a.receipt<<",\"callback_frame\":"<<a.callback_frame<<",\"event\":"<<a.event<<",\"row\":"<<a.row<<",\"item_id\":"<<a.item_id
@@ -2142,11 +2166,13 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
        <<",\"model_pixel_writes\":"<<runtime.model_pixel_writes<<",\"visible_pixels\":"<<runtime.visible_pixels
        <<",\"last_model_slot\":"<<runtime.last_model_slot<<",\"last_model_path\":"<<JsonString(runtime.last_model_path)
        <<",\"model_publications\":"<<runtime.model_publications<<",\"model_updates\":"<<runtime.model_updates
+       <<",\"owner_epoch\":"<<runtime.owner_epoch<<",\"model_asset_acquisitions\":"<<runtime.model_asset_acquisitions<<",\"model_clone_initializations\":"<<runtime.model_clone_initializations
        <<",\"model_retire_requests\":"<<runtime.model_retire_requests<<",\"model_retirements\":"<<runtime.model_retirements
        <<",\"room_models\":[";
     {bool first=true;for(size_t i=0;i<runtime.room_models.size();++i){const auto& m=runtime.room_models[i];if(!m.generation)continue;if(!first)out<<',';first=false;
         out<<"{\"slot\":"<<i<<",\"active\":"<<boolean(m.active)<<",\"retirement\":"<<m.retirement<<",\"generation\":"<<m.generation
-           <<",\"resource\":"<<m.resource<<",\"category\":"<<m.category<<",\"selector\":"<<m.selector<<",\"source_x\":"<<m.source_x<<",\"anchor_node\":"<<m.anchor_node<<",\"native_root\":[";
+           <<",\"resource\":"<<m.resource<<",\"category\":"<<m.category<<",\"selector\":"<<m.selector<<",\"source_x\":"<<m.source_x<<",\"anchor_node\":"<<m.anchor_node
+           <<",\"asset_identity\":"<<m.asset_identity<<",\"clone_identity\":"<<m.clone_identity<<",\"draw_frames\":"<<m.draw_frames<<",\"draw_pixel_writes\":"<<m.draw_pixel_writes<<",\"native_root\":[";
         for(size_t j=0;j<m.native_root.size();++j){if(j)out<<',';out<<m.native_root[j];}out<<"]}";}}out<<']'
        <<",\"room_owner_phases\":"<<runtime.room_owner_phases<<",\"model_retirement_history_dropped\":"<<runtime.model_retirement_history_dropped
        <<",\"model_retirement_history\":[";
@@ -4430,6 +4456,7 @@ struct Application {
     uint64_t miInventoryGeneration=0;bool miHeldRefused=false,miFocusRefused=false,miReturnHeldRefused=false;
 
     unsigned mmNav=0;int32_t mmRow=-1,mmId=-1;uint32_t mmInitialFlag=0,mmActions=0;uint64_t mmMarkReceipt=0;bool mmMarkPassed=false;
+    bool mpPassed=false,mpInputGuardsDone=false;int32_t mpRow=-1,mpId=-1,mpSlot=-1;uint64_t mpReceipt=0,mpGeneration=0;unsigned mpActions=0,mpNav=0;
     unsigned gameplayUi=0,gameplayPosts=0,gameplayCuts=0;uint64_t gameplayWait=0,gameplayGeneration=0;uint32_t gameplayPosted=0,gameplayBaseline=0;bool gameplayPassed=false,gameplayKnownInput=false,gameplayCorrectedInput=false,gameplayWordRow=false,gameplayEcho=false;
     std::vector<std::pair<uint32_t,std::string>> fixtureChoiceHistory;
     std::vector<std::string> fixtureChoiceOptions;
@@ -4956,7 +4983,13 @@ struct Application {
                              &&a.menu_close_return.restored.clock_tick<=a.menu_pause_return.suspended.clock_tick
                              &&a.menu_pause_return.restored.clock_tick<c.main_menu_inventory_child_clock)){fail(L"mi-owner-phase-order");return;}
                         save(L"mi-inventory-open");miExecuted=a.instructions;
-                        if(options.menuMarkWindowFixture){
+                        if(options.menuPlaceWindowFixture){
+                            if(!inv.placement_enabled||inv.selected_row<0||size_t(inv.selected_row)>=inv.items.size()){fail(L"mp-no-offered-placement");return;}
+                            const auto& item=inv.items[size_t(inv.selected_row)];
+                            if(!item.valid||item.source_kinds[1]!=1||item.source_words[1]!=0){fail(L"mp-offered-item-not-NIL6");return;}
+                            mpRow=inv.selected_row;mpId=item.id;mpActions=inv.action_completions;
+                            button(Cross);miWait=phase+4;miStep=8;
+                        }else if(options.menuMarkWindowFixture){
                             if(inv.selected_row<0||size_t(inv.selected_row)>=inv.items.size()){fail(L"mm-no-offered-item");return;}
                             const auto& item=inv.items[size_t(inv.selected_row)];
                             if(!item.valid||item.source_kinds[1]!=1||item.source_words[1]!=0){fail(L"mm-offered-item-not-NIL6");return;}
@@ -4976,15 +5009,15 @@ struct Application {
                         if(inv.phase!=3||inv.close_requests||a.instructions!=miExecuted){fail(L"mi-refocused-held-cross");return;}
                         miFocusRefused=true;json(L"mi-focus-cross-refused");button(0);miWait=phase+3;miStep=12;
                     }break;
-                case 12:if(phase>=miWait){button(Cross);miStep=13;}break;
+                case 12:if(phase>=miWait){if(options.menuPlaceWindowFixture&&!mpInputGuardsDone){mpInputGuardsDone=true;button(0);miWait=phase+3;miStep=40;}else{button(Cross);miStep=13;}}break;
                 case 13:
                     if(inv.phase==4){save(L"mi-inventory-closing");button(0);miStep=14;}break;
                 case 14:
                     if(!c.main_menu_phase&&r.eligible&&c.main_menu_inventory_completions==1){
                         const auto& before=a.menu_inventory_before;const auto& after=a.menu_inventory_after;
-                        const auto callbacks=miCallbacks+(options.menuMarkWindowFixture?5u:3u);
-                        const bool validRAM=options.menuMarkWindowFixture
-                            ?(mmMarkPassed&&a.menu_mark.completions==2&&a.menu_mark.verified_sha256==after.sha256)
+                        const auto callbacks=miCallbacks+((options.menuMarkWindowFixture||options.menuPlaceWindowFixture)?5u:3u);
+                        const bool validRAM=(options.menuMarkWindowFixture||options.menuPlaceWindowFixture)
+                            ?((options.menuPlaceWindowFixture?mpPassed:mmMarkPassed)&&a.menu_mark.completions==2&&a.menu_mark.verified_sha256==after.sha256)
                             :before.sha256==after.sha256;
                         if(!miHeldRefused||!miFocusRefused||inv.phase!=7||inv.live||inv.owner480||inv.request14||inv.retirement_pending
                            ||inv.retired_generation!=inv.generation||inv.generation!=miInventoryGeneration+1||inv.retirements!=miRetirements+1
@@ -5000,7 +5033,7 @@ struct Application {
                     }break;
                 case 15:
                     if(phase>=miWait){
-                        if(r.posted||r.activation.consumed||c.main_menu_phase||a.callbacks_returned!=miCallbacks+(options.menuMarkWindowFixture?5u:3u)
+                        if(r.posted||r.activation.consumed||c.main_menu_phase||a.callbacks_returned!=miCallbacks+((options.menuMarkWindowFixture||options.menuPlaceWindowFixture)?5u:3u)
                            ||a.message_acknowledgements!=miAcks){fail(L"mi-return-held-circle");return;}
                         miReturnHeldRefused=true;save(L"mi-returned");mainMenuFixturePassed=gameplayPassed=storageBoundaryPassed=true;
                         mainMenuFixtureReturns=1;button(0);return;
@@ -5011,7 +5044,7 @@ struct Application {
                 case 22:
                     if(phase>=miWait){
                         if(!inv.actions||inv.selected_row!=mmRow||inv.selected_id!=mmId){fail(L"mm-action-owner");return;}
-                        if(inv.action_selection==0){save(L"mm-mark-choice");button(0);miWait=phase+3;miStep=24;}
+                        if(inv.action_selection==(inv.placement_enabled?2u:0u)){save(L"mm-mark-choice");button(0);miWait=phase+3;miStep=24;}
                         else{if(++mmNav>6){fail(L"mm-action-navigation");return;}miRow=int32_t(inv.action_selection);button(Down);miStep=23;}
                     }break;
                 case 23:if(int32_t(inv.action_selection)!=miRow){button(0);miWait=phase+3;miStep=22;}break;
@@ -5055,6 +5088,79 @@ struct Application {
                         save(L"mm-unmarked-empty-gift");mmMarkPassed=true;miExecuted=a.instructions;
                         button(Cross);miWait=phase+4;miStep=8;
                     }break;
+                case 40:if(phase>=miWait){button(Circle);miStep=41;}break;
+                case 41:if(inv.actions){button(0);miWait=phase+3;miStep=42;}break;
+                case 42:
+                    if(phase>=miWait){
+                        if(!inv.actions||!inv.placement_enabled||inv.selected_row!=mpRow||inv.selected_id!=mpId||inv.action_selection!=0){fail(L"mp-decorate-owner");return;}
+                        save(L"mp-decorate-offered");button(Circle);miStep=43;
+                    }break;
+                case 43:
+                    if(inv.action_completions==mpActions+1){
+                        const auto& action=a.inventory_action;const auto& proof=a.menu_placement;
+                        mpSlot=int32_t(action.after_words[1]&0xFFFFFFF);
+                        if(!action.placement||!action.menu_origin||!action.completed||action.failed||!action.returned||action.event!=13
+                           ||int32_t(action.row)!=mpRow||action.item_id!=mpId||action.before_words[1]!=0||action.after_words[1]>>28!=2
+                           ||mpSlot<0||mpSlot>=100||!proof.returned||!proof.flag_returned||!proof.callback_returned||proof.completions!=1
+                           ||proof.source_return_pc!=0x38D9||a.menu_mark.completions!=1||a.context_enabled||a.callbacks_returned!=miCallbacks+4
+                           ||inv.items[size_t(mpRow)].category!=0){fail(L"mp-source-decorate");return;}
+                        const auto& model=a.runtime.room_models[size_t(mpSlot)];
+                        if(!model.active||model.retirement||model.resource!=mpId||!model.asset_identity||!model.clone_identity){fail(L"mp-model-publication");return;}
+                        mpGeneration=model.generation;mpReceipt=action.receipt;json(L"mp-decorated-source");button(0);mpNav=0;miWait=phase+4;miStep=44;
+                    }break;
+                case 44:
+                    if(phase>=miWait){
+                        const auto& model=a.runtime.room_models[size_t(mpSlot)];
+                        if(!model.active||model.generation!=mpGeneration||!model.draw_frames||!model.draw_pixel_writes){fail(L"mp-model-presentation");return;}
+                        if(inv.filter==2){button(0);mpNav=0;miWait=phase+3;miStep=46;}
+                        else{if(++mpNav>5){fail(L"mp-placed-filter-navigation");return;}miRow=int32_t(inv.filter);button(Right);miStep=45;}
+                    }break;
+                case 45:if(int32_t(inv.filter)!=miRow){button(0);miWait=phase+3;miStep=44;}break;
+                case 46:
+                    if(phase>=miWait){
+                        if(!inv.count){fail(L"mp-placed-filter-empty");return;}
+                        if(inv.selected_row==mpRow){if(inv.selected_id!=mpId){fail(L"mp-placed-row-identity");return;}save(L"mp-placed-filter");button(0);miWait=phase+3;miStep=48;}
+                        else{if(++mpNav>170){fail(L"mp-placed-row-navigation");return;}miRow=inv.selected_row;button(Down);miStep=47;}
+                    }break;
+                case 47:if(inv.selected_row!=miRow){button(0);miWait=phase+3;miStep=46;}break;
+                case 48:if(phase>=miWait){button(Circle);miStep=49;}break;
+                case 49:if(inv.actions){button(0);mpNav=0;miWait=phase+3;miStep=50;}break;
+                case 50:
+                    if(phase>=miWait){
+                        if(!inv.actions||inv.selected_row!=mpRow||inv.selected_id!=mpId){fail(L"mp-putaway-owner");return;}
+                        if(inv.action_selection==1){json(L"mp-putaway-offered");button(0);miWait=phase+3;miStep=52;}
+                        else{if(++mpNav>5){fail(L"mp-putaway-navigation");return;}miRow=int32_t(inv.action_selection);button(Down);miStep=51;}
+                    }break;
+                case 51:if(int32_t(inv.action_selection)!=miRow){button(0);miWait=phase+3;miStep=50;}break;
+                case 52:if(phase>=miWait){button(Circle);miStep=53;}break;
+                case 53:
+                    if(inv.action_completions==mpActions+2){
+                        const auto& action=a.inventory_action;const auto& proof=a.menu_placement;
+                        if(!action.placement||!action.menu_origin||!action.completed||!action.returned||action.failed||action.event!=14||action.receipt<=mpReceipt
+                           ||int32_t(action.row)!=mpRow||action.item_id!=mpId||action.before_words[1]!=(0x20000000u|uint32_t(mpSlot))
+                           ||action.after_words[1]||action.after_words[2]||action.after_words[0]!=0x10000000||action.before_controls[1]!=action.after_controls[1]
+                           ||!proof.flag_returned||!proof.callback_returned||proof.completions!=2||proof.source_return_pc!=0x393B
+                           ||a.menu_mark.completions!=2||a.context_enabled||a.callbacks_returned!=miCallbacks+5||inv.items[size_t(mpRow)].category!=1){fail(L"mp-source-putaway");return;}
+                        json(L"mp-putaway-source");button(0);mpNav=0;miWait=phase+3;miStep=54;
+                    }break;
+                case 54:
+                    if(phase>=miWait){
+                        const auto& room=a.runtime;const auto it=std::find_if(room.model_retirement_history.begin(),room.model_retirement_history.end(),[&](const auto& x){return x.slot==mpSlot&&x.generation==mpGeneration;});
+                        if(it==room.model_retirement_history.end()||!it->destroyed_phase)break;
+                        const auto& model=room.room_models[size_t(mpSlot)];
+                        if(!(it->requested_phase<it->disabled_phase&&it->disabled_phase<it->destroyed_phase)||!it->assets_retained_at_disable||!it->clone_retained_at_disable
+                           ||!it->asset_owner_expired||!it->clone_owner_cleared||model.active||model.asset_identity||model.clone_identity||model.generation!=mpGeneration){fail(L"mp-natural-model-retirement");return;}
+                        if(inv.filter==3){button(0);mpNav=0;miWait=phase+3;miStep=56;}
+                        else{if(++mpNav>5){fail(L"mp-stored-filter-navigation");return;}miRow=int32_t(inv.filter);button(Right);miStep=55;}
+                    }break;
+                case 55:if(int32_t(inv.filter)!=miRow){button(0);miWait=phase+3;miStep=54;}break;
+                case 56:
+                    if(phase>=miWait){
+                        if(!inv.count){fail(L"mp-stored-filter-empty");return;}
+                        if(inv.selected_row==mpRow){if(inv.selected_id!=mpId){fail(L"mp-stored-row-identity");return;}save(L"mp-stored-filter");mpPassed=true;miExecuted=a.instructions;button(Cross);miStep=13;}
+                        else{if(++mpNav>170){fail(L"mp-stored-row-navigation");return;}miRow=inv.selected_row;button(Down);miStep=57;}
+                    }break;
+                case 57:if(inv.selected_row!=miRow){button(0);miWait=phase+3;miStep=56;}break;
                 default:fail(L"mi-fixture-step");return;
                 }
                 return;
@@ -6566,7 +6672,7 @@ struct Application {
             && (!options.putawayWindowFixture || modelRemovalPassed)
             && (!options.discardWindowFixture || discardPassed)
             && (!options.kanaWindowFixture || (options.gameplayWindowFixture?gameplayPassed:kanaPassed))
-            && (!options.mainMenuWindowFixture || mainMenuFixturePassed) && (!options.menuMarkWindowFixture || mmMarkPassed)
+            && (!options.mainMenuWindowFixture || mainMenuFixturePassed) && (!options.menuMarkWindowFixture || mmMarkPassed) && (!options.menuPlaceWindowFixture || mpPassed)
             && (!options.repeatWindowFixture || repeatPassed)
             && (!options.playWindowFixture || playPassed)
             && (!options.soundWindowFixture || SelectedGameSoundDrained(startupObservation))
@@ -6695,7 +6801,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 && (!options.putawayWindowFixture || app.modelRemovalPassed)
                 && (!options.discardWindowFixture || app.discardPassed)
                 && (!options.kanaWindowFixture || (options.gameplayWindowFixture?app.gameplayPassed:app.kanaPassed))
-                && (!options.mainMenuWindowFixture || app.mainMenuFixturePassed) && (!options.menuMarkWindowFixture || app.mmMarkPassed)
+                && (!options.mainMenuWindowFixture || app.mainMenuFixturePassed) && (!options.menuMarkWindowFixture || app.mmMarkPassed) && (!options.menuPlaceWindowFixture || app.mpPassed)
                 && (!options.repeatWindowFixture || app.repeatPassed)
                 && (!options.playWindowFixture || app.playPassed)
                 && (!options.soundWindowFixture || (SelectedGameSoundDrained(app.startupObservation)&&app.startupObservation.native_audio.actor_joined&&app.startupObservation.native_audio.handles_closed&&app.startupObservation.native_audio.com_references_released))
@@ -6789,6 +6895,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"fixture_text_policy\":\"ActualRenderedGreetingPromptOssuOtherwiseAki;StrictReactionFixtureNekoTarou;TestTextOnlyNoCategoryOrResultInjection\""
                 << ",\"continuation_window_fixture\":"<<(options.continuationWindowFixture?"true":"false")
                 << ",\"menu_inventory_fixture\":"<<(options.menuInventoryWindowFixture?"true":"false")<<",\"menu_inventory_held_refused\":"<<(app.miHeldRefused?"true":"false")<<",\"menu_inventory_focus_refused\":"<<(app.miFocusRefused?"true":"false")<<",\"menu_inventory_return_held_refused\":"<<(app.miReturnHeldRefused?"true":"false")
+                << ",\"menu_place_fixture\":"<<(options.menuPlaceWindowFixture?"true":"false")<<",\"menu_place_passed\":"<<(app.mpPassed?"true":"false")<<",\"menu_place_row\":"<<app.mpRow<<",\"menu_place_item_id\":"<<app.mpId<<",\"menu_place_slot\":"<<app.mpSlot<<",\"menu_place_generation\":"<<app.mpGeneration
                 << ",\"menu_mark_fixture\":"<<(options.menuMarkWindowFixture?"true":"false")<<",\"menu_mark_passed\":"<<(app.mmMarkPassed?"true":"false")
                 << ",\"main_menu_fixture\":"<<(options.mainMenuWindowFixture?"true":"false")<<",\"main_menu_fixture_passed\":"<<(app.mainMenuFixturePassed?"true":"false")
                 << ",\"gameplay_exploration_fixture\":"<<(options.gameplayWindowFixture?"true":"false")<<",\"gameplay_exploration_passed\":"<<(app.gameplayPassed?"true":"false")<<",\"gameplay_posts\":"<<app.gameplayPosts<<",\"gameplay_known_input\":"<<(app.gameplayKnownInput?"true":"false")<<",\"gameplay_corrected_input\":"<<(app.gameplayCorrectedInput?"true":"false")<<",\"gameplay_word_row\":"<<(app.gameplayWordRow?"true":"false")<<",\"gameplay_echo\":"<<(app.gameplayEcho?"true":"false")
@@ -6813,7 +6920,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"profile_no_preserved\":"<<(app.profileNoObserved?"true":"false")
                 << ",\"title_arrival_observed\":" << (app.titleArrivalObserved?"true":"false")
                 << ",\"title_menu_selection_observed\":" << (app.titleMenuSelectionObserved?"true":"false")
-                << ",\"validation_scope\":" << JsonString(options.menuMarkWindowFixture?"ActualMainMenu5NIL6Mark15Unmark14;ReceiptQualified2FDAStores;ExactOtherTypedRAM;DisabledCallback32;ActualChildClosePollDrain;NotSaveOrScene":options.menuInventoryWindowFixture?"ActualAuthoredMenuRow5Resource14;Source11Then18Disable;RealInventoryClosePollRetirement;SameBorrowedActivation;NotGAME41SaveOrSceneTransfer":options.mainMenuWindowFixture?"ActualAuthoredMainMenuOpenCancel;BorrowAvailableOwner;Source10And11;No469ClearSaveOrSceneTransfer":options.continuationWindowFixture?"BoundedActualOfferedGameplayWithSharedOwnedRoute;ExplicitInvocationRNGPolicy;NotNewFeatureOrFullGame":options.gameplayWindowFixture?"ActualKnownWordReactionAndFreshCorrection;Opcode55DescendingConsumer;TypedRowAndFONTThenOwnedReturn;ExplicitInvocationRNGPolicy;NotSaveOrFullGame":options.kanaWindowFixture?"ActualInput32Kana229;SourceWordClassPrefixSuffixCountAndVMRow;FreshOwnerReturn;NotNJSaveOrMatching":options.discardWindowFixture?"ActualPlacedDiscard16AfterTRCCancelAndFreshYes;AllVMRowCellsNIL;NaturalModelRetirement;NotFilesOrSave":options.putawayWindowFixture?"ActualPlacedEvent14AfterReal13;VMReadback;NaturalModelDisableRetainThenDestruction;NotSaveOrFullGame":options.decorateWindowFixture?"ActualEvent13SourcePlacement;OwnedRoomModel;VMWriteReadback;RealInventoryRetirement;NotSaveOrFullGame":options.inventoryActionWindowFixture?"ActualItemMarkAndUnmarkViaOwnedEvent15And14;VMField5;DisplayReadback;NoAwardOrNetwork;NormalInventoryRetirement;NotFullGame":options.soundWindowFixture?"SelectedGAME73BankSequenceWave;ReferenceADSR;NativeOutputDrain;NotAudibleOrFirmwareMatching":options.playWindowFixture?"ContinuedOwnedConversationsFromGeneration3;RealUI;No469Clear;NotFullGame":options.repeatWindowFixture?"SourceOwnedCommonConversation;TwoAcceptedEvent0CyclesAndFreshSuccessor;SafePhase1Dispatch;No469Clear;NotFullGame":options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;NaturalDeadlineResumeAndRepeatedOwnedLoop;TimedIdle;NoSourceWakeOrTokenRearm;NotFullGame":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
+                << ",\"validation_scope\":" << JsonString(options.menuPlaceWindowFixture?"ActualMainMenu5Source13Placed14;ExactReceiptApprovedRAMAndAuxiliary;ActualModelOwnerAndNaturalRetirement;Disabled32;CurrentChildDrain;NativeSceneAnchorLocalX;NotOriginalSchedulingSaveOrFullGame":options.menuMarkWindowFixture?"ActualMainMenu5NIL6Mark15Unmark14;ReceiptQualified2FDAStores;ExactOtherTypedRAM;DisabledCallback32;ActualChildClosePollDrain;NotSaveOrScene":options.menuInventoryWindowFixture?"ActualAuthoredMenuRow5Resource14;Source11Then18Disable;RealInventoryClosePollRetirement;SameBorrowedActivation;NotGAME41SaveOrSceneTransfer":options.mainMenuWindowFixture?"ActualAuthoredMainMenuOpenCancel;BorrowAvailableOwner;Source10And11;No469ClearSaveOrSceneTransfer":options.continuationWindowFixture?"BoundedActualOfferedGameplayWithSharedOwnedRoute;ExplicitInvocationRNGPolicy;NotNewFeatureOrFullGame":options.gameplayWindowFixture?"ActualKnownWordReactionAndFreshCorrection;Opcode55DescendingConsumer;TypedRowAndFONTThenOwnedReturn;ExplicitInvocationRNGPolicy;NotSaveOrFullGame":options.kanaWindowFixture?"ActualInput32Kana229;SourceWordClassPrefixSuffixCountAndVMRow;FreshOwnerReturn;NotNJSaveOrMatching":options.discardWindowFixture?"ActualPlacedDiscard16AfterTRCCancelAndFreshYes;AllVMRowCellsNIL;NaturalModelRetirement;NotFilesOrSave":options.putawayWindowFixture?"ActualPlacedEvent14AfterReal13;VMReadback;NaturalModelDisableRetainThenDestruction;NotSaveOrFullGame":options.decorateWindowFixture?"ActualEvent13SourcePlacement;OwnedRoomModel;VMWriteReadback;RealInventoryRetirement;NotSaveOrFullGame":options.inventoryActionWindowFixture?"ActualItemMarkAndUnmarkViaOwnedEvent15And14;VMField5;DisplayReadback;NoAwardOrNetwork;NormalInventoryRetirement;NotFullGame":options.soundWindowFixture?"SelectedGAME73BankSequenceWave;ReferenceADSR;NativeOutputDrain;NotAudibleOrFirmwareMatching":options.playWindowFixture?"ContinuedOwnedConversationsFromGeneration3;RealUI;No469Clear;NotFullGame":options.repeatWindowFixture?"SourceOwnedCommonConversation;TwoAcceptedEvent0CyclesAndFreshSuccessor;SafePhase1Dispatch;No469Clear;NotFullGame":options.activationWindowFixture?"SourceQualifiedTopicConversationLifecycle;FreshBodyFarewellMainConsumer;WindowsOwnedEvent0ThenActualConversation;NaturalDeadlineResumeAndRepeatedOwnedLoop;TimedIdle;NoSourceWakeOrTokenRearm;NotFullGame":options.post28WindowFixture&&app.post28AlternateStep?"INTERMEDIATE_ALTERNATE_ROUTE;ActualSELECTAndFreshMessages;NoNewQualifiedInputToken;NotPost28Pass;NoSceneStatSaveClaim":options.post28WindowFixture?"FreshAck28And29;ActualTwoAndFiveOptionSELECTCloseResult1;ObservedOwnedWordContinuation;ConsumedPoliciesNotRearmed;NoSceneStatSaveClaim":options.post26WindowFixture?"FreshAck26And27;ActualSELECT1ThenWindowsInput32Ascii8NativeTextPanel;RealCloseOwnedTextAuxArray57AndObservedFONT28;ConsumedPoliciesNotRearmed;NoSceneStatOrSaveClaim":options.post25WindowFixture?"FreshAck25;ActualFarewellNormal31AndCallerMainLoop;SourceTriangle12Arg1ThenRTrigger12Arg4;ObservedNextConsumer;NoSceneCompletionOrEvent0Rearm":options.post24WindowFixture?"FreshAck24;ActualTRUEAndNormal31CallerWitness;NextObservedConsumer;NoSceneOrFriendshipMutationClaim":options.post21WindowFixture?"ActualFreshAck21;TwoSourceOptionsRealCloseResult1;OriginalFONTResponses22_23_24WithIndependentFreshEdges;Held24Pending;NoFriendshipMutationOrSceneCompletion":options.post19WindowFixture?(app.post19LinearRoute?"ActualLinearRngRouteFreshAck19And20ToOriginalFONTReplies20And21;Held21Refused;NotSceneCompletion":"FreshMessage19AckThenActualRepeatedQuestionAndSecondSELECTRealCloseResult1Response22;OwnedDictionaryFields14And15;NotSceneCompletion"):options.post17WindowFixture?"ActualFreshMessage17Ack;SELECT33ActualOwnedOptionsRealClipCloseResult2;ActualBranchResponse19AndActorUpdate;NotSceneCompletion":options.manager9WindowFixture?"ActualManager9OrderedOuterReturn;Source469CircleBlocked;WindowsPostModalOwnedEvent0;ActualCallbackReturnAndNextFONTMessage;NotOriginalLoadManSceneChange":options.game71WindowFixture?"ActualGAME71RecordMutationThenByeMessageFreshAckAndCameraOut;Manager9RequestPendingNotSceneReturn":options.inventoryWindowFixture?"ActualGAME41False;MOCHIMONOListFilterInputCancelFadeClosePollDeferredRetirement;NativeActualCloseOnlyWake;NextUnimplementedGAME71":options.conversationWindowFixture?"ActualKscIntroductionAndSeparateFreshMessageEdgesThenStringResult;ExplicitCalendarFixture;NotFullTextEngineOrGame":options.cameraWindowTest?"ImmediateGAME44FalseAndIndependentCameraCurveCompletion;ActualCGuiIntroAndMinuteClockWait;KSCMessagesFONTAndFreshInput;NotFullTextEngineOrGame":options.actorPositionWindowTest?"ActualType12RegionOwnersAndGAME19Boolean;GAME28AndASC178ActualTurn;GAME44CameraRequestUnimplemented":options.sceneClockWindowTest?"ActualGAME36CivilClockAndSevenSeasonalControls;ActualMode3MovementToCoord16AndEligibleVMResume;GAME19PositionCheckUnimplemented":options.actorChannelWindowTest?"ActualMotion8ThenScenePair3ThenMotion123End;ASC176ReadyAndUnwind;EligibleVM54ResumeToUnimplementedGame36;ActorRoomDraw":options.gameLoopWindowTest?"ActualKscMainControlSwitchRoomFrame;LiveActorEventWaitingAtASC176;ASCExecutionAndActorDrawNotImplemented":options.softkeyWindowTest?"ActualKscStartupReturnsAfterDictionaryImportQueriesMutations;NativeProfileClockRng;MainLoopControlBoundaryNotGameplay":options.titleMenuWindowTest?"SourceTitleMenuAndMotionToExplicitUnavailableSoftkey;NotKeyboardOrScene3Completion":"LegacySelectedBoundary")
                 << ",\"graphics_smoke\":" << (options.graphicsSmoke ? "true" : "false")
                 << ",\"diagnostic_frame\":" << (graphics.diagnostic_frame ? "true" : "false")
                 << ",\"actual_gdi_present_count\":" << graphics.present_count

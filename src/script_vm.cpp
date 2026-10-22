@@ -590,6 +590,25 @@ std::string Vm::expand(const Command& cmd) const {
     }
     throw std::runtime_error("Missing inline terminator");
 }
+bool Vm::reference_belongs_to_frame(const Value& ref,uint64_t id)const noexcept{
+    if(ref.kind!=Value::Kind::Reference||ref.table!=Table::Frame||!id)return false;
+    const auto owner=ref.frame_owner.lock();if(!owner)return false;
+    if(frame_id_==id&&frame_==owner)return true;
+    for(const auto& c:calls_)if(c.frame_id==id&&c.values==owner)return true;
+    return false;
+}
+bool Vm::stable_value_owner(const Value& value)const noexcept{
+    if(value.kind==Value::Kind::Reference){
+        if(value.table==Table::Frame||value.table==Table::InputResult)return false;
+        if(value.table!=Table::Ctx28)return true;
+        const std::weak_ptr<NativeScriptContext> empty;
+        // Immutable image Ctx28 references have no weak owner and are local
+        // to this VM/run. Once an owner is supplied it must be this live one.
+        if(!value.context_owner.owner_before(empty)&&!empty.owner_before(value.context_owner))return true;
+    }else if(value.kind!=Value::Kind::Context)return true;
+    const auto owner=value.context_owner.lock();
+    return owner&&owner==context_&&owner->vm==this&&owner->thread==std::this_thread::get_id();
+}
 bool Vm::owns_active_frame(uint64_t id,uint32_t entry)const noexcept{
     if(stopped_||event_envelope_||!context_||context_->vm!=this||context_->thread!=std::this_thread::get_id())return false;
     if(frame_id_==id&&code_entry_==entry)return true;

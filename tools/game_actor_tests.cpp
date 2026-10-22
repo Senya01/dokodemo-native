@@ -57,6 +57,18 @@
 #endif
 
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_place_regressions.h"
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_callback_boundary_regressions.h"
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_place_scratch_regressions.h"
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_menu_render_retirement_regressions.h"
 #endif
 #include <algorithm>
@@ -430,6 +442,21 @@ GameMenuInventoryRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameMenuMarkRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuPlaceRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuCallbackBoundaryRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuPlaceScratchRegressionChecks();
 #endif
 
     

@@ -29,6 +29,10 @@ uint8_t KanaPrefix(uint8_t trail) {
     }
 }
 }
+bool GameMenuCallbackBoundaryAccepted(const script::Event& event,bool restored32,bool disabled)noexcept{
+    return event.status==script::Status::HostYield||(event.status==script::Status::Yield&&event.opcode==0x32
+        &&event.pc==0x8DD8B&&restored32&&disabled);
+}
 GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generation,uint32_t row) noexcept {
     GameWordRowObservation out;out.generation=generation;out.row=row;
     try {
@@ -62,7 +66,7 @@ GameInventoryRowsObservation GameObserveInventoryRows(const script::Vm& vm,uint6
     out.table=uint32_t(registered.table);out.index=registered.index;
     std::vector<uint8_t> bytes;std::vector<GameInventoryItem> next;GameInventoryRowsImage captured;
     const auto append=[&](uint32_t n){for(unsigned i=0;i<4;++i)bytes.push_back(uint8_t(n>>(8*i)));};
-    const auto capture=[&](const Value& v){append(uint32_t(v.kind));append(v.word);append(uint32_t(v.table));append(v.index);
+    const auto capture=[&](const Value& v){Need(v.kind==Value::Kind::String||v.cp932.empty(),"Inventory non-string value owns malformed text");append(uint32_t(v.kind));append(v.word);append(uint32_t(v.table));append(v.index);
         append(uint32_t(v.kind==Value::Kind::String?v.cp932.size():0));if(v.kind==Value::Kind::String)bytes.insert(bytes.end(),v.cp932.begin(),v.cp932.end());};
     const auto at=[&](Value root,uint32_t n){const auto index=uint32_t(root.index)+1+n;Need(index<=UINT16_MAX,"Inventory typed row extent");root.index=uint16_t(index);return vm.peek_reference(root);};
     const auto header=vm.peek_reference(registered);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==170,"Inventory actual170-row table");
@@ -73,8 +77,10 @@ GameInventoryRowsObservation GameObserveInventoryRows(const script::Vm& vm,uint6
         Need(row_header.kind==Value::Kind::ArrayHeader&&count>=10&&count<=64,"Inventory finite actual row header");
         capture(row);capture(row_header);std::array<Value,10> first;
         auto& shape=captured.rows[i];shape.table=uint32_t(row.table);shape.index=row.index;shape.header=row_header.word;
+        shape.cell_offsets.resize(count);
         for(uint32_t n=0;n<count;++n){const auto value=at(row,n);
             Need(bytes.size()<=UINT32_MAX,"Inventory canonical image extent");
+            shape.cell_offsets[n]=uint32_t(bytes.size());
             if(n==5)shape.flag_offset=uint32_t(bytes.size());if(n==6)shape.model_offset=uint32_t(bytes.size());
             capture(value);if(n<10)first[n]=value;}
         out.cells+=count;GameInventoryItem item;item.row=i;
@@ -287,25 +293,34 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     }
     case 31: {
         Need(runtime_!=nullptr,"Render31 needs actual model slot owner");
+        const bool placement=state_.inventory_action.pending&&state_.inventory_action.placement;
+        const auto before=runtime_->Snapshot();if(placement)menu_placement_.BeforeModel(*vm_,31,arg,before);
         const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
         const auto resource=field(0),category=field(3),motion=field(8),x=field(9);
         int32_t slot=-1;const auto status=runtime_->CreateModel(resource,category,motion,float(x),slot);
         const auto result=Value::integer(slot);
         RecordInventoryModelService(31,slot,resource,category,motion,x,status?result.word:0,bool(status));
+        if(status&&placement)menu_placement_.AfterModel(*vm_,31,arg,result,before,runtime_->Snapshot());
         Need(bool(status),status.detail.c_str());return result;
     }
     case 32: {
         Need(runtime_!=nullptr,"GAME32 requires live model slot owner");const auto slot=Number(arg);
+        const bool placement=state_.inventory_action.pending&&state_.inventory_action.placement;
+        const auto before=runtime_->Snapshot();if(placement)menu_placement_.BeforeModel(*vm_,32,arg,before);
         const auto status=runtime_->RetireModel(slot);
         RecordInventoryModelService(32,slot,-1,0,0,0,status?False().word:0,bool(status));
+        if(status&&placement)menu_placement_.AfterModel(*vm_,32,arg,False(),before,runtime_->Snapshot());
         Need(bool(status),status.detail.c_str());return False();
     }
     case 33: {
         Need(runtime_!=nullptr,"GAME33 requires live model slot owner");
+        const bool placement=state_.inventory_action.pending&&state_.inventory_action.placement;
+        const auto before=runtime_->Snapshot();if(placement)menu_placement_.BeforeModel(*vm_,33,arg,before);
         const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
         const auto slot=field(6),selector=field(8),x=field(9);
         const auto status=runtime_->UpdateModel(slot,selector,float(x));
         RecordInventoryModelService(33,slot,field(0),field(3),selector,x,status?False().word:0,bool(status));
+        if(status&&placement)menu_placement_.AfterModel(*vm_,33,arg,False(),before,runtime_->Snapshot());
         Need(bool(status),status.detail.c_str());return False();
     }
     case 36: {
@@ -580,7 +595,10 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         return Value::integer(int32_t((packed(uint32_t(year-2000))<<16)|(packed(uint32_t(month))<<8)|packed(uint32_t(days+1))));
     }
     if(id==0x60||id==0x61||id==0x62||id==0x63) {
+        const bool placement=state_.inventory_action.pending&&state_.inventory_action.placement;
+        if(placement&&id==0x60)menu_placement_.BeforeFilter(*vm_,args);
         const auto result=id==0x60?GameValueArray96(*vm_,args):id==0x61?GameValueArray97(*vm_,args):id==0x62?GameValueArray98(*vm_,args):GameValueArray99(*vm_,args);
+        if(placement&&id==0x60)menu_placement_.AfterFilter();
         if(id!=0x61){++state_.array_query_calls;state_.array_query_matches+=uint32_t(result.selected);state_.last_query_indices=result.indices;}
         state_.array_actions+=result.writes;
         if(id==0x63){auto value=False();value.word|=uint32_t(result.selected);return value;}
@@ -682,7 +700,7 @@ void GameActorScript::CompleteInventoryActionReadback(){
             GameInventoryRowsImage approved;
             if(action.menu_origin){
                 (void)GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),state_.inventory_items,&approved);
-                Need(action.model_service_count==0,"NIL6 mark callback reached an unsupported model service");
+                if(!action.placement)Need(action.model_service_count==0,"NIL6 mark callback reached an unsupported model service");
             }else CaptureInventoryItems();
             const auto& item=state_.inventory_items.at(action.row);
             if(action.event==16){
@@ -729,10 +747,17 @@ void GameActorScript::CompleteInventoryActionReadback(){
             }
             }
             if(action.menu_origin){
+                if(action.placement){
+                    menu_placement_.Commit(*vm_,approved,menu_mark_);
+                    auto& cert=action.certificate;cert.after_display=GameInventoryItemsHash(state_.inventory_items);cert.approved_image=approved.observation.sha256;
+                    for(const auto& store:menu_placement_.Stores())cert.mutable_fields[store.row]|=1u<<store.field;
+                    cert.valid=true;
+                }else{
                 Need(action.nil6_returns==1&&action.flag_returns==1&&action.protected_writes==0
                      &&action.nil6_return_executed<action.flag_store_executed&&action.flag_store_executed<action.flag_return_executed,
                      "Menu mark helper return/store ordering or protected write proof failed");
                 menu_mark_.Commit(approved,action.event,action.row,action.receipt,action.flag_store_pc,action.flag_store_count);
+                }
                 state_.menu_inventory_verified=approved.observation;state_.menu_mark=menu_mark_.Snapshot();
             }
             action.pending=false;action.completed=true;++action.completions;
@@ -785,12 +810,25 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
 GameFsStatus GameActorScript::TickMenuOwner(){
     try{
         Need(state_.live&&vm_&&!state_.blocked,"Menu modal VM retired or blocked");
+        const auto step_callback=[&]{
+            const auto e=vm_->run(1);
+            const auto& c=state_.menu_callback;const auto& a=state_.inventory_action;
+            const auto w=vm_->current_witness();
+            const bool restored=!w.event_envelope_present&&!vm_->callback_depth()&&((c.pending&&c.returned&&!c.failed)
+                ||(a.pending&&a.menu_origin&&a.returned&&!a.failed));
+            if(!GameMenuCallbackBoundaryAccepted(e,restored,!vm_->context_enabled())){
+                std::ostringstream why;why<<"Menu callback reached unsupported VM boundary status="<<int(e.status)
+                    <<" pc="<<std::hex<<e.pc<<" opcode="<<e.opcode<<" next="<<e.next_pc<<" "<<e.diagnostic.text();
+                state_.pc=e.pc;state_.last_opcode=uint32_t(e.opcode);state_.message=e.message_cp932;
+                throw std::runtime_error(why.str());
+            }
+        };
         vm_->clock_tick(++state_.native_clock_ticks);
         if(runtime_){const auto status=runtime_->AdvanceActorFrame();Need(bool(status),status.detail.c_str());}
         auto& c=state_.menu_callback;
         if(c.pending){
             for(uint32_t i=0;i<256&&!c.returned&&!c.failed;++i){
-                const auto e=vm_->run(1);Need(e.status!=script::Status::Stopped,e.diagnostic.text().c_str());
+                step_callback();
             }
             Need(!c.failed,"Menu callback did not restore its source envelope/typed flag");
             Need(c.returned,"Menu callback exceeded finite instruction domain");
@@ -802,10 +840,10 @@ GameFsStatus GameActorScript::TickMenuOwner(){
         auto& action=state_.inventory_action;
         if(action.pending&&action.menu_origin){
             for(uint32_t i=0;i<256&&!action.returned&&!action.failed;++i){
-                const auto e=vm_->run(1);Need(e.status!=script::Status::Stopped,e.diagnostic.text().c_str());
+                step_callback();
             }
-            Need(action.returned&&!action.failed,"Menu item callback did not restore its disabled envelope");
-            CompleteInventoryActionReadback();
+            Need(!action.failed,action.proof_error.empty()?"Menu item callback source/owner proof failed":action.proof_error.c_str());
+            if(action.returned)CompleteInventoryActionReadback(); // same receipt continues next tick; no ordinary VM slice
         }
         return {};
     }catch(const std::exception& e){state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
@@ -871,7 +909,9 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
 }
 GameInventoryActionAdmission GameActorScript::PostMenuInventoryAction(const GameOwnerEventTarget& expected,uint64_t generation,uint32_t event,int32_t row){
     GameInventoryActionAdmission out;
+    bool prepared=false;
     try{
+        Need(!state_.inventory_action.pending&&!menu_placement_.Pending(),"Menu item action already pending");
         Need(state_.menu_inventory_live&&!state_.inventory_requested&&generation==state_.inventory_gui_generation,
              "Menu item request origin/generation replaced");
         const auto current=OwnerEventTarget();const auto& pause=state_.menu_pause_return;
@@ -880,18 +920,24 @@ GameInventoryActionAdmission GameActorScript::PostMenuInventoryAction(const Game
              &&expected.context.context_owner.lock()==current.context.context_owner.lock()
              &&pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_inventory_parent_generation,
              "Menu item callback origin/registered owner changed");
-        Need((event==14||event==15)&&row>=0&&row<170,"Menu inventory supports NIL6 mark/unmark only");
+        Need((event==13||event==14||event==15)&&row>=0&&row<170,"Menu inventory event domain");
         GameInventoryRowsImage before;std::vector<GameInventoryItem> items;
         (void)GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),items,&before);
-        menu_mark_.CheckBefore(before,event,uint32_t(row));
         const auto& item=items.at(size_t(row));
-        Need(item.valid&&item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&item.source_words[1]==0,
-             "Menu mark requires actual canonical typed NIL model field6");
+        const bool placement=event==13||(event==14&&item.source_words[1]!=0);
+        if(placement){
+            Need(MenuPlacementAvailable(),"Menu placement requires actual home and source gate");menu_mark_.CheckPlacementBefore(before,event,uint32_t(row));
+            menu_placement_.Begin(*vm_,before,event,uint32_t(row),runtime_->Snapshot());
+            prepared=true;
+        }else menu_mark_.CheckBefore(before,event,uint32_t(row));
+        Need(item.valid&&item.source_kinds[1]==uint8_t(Value::Kind::Scalar),"Menu item typed model field");
         const auto w=vm_->current_witness();
         Need(w.frame_cells==w.frame_captured&&w.operand_cells==w.operands_captured,
              "Menu item caller exceeds complete witness extent");
-        return PostInventoryActionImpl(generation,event,row,true);
-    }catch(const std::exception& e){out.status={GameFsCode::Unavailable,0,e.what()};return out;}
+        out=PostInventoryActionImpl(generation,event,row,true);
+        if(placement){if(out.status&&out.queue_result==0)menu_placement_.Receipt(out.receipt,state_.inventory_action.callback_frame);else menu_placement_.Abort();}
+        return out;
+    }catch(const std::exception& e){if(prepared)menu_placement_.Abort();out.status={GameFsCode::Unavailable,0,e.what()};return out;}
 }
 GameInventoryActionAdmission GameActorScript::PostInventoryActionImpl(uint64_t generation,uint32_t event,int32_t row,bool menu){
     GameInventoryActionAdmission out;
@@ -936,6 +982,7 @@ GameInventoryActionAdmission GameActorScript::PostInventoryActionImpl(uint64_t g
         if(out.status&&out.queue_result==0){
             const auto entered=vm_->current_witness();const auto count=state_.inventory_action.completions;
             state_.inventory_action={};auto& a=state_.inventory_action;a.pending=true;a.completions=count;a.menu_origin=menu;
+            a.placement=menu&&(event==13||(event==14&&item.source_words[1]!=0));
             a.generation=generation;a.receipt=out.receipt=vm_->last_callback_receipt();a.callback_frame=entered.frame_id;
             a.event=event;a.row=uint32_t(row);a.item_id=item.id;a.before_words=item.source_words;a.before_kinds=item.source_kinds;
             a.before_controls=item.control_words;a.before_control_kinds=item.control_kinds;a.gate_word=gate_word;
@@ -943,6 +990,7 @@ GameInventoryActionAdmission GameActorScript::PostInventoryActionImpl(uint64_t g
             if(event==13){a.definition_table=uint32_t(definition.table);a.definition_index=definition.index;
                 a.definition_header=vm_->load_reference(definition).word;a.definition_mask=definition_mask;a.definition_width=definition_width;}
             a.row_table=uint32_t(rowref.table);a.row_index=rowref.index;a.row_header=header.word;a.suspended=before;
+            if(a.placement){auto& cert=a.certificate;cert.generation=generation;cert.receipt=a.receipt;cert.event=event;cert.row=uint32_t(row);cert.before_display=GameInventoryItemsHash(state_.inventory_items);}
         }
     }catch(const std::exception& e){out.status={GameFsCode::Unavailable,0,e.what()};}
     return out;
@@ -950,14 +998,20 @@ GameInventoryActionAdmission GameActorScript::PostInventoryActionImpl(uint64_t g
 void GameActorScript::ObserveInventoryStore(const Value& ref,bool write)noexcept{
     auto& a=state_.inventory_action;if(!write||!a.pending||!a.menu_origin)return;
     try{
+        if(a.placement){
+            menu_placement_.ObserveStore(*vm_,ref,menu_mark_);
+            if(uint32_t(ref.table)==a.row_table&&ref.index==a.row_index+6){const auto w=vm_->current_witness();++a.flag_store_count;a.flag_store_pc=w.current_pc;a.flag_store_executed=w.executed;a.flag_store_word=vm_->peek_reference(ref).word;}
+            return;
+        }
         const auto w=vm_->current_witness();
+        Need(!menu_placement_.OwnsAuxiliaryCell(ref),"NIL mark callback wrote protected placement dependency");
         if(uint32_t(ref.table)==a.row_table&&uint32_t(ref.index)==a.row_index+6){
             ++a.flag_store_count;a.flag_store_pc=w.current_pc;a.flag_store_executed=w.executed;
             const auto value=vm_->peek_reference(ref);a.flag_store_word=value.word;
             if(w.current_pc!=0x2FDA||w.code_entry!=0x2FBC||!w.event_envelope_present||w.run_id!=a.suspended.run_id
                ||value.kind!=Value::Kind::Scalar||value.word!=(a.event==15?0x10000001u:0x10000000u))a.failed=true;
         }else if(menu_mark_.OwnsCell(uint32_t(ref.table),ref.index)){++a.protected_writes;a.failed=true;}
-    }catch(...){a.failed=true;}
+    }catch(const std::exception& e){a.failed=true;a.proof_error=e.what();}catch(...){a.failed=true;a.proof_error="Unknown placement store failure";}
 }
 void GameActorScript::RecordInventoryModelService(uint32_t id,int32_t slot,int32_t resource,int32_t category,int32_t selector,int32_t x,uint32_t result,bool returned){
     auto& a=state_.inventory_action;if(!a.pending)return;
@@ -969,9 +1023,10 @@ void GameActorScript::ObserveInventoryAction(const script::FrameTransition& t)no
     auto& a=state_.inventory_action;if(!a.pending||a.returned||a.failed)return;
     const auto& x=t.before;const auto& y=t.after;const auto& s=a.suspended;
     if(t.callback_receipt!=a.receipt||x.run_id!=s.run_id||y.run_id!=s.run_id||x.code_sha256!=s.code_sha256||y.context_word!=s.context_word){a.failed=true;return;}
+    if(a.placement){try{menu_placement_.ObserveReturn(t);}catch(const std::exception& e){a.failed=true;a.proof_error=e.what();return;}catch(...){a.failed=true;return;}}
     if(a.menu_origin&&t.opcode==0x31){
         if(x.code_entry==0x38DA){
-            if(x.current_pc!=0x38F2||y.frame_id!=a.callback_frame||y.code_entry!=0x8DA28)a.failed=true;
+            if(x.current_pc!=(a.placement?0x393Bu:0x38F2u)||y.frame_id!=a.callback_frame||y.code_entry!=0x8DA28)a.failed=true;
             else{++a.nil6_returns;a.nil6_return_executed=y.executed;}
         }
         if(x.code_entry==0x2FBC){
@@ -1028,7 +1083,9 @@ GameFsStatus GameActorScript::BindMenuInventory(const GameOwnerEventTarget& expe
     std::vector<GameInventoryItem> items;const auto status=ReadMenuInventory(expected,items);if(!status)return status;
     try{
         GameInventoryRowsImage image;(void)GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),items,&image);
-        menu_mark_.Begin(image);state_.menu_inventory_before=state_.menu_inventory_verified=image.observation;
+        GameInventoryMarkChain mark;mark.Begin(image);
+        Need(runtime_!=nullptr,"Menu inventory runtime owner missing");GameInventoryPlacementProof placement;placement.BindModels(runtime_->Snapshot());
+        menu_mark_=std::move(mark);menu_placement_=std::move(placement);state_.menu_inventory_before=state_.menu_inventory_verified=image.observation;
         state_.menu_mark=menu_mark_.Snapshot();state_.inventory_items=std::move(items);
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
     state_.inventory_gui_generation=generation;state_.menu_inventory_parent_generation=menu_generation;
@@ -1052,13 +1109,37 @@ GameFsStatus GameActorScript::CompleteMenuInventory(const GameOwnerEventTarget& 
         GameInventoryRowsImage after;
         state_.menu_inventory_after=GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),items,&after);
         Need(menu_mark_.Matches(after),"Menu inventory close changed receipt-approved registered typed RAM");
+        Need(menu_placement_.MatchesAuxiliary(*vm_),"Menu inventory close changed protected placement dependencies");
+        Need(runtime_&&menu_placement_.RetirementsComplete(runtime_->Snapshot()),"Menu inventory model retirement has not naturally destroyed this publication");
         vm_->resume_modal_context();menu_mark_.End();state_.menu_mark=menu_mark_.Snapshot();
+        menu_placement_.End();
         state_.menu_inventory_live=false;++state_.menu_inventory_completions;state_.inventory_items=std::move(items);return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{
     Need(state_.live&&vm_&&program_.header().local_count>0,"Owner event target requires live context/local owner");
     return {state_.generation,vm_->context_value(),vm_->read_slot(script::Table::Local,0)};
+}
+bool GameActorScript::MenuPlacementAvailable()const{
+    try{
+        if(!state_.live||!vm_||!runtime_||!runtime_->OwnersLive()||runtime_->Snapshot().manager_scene14!=0)return false;
+        const auto header=vm_->read_slot(script::Table::Ctx28,0x243F);if(header.kind!=Value::Kind::ArrayHeader||(header.word&0xFFF)<1)return false;
+        const auto gate=vm_->peek_reference(script::Value{Value::Kind::Reference,0,script::Table::Ctx28,uint16_t(0x2440)});
+        return gate.kind==Value::Kind::Scalar&&gate.word==0x20000000u&&gate.cp932.empty();
+    }catch(...){return false;}
+}
+bool GameActorScript::ValidateMenuInventoryCertificate(const GameOwnerEventTarget& expected,const GameInventoryActionCertificate& c)const{
+    try{
+        if(!state_.live||!vm_||!state_.menu_inventory_live||state_.inventory_requested||vm_->context_enabled()||vm_->callback_depth()||vm_->queued_callbacks())return false;
+        const auto target=OwnerEventTarget();const auto& a=state_.inventory_action;const auto& actual=a.certificate;const auto proof=menu_placement_.Snapshot();
+        return expected.generation==target.generation&&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word
+            &&expected.context.word==target.context.word&&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+            &&a.placement&&a.menu_origin&&a.completed&&a.returned&&!a.failed&&!a.pending&&c.valid&&actual.valid&&proof.callback_returned&&!proof.pending
+            &&c.generation==state_.inventory_gui_generation&&c.generation==actual.generation&&c.receipt==actual.receipt&&c.receipt==proof.receipt
+            &&c.event==actual.event&&c.row==actual.row&&c.before_display==actual.before_display&&c.after_display==actual.after_display
+            &&c.after_display==GameInventoryItemsHash(state_.inventory_items)&&c.approved_image==actual.approved_image
+            &&c.approved_image==state_.menu_inventory_verified.sha256&&c.mutable_fields==actual.mutable_fields;
+    }catch(...){return false;}
 }
 GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected){
     try{
@@ -1122,7 +1203,7 @@ void GameActorScript::ObserveWordSelection(const script::FrameTransition& t)noex
     state_.word_accepted_row=ObserveWordRow(row);
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
@@ -1160,6 +1241,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
 }
 void GameActorScript::Close() {
     menu_mark_.End();
+    menu_placement_.End();
     owned_conversation_.Close();
     ascii_class70_.Close();state_.ascii_class70_live=false;state_.ascii_class70_generation=0;
     state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
