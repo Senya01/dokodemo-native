@@ -10,6 +10,11 @@ namespace dokodemo::recovered {
 namespace {
 using script::Value;
 void Need(bool value,const char* message) {if(!value)throw std::runtime_error(message);}
+bool SameRegistration(const Value& a,const Value& b){
+    return a.kind==Value::Kind::Reference&&b.kind==a.kind&&a.word==b.word&&a.table==b.table&&a.index==b.index
+        &&!a.frame_owner.owner_before(b.frame_owner)&&!b.frame_owner.owner_before(a.frame_owner)
+        &&!a.context_owner.owner_before(b.context_owner)&&!b.context_owner.owner_before(a.context_owner);
+}
 Value False() {Value v;v.kind=Value::Kind::Scalar;v.word=0x10000000;return v;}
 Value Nil() {Value v;v.kind=Value::Kind::Scalar;return v;}
 script::ValueWitness PassiveValue(const Value& v){
@@ -443,6 +448,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(arg.kind==Value::Kind::Reference,"Game registration requires typed live table reference");
         (void)vm_->load_reference(arg);bindings_[uint32_t(id)]=arg;
         if(id==11)++state_.notebook_registrations;
+        if(id==10){++state_.wordmemo_registrations;state_.wordmemo_registration_source=vm_->current_witness();state_.wordmemo_import_alias=SameRegistration(arg,dictionary_import_target_);}
         return False();
     case 47:
         Need(arg.kind==Value::Kind::Reference,"Service47 destination reference");
@@ -454,6 +460,11 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     case 48: {
         auto copied=dictionary_.Import(*vm_,arg);
         Need(bool(copied),copied.detail.c_str());
+        dictionary_import_target_=arg;++state_.wordmemo_imports;state_.wordmemo_import_source=vm_->current_witness();
+        state_.wordmemo_import_cells=dictionary_.Snapshot().copied_values;
+        if(const auto registered=bindings_.find(10);registered!=bindings_.end()){
+            state_.wordmemo_import_alias=SameRegistration(registered->second,dictionary_import_target_);
+        }
         // Register after import's internal validation. These counts describe
         // subsequent executed game queries/mutations,not a parser self-check.
         vm_->access_observer([this](const Value& ref,bool write){
@@ -1232,6 +1243,66 @@ GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& t
         vm_->resume_modal_context();notebook_self_before_={};state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::ReadMenuWordMemo(const GameOwnerEventTarget& expected,GameWordMemoRows& out)const{
+    try{
+        Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Wordmemo read needs idle owning VM");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
+             "Wordmemo actual registered context/Local0 replaced");
+        out=GameObserveWordMemoRows(*vm_,state_.generation,bindings_.at(10));return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::BindMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameWordMemoRows& rows){
+    const auto status=PrepareMenuWordMemo(target,gui,parent,rows);if(!status)return status;
+    state_.wordmemo_before=rows;state_.wordmemo_after={};wordmemo_registration_at_bind_=state_.wordmemo_registrations;
+    state_.menu_wordmemo_generation=gui;state_.menu_wordmemo_parent=parent;
+    state_.menu_wordmemo_live=true;++state_.menu_wordmemo_requests;return {};
+}
+GameFsStatus GameActorScript::PrepareMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameWordMemoRows& rows)const{
+    if(!gui||gui<=state_.menu_wordmemo_generation||!parent||state_.menu_wordmemo_live||state_.menu_notebook_live
+       ||state_.menu_inventory_live||state_.inventory_requested||!vm_||!vm_->context_enabled())
+        return {GameFsCode::Unavailable,0,"Wordmemo origin/generation unavailable"};
+    GameWordMemoRows current;const auto status=ReadMenuWordMemo(target,current);if(!status)return status;
+    if(!rows.valid||rows.sha!=current.sha||rows.run_id!=current.run_id||rows.code_sha!=current.code_sha
+       ||rows.records!=current.records||rows.cells!=current.cells||rows.eligible_records!=current.eligible_records||current.eligible_records
+       ||!state_.wordmemo_imports||!dictionary_.ImportedRecordCount()
+       ||dictionary_.ImportedRecordsInRoot(*vm_,bindings_.at(10))!=dictionary_.ImportedRecordCount()
+       ||!state_.menu_open_return.returned||state_.menu_open_return.failed||state_.menu_open_return.menu_generation!=parent)
+        return {GameFsCode::Unavailable,0,"Wordmemo registration changed before binding"};
+    return {};
+}
+GameFsStatus GameActorScript::CheckMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent)const{
+    try{
+        Need(state_.menu_wordmemo_live&&gui==state_.menu_wordmemo_generation&&parent==state_.menu_wordmemo_parent
+             &&wordmemo_registration_at_bind_==state_.wordmemo_registrations&&state_.wordmemo_imports
+             &&dictionary_.ImportedRecordCount()&&dictionary_.ImportedRecordsInRoot(*vm_,bindings_.at(10))==dictionary_.ImportedRecordCount(),
+             "Wordmemo GUI/registration/imported-record owner replaced");
+        const auto& pause=state_.menu_pause_return;
+        Need(vm_&&pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==parent
+             &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Wordmemo needs actual disabled18/32 owner");
+        Need(GameWordMemoPausedOwnerExact(pause.restored,vm_->current_witness()),"Wordmemo suspended18 caller/frame/deadline changed");
+        GameWordMemoRows current;const auto status=ReadMenuWordMemo(target,current);Need(bool(status),status.detail.c_str());
+        const auto& before=state_.wordmemo_before;
+        Need(before.valid&&current.sha==before.sha&&current.run_id==before.run_id&&current.code_sha==before.code_sha
+             &&current.script_generation==before.script_generation&&current.root_table==before.root_table
+             &&current.root_index==before.root_index&&current.root_header==before.root_header,
+             "Wordmemo immutable registered typed image changed");return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::CompleteMenuWordMemo(const GameOwnerEventTarget& target,const GameWordMemoSnapshot& gui){
+    try{
+        const auto checked=CheckMenuWordMemo(target,gui.generation,gui.lease.parent_generation);Need(bool(checked),checked.detail.c_str());
+        Need(gui.phase==7&&gui.retired_generation==gui.generation&&!gui.live&&!gui.owner470&&!gui.request8
+             &&!gui.retirement_pending&&gui.state9B0==3&&gui.loader469==0&&gui.close_requests&&gui.close_completions
+             &&gui.polls&&gui.retirement_requests&&gui.retirements,"Wordmemo needs real current-generation close/poll/deferred drain");
+        GameWordMemoRows after;const auto status=ReadMenuWordMemo(target,after);Need(bool(status),status.detail.c_str());
+        state_.wordmemo_after=after;
+        // NativeActualClosedWordMemoWake, separate from original post32 producer.
+        vm_->resume_modal_context();state_.menu_wordmemo_live=false;++state_.menu_wordmemo_completions;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{
     Need(state_.live&&vm_&&program_.header().local_count>0,"Owner event target requires live context/local owner");
     return {state_.generation,vm_->context_value(),vm_->read_slot(script::Table::Local,0)};
@@ -1373,6 +1444,8 @@ void GameActorScript::ObserveWordSelection(const script::FrameTransition& t)noex
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+        out.wordmemo_import_records=dictionary_.ImportedRecordCount();
+        if(const auto it=bindings_.find(10);it!=bindings_.end())out.wordmemo_import_rows=dictionary_.ImportedRecordsInRoot(*vm_,it->second);
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
@@ -1410,6 +1483,8 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
     }if(runtime_){out.runtime=runtime_->Snapshot();out.source_flag2A980=out.runtime.source_flag2A980!=0;}return out;
 }
 void GameActorScript::Close() {
+    dictionary_import_target_={};
+    wordmemo_registration_at_bind_=0;
     notebook_self_before_={};notebook_self_registration_=0;
     menu_mark_.End();
     menu_placement_.End();

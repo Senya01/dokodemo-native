@@ -3,6 +3,7 @@
 #include "game_actor_runtime_native.h"
 #include "game_inventory_native.h"
 #include "game_notebook_native.h"
+#include "game_wordmemo_native.h"
 #include "game_inventory_mark_native.h"
 #include "game_inventory_placement_native.h"
 #include "game_record_native.h"
@@ -141,6 +142,15 @@ struct GameActorScriptSnapshot {
     std::vector<GameNotebookStoreWitness> notebook_slot0_stores;
     uint32_t notebook_slot0_stores_dropped=0;
     uint32_t notebook_registrations=0;
+    uint32_t wordmemo_registrations=0;
+    bool wordmemo_import_alias=false;
+    uint32_t wordmemo_imports=0,wordmemo_import_cells=0;
+    uint32_t wordmemo_import_records=0,wordmemo_import_rows=0;
+    script::VmStateWitness wordmemo_registration_source,wordmemo_import_source;
+    bool menu_wordmemo_live=false;
+    uint64_t menu_wordmemo_generation=0,menu_wordmemo_parent=0;
+    uint32_t menu_wordmemo_requests=0,menu_wordmemo_completions=0;
+    GameWordMemoRows wordmemo_before,wordmemo_after;
     GameFlow5EventSnapshot flow5_event;
     std::array<script::ValueWitness,4> flow5_guards{};
     bool flow5_guards_valid=false;
@@ -305,6 +315,11 @@ class GameActorScript final {
     GameFsStatus BindMenuNotebook(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameNotebookRows&);
     GameFsStatus CompleteMenuNotebook(const GameOwnerEventTarget&,const GameNotebookSnapshot&);
     GameFsStatus ReadMenuNotebookSelf(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameNotebookSelfImage&,bool for_preview=true)const;
+    GameFsStatus ReadMenuWordMemo(const GameOwnerEventTarget&,GameWordMemoRows&)const;
+    GameFsStatus BindMenuWordMemo(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameWordMemoRows&);
+    GameFsStatus PrepareMenuWordMemo(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameWordMemoRows&)const;
+    GameFsStatus CheckMenuWordMemo(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent)const;
+    GameFsStatus CompleteMenuWordMemo(const GameOwnerEventTarget&,const GameWordMemoSnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,bool owned_dispatch,int32_t& queue_result);
@@ -337,6 +352,7 @@ class GameActorScript final {
     GameInventoryPlacementProof menu_placement_;
     GameNotebookSelfImage notebook_self_before_;
     uint32_t notebook_self_registration_=0;
+    uint32_t wordmemo_registration_at_bind_=0;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
@@ -344,6 +360,7 @@ class GameActorScript final {
     GameRecordStore* records_=nullptr;
     GameSoundBank* sound_=nullptr;
     std::map<uint32_t,script::Value> bindings_;
+    script::Value dictionary_import_target_; // reference only; no backing ownership
     GameActorScriptSnapshot state_;
     uint64_t owner_generation_=0;
     uint32_t word_consumer_row_index_=UINT32_MAX;

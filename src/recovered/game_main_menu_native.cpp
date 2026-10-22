@@ -40,7 +40,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
         if(down){if(state_.column<max)++state_.column;else if(down==1)state_.column=0;return;}
         if(up){if(state_.column>0)--state_.column;else if(up==1)state_.column=max;return;}
         if(input_.First(Circle)){
-            if(state_.column==0){state_.state78=2;input_.BeginContext();}else ++state_.unsupported;
+            if(state_.column<=1){state_.state78=2;input_.BeginContext();}else ++state_.unsupported;
             return;
         }
         if(input_.First(Cross)||input_.First(Left)){state_.substate7C=0;input_.BeginContext();}
@@ -139,7 +139,7 @@ GameMainMenuSnapshot GameMainMenu::Snapshot()const{
 }
 GameFsStatus GameMainMenu::RetireClosedRender(){
     const auto s=Snapshot();
-    if(!s.live||s.state78!=3||(s.result!=5&&s.result!=3))return {GameFsCode::Unavailable,0,"Only resolved finite child menu render may retire"};
+    if(!s.live||s.state78!=3||(s.result!=5&&s.result!=3&&s.result!=4))return {GameFsCode::Unavailable,0,"Only resolved finite child menu render may retire"};
     if(!resource_)return {};
     last_frame_=s.frame;last_clip_=s.clip;last_mode_=s.mode;
     clone_.Close();resource_.reset();++render_retirements_;return {};

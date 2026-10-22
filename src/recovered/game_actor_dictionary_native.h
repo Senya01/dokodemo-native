@@ -28,6 +28,11 @@ class GameActorDictionary final {
     GameFsStatus Import(script::Vm& vm, const script::Value& destination);
     std::pair<std::string,std::string> ReadRecord(script::Vm& vm,uint32_t index);
     bool OwnsCell(const script::Value& reference) const noexcept;
+    // GAME48 can import through a temporary Frame array whose record aliases
+    // belong to the registered GAME10 Global root. Compare the actual aliases,
+    // not the two container references. Every imported record must occur once.
+    uint32_t ImportedRecordsInRoot(const script::Vm&,const script::Value&) const noexcept;
+    uint32_t ImportedRecordCount()const noexcept{return state_.imported&&!state_.closed?uint32_t(records_.size()):0;}
     void Capture(script::Vm&);
     GameActorDictionarySnapshot Snapshot() const { return state_; }
     void Close();

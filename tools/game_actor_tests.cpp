@@ -82,6 +82,7 @@
 #endif
 #include "game_notebook_slot_probe_regressions.h"
 #include "game_notebook_self_regressions.h"
+#include "game_wordmemo_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -488,6 +489,7 @@ GameFlow5RegressionChecks();
 
     ::GameNotebookSlotProbeRegressionChecks();
     ::GameNotebookSelfRegressionChecks();
+    ::GameWordMemoRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDecorateRegressionChecks();
@@ -744,6 +746,29 @@ GameInitialCommonRegressionChecks();
     const auto before=dictionary.ReadRecord(vm,0);
     Check(before.first=="\x83\x6C\x83\x52"&&before.second=="\x82\xCB\x82\xB1","copied real CP932 units");
     Check(!dictionary.Snapshot().source_live&&dictionary.Snapshot().copied_strings==2,"source handle retired,owned strings");
+    const auto import_context=vm.context_value();const auto import_owner=vm.current_witness();
+    Check(dictionary.ImportedRecordCount()==1&&dictionary.ImportedRecordsInRoot(vm,root)==1,"imported record matches its actual root");
+    auto unsupported_root=root;unsupported_root.table=script::Table::Frame;
+    Check(!dictionary.ImportedRecordsInRoot(vm,unsupported_root),"import proof shares the Global-only consumer domain");
+    unsupported_root=root;unsupported_root.context_owner=import_context.context_owner;
+    Check(!dictionary.ImportedRecordsInRoot(vm,unsupported_root),"borrowed Global container cannot replace current import owner");
+    auto alternate=root;alternate.index=14;auto slot=root;slot.index=15;
+    const auto old_head=vm.peek_reference(alternate),old_slot=vm.peek_reference(slot);
+    auto imported_slot=root;imported_slot.index=1;const auto imported_ref=vm.peek_reference(imported_slot);
+    script::Value one_header;one_header.kind=script::Value::Kind::ArrayHeader;one_header.word=0x90000001u;
+    vm.store_reference(alternate,one_header);vm.store_reference(slot,imported_ref);
+    Check(dictionary.ImportedRecordsInRoot(vm,alternate)==1,"different container with exact imported record aliases is admitted");
+    auto foreign_ref=imported_ref;foreign_ref.context_owner=import_context.context_owner;vm.store_reference(slot,foreign_ref);
+    Check(!dictionary.ImportedRecordsInRoot(vm,alternate),"same numeric record with different weak owner refuses");
+    vm.store_reference(slot,script::Value::integer(0));Check(!dictionary.ImportedRecordsInRoot(vm,alternate),"missing imported row refuses");
+    vm.store_reference(slot,imported_ref);auto duplicate=root;duplicate.index=6;
+    std::array<script::Value,3> old_duplicate;for(uint32_t i=0;i<3;++i){auto at=duplicate;at.index=uint16_t(6+i);old_duplicate[i]=vm.peek_reference(at);}
+    auto two_header=one_header;two_header.word=0x90000002u;vm.store_reference(duplicate,two_header);
+    for(uint32_t i=1;i<3;++i){auto at=duplicate;at.index=uint16_t(6+i);vm.store_reference(at,imported_ref);}
+    Check(!dictionary.ImportedRecordsInRoot(vm,duplicate),"duplicate claims cannot replace missing imported owners");
+    for(uint32_t i=0;i<3;++i){auto at=duplicate;at.index=uint16_t(6+i);vm.store_reference(at,old_duplicate[i]);}
+    vm.store_reference(alternate,old_head);vm.store_reference(slot,old_slot);
+    Check(dictionary.ImportedRecordsInRoot(vm,root)==1&&dokodemo::notebook_tests::SameVm(import_owner,vm.current_witness()),"alias proof is passive and caller state unchanged");
     auto condition=root;condition.index=6;auto actions=root;actions.index=10;auto needle=root;needle.index=9;
     vm.store_reference(needle,script::Value::string(before.first));
     const auto match=GameValueArray98(vm,{root,condition,actions});

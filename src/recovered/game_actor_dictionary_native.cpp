@@ -120,6 +120,32 @@ bool GameActorDictionary::OwnsCell(const script::Value& ref) const noexcept {
         if(ref.table==record.table&&!ref.frame_owner.owner_before(record.frame_owner)&&!record.frame_owner.owner_before(ref.frame_owner)&&ref.index>record.index&&uint32_t(ref.index)<=uint32_t(record.index)+19)return true;
     return false;
 }
+uint32_t GameActorDictionary::ImportedRecordsInRoot(const script::Vm& vm,const script::Value& root) const noexcept {
+    try {
+        const auto empty_owner=[](const auto& owner){const auto empty=decltype(owner.lock()){};return !owner.owner_before(empty)&&!empty.owner_before(owner);};
+        const auto global=[&](const script::Value& ref){return ref.kind==script::Value::Kind::Reference&&ref.table==script::Table::Global
+            &&empty_owner(ref.frame_owner)&&empty_owner(ref.context_owner)&&vm.stable_value_owner(ref);};
+        // The same NativeGlobalGAME10Only boundary as the consuming capture.
+        // Retired/borrowed Frame aliases are not a supported dictionary owner.
+        if(!state_.imported||state_.closed||records_.empty()||!global(root))return 0;
+        for(const auto& record:records_){if(!global(record))return 0;const auto h=vm.peek_reference(record);
+            if(h.kind!=script::Value::Kind::ArrayHeader||h.word>>28!=9||!(h.word&0xFFF)||(h.word&0xFFF)>64)return 0;}
+        const auto head=vm.peek_reference(root);const auto count=head.word&0xFFF;
+        if(head.kind!=script::Value::Kind::ArrayHeader||head.word>>28!=9||count>600)return 0;
+        std::vector<bool> seen(records_.size());uint32_t matched=0;
+        for(uint32_t i=0;i<count;++i){
+            if(uint64_t(root.index)+i+1>UINT16_MAX)return 0;
+            auto cell=root;cell.index=uint16_t(root.index+i+1);const auto row=vm.peek_reference(cell);
+            for(size_t k=0;k<records_.size();++k){const auto& record=records_[k];
+                if(row.kind!=record.kind||row.word!=record.word||row.table!=record.table||row.index!=record.index
+                   ||row.frame_owner.owner_before(record.frame_owner)||record.frame_owner.owner_before(row.frame_owner)
+                   ||row.context_owner.owner_before(record.context_owner)||record.context_owner.owner_before(row.context_owner))continue;
+                if(seen[k])return 0;seen[k]=true;++matched;break;
+            }
+        }
+        return matched==records_.size()?matched:0;
+    }catch(...){return 0;}
+}
 void GameActorDictionary::Capture(script::Vm& vm) {
     if(!state_.imported||state_.closed)return;
     std::vector<GameActorDictionaryRecordState> rows;

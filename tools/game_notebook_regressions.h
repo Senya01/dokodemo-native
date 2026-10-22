@@ -281,7 +281,7 @@ press(Right|Cross);Ck(ms().state78==1&&ms().cancels==0&&ms().unsupported==2,87);
 auto s=ms();Ck(s.substate7C==1&&s.clip==(profiles?3u:2u)&&s.mode==1&&s.frame==0&&s.result==-1,88);steady();
 press(Right);Ck(ms().state78==1&&ms().column==0,89);
 const U max=profiles?3:2;
-for(U col=1;col<=max;++col){press(Down);press(Circle);s=ms();Ck(s.column==int32_t(col)&&s.substate7C==1&&s.state78==1&&s.result==-1&&s.unsupported==col,90);}
+for(U col=1;col<=max;++col){press(Down);if(col>=2)press(Circle);s=ms();Ck(s.column==int32_t(col)&&s.substate7C==1&&s.state78==1&&s.result==-1&&s.unsupported==col-1,90);}
 press(Cross);s=ms();Ck(s.substate7C==0&&s.state78==1&&s.row==3&&s.cancels==0&&s.result==-1&&s.clip==0,91);steady();
 press(Right);Ck(ms().substate7C==1&&ms().column==0,92);steady();press(Circle);s=ms();
 Ck(s.state78==2&&s.clip==1&&s.mode==1&&s.result==-1&&s.closed==0,93);

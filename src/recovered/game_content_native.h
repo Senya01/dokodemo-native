@@ -93,6 +93,9 @@ struct GameContentSnapshot {
     GameMainMenuSnapshot main_menu;
     GameNotebookSnapshot notebook;
     GameNotebookRows notebook_observed;
+    GameWordMemoSnapshot wordmemo;
+    GameWordMemoRows wordmemo_observed;
+    uint32_t main_menu_wordmemo_requests=0,main_menu_wordmemo_completions=0;
     uint32_t main_menu_notebook_requests=0,main_menu_notebook_completions=0;
     uint32_t source469_resource=0;
     uint64_t source469_generation=0,source469_poll=0;
@@ -194,6 +197,7 @@ class GameContentBoot final : public GameResourceSource {
     GameMainFlow main_flow_;
     GameMainMenu main_menu_;
     GameNotebook notebook_;
+    GameWordMemo wordmemo_;
     uint64_t inventory469_generation_=0,inventory469_poll_=0;
     void PublishInventory469();
     GameButtonGate main_menu_entry_gate_;
@@ -220,6 +224,9 @@ class GameContentBoot final : public GameResourceSource {
     PackageView notebook_package_;
     BpDirectory notebook_directory_;
     bool notebook_mounted_=false;
+    PackageView wordmemo_package_;
+    BpDirectory wordmemo_directory_;
+    bool wordmemo_mounted_=false;
     PackageView room_package_;
     BpDirectory room_directory_;
     bool room_mounted_=false;

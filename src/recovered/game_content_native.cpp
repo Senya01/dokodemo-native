@@ -427,6 +427,13 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 }
                 out=notebook_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
             }
+            if(mount=="MKOTOBA"&&game_filesystem_){
+                if(!wordmemo_mounted_){
+                    const auto status=game_filesystem_->LoadMember("MKOTOBA.BPM",wordmemo_package_);if(!status)return status;
+                    wordmemo_directory_=BpDirectory::Parse(wordmemo_package_,wordmemo_package_.Describe().size);wordmemo_mounted_=true;
+                }
+                out=wordmemo_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
             if(mount=="MOCHI"&&game_filesystem_){
                 if(!inventory_mounted_){
                     const auto status=game_filesystem_->LoadMember("MOCHI.BPM",inventory_package_);if(!status)return status;
@@ -513,7 +520,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             auto loss=frame;loss.overflow_resync=true;
             post_modal_.Input(loss);state_.post_modal=post_modal_.Snapshot();
             if(state_.main_menu_phase){
-                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);
+                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);
             }
             else if(inventory_.Modal())inventory_.Input(loss);
             else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(loss);
@@ -528,6 +535,13 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
                ||frame.returned_owner!=lease.available_owner||frame.returned_generation!=lease.available_generation
                ||frame.sequence<=main_menu_last_sequence_)return false;
             main_menu_last_sequence_=frame.sequence;
+            if(state_.main_menu_phase==7&&wordmemo_.Modal()){
+                if(!state_.main_menu_child_ready||wordmemo_.Snapshot().phase!=3)return false;
+                auto status=CheckMainMenuLease();
+                if(status){const auto child=wordmemo_.Snapshot();status=actor_script_.CheckMenuWordMemo(main_menu_target_,child.generation,child.lease.parent_generation);}
+                if(!status){state_.status=status;state_.blocked=true;return false;}
+                return wordmemo_.Input(frame);
+            }
             if(state_.main_menu_phase==7&&notebook_.Modal()){
                 if(!state_.main_menu_child_ready||notebook_.Snapshot().phase!=3)return false;
                 const auto status=CheckMainMenuLease();if(!status){state_.status=status;state_.blocked=true;return false;}
@@ -786,7 +800,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
-    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
+    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
@@ -798,6 +812,7 @@ bool GameContentBoot::Close() {
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
     notebook_directory_.Reset();notebook_package_.Reset();notebook_mounted_=false;
+    wordmemo_directory_.Reset();wordmemo_package_.Reset();wordmemo_mounted_=false;
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
@@ -948,6 +963,19 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.Tick();
             if(status&&main_menu_.Snapshot().state78==3){
                 const auto result=main_menu_.Snapshot().result;status=main_flow_.PollMenuResult(result);
+                if(status&&result==4){
+                    GameWordMemoRows rows;status=actor_script_.ReadMenuWordMemo(main_menu_target_,rows);state_.wordmemo_observed=rows;
+                    const auto actor=actor_script_.Snapshot();
+                    const GameWordMemoLease lease{actor.generation,actor.vm_current.run_id,state_.actor_message_contexts,
+                        main_menu_.Snapshot().generation,main_menu_lease_.available_owner,main_menu_lease_.available_generation,state_.main_menu_input_epoch+1};
+                    if(status)status=actor_script_.PrepareMenuWordMemo(main_menu_target_,wordmemo_.Snapshot().generation+1,main_menu_.Snapshot().generation,rows);
+                    if(status)status=wordmemo_.Request(rows,lease);
+                    if(status){
+                        status=actor_script_.BindMenuWordMemo(main_menu_target_,wordmemo_.Snapshot().generation,main_menu_.Snapshot().generation,rows);
+                        if(!status)wordmemo_.Close(); // failed admission teardown, never a successful poll/drain
+                    }
+                    if(status){++state_.main_menu_wordmemo_requests;++state_.main_menu_input_epoch;state_.main_menu_child_ready=false;}
+                }
                 if(status&&result==3){
                     GameNotebookRows rows;status=actor_script_.ReadMenuNotebook(main_menu_target_,rows);
                     state_.notebook_observed=rows; // retain actual reached data even on Unsupported
@@ -992,7 +1020,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 5:
             if(actor_script_.Snapshot().menu_close_return.returned
                &&actor_script_.Snapshot().menu_close_return.menu_generation==main_menu_.Snapshot().generation){
-                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3){
+                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3||main_flow_.Snapshot().menu_result50==4){
                     int32_t queue=-1;status=actor_script_.PostMenuEvent(main_menu_target_,18,main_menu_.Snapshot().generation,queue);
                     if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event18 queue refused"};
                     if(status)state_.main_menu_phase=6;
@@ -1014,6 +1042,24 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             // callbacks; only subsequent cache pressure can evict those images.
             status=main_menu_.RetireClosedRender();
             if(!status)break;
+            if(main_flow_.Snapshot().menu_result50==4){
+                const auto before=wordmemo_.Snapshot();
+                status=actor_script_.CheckMenuWordMemo(main_menu_target_,before.generation,before.lease.parent_generation);
+                if(status)status=wordmemo_.Tick(*this,scene_ui_.TitleTransitionOwner());
+                const auto child=wordmemo_.Snapshot();
+                if(status&&child.polls&&child.loader469==0&&child.generation==actor_script_.Snapshot().menu_wordmemo_generation){
+                    state_.source_loader469=false;state_.source469_resource=8;state_.source469_generation=child.generation;state_.source469_poll=child.polls;
+                }
+                if(status&&!state_.main_menu_child_ready&&child.phase==3){
+                    ++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
+                    if(!wordmemo_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"Wordmemo ready input epoch refused"};
+                }
+                if(status&&wordmemo_.ClosedAndRetired()){
+                    status=actor_script_.CompleteMenuWordMemo(main_menu_target_,child);
+                    if(status){++state_.main_menu_wordmemo_completions;finish();}
+                }
+                break;
+            }
             if(main_flow_.Snapshot().menu_result50==3){
                 const auto prior=notebook_.Snapshot();
                 if(prior.phase==3){
@@ -1071,12 +1117,15 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.actor_script=actor_script_.Snapshot();state_.main_flow=main_flow_.Snapshot();state_.main_menu=main_menu_.Snapshot();
     state_.inventory=inventory_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
     state_.notebook=notebook_.Snapshot();
+    state_.wordmemo=wordmemo_.Snapshot();
     if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+        if(wordmemo_.Modal())return wordmemo_.Draw(surface,font_);
         if(notebook_.Modal())return notebook_.Draw(surface,font_);
         return inventory_.Modal()?inventory_.Draw(surface,font_):main_menu_.Draw(surface);
     });
     state_.main_menu=main_menu_.Snapshot();
     state_.notebook=notebook_.Snapshot(); // publish actual post-draw empty batch/lease observations
+    state_.wordmemo=wordmemo_.Snapshot();
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
         returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
