@@ -1,5 +1,7 @@
 #include "game_sound_component_regressions.h"
+#include "game_sound_selected_regressions.h"
 #include "../src/game73_pcm_output_win32.h"
+#include "../src/recovered/game_scene_ui_native.h"
 #include <windows.h>
 #include <algorithm>
 #include <fstream>
@@ -76,7 +78,7 @@ void Errors() {
     auto c=std::make_shared<Game73OutputTestControl>();c->hold_initialize.store(true);c->fail=Game73OutputOperation::ComInitialize;
     auto a=Actor(c);Until([&]{return c->initialize_entered.load();},"initialization held");auto r=Request(1);Queue(*a,r);c->hold_initialize.store(false);
     Until([&]{return a->Snapshot().actor_exited;},"fatal initialization exit");auto s=a->Snapshot();
-    Check(s.failed_requests==1&&s.cancelled_requests==0&&s.failed_operation==Game73OutputOperation::ComInitialize&&!s.accepting,"pending fatal classified failed");Closed(*a);
+    Check(s.failed_requests==1&&s.last_failed_request_id==1&&s.stage==Game73OutputStage::Failed&&s.cancelled_requests==0&&s.failed_operation==Game73OutputOperation::ComInitialize&&!s.accepting,"pending fatal classified failed with exact ID");Closed(*a);
 }
 void CancellationAndTimeout() {
     for (bool afterSubmit:{false,true}) {
@@ -108,6 +110,45 @@ void WaveReference(const char* encoded,const char* reference) {
     for (std::size_t i=0;i<pcm.samples.size();++i) Check(static_cast<std::uint16_t>(pcm.samples[i])==(std::uint16_t(static_cast<unsigned char>(raw[2*i]))|(std::uint16_t(static_cast<unsigned char>(raw[2*i+1]))<<8)),"native storage decode byte equality");
     std::cout<<"CANDIDATE_STORAGE_PCM_MATCH frames="<<pcm.FrameCount()<<"; no SESQ/GAME73 output credit\n";
 }
+void SelectedMailboxAndSourceStatus() {
+    using Fixture=dokodemo::game_sound_selected_checks_detail::Fixture;
+    Fixture f;
+    struct Sink final : Game73SelectedSink {
+        Game73QueueCode code=Game73QueueCode::Busy;Game73SelectedBankRequest last;
+        Game73QueueCode TryQueueSelected(Game73SelectedBankRequest& r) noexcept override {last=r;return code;}
+    } sink;
+    dokodemo::recovered::GameSoundBank bank;bank.SetSink(&sink);bank.SetProfileGain(3);
+    Check(bool(bank.Register(f.view)),"synthetic source bank register");
+    std::uint64_t prior=0;
+    for(auto code:{Game73QueueCode::Busy,Game73QueueCode::Closed,Game73QueueCode::NativeFailure,Game73QueueCode::Queued}) {
+        sink.code=code;const auto reads=f.lease->calls;Check(bool(bank.Request73(0,4,128))&&f.lease->calls==reads,"actual source producer never reads bank and host error does not fail source");
+        auto s=bank.Snapshot();Check(s.last_playback_result==-1&&s.native_queue_code==int(code)&&s.native_request_id>prior,"source/native results distinct");
+        prior=s.native_request_id;Check(sink.last.group==0&&sink.last.entry==4&&sink.last.volume==128&&sink.last.profile_gain==3,"owned immutable selectors/current gain");
+    }
+    bank.SetProfileGain(1);Check(bool(bank.Request73(0,4,128))&&sink.last.profile_gain==1,"gain snapshot follows mutable source owner");
+    auto c=std::make_shared<Game73OutputTestControl>();c->hold_initialize.store(true);c->hold_open.store(true);auto a=Actor(c);
+    Until([&]{return c->initialize_entered.load();},"selected actor held before work");
+    Game73SelectedBankRequest r;r.request_id=1;r.bank=f.view;r.identity=f.view.Describe();r.group=0;r.entry=4;r.volume=128;r.profile_gain=3;
+    const auto acquisitions=f.lease->calls;Check(a->TryQueueSelected(r)==Game73QueueCode::Queued&&f.lease->calls==acquisitions,"selected producer does no source reads");
+    c->hold_initialize.store(false);Until([&]{return a->Snapshot().stage==Game73OutputStage::Opening;},"selected rendered before device");
+    auto s=a->Snapshot();Check(s.last_rendered.request_id==1&&s.last_rendered.trace.output_frames==168&&s.last_rendered.trace.dry_left==1028&&s.rendered_requests==1,"same actor renders actual captured request");
+    c->hold_open.store(false);Until([&]{return a->Snapshot().completed_client_drain==1;},"selected synthetic drain");
+    Game73SelectedBankRequest unsupported;unsupported.request_id=2;unsupported.bank=f.view;unsupported.identity=f.view.Describe();unsupported.group=0;unsupported.entry=3;unsupported.volume=128;unsupported.profile_gain=3;
+    Until([&]{return a->TryQueueSelected(unsupported)==Game73QueueCode::Queued;},"unsupported request admitted for async diagnosis");
+    Until([&]{return a->Snapshot().failed_requests==1;},"unsupported render result");s=a->Snapshot();
+    Check(s.request_id==2&&s.render_code==SelectedSoundCode::Unsupported&&s.last_rendered.request_id==1&&s.last_drained_request_id==1,"later unsupported cannot replace successful playback identity");
+    Game73SelectedBankRequest foreign;foreign.request_id=3;foreign.bank=f.view;foreign.identity=f.view.Describe();++foreign.identity.generation;foreign.group=0;foreign.entry=4;
+    Until([&]{return a->TryQueueSelected(foreign)==Game73QueueCode::Queued;},"foreign identity queued");
+    Until([&]{return a->Snapshot().failed_requests==2;},"foreign identity failed");Check(a->Snapshot().render_code==SelectedSoundCode::InvalidLease,"actor revalidates bank identity");
+    Closed(*a);bank.Close();f.lease->live=false;
+    Fixture cancelled;
+    auto stopControl=std::make_shared<Game73OutputTestControl>();stopControl->hold_initialize.store(true);auto stopActor=Actor(stopControl);
+    Until([&]{return stopControl->initialize_entered.load();},"selected pending before stop");
+    Game73SelectedBankRequest pending;pending.request_id=1;pending.bank=cancelled.view;pending.identity=cancelled.view.Describe();pending.group=0;pending.entry=4;pending.volume=128;pending.profile_gain=3;
+    Check(stopActor->TryQueueSelected(pending)==Game73QueueCode::Queued,"selected pending admitted");stopActor->RequestStop();stopControl->hold_initialize.store(false);
+    Until([&]{return stopActor->Snapshot().actor_exited;},"selected pending cancellation exit");s=stopActor->Snapshot();
+    Check(s.cancelled_requests==1&&s.last_cancelled_request_id==1&&s.stage==Game73OutputStage::Cancelled&&s.failed_requests==0&&s.rendered_requests==0,"pending selected has exactly one terminal ID/stage");Closed(*stopActor);
+}
 int RealDevice(bool stopDuringPlayback) {
     std::uint32_t error=0;auto a=Game73PcmOutput::Create(error);if (!a) {std::cout<<"DEVICE_CREATE_ERROR "<<error<<'\n';return 2;}
     auto r=Request(1,stopDuringPlayback?48000:4800,1);Queue(*a,r);
@@ -129,7 +170,9 @@ int main(int argc,char** argv) {
         if (argc==4&&std::string(argv[1])=="--wave-reference") {WaveReference(argv[2],argv[3]);return 0;}
         Check(argc==1,"unknown sound test arguments");
         dokodemo::GameSoundCodecRegressionChecks();std::cout<<"CODEC 4/4 groups\n";
-        OwnershipAndContent();Errors();CancellationAndTimeout();
+        dokodemo::GameSoundSelectedRegressionChecks();std::cout<<"SELECTED 4/4 synthetic groups\n";
+        OwnershipAndContent();Errors();CancellationAndTimeout();SelectedMailboxAndSourceStatus();
+        std::cout<<"SELECTED_MAILBOX 1/1 synthetic group\n";
         std::cout<<"OUTPUT 3/3 groups; synthetic transport, no real COM or audible credit\n";return 0;
     }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}
 }

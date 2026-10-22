@@ -5,6 +5,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include "game73_pcm_output_win32.h"
+#include "core_hash.h"
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
@@ -176,6 +177,8 @@ struct Game73PcmOutput::Impl {
     unsigned thread_id = 0;
     Game73PcmOutputSnapshot state;
     Game73DecodedPcmRequest pending;
+    Game73SelectedBankRequest pending_selected;
+    bool has_selected=false;
     bool outstanding = false;
     std::atomic<bool> admission{false}, stop_requested{false};
     std::atomic<DWORD> stop_error{0};
@@ -223,12 +226,12 @@ struct Game73PcmOutput::Impl {
                 if (!started) {
                     result = device.Start(operation);
                     if (FAILED(result)) { failed = true; Failure(operation,result); break; }
-                    started = true; Lock guard(lock); ++state.started_requests;
+                    started = true; Lock guard(lock); ++state.started_requests;state.last_started_request_id=request.request_id;
                 }
             } else if (position == frames && padding == 0) {
                 Lock guard(lock);
                 if (Cancelled()) cancelled = true;
-                else { drained = true; ++state.completed_client_drain; }
+                else { drained = true; ++state.completed_client_drain;state.last_drained_request_id=request.request_id; }
                 break;
             }
             { Lock guard(lock); if (full) state.stage = Game73OutputStage::Draining; }
@@ -245,9 +248,34 @@ struct Game73PcmOutput::Impl {
         if (FAILED(stopped)) { if (!failed) Failure(operation,stopped); failed = true; }
         device.Close(); request.clip.reset();
         { Lock guard(lock); state.com_references_released = true; outstanding = false;
-          if (failed) { ++state.failed_requests; state.stage = Game73OutputStage::Failed; }
-          else if (cancelled) { ++state.cancelled_requests; state.stage = Game73OutputStage::Cancelled; }
+          if (failed) { ++state.failed_requests;state.last_failed_request_id=request.request_id; state.stage = Game73OutputStage::Failed; }
+          else if (cancelled) { ++state.cancelled_requests;state.last_cancelled_request_id=request.request_id; state.stage = Game73OutputStage::Cancelled; }
           else if (drained) state.stage = Game73OutputStage::Completed; }
+    }
+    void Render(Game73SelectedBankRequest request) {
+        if(Cancelled()){request.bank.Reset();Lock guard(lock);++state.cancelled_requests;state.last_cancelled_request_id=request.request_id;outstanding=false;state.stage=Game73OutputStage::Cancelled;return;}
+        auto pcm=std::make_unique<PcmClip>();SelectedSoundTrace trace;
+        SelectedSoundResult result;
+        core::Sha256Digest wave{},samples{};
+        try {
+            const auto a=request.bank.Describe(),b=request.identity;
+            const bool same=a.owner==b.owner&&a.generation==b.generation&&a.serial==b.serial
+                &&a.allocation_bytes==b.allocation_bytes&&a.host_address==b.host_address&&a.offset==b.offset&&a.size==b.size
+                &&a.source_address==b.source_address&&a.allocation_source_base==b.allocation_source_base&&a.readable==b.readable;
+            if(!same)result={SelectedSoundCode::InvalidLease,"Queued bank identity changed"};
+            else result=RenderSelectedGame73(request.bank,request.group,request.entry,request.volume,request.profile_gain,1u<<20,*pcm,trace,request.master_left,request.master_right);
+            if(result) {
+                core::Sha256 hash;for(std::uint32_t i=0;i<trace.wave_bytes;++i){const auto byte=request.bank.ReadU8(std::uint64_t(trace.wave_offset)+i);hash.update(&byte,1);}wave=hash.digest();
+                core::Sha256 pcmHash;for(const auto value:pcm->samples){const auto u=std::uint16_t(value);const std::uint8_t bytes[]{std::uint8_t(u),std::uint8_t(u>>8)};pcmHash.update(bytes,2);}samples=pcmHash.digest();
+            }
+        }catch(const recovered::PackageStorageError&){result={SelectedSoundCode::InvalidLease,"Bank retired during selected render"};}
+        // Release actor-local borrowed view BEFORE advertising this request done.
+        request.bank.Reset();
+        {Lock guard(lock);state.render_code=result.code;
+            if(result){state.render_trace=trace;state.wave_sha256=wave;state.pcm_sha256=samples;state.expected_frames=pcm->FrameCount();++state.rendered_requests;state.last_rendered={request.request_id,request.identity,trace,wave,samples};}
+            else {++state.failed_requests;state.last_failed_request_id=request.request_id;outstanding=false;state.stage=Game73OutputStage::Failed;return;}}
+        if(Cancelled()){Lock guard(lock);++state.cancelled_requests;state.last_cancelled_request_id=request.request_id;outstanding=false;state.stage=Game73OutputStage::Cancelled;return;}
+        Game73DecodedPcmRequest owned;owned.request_id=request.request_id;owned.group=request.group;owned.sequence=request.entry;owned.clip=std::move(pcm);Play(std::move(owned));
     }
     static unsigned __stdcall Entry(void* raw) noexcept { static_cast<Impl*>(raw)->Run(); return 0; }
     void Run() noexcept {
@@ -270,10 +298,11 @@ struct Game73PcmOutput::Impl {
                     const DWORD wait = WaitWithMessages(stop,work,INFINITE);
                     if (wait == WAIT_OBJECT_0 || Cancelled()) break;
                     if (wait != WAIT_OBJECT_0+1) { fatal = true; Failure(Game73OutputOperation::Wait,HRESULT_FROM_WIN32(GetLastError()),GetLastError()); break; }
-                    Game73DecodedPcmRequest request;
-                    { Lock guard(lock); if (!pending.clip) continue; request = std::move(pending);
+                    Game73DecodedPcmRequest request;Game73SelectedBankRequest selected;bool render=false;
+                    { Lock guard(lock); if (!pending.clip&&!has_selected) continue;
+                      render=has_selected;if(render){selected=std::move(pending_selected);has_selected=false;}else request = std::move(pending);
                       state.failed_operation = Game73OutputOperation::None; state.hresult = 0; state.native_error = 0; }
-                    Play(std::move(request));
+                    if(render)Render(std::move(selected));else Play(std::move(request));
                 }
             }
         } catch (...) { fatal = true; Failure(Game73OutputOperation::Unexpected,E_UNEXPECTED); }
@@ -284,8 +313,11 @@ struct Game73PcmOutput::Impl {
 #endif
         admission.store(false);
         { Lock guard(lock); state.accepting = false;
-          if (pending.clip) { pending.clip.reset(); if (fatal) ++state.failed_requests; else ++state.cancelled_requests; }
-          else if (fatal && outstanding) ++state.failed_requests;
+          if (pending.clip||has_selected||outstanding) {
+              pending.clip.reset();pending_selected.bank.Reset();has_selected=false;
+              if(fatal){++state.failed_requests;state.last_failed_request_id=state.request_id;state.stage=Game73OutputStage::Failed;}
+              else {++state.cancelled_requests;state.last_cancelled_request_id=state.request_id;state.stage=Game73OutputStage::Cancelled;}
+          }
           outstanding = false; state.com_references_released = true; state.actor_exited = true; }
     }
     bool Start(std::uint32_t& error) noexcept {
@@ -335,10 +367,25 @@ Game73QueueCode Game73PcmOutput::TryQueueDecoded(Game73DecodedPcmRequest& reques
     if (impl_->outstanding) return Game73QueueCode::Busy;
     if (!SetEvent(impl_->work)) { impl_->state.native_error = GetLastError(); impl_->admission.store(false); impl_->state.accepting = false; return Game73QueueCode::NativeFailure; }
     impl_->state.request_id = request.request_id; impl_->state.expected_frames = pcm->FrameCount();
+    impl_->state.selected_request=false;
     impl_->state.failed_operation = Game73OutputOperation::None; impl_->state.hresult = 0; impl_->state.native_error = 0;
     impl_->state.submitted_frames = 0; ++impl_->state.queued_requests; impl_->state.stage = Game73OutputStage::Queued;
     impl_->pending = std::move(request); impl_->outstanding = true;
     return Game73QueueCode::Queued;
+}
+Game73QueueCode Game73PcmOutput::TryQueueSelected(Game73SelectedBankRequest& request) noexcept {
+    if(!impl_->admission.load())return Game73QueueCode::Closed;
+    TryLock guard(impl_->lock);
+    if(!guard.acquired)return impl_->admission.load()?Game73QueueCode::Busy:Game73QueueCode::Closed;
+    if(!impl_->admission.load())return Game73QueueCode::Closed;
+    if(!request.request_id||request.request_id<=impl_->state.request_id)return Game73QueueCode::StaleRequest;
+    if(!request.identity.size||!request.identity.owner||!request.identity.readable)return Game73QueueCode::InvalidPcm;
+    if(impl_->outstanding)return Game73QueueCode::Busy;
+    if(!SetEvent(impl_->work)){impl_->stop_error.store(GetLastError());impl_->admission.store(false);return Game73QueueCode::NativeFailure;}
+    auto& s=impl_->state;s.request_id=request.request_id;s.expected_frames=s.submitted_frames=0;s.selected_request=true;
+    s.group=request.group;s.entry=request.entry;s.volume=request.volume;s.profile_gain=request.profile_gain;s.master_left=request.master_left;s.master_right=request.master_right;s.bank_identity=request.identity;
+    s.failed_operation=Game73OutputOperation::None;s.hresult=0;s.native_error=0;s.render_code=SelectedSoundCode::Ok;s.render_trace={};s.wave_sha256={};s.pcm_sha256={};s.stage=Game73OutputStage::Queued;++s.queued_requests;++s.selected_requests;
+    impl_->pending_selected=std::move(request);impl_->has_selected=true;impl_->outstanding=true;return Game73QueueCode::Queued;
 }
 Game73PcmOutputSnapshot Game73PcmOutput::Snapshot() const noexcept {
     Lock guard(impl_->lock); auto state = impl_->state;

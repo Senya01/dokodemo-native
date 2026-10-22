@@ -124,6 +124,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameScene9DC game_scene;
     recovered::GameVmBoot game_vm;
     recovered::GameContentBoot game_content;
+    std::unique_ptr<audio::Game73PcmOutput> sound_output;
     std::unique_ptr<recovered::GameFileSource> scene_sound_file;
     std::unique_ptr<recovered::GameStorage> game_storage;
     uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
@@ -1552,6 +1553,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         }
     }
     StartupRuntimeStatus QueueExitLocked() {
+        if(sound_output)sound_output->RequestStop(); // admission closes BEFORE source exit notification
         state.exit_requested = true;
         notifications = (std::min)(notifications + 1u, uint32_t((std::numeric_limits<int>::max)()));
         const BOOL signaled = SetEvent(exit_event); DWORD error = signaled ? 0 : GetLastError();
@@ -1585,6 +1587,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         return state.status;
     }
     StartupRuntimeStatus Close(uint32_t timeout) {
+        const auto close_started=GetTickCount64();
+        const auto remaining_budget=[&]{const auto elapsed=GetTickCount64()-close_started;return timeout==INFINITE?DWORD(INFINITE):elapsed>=timeout?DWORD(0):timeout-DWORD(elapsed);};
         {
             std::lock_guard<std::mutex> lock(metadata);
             if (state.resources_closed) return {};
@@ -1599,6 +1603,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             Impl& self;
             ~Admission() { std::lock_guard<std::mutex> lock(self.metadata); self.close_in_progress = false; }
         } admission{*this};
+        // Audio never waits for game/update. Retain SAME owner/bank/source on
+        // timeout; no source context join or bank retirement has occurred yet.
+        if(sound_output){
+            sound_output->RequestStop();const auto closed=sound_output->StopAndJoin(remaining_budget());
+            Emit("JoinGame73Audio","HostLifecycle",0,closed?1:0,false,0,closed.native_error,0,"before caller+worker joins;bank/file retained on failure");
+            if(!closed){const auto failure=Failure(closed.code==audio::Game73OutputCloseCode::TimedOut?StartupRuntimeCode::Timeout:StartupRuntimeCode::HostFailure,closed.native_error);std::lock_guard<std::mutex> lock(metadata);state.status=failure;return failure;}
+        }
         codec_session->cancelled.store(true);
         if (cancel) {
             const BOOL signaled = SetEvent(cancel); const DWORD error = signaled ? 0 : GetLastError();
@@ -1621,7 +1632,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if (caller) handles[count++] = caller;
         if (worker) handles[count++] = worker;
         if (count) {
-            const DWORD wait = WaitForMultipleObjects(count, handles, TRUE, timeout);
+            const DWORD wait = WaitForMultipleObjects(count, handles, TRUE, remaining_budget());
             const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
             Emit("JoinCallerAndWorker", "HostLifecycle", 0, count, false, 0, error, wait);
             if (wait != WAIT_OBJECT_0) {
@@ -1944,6 +1955,11 @@ std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRunt
     auto owner = std::unique_ptr<StartupCoordinator>(
         new StartupCoordinator(std::make_unique<Impl>(options)));
     auto& impl = owner->impl_;
+    // Publish immutable owner/sink BEFORE any source Start or exit notification.
+    // Endpoint/COM failures remain asynchronous native audio failures.
+    try {impl->sound_output=audio::Game73PcmOutput::Create(impl->state.native_audio_creation_error);}
+    catch(...){impl->state.native_audio_creation_error=ERROR_NOT_ENOUGH_MEMORY;}
+    impl->game_content.SetSoundOutput(impl->sound_output.get());
     StartupHostStatus backend_status;
     impl->backend = WindowsStartupBackend::Create(backend_status);
     if (!impl->backend) { status = Failure(StartupRuntimeCode::HostFailure, backend_status.win32_error); return {}; }
@@ -2016,6 +2032,7 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
     const auto& self = *impl_;
     std::lock_guard<std::mutex> lock(self.metadata);
     auto out = self.state;
+    if(self.sound_output)out.native_audio=self.sound_output->Snapshot();
     out.game_boot.graphics = self.game_graphics.Snapshot();
     out.repeated_modules=self.RepeatedSnapshot();
     out.module_records = self.modules.Snapshots();

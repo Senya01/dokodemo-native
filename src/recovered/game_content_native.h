@@ -132,6 +132,7 @@ class GameContentBoot final : public GameResourceSource {
     void SetTitleRng(RngNativeOwner& rng){title_rng_=&rng;}
     void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
     void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
+    void SetSoundOutput(audio::Game73SelectedSink* sink){sound_bank_.SetSink(sink);}
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {

@@ -31,6 +31,7 @@ endfunction()
 add_library(dokodemo-core STATIC
     src/core_hash.cpp
     src/ps_adpcm.cpp
+    src/game73_selected.cpp
     src/core/cp932.cpp
     src/script_vm.cpp
     src/startup_probe.cpp

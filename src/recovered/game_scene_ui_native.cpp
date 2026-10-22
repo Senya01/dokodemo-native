@@ -632,19 +632,25 @@ bool GameSceneUiBootstrap::DrawEditor(GameGraphics& graphics){
 }
 GameFsStatus GameSoundBank::Request73(int32_t sound,int32_t channel,int32_t volume){
     if(!state_.metadata_ready)return {GameFsCode::Unavailable,0,"GAME73 requires live SE_SYS bank lease"};
-    (void)image_.Describe(); //checks generation/serial,including after external retirement
+    // Cached registration descriptor only: actor revalidates the lease. No
+    // source acquisition/decoder work belongs on the game dispatch thread.
     if(sound<0||channel<0||volume<0||volume>128)return {GameFsCode::Unavailable,0,"GAME73 finite sound/channel/volume domain"};
     ++state_.playback_requests;state_.last_sound=sound;state_.last_channel=channel;state_.last_volume=volume;
-    // Source1D05C ignores4AC38's signed playback return. The current named
-    // Windows backend has no SGX mixer: retain a real refused request (-1),
-    // never an audible/playback-success claim or a synthesized channel.
+    audio::Game73SelectedBankRequest request;
+    request.request_id=next_request_++;request.bank=image_;request.identity=identity_;
+    request.group=sound;request.entry=channel;request.volume=volume;request.profile_gain=state_.profile_gain;
+    request.master_left=state_.master_left;request.master_right=state_.master_right;
+    state_.native_request_id=request.request_id;
+    state_.native_queue_code=int32_t(sink_?sink_->TryQueueSelected(request):audio::Game73QueueCode::Closed);
+    // Queue/decode/device results are separate native evidence. Source1D064
+    // ignores the playback return; do not synthesize a source playback handle.
     state_.last_playback_result=-1;return {};
 }
 GameFsStatus GameSoundBank::Register(PackageView image) {
     if (state_.metadata_ready)
         return {GameFsCode::Busy, 0, "sound bank already registered"};
     try {
-        const auto size = image.Describe().size;
+        const auto description=image.Describe();const auto size = description.size;
         if (size < 16 || size > UINT32_MAX || image.ReadLE32(0) != 0x44584753)
             return {GameFsCode::MalformedDirectory, 0, "SGXD signature/extent"};
         const auto end = image.ReadLE32(8);
@@ -678,6 +684,8 @@ GameFsStatus GameSoundBank::Register(PackageView image) {
         slots_[size_t(slot)] = true;
         next.native_metadata_slot = slot;
         next.metadata_ready = true;
+        next.profile_gain=state_.profile_gain;next.finite_windows_output=sink_!=nullptr;
+        identity_=description;
         image_ = std::move(image);
         state_ = next;
         return {};

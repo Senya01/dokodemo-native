@@ -2,6 +2,7 @@
 #include "recovered/module_manager_native.h"
 #include "recovered/startup_flow_native.h"
 #include "recovered/game_boot_native.h"
+#include "game73_pcm_output_win32.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -137,6 +138,8 @@ struct StartupObservation {
     std::vector<StartupModuleObservation> module_observations;
     recovered::StartupRepeatedModuleSnapshot repeated_modules;
     recovered::GameBootObservation game_boot;
+    audio::Game73PcmOutputSnapshot native_audio;
+    uint32_t native_audio_creation_error=0;
     std::vector<recovered::NativeModuleSnapshot> module_records; //live manager only
     uint32_t current_module_index = StartupNoCurrentModule;
     std::string current_frontier;

@@ -5,6 +5,7 @@
 #include "game_input_native.h"
 #include "game_text_native.h"
 #include <array>
+#include "../game73_audio_request.h"
 
 namespace dokodemo::recovered {
 struct GameTransitionSnapshot {
@@ -166,6 +167,9 @@ struct GameSoundBankSnapshot {
     bool regions = false, waves = false, sequences = false, names = false;
     uint32_t playback_requests=0;
     int32_t last_sound=-1,last_channel=-1,last_volume=0,last_playback_result=-1;
+    uint64_t native_request_id=0;
+    int32_t native_queue_code=int32_t(audio::Game73QueueCode::Closed),profile_gain=0,master_left=128,master_right=128;
+    bool finite_windows_output=false;
 };
 // Native metadata pool adaptation of551E4/55208/5536C. This owns a live source
 // image and a real bounded slot; it does not pretend to implement SGX playback.
@@ -173,6 +177,9 @@ class GameSoundBank final {
   public:
     GameFsStatus Register(PackageView image);
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
+    void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}
+    void SetProfileGain(int32_t value) noexcept {state_.profile_gain=value;}
+    void SetMasterGain(int32_t left,int32_t right) noexcept {state_.master_left=left<-128?-128:left>128?128:left;state_.master_right=right<-128?-128:right>128?128:right;}
     GameSoundBankSnapshot Snapshot() const {
         return state_;
     }
@@ -186,5 +193,8 @@ class GameSoundBank final {
     PackageView image_;
     std::array<bool, 64> slots_{};
     GameSoundBankSnapshot state_;
+    PackageViewDescription identity_;
+    audio::Game73SelectedSink* sink_=nullptr;
+    uint64_t next_request_=1;
 };
 } // namespace dokodemo::recovered

@@ -245,6 +245,7 @@ bool GameContentBoot::Reset24994() {
     // remaining explicit reset without assigning unknown resource meanings.
     reset_bytes_[0x10] = 2;
     reset_bytes_[0x14] = 3;
+    sound_bank_.SetProfileGain(3); // explicit249D0 profile producer, not BSS or per-request reset
     reset_bytes_[0x18] = 3;
     state_.state_reset = true;
     return true;
@@ -823,6 +824,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             const auto flow=main_flow_.Tick(gate);state_.main_flow=main_flow_.Snapshot();
             if(!flow){state_.status=flow;state_.blocked=true;state_.frontier_pc=state_.main_flow.last_pc;return false;}
         }
+        sound_bank_.SetProfileGain(int32_t(StateWord(0x14))); // current249D0/24B34 owner, not a per-query default
         state_.status=actor_script_.Tick();state_.actor_script=actor_script_.Snapshot();
         if(state_.status&&state_.actor_script.awaiting_choice){
             if(actor_choice_target_.generation!=state_.actor_script.generation||actor_choice_target_.request!=state_.actor_script.choice_requests){

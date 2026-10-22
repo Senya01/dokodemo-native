@@ -1,5 +1,8 @@
 #pragma once
 #include "audio_pcm.h"
+#include "game73_audio_request.h"
+#include "game73_selected.h"
+#include <array>
 #include <cstdint>
 #include <memory>
 #ifdef DOKODEMO_SOUND_OUTPUT_TESTS
@@ -8,7 +11,6 @@
 #endif
 
 namespace dokodemo::audio {
-enum class Game73QueueCode { Queued, Busy, Closed, InvalidPcm, StaleRequest, NativeFailure };
 enum class Game73OutputStage { Idle, Queued, Opening, Submitting, Draining, Completed, Failed, Cancelled, Closed };
 enum class Game73OutputOperation { None, ComInitialize, CreateEnumerator, DefaultEndpoint, Activate,
     Initialize, GetBufferSize, SetEventHandle, GetRenderService, GetPadding, GetBuffer, ReleaseBuffer,
@@ -20,6 +22,12 @@ struct Game73DecodedPcmRequest {
     // or source allocation can escape into the output device's render buffers.
     std::unique_ptr<const PcmClip> clip;
 };
+struct Game73RenderedWitness {
+    std::uint64_t request_id=0;
+    recovered::PackageViewDescription bank_identity;
+    SelectedSoundTrace trace;
+    std::array<std::uint8_t,32> wave_sha256{},pcm_sha256{};
+};
 struct Game73PcmOutputSnapshot {
     Game73OutputStage stage = Game73OutputStage::Idle;
     Game73OutputOperation failed_operation = Game73OutputOperation::None;
@@ -30,6 +38,15 @@ struct Game73PcmOutputSnapshot {
     std::uint64_t completed_client_drain = 0, failed_requests = 0, cancelled_requests = 0;
     bool accepting = false, actor_exited = false, actor_joined = false;
     bool handles_closed = false, com_references_released = true, synthetic_device = false;
+    bool selected_request=false;
+    std::uint64_t selected_requests=0,rendered_requests=0;
+    std::int32_t group=-1,entry=-1,volume=0,profile_gain=0,master_left=128,master_right=128;
+    recovered::PackageViewDescription bank_identity;
+    SelectedSoundCode render_code=SelectedSoundCode::Ok;
+    SelectedSoundTrace render_trace;
+    std::array<std::uint8_t,32> wave_sha256{},pcm_sha256{};
+    Game73RenderedWitness last_rendered;
+    std::uint64_t last_started_request_id=0,last_drained_request_id=0,last_failed_request_id=0,last_cancelled_request_id=0;
 };
 enum class Game73OutputCloseCode { Closed, TimedOut, HostFailure, WrongThread };
 struct Game73OutputCloseResult {
@@ -57,7 +74,7 @@ struct Game73OutputTestControl {
 #endif
 // One finite PCM request at a time, one COM/render owner. Queue admission does
 // not mean device submission, Start, drain, or audible success. No SGX ABI here.
-class Game73PcmOutput final {
+class Game73PcmOutput final : public Game73SelectedSink {
 public:
     static std::unique_ptr<Game73PcmOutput> Create(std::uint32_t& error);
 #ifdef DOKODEMO_SOUND_OUTPUT_TESTS
@@ -68,6 +85,7 @@ public:
     Game73PcmOutput(const Game73PcmOutput&) = delete;
     Game73PcmOutput& operator=(const Game73PcmOutput&) = delete;
     Game73QueueCode TryQueueDecoded(Game73DecodedPcmRequest&) noexcept;
+    Game73QueueCode TryQueueSelected(Game73SelectedBankRequest&) noexcept override;
     Game73PcmOutputSnapshot Snapshot() const noexcept;
     // Close mailbox FIRST; late requests receive Closed. No COM or join here.
     void RequestStop() noexcept;
