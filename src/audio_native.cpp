@@ -39,14 +39,6 @@ bool MmResult(MMRESULT result, const char* operation, std::string& error) {
 
 } // namespace
 
-std::uint64_t PcmClip::FrameCount() const noexcept {
-    return channels ? samples.size() / channels : 0;
-}
-
-double PcmClip::DurationSeconds() const noexcept {
-    return sample_rate ? static_cast<double>(FrameCount()) / sample_rate : 0.0;
-}
-
 bool LoadPcm16Wave(const std::filesystem::path& path,
                   std::shared_ptr<const PcmClip>& clip, std::string& error) {
     clip.reset();

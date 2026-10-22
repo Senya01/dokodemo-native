@@ -30,6 +30,7 @@ endfunction()
 # bounded KSC interpreter. Core sources use no Windows APIs or PSP CPU/OS runtime.
 add_library(dokodemo-core STATIC
     src/core_hash.cpp
+    src/ps_adpcm.cpp
     src/core/cp932.cpp
     src/script_vm.cpp
     src/startup_probe.cpp
@@ -163,6 +164,14 @@ if(DOKODEMO_GAME_BOOT_TESTS)
     endif()
     add_test(NAME game-actor-tests COMMAND dokodemo-game-actor-tests)
     if(WIN32)
+        add_executable(dokodemo-game-sound-tests tools/game_sound_tests.cpp src/game73_pcm_output_win32.cpp)
+        target_link_libraries(dokodemo-game-sound-tests PRIVATE dokodemo-core ole32 uuid user32)
+        target_compile_definitions(dokodemo-game-sound-tests PRIVATE DOKODEMO_SOUND_OUTPUT_TESTS UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+        if(MSVC)
+            set_target_properties(dokodemo-game-sound-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+            target_compile_options(dokodemo-game-sound-tests PRIVATE /W4 /WX /EHsc /permissive- /utf-8)
+        endif()
+        add_test(NAME game-sound-tests COMMAND dokodemo-game-sound-tests)
         add_executable(dokodemo-game-storage-tests tools/game_storage_tests.cpp src/game_storage_win32.cpp)
         target_link_libraries(dokodemo-game-storage-tests PRIVATE dokodemo-core)
         target_compile_definitions(dokodemo-game-storage-tests PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)

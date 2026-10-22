@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_pcm.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -8,14 +9,6 @@
 #include <vector>
 
 namespace dokodemo::audio {
-
-struct PcmClip {
-    std::uint32_t sample_rate = 0;
-    std::uint16_t channels = 0;
-    std::vector<std::int16_t> samples;
-    std::uint64_t FrameCount() const noexcept;
-    double DurationSeconds() const noexcept;
-};
 
 // Accepts RIFF PCM16 little-endian mono/stereo only; fails explicitly on other
 // codecs, truncated chunks, duplicate data/fmt chunks, or inconsistent sizes.
