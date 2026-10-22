@@ -7,9 +7,13 @@ GameFsStatus GameMainFlow::Initialize(GameActorRuntime& runtime,EventDispatch di
     const auto generation=state_.generation+1;state_={};state_.generation=generation;
     runtime_=&runtime;dispatch_=std::move(dispatch);input_.BeginContext();state_.live=true;return {};
 }
-bool GameMainFlow::Input(const GameInputFrame& frame){
+bool GameMainFlow::Input(const GameInputFrame& frame,bool circle_owned_by_modal){
     if(!state_.live||!runtime_||!runtime_->OwnersLive())return false;
-    input_.Observe(frame);return true;
+    input_.Observe(frame);
+    // A message/choice/input confirmation cannot migrate into phase5 when
+    // its owner clears busy during this same packet. Prefix keys are intact.
+    if(circle_owned_by_modal)input_.Disarm(Circle);
+    return true;
 }
 GameFsStatus GameMainFlow::Clear8(){const auto s=runtime_->ClearManager8();if(s)++state_.request8_clears;return s;}
 GameFsStatus GameMainFlow::Clear9(){const auto s=runtime_->ClearManager9();if(s)++state_.request9_clears;return s;}

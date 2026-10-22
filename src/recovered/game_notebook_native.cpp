@@ -6,6 +6,30 @@
 
 namespace dokodemo::recovered {
 namespace {void Require(bool yes,const char* why){if(!yes)throw std::runtime_error(why);}}
+GameNotebookSlotObservation GameObserveNotebookSlot(const script::Vm& vm,uint64_t generation,const script::Value& registered,uint32_t index)noexcept{
+    using V=script::Value;GameNotebookSlotObservation out;out.index=index;out.script_generation=generation;
+    try{
+        const auto w=vm.current_witness();out.error=1;Require(generation&&w.valid&&w.context_registered,"NOTE preview probe VM owner");out.run_id=w.run_id;
+        Require(registered.kind==V::Kind::Reference&&vm.stable_value_owner(registered),"NOTE preview probe registration owner");
+        const auto h=vm.peek_reference(registered);out.error=2;
+        Require(h.kind==V::Kind::ArrayHeader&&h.word>>28==9&&index<(h.word&0xFFF),"NOTE preview probe index/header");
+        const auto at=[&](V ref,uint32_t offset){Require(uint64_t(ref.index)+offset<=UINT16_MAX,"NOTE preview probe table extent");ref.index=uint16_t(ref.index+offset);return vm.peek_reference(ref);};
+        const auto ref=at(registered,index+1);out.error=3;
+        Require(ref.kind==V::Kind::Reference&&vm.stable_value_owner(ref),"NOTE preview probe indexed owner");
+        out.row_table=uint32_t(ref.table);out.row_index=ref.index;const auto rh=vm.peek_reference(ref);out.row_header=rh.word;out.cells=rh.word&0xFFF;
+        Require(rh.kind==V::Kind::ArrayHeader&&rh.word>>28==9&&out.cells&&out.cells<=64,"NOTE preview probe row shape");
+        std::vector<uint8_t> bytes;
+        const auto n=[&](uint32_t x){for(unsigned i=0;i<4;++i)bytes.push_back(uint8_t(x>>(8*i)));};
+        const auto cell=[&](const V& v){Require(vm.stable_value_owner(v)&&(v.kind==V::Kind::String||v.cp932.empty()),"NOTE preview probe value owner/shape");
+            n(uint32_t(v.kind));n(v.word);n(uint32_t(v.table));n(v.index);n(uint32_t(v.cp932.size()));bytes.insert(bytes.end(),v.cp932.begin(),v.cp932.end());};
+        cell(registered);cell(h);cell(ref);cell(rh);out.error=4;
+        for(uint32_t i=0;i<out.cells;++i){const auto v=at(ref,i+1);cell(v);
+            if(i<out.first.size()){auto& x=out.first[i];x.kind=v.kind;x.word=v.word;x.table=uint32_t(v.table);x.index=v.index;
+                x.cp932_bytes=v.cp932.size();x.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(v.cp932.data()),v.cp932.size());}}
+        out.sha=core::sha256(bytes.data(),bytes.size());out.valid=true;out.error=0;
+    }catch(...){/* Diagnostic failure must not narrow the accepted empty NOTE path. */}
+    return out;
+}
 GameNotebookRows GameObserveNotebookRows(const script::Vm& vm,uint64_t generation,const script::Value& registered){
     using V=script::Value;GameNotebookRows out;const auto witness=vm.current_witness();
     Require(generation&&witness.valid&&witness.run_id,"NOTE needs current registered GAME11 VM run");
@@ -25,7 +49,7 @@ GameNotebookRows GameObserveNotebookRows(const script::Vm& vm,uint64_t generatio
     capture(registered);capture(header);
     for(uint32_t id=0;id<count;++id){const auto row=at(registered,id+1);capture(row);
         // Original enumeration starts at1. Preserve slot0 without inventing its purpose.
-        if(!id)continue;
+        if(!id){out.slot0=GameObserveNotebookSlot(vm,generation,registered,0);continue;}
         Require(row.kind==V::Kind::Reference&&vm.stable_value_owner(row),"NOTE indexed row has no stable owner");
         const auto rh=vm.peek_reference(row);capture(rh);const auto n=rh.word&0xFFF;
         Require(rh.kind==V::Kind::ArrayHeader&&rh.word>>28==9&&n&&n<=64,"NOTE row shape outside finite typed accessor");
@@ -125,7 +149,11 @@ GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade)
             return {};
         }
         if(input_.First(Circle))return {};
-        if(input_.First(Triangle)){++state_.unsupported;return {};}
+        if(input_.First(Triangle)){
+            ++state_.unsupported;
+            state_.error="Unsupported NOTE self-details: source2C91C index0 producer/text consumer not implemented";
+            return {}; // nonfatal refusal: preserve real ordinary Cancel and owner
+        }
         if(input_.First(Cross)){state_.state23C=2;state_.phase=4;++state_.close_requests;fade.CloseWipe(false);input_.BeginContext();}
         return {};
     }catch(const std::exception& e){state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}

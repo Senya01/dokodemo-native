@@ -12,6 +12,14 @@ using script::Value;
 void Need(bool value,const char* message) {if(!value)throw std::runtime_error(message);}
 Value False() {Value v;v.kind=Value::Kind::Scalar;v.word=0x10000000;return v;}
 Value Nil() {Value v;v.kind=Value::Kind::Scalar;return v;}
+script::ValueWitness PassiveValue(const Value& v){
+    script::ValueWitness w;w.kind=v.kind;w.word=v.word;w.table=uint32_t(v.table);w.index=v.index;
+    w.cp932_bytes=v.cp932.size();w.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(v.cp932.data()),v.cp932.size());return w;
+}
+std::array<script::ValueWitness,4> Flow5Guards(const script::Vm& vm){
+    return {PassiveValue(vm.read_slot(script::Table::Global,0x9A76)),PassiveValue(vm.read_slot(script::Table::Ctx28,0x2869)),
+            PassiveValue(vm.read_slot(script::Table::Ctx28,0x2866)),PassiveValue(vm.read_slot(script::Table::Global,0x6105))};
+}
 int32_t Number(const Value& value) {
     if(value.kind==Value::Kind::ArrayHeader)return int32_t(value.word&0xFFF);
     Need((value.kind==Value::Kind::Scalar||value.kind==Value::Kind::Timestamp)&&value.word>>28<=3,"Native KSC service needs scalar value");
@@ -32,6 +40,33 @@ uint8_t KanaPrefix(uint8_t trail) {
 bool GameMenuCallbackBoundaryAccepted(const script::Event& event,bool restored32,bool disabled)noexcept{
     return event.status==script::Status::HostYield||(event.status==script::Status::Yield&&event.opcode==0x32
         &&event.pc==0x8DD8B&&restored32&&disabled);
+}
+bool GameFlow5EventRestored(const GameFlow5EventSnapshot& c,const script::FrameTransition& t)noexcept{
+    const auto& s=c.suspended;const auto& x=t.before;const auto& y=t.after;
+    const auto same=[](const script::ValueWitness& a,const script::ValueWitness& b){return a.kind==b.kind&&a.word==b.word&&a.table==b.table&&a.index==b.index&&a.cp932_bytes==b.cp932_bytes&&a.cp932_sha256==b.cp932_sha256;};
+    if(!c.accepted||c.queued||!c.receipt||t.callback_receipt!=c.receipt||(t.opcode!=0x32&&t.opcode!=0x1C)
+       ||!s.valid||!x.valid||!y.valid||!s.context_registered||!x.context_registered||!y.context_registered
+       ||s.stopped||x.stopped||y.stopped||s.event_envelope_present||s.queued_callbacks
+       ||s.frame_cells!=s.frame_captured||s.operand_cells!=s.operands_captured
+       ||s.frame_captured>s.frame_values.size()||s.operands_captured>s.operands.size()
+       ||!c.entered.valid||!c.entered.context_registered||c.entered.stopped||!c.entered.event_envelope_present
+       ||c.entered.run_id!=s.run_id||c.entered.context_word!=s.context_word||c.entered.code_sha256!=s.code_sha256
+       ||c.entered.code_entry!=0x8DA28||c.entered.frame_id!=c.callback_frame||c.entered.frame_captured!=2
+       ||c.entered.frame_values[0].kind!=Value::Kind::Scalar||c.entered.frame_values[0].word!=0x2000000C
+       ||c.entered.frame_values[1].kind!=Value::Kind::Scalar||c.entered.frame_values[1].word!=0x20000005
+       ||x.frame_id!=c.callback_frame||x.code_entry!=0x8DA28||!x.event_envelope_present||y.event_envelope_present
+       ||x.run_id!=s.run_id||y.run_id!=s.run_id||x.context_word!=s.context_word||y.context_word!=s.context_word
+       ||x.code_sha256!=s.code_sha256||y.code_sha256!=s.code_sha256||y.frame_id!=s.frame_id||y.code_entry!=s.code_entry
+       ||y.current_pc!=s.current_pc||y.caller_entry!=s.caller_entry||y.caller_call_pc!=s.caller_call_pc
+       ||y.caller_return_pc!=s.caller_return_pc||y.caller_frame_id!=s.caller_frame_id||y.caller_stack_base!=s.caller_stack_base
+       ||y.call_depth!=s.call_depth||y.active_blocks!=s.active_blocks||y.event_scope_depth!=s.event_scope_depth+1
+       ||y.queued_callbacks!=s.queued_callbacks||y.frame_cells!=s.frame_cells||y.operand_cells!=s.operand_cells
+       ||y.frame_captured!=s.frame_captured||y.operands_captured!=s.operands_captured||!same(s.result,y.result)
+       ||y.executed!=x.executed+1||y.clock_tick!=x.clock_tick
+       ||y.deadline_tick!=(s.relative_deadline23>0?y.clock_tick+uint32_t(s.relative_deadline23):0))return false;
+    for(uint32_t i=0;i<s.frame_captured;++i)if(!same(s.frame_values[i],y.frame_values[i]))return false;
+    for(uint32_t i=0;i<s.operands_captured;++i)if(!same(s.operands[i],y.operands[i]))return false;
+    return true;
 }
 GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generation,uint32_t row) noexcept {
     GameWordRowObservation out;out.generation=generation;out.row=row;
@@ -219,8 +254,9 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(bool(attached),attached.detail.c_str());
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
+        vm_->access_observer([this](const Value& ref,bool write){ObserveNotebookStore(ref,write);});
         owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);});
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);ObserveFlow5Event(t);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -405,7 +441,9 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     }
     case 10:case 11:case 16:case 29:case 35:
         Need(arg.kind==Value::Kind::Reference,"Game registration requires typed live table reference");
-        (void)vm_->load_reference(arg);bindings_[uint32_t(id)]=arg;return False();
+        (void)vm_->load_reference(arg);bindings_[uint32_t(id)]=arg;
+        if(id==11)++state_.notebook_registrations;
+        return False();
     case 47:
         Need(arg.kind==Value::Kind::Reference,"Service47 destination reference");
         (void)vm_->load_reference(arg);
@@ -419,6 +457,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         // Register after import's internal validation. These counts describe
         // subsequent executed game queries/mutations,not a parser self-check.
         vm_->access_observer([this](const Value& ref,bool write){
+            ObserveNotebookStore(ref,write);
             ObserveInventoryStore(ref,write);
             if(dictionary_.OwnsCell(ref)){if(write)++state_.dictionary_game_writes;else ++state_.dictionary_game_reads;}
             // Passive proof of the reached DBC descending row-clear consumer.
@@ -1194,10 +1233,63 @@ GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argume
                  &&expected->context.word==target.context.word&&expected->callback.kind==code.kind&&expected->callback.word==code.word,
                  "Native interaction target registry/generation/callback changed or retired");
         }
+        const bool flow5=event_id==12&&argument==5;
+        GameFlow5EventSnapshot observation;
+        if(flow5){
+            observation.attempts=state_.flow5_event.attempts+1;observation.unobserved=state_.flow5_event.unobserved;
+            if(state_.flow5_event.accepted&&!state_.flow5_event.returned)++observation.unobserved;
+            observation.generation=state_.generation;observation.callback_word=code.word;
+            observation.suspended=vm_->current_witness();observation.enabled_before=vm_->context_enabled();
+            observation.manager9_before=runtime_&&runtime_->Snapshot().manager_request9;
+            try{observation.guards_before=Flow5Guards(*vm_);observation.guards_valid=true;}catch(...){}
+        }
         state_.owner_event_callback_word=code.word;
         state_.owner_event_result=vm_->post_owner_event(code,int32_t(event_id),argument);
-        ++state_.owner_event_calls;return {};
+        ++state_.owner_event_calls;
+        if(flow5){
+            observation.queue_result=state_.owner_event_result;observation.accepted=observation.queue_result==0;
+            observation.receipt=observation.accepted?vm_->last_callback_receipt():0;
+            observation.entered=vm_->current_witness();observation.callback_frame=observation.entered.frame_id;
+            observation.queued=observation.accepted&&(observation.suspended.event_envelope_present||observation.suspended.event_scope_depth);
+            state_.flow5_event=std::move(observation);
+        }
+        if(state_.owner_event_result!=0){std::ostringstream why;why<<"Owner event rejected event="<<event_id<<" argument="<<argument<<" queue_result="<<state_.owner_event_result;
+            return {GameFsCode::Unavailable,0,why.str()};}
+        return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+void GameActorScript::ObserveFlow5Event(const script::FrameTransition& t)noexcept{
+    auto& c=state_.flow5_event;if(!c.accepted||c.returned||t.callback_receipt!=c.receipt)return;
+    if(t.before.code_entry==0x8DA28&&t.before.frame_id==c.callback_frame&&t.opcode>=0x20&&t.opcode<=0x23){
+        if(c.calls<c.call_pcs.size()){c.call_pcs[c.calls]=t.before.current_pc;c.call_entries[c.calls]=t.after.code_entry;++c.calls;}
+        else ++c.unobserved;
+    }
+    if((t.opcode!=0x32&&t.opcode!=0x1C)||!t.before.event_envelope_present||t.after.event_envelope_present)return;
+    c.returned=true;c.return_pc=t.before.current_pc;c.return_opcode=t.opcode;c.restored=t.after;c.enabled_after=vm_->context_enabled();
+    c.restored_exact=GameFlow5EventRestored(c,t)&&c.enabled_before==c.enabled_after;
+    c.manager9_after=runtime_&&runtime_->Snapshot().manager_request9;
+    try{c.guards_after=Flow5Guards(*vm_);}catch(...){c.guards_valid=false;}
+}
+void GameActorScript::ObserveNotebookStore(const Value& ref,bool write)noexcept{
+    if(!write||!vm_||ref.kind!=Value::Kind::Reference)return;
+    try{
+        const auto found=bindings_.find(11);if(found==bindings_.end())return;
+        const auto& root=found->second;
+        if(root.kind!=Value::Kind::Reference||!vm_->stable_value_owner(root)||root.index==UINT16_MAX)return;
+        const auto h=vm_->peek_reference(root);if(h.kind!=Value::Kind::ArrayHeader||!(h.word&0xFFF))return;
+        auto slot=root;++slot.index;const auto row=vm_->peek_reference(slot);
+        if(row.kind!=Value::Kind::Reference||!vm_->stable_value_owner(row)||row.table!=ref.table)return;
+        const auto header=vm_->peek_reference(row);const auto cells=header.word&0xFFF;
+        if(header.kind!=Value::Kind::ArrayHeader||!cells||cells>64||ref.index<=row.index||uint32_t(ref.index)>uint32_t(row.index)+cells)return;
+        if(state_.notebook_slot0_stores.size()==64){++state_.notebook_slot0_stores_dropped;return;}
+        const auto w=vm_->current_witness();const auto* cmd=program_.command(vm_->pc());
+        GameNotebookStoreWitness s;s.field=uint32_t(ref.index)-row.index-1;s.pc=vm_->pc();s.entry=w.code_entry;
+        s.opcode=cmd?uint32_t(cmd->opcode):UINT32_MAX;s.table=uint32_t(ref.table);s.index=ref.index;
+        s.row_index=row.index;s.row_header=header.word;s.registered_table=uint32_t(root.table);s.registered_index=root.index;
+        s.registration=state_.notebook_registrations;s.run_id=w.run_id;s.generation=state_.generation;
+        s.executed=w.executed+1;s.frame=w.frame_id;s.value=PassiveValue(vm_->peek_reference(ref));
+        state_.notebook_slot0_stores.push_back(std::move(s));
+    }catch(...){++state_.notebook_slot0_stores_dropped;}
 }
 GameFsStatus GameActorScript::PostConversationInteraction(const GameOwnerEventTarget& target,uint64_t origin,bool owned_dispatch,int32_t& result){
     if(!vm_||!origin)return {GameFsCode::Unavailable,0,"Conversation transaction needs its live source activation"};
@@ -1265,6 +1357,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
             controls.valid=true;controls.error_code=0;
         }catch(...){/* Observation failure never changes input eligibility. */}
         out.vm_current=vm_->current_witness();out.normal_return=vm_->last_normal_return();out.farewell_return=vm_->last_normal_return(1);
+        try{out.flow5_guards=Flow5Guards(*vm_);out.flow5_guards_valid=true;}catch(...){}
         if(word_consumer_row_index_!=UINT32_MAX)out.word_consumer_row=ObserveWordRow(word_consumer_row_index_);
         if(out.vm_current.frame_captured&&out.vm_current.frame_values[0].kind==Value::Kind::Scalar&&out.vm_current.frame_values[0].word>>28==2){
             const auto index=out.vm_current.frame_values[0].word&0x0FFFFFFF;

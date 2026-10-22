@@ -7,6 +7,10 @@ namespace dokodemo::recovered {
 void GameMenuInput::BeginContext()noexcept {
     counters_.fill(-1);buttons_=armed_=active_=pending_=0;focused_=false;
 }
+void GameMenuInput::Disarm(uint32_t mask)noexcept {
+    buttons_&=~mask;armed_&=~mask;active_&=~mask;pending_&=~mask;
+    for(unsigned i=0;i<counters_.size();++i)if(mask&(1u<<i))counters_[i]=-1;
+}
 void GameMenuInput::Observe(const GameInputFrame& frame)noexcept {
     if(!frame.focused){BeginContext();return;}
     focused_=true;const auto raw=frame.buttons&0xFFFFFFu;

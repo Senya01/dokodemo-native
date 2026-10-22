@@ -46,6 +46,24 @@ struct GameInputFrame {
     uint64_t returned_owner=0,returned_generation=0;
     uint64_t main_menu_epoch=0; // native modal input boundary;not a game activation token
 };
+struct GameInputIdentity {
+    uint64_t script_generation=0,message_context=0,returned_owner=0,returned_generation=0,epoch=0;
+};
+// Validate the identity sampled into the packet. This is neither a returned
+// activation nor a new permission; it cannot restamp queued input.
+class GameOrdinaryInputIdentity final {
+  public:
+    bool Accept(const GameInputFrame& f,const GameInputIdentity& i)noexcept{
+        if(f.overflow_resync||!f.focused||!f.sequence||f.sequence<=sequence_
+           ||f.message_owner_generation!=i.script_generation||f.message_context!=i.message_context
+           ||f.returned_owner!=i.returned_owner||f.returned_generation!=i.returned_generation||f.main_menu_epoch!=i.epoch){++rejected_;return false;}
+        sequence_=f.sequence;return true;
+    }
+    uint64_t Sequence()const noexcept{return sequence_;}
+    uint32_t Rejected()const noexcept{return rejected_;}
+  private:
+    uint64_t sequence_=0;uint32_t rejected_=0;
+};
 // One prompt consumes only a focused release followed by a fresh press. A held
 // button at prompt creation/refocus cannot confirm it or a following prompt.
 class GameButtonGate {
@@ -91,6 +109,7 @@ class GameMenuInput {
   public:
     GameMenuInput() { BeginContext(); }
     void BeginContext() noexcept;
+    void Disarm(uint32_t mask) noexcept;
     void Observe(const GameInputFrame &) noexcept;
     void Tick() noexcept;
     int32_t Counter(uint32_t single_button) const noexcept;

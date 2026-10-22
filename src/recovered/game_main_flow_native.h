@@ -29,7 +29,7 @@ class GameMainFlow final {
   public:
     using EventDispatch=std::function<GameFsStatus(uint32_t,int32_t)>;
     GameFsStatus Initialize(GameActorRuntime&,EventDispatch);
-    bool Input(const GameInputFrame&);
+    bool Input(const GameInputFrame&,bool circle_owned_by_modal=false);
     GameFsStatus Tick(const GameMainFlowGate&);
     GameFsStatus BeginAvailableMenu();
     GameFsStatus AdvanceMenuOpening();

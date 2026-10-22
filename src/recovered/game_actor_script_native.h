@@ -118,7 +118,32 @@ struct GameMenuCallbackSnapshot {
     uint64_t menu_generation=0,receipt=0,callback_frame=0;
     script::VmStateWitness suspended,restored;
 };
+// Passive evidence for the existing phase5 Circle -> event12,arg5 route.
+// This neither grants input permission nor changes callback scheduling.
+struct GameFlow5EventSnapshot {
+    bool accepted=false,queued=false,returned=false,restored_exact=false;
+    bool enabled_before=false,enabled_after=false,guards_valid=false,manager9_before=false,manager9_after=false;
+    uint64_t generation=0,receipt=0,callback_frame=0;
+    uint32_t attempts=0,unobserved=0,callback_word=0,return_pc=0,return_opcode=0,calls=0;
+    int32_t queue_result=-1;
+    std::array<uint32_t,4> call_pcs{},call_entries{};
+    std::array<script::ValueWitness,4> guards_before{},guards_after{}; // Global9A76,Ctx2869,Ctx2866,Global6105
+    script::VmStateWitness suspended,entered,restored;
+};
+bool GameFlow5EventRestored(const GameFlow5EventSnapshot&,const script::FrameTransition&)noexcept;
+struct GameNotebookStoreWitness {
+    uint32_t field=0,pc=0,entry=0,opcode=0,table=0,index=0;
+    uint32_t row_index=0,row_header=0,registered_table=0,registered_index=0,registration=0;
+    uint64_t executed=0,frame=0,run_id=0,generation=0;
+    script::ValueWitness value;
+};
 struct GameActorScriptSnapshot {
+    std::vector<GameNotebookStoreWitness> notebook_slot0_stores;
+    uint32_t notebook_slot0_stores_dropped=0;
+    uint32_t notebook_registrations=0;
+    GameFlow5EventSnapshot flow5_event;
+    std::array<script::ValueWitness,4> flow5_guards{};
+    bool flow5_guards_valid=false;
     GameNotebookRows notebook_rows;
     GameNotebookRows notebook_after;
     bool menu_notebook_live=false;
@@ -294,6 +319,8 @@ class GameActorScript final {
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
     void ObserveWordSelection(const script::FrameTransition&)noexcept;
     void ObserveMenuCallback(const script::FrameTransition&)noexcept;
+    void ObserveFlow5Event(const script::FrameTransition&)noexcept;
+    void ObserveNotebookStore(const script::Value&,bool)noexcept;
     void RecordInventoryModelService(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,bool=true);
     script::Value Service(uint8_t,const std::vector<script::Value>&);
     script::Value GameService(const std::vector<script::Value>&);

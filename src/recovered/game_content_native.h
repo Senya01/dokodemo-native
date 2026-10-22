@@ -99,6 +99,8 @@ struct GameContentSnapshot {
     uint32_t main_menu_phase=0,main_menu_returns=0;
     uint32_t main_menu_inventory_requests=0,main_menu_inventory_completions=0,consumed_script_inventory_requests=0;
     uint64_t main_menu_input_epoch=0;
+    uint64_t ordinary_input_sequence=0;
+    uint32_t ordinary_input_rejected=0;
     bool main_menu_child_ready=false;
     uint32_t main_menu_inventory_request_phase=0,main_menu_inventory_request498=0;
     uint64_t main_menu_inventory_request_clock=0,main_menu_inventory_child_clock=0,main_menu_inventory_retire_clock=0;
@@ -200,6 +202,7 @@ class GameContentBoot final : public GameResourceSource {
     bool main_menu_entry_ready_=false;
     uint64_t main_menu_entry_owner_=0,main_menu_entry_generation_=0;
     uint64_t main_menu_last_sequence_=0;
+    GameOrdinaryInputIdentity ordinary_input_identity_;
     bool MainMenuEligible()const;
     enum class MenuInputRoute { NoMatch,Consumed,Error };
     MenuInputRoute MainMenuInput(const GameInputFrame&);

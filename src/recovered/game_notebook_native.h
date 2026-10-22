@@ -4,9 +4,20 @@
 
 namespace dokodemo::recovered {
 class GameFontResource;
+// Optional passive probe for the source preview's index0. It is separate from
+// the accepted rows1..N image and never grants populated/preview admission.
+struct GameNotebookSlotObservation {
+    bool valid=false;
+    uint32_t error=0,index=0,row_table=0,row_index=0,row_header=0,cells=0;
+    uint64_t run_id=0,script_generation=0;
+    std::array<script::ValueWitness,2> first{};
+    std::array<uint8_t,32> sha{};
+};
+GameNotebookSlotObservation GameObserveNotebookSlot(const script::Vm&,uint64_t,const script::Value&,uint32_t)noexcept;
 // NativeTypedScriptArrayReference: the existing native VM representation of
 // GAME11/manager+10. It is not a new proof of the original22F38 pointer resolver.
 struct GameNotebookRows {
+    GameNotebookSlotObservation slot0;
     bool valid=false;
     uint64_t script_generation=0,run_id=0;
     uint32_t root_table=0,root_index=0,root_header=0,records=0,populated=0,cells=0;

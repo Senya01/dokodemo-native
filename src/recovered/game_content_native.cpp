@@ -540,10 +540,15 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             }
             return main_menu_.Input(frame);
         }
+        const auto returned=returned_interaction_.Snapshot();
+        const bool current_input=ordinary_input_identity_.Accept(frame,{state_.actor_script.generation,state_.actor_message_contexts,
+               returned.owner,returned.generation,state_.main_menu_input_epoch});
+        state_.ordinary_input_sequence=ordinary_input_identity_.Sequence();state_.ordinary_input_rejected=ordinary_input_identity_.Rejected();
+        if(!current_input)return false; // stale packets cannot erase already accepted prefix edges
         const auto menu_route=MainMenuInput(frame);
         if(menu_route!=MenuInputRoute::NoMatch)return menu_route==MenuInputRoute::Consumed;
         if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
-        if(!inventory_.Modal())main_flow_.Input(frame);
+        if(!inventory_.Modal())main_flow_.Input(frame,state_.actor_script.awaiting_message||state_.actor_script.awaiting_choice||state_.actor_script.awaiting_input);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
         if(posted)return true;
         // Recheck live owners before the queue call;the published input token
