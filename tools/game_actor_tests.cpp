@@ -25,6 +25,10 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_inventory_decorate_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_inventory_discard_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -330,6 +334,10 @@ GameInventoryActionRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDecorateRegressionChecks();
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameInventoryDiscardRegressionChecks();
 #endif
 
     OwnedCtxReferenceBranchChecks();

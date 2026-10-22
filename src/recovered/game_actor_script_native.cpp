@@ -518,9 +518,18 @@ GameFsStatus GameActorScript::Tick() {
             Need(rowref.kind==Value::Kind::Reference&&uint32_t(rowref.table)==action.row_table&&rowref.index==action.row_index
                  &&vm_->load_reference(rowref).word==action.row_header,"Inventory action source row replaced");
             CaptureInventoryItems();const auto& item=state_.inventory_items.at(action.row);
-            Need(item.valid&&item.id==action.item_id,"Inventory action changed item identity");
+            if(action.event==16){
+                Need(!item.valid&&action.row_cells==10,"Discard row remained valid or changed declared shape");
+                for(uint32_t i=0;i<action.row_cells;++i){const auto v=vm_->load_reference(vm_->indexed_reference(rowref,i));
+                    action.after_row_words[i]=v.word;action.after_row_kinds[i]=uint8_t(v.kind);
+                    Need(v.kind==Value::Kind::Scalar&&v.word==0,"Discard did not clear every actual row cell to canonical NIL");}
+            }else Need(item.valid&&item.id==action.item_id,"Inventory action changed item identity");
             action.after_words=item.source_words;action.after_kinds=item.source_kinds;
             action.after_controls=item.control_words;action.after_control_kinds=item.control_kinds;
+            if(action.event==16){
+                for(uint32_t i=0;i<3;++i){action.after_words[i]=action.after_row_words[i+5];action.after_kinds[i]=action.after_row_kinds[i+5];
+                    const auto n=i==0?3u:i+7;action.after_controls[i]=action.after_row_words[n];action.after_control_kinds[i]=action.after_row_kinds[n];}
+            }else{
             Need(item.source_kinds[0]==uint8_t(Value::Kind::Scalar)&&item.source_words[0]==(action.event==15?0x10000001u:0x10000000u),"Inventory action source flag write mismatch");
             if(action.event==13){
                 Need(item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&(item.source_words[1]>>28)==2
@@ -535,8 +544,12 @@ GameFsStatus GameActorScript::Tick() {
                 Need(item.control_words[1]==action.layout_words[0],"Decoration did not retain actual layout selector");
                 const auto room=runtime_->Snapshot();Need(slot>=0&&size_t(slot)<room.room_models.size(),"Decoration source model allocation unavailable");
                 const auto& owner=room.room_models[size_t(slot)];
-                Need(owner.active&&!owner.retirement&&owner.resource==item.id&&owner.category==0&&owner.selector==Value{Value::Kind::Scalar,item.control_words[1]}.signed_integer()
-                     &&owner.source_x==float(Value{Value::Kind::Scalar,item.control_words[2]}.signed_integer()),"Decoration returned a foreign/unsupported model owner");
+                // Match GAME31/33's scalar conversion: the source layout may
+                // retain canonical NIL as numeric selector0. Do not retag it.
+                const auto selector=Number(vm_->load_reference(vm_->indexed_reference(rowref,8)));
+                const auto x=Number(vm_->load_reference(vm_->indexed_reference(rowref,9)));
+                Need(owner.active&&!owner.retirement&&owner.resource==item.id&&owner.category==0&&owner.selector==selector
+                     &&owner.source_x==float(x),"Decoration returned a foreign/unsupported model owner");
             }else if(action.before_words[1]>>28){
                 Need(item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&item.source_kinds[2]==uint8_t(Value::Kind::Scalar)
                      &&item.source_words[1]==0&&item.source_words[2]==0&&item.control_kinds[2]==uint8_t(Value::Kind::Scalar)
@@ -546,6 +559,7 @@ GameFsStatus GameActorScript::Tick() {
             }else{
                 Need(item.source_words[1]==action.before_words[1]&&item.source_words[2]==action.before_words[2]
                      &&item.source_kinds[1]==action.before_kinds[1]&&item.source_kinds[2]==action.before_kinds[2],"Inventory flag action changed placement");
+            }
             }
             action.pending=false;action.completed=true;++action.completions;
         }
@@ -644,7 +658,7 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
     try{
         Need(state_.live&&vm_&&state_.inventory_requested&&generation==state_.inventory_requests&&!state_.inventory_action.pending,
              "Inventory action owner/generation unavailable");
-        Need((event==13||event==14||event==15)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
+        Need((event==13||event==14||event==15||event==16)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input&&!vm_->context_enabled()
              &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Inventory action requires its suspended nonmodal callback owner");
         CaptureInventoryItems();const auto item=state_.inventory_items.at(size_t(row));
@@ -667,6 +681,7 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
         const auto header=vm_->load_reference(rowref);const auto before=vm_->current_witness();const auto target=OwnerEventTarget();
         Need(rowref.kind==Value::Kind::Reference&&header.kind==Value::Kind::ArrayHeader&&before.valid&&!before.event_envelope_present
              &&target.callback.word==0x7008DA28u,"Inventory source row/callback identity");
+        if(event==16)Need((header.word&0xFFF)==10,"Discard finite actual ten-cell row domain");
         Value definition;uint32_t definition_mask=0,definition_width=0;
         if(event==13){
             Value definitions;definitions.kind=Value::Kind::Reference;definitions.table=script::Table::Global;definitions.index=0x44ED;
@@ -683,6 +698,7 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
             a.generation=generation;a.receipt=out.receipt=vm_->last_callback_receipt();a.callback_frame=entered.frame_id;
             a.event=event;a.row=uint32_t(row);a.item_id=item.id;a.before_words=item.source_words;a.before_kinds=item.source_kinds;
             a.before_controls=item.control_words;a.before_control_kinds=item.control_kinds;a.gate_word=gate_word;
+            if(event==16){a.row_cells=10;for(uint32_t i=0;i<a.row_cells;++i){const auto v=vm_->load_reference(vm_->indexed_reference(rowref,i));a.before_row_words[i]=v.word;a.before_row_kinds[i]=uint8_t(v.kind);}}
             if(event==13){a.definition_table=uint32_t(definition.table);a.definition_index=definition.index;
                 a.definition_header=vm_->load_reference(definition).word;a.definition_mask=definition_mask;a.definition_width=definition_width;}
             a.row_table=uint32_t(rowref.table);a.row_index=rowref.index;a.row_header=header.word;a.suspended=before;

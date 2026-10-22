@@ -28,6 +28,10 @@ struct GameInventorySnapshot {
     uint32_t retirement_requests=0,retirements=0,navigation=0,action_opens=0,action_cancels=0;
     uint32_t draw_frames=0,quads=0,glyphs=0,resource_nodes=0,resource_clips=0,texture_count=0;
     uint32_t action_selection=0,action_frontier=0,action_events=0,action_completions=0;
+    bool discard_confirmation=false;
+    uint32_t discard_prompts=0,discard_cancelled=0,discard_accepted=0;
+    int32_t discard_dialog_state=3,discard_result=0,discard_row=-1,discard_item_id=-1;
+    float discard_progress=0;
     bool action_pending=false;uint64_t action_receipt=0;int32_t action_queue_result=-1;
     uint32_t action_event=0;int32_t action_row=-1;
     std::string selected_name,selected_description,error;
@@ -35,8 +39,8 @@ struct GameInventorySnapshot {
     std::vector<GameInventoryItem> items;
 };
 // Source41 -> resource14. Typed native ownership and modal SELECT layout;
-// List/filter/navigation and owned script events13/14/15. The VM owns all
-// placement/flag writes; confirmed discard16 remains an explicit frontier.
+// List/filter/navigation and owned script events13..16. Source result1
+//confirmation precedes16;NativeInventoryTRCXYesZNo is a nonmatching panel/input adapter.
 class GameInventory final {
   public:
     GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={});
@@ -53,9 +57,11 @@ class GameInventory final {
     std::shared_ptr<GameUiResource> resource_;
     GameUiInstance clone_;
     GameMenuInput input_;
+    GameDialogController discard_dialog_;
     GameTransition* transition_=nullptr;
     bool home_=true;
     GameInventoryActionDispatch dispatch_;
+    GameFsStatus DispatchAction(uint32_t event,int32_t row);
     void Rebuild();
     void Select();
     GameFsStatus Initialize(GameResourceSource&,GameTransition&);

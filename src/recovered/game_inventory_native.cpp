@@ -13,7 +13,7 @@ GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool ho
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory row index/provenance mismatch"};
     const auto generation=state_.generation+1;
     const auto requests=state_.requests+1,retired=state_.retirements;
-    state_={};state_.generation=generation;state_.requests=uint32_t(requests);state_.retirements=retired;
+    discard_dialog_.Retire();state_={};state_.generation=generation;state_.requests=uint32_t(requests);state_.retirements=retired;
     state_.items=std::move(items);state_.requested=state_.request14=true;state_.loader498=2;state_.phase=1;
     home_=home_context;dispatch_=std::move(dispatch);input_.BeginContext();return {};
 }
@@ -24,6 +24,17 @@ GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory action row identity"};
     state_.items=std::move(items);state_.action_pending=false;++state_.action_completions;
     Rebuild();input_.BeginContext();return {};
+}
+GameFsStatus GameInventory::DispatchAction(uint32_t event,int32_t row){
+    if(!dispatch_)return {GameFsCode::Unavailable,0,"Inventory source action dispatcher absent"};
+    const auto admitted=dispatch_(state_.generation,event,row);
+    state_.action_queue_result=admitted.queue_result;input_.BeginContext();
+    if(!admitted.status)return admitted.status;
+    if(admitted.queue_result==1){state_.actions=true;state_.stateB30=1;return {};}
+    if(admitted.queue_result!=0||!admitted.receipt)return {GameFsCode::Unavailable,0,"Inventory action queue did not accept its owner"};
+    state_.select_result=int32_t(state_.action_selection+1);state_.action_pending=true;state_.action_receipt=admitted.receipt;state_.action_event=event;
+    state_.action_row=row;++state_.action_events;state_.actions=false;state_.stateB30=0;
+    return {};
 }
 void GameInventory::Rebuild(){
     auto& rows=state_.filtered_rows;rows.clear();
@@ -69,7 +80,12 @@ GameFsStatus GameInventory::Initialize(GameResourceSource& source,GameTransition
 }
 bool GameInventory::Input(const GameInputFrame& frame){
     if(!state_.live||state_.phase!=3||state_.action_pending)return false;
-    input_.Observe(frame);state_.input_focused=frame.focused;return true;
+    state_.input_focused=frame.focused;
+    if(state_.discard_confirmation){
+        if(frame.overflow_resync){auto lost=frame;lost.focused=false;lost.buttons=0;(void)discard_dialog_.Input(lost);return false;}
+        return discard_dialog_.Input(frame);
+    }
+    input_.Observe(frame);return true;
 }
 GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& transition){
     try{
@@ -85,6 +101,17 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
             Need(clone_.ShowRoot(0,false),"Inventory close root");auto* control=clone_.Control(0);control->mode=control->active=0;
             state_.visible=false;state_.stateB2C=3;state_.phase=5;++state_.close_completions;
         }else if(state_.phase==3&&!state_.action_pending){
+            if(state_.discard_confirmation){
+                discard_dialog_.Tick();const auto d=discard_dialog_.Snapshot();
+                state_.discard_dialog_state=d.state;state_.discard_result=d.result;state_.discard_progress=d.progress;
+                if(d.state==3){
+                    state_.discard_confirmation=false;input_.BeginContext();
+                    Need(state_.discard_row==state_.selected_row&&state_.discard_item_id==state_.selected_id
+                         &&state_.selected_row>=0&&state_.items.at(size_t(state_.selected_row)).valid,"Discard confirmation row owner changed");
+                    if(d.result==1){++state_.discard_accepted;const auto status=DispatchAction(16,state_.discard_row);if(!status)return status;}
+                    else{++state_.discard_cancelled;state_.actions=true;state_.stateB30=1;}
+                }
+            }else{
             input_.Tick();
             if(state_.actions){
                 const uint32_t count=home_?5:3;
@@ -93,15 +120,13 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
                 else if(input_.First(Cross)||(input_.First(Circle)&&state_.action_selection==count-1)){
                     state_.select_result=input_.First(Cross)?0:int32_t(count);state_.actions=false;state_.stateB30=0;++state_.action_cancels;input_.BeginContext();
                 }else if(input_.First(Circle)){
-                    const auto event=home_&&state_.action_selection==0?13u:home_&&state_.action_selection==1?14u:state_.action_selection==(home_?2u:0u)?15u:0u;
-                    if(!event||!dispatch_){state_.action_frontier=0x1B4C0;return {GameFsCode::Unavailable,0,"Inventory discard action is not implemented"};}
-                    const auto admitted=dispatch_(state_.generation,event,state_.selected_row);
-                    state_.action_queue_result=admitted.queue_result;input_.BeginContext();
-                    if(!admitted.status)return admitted.status;
-                    if(admitted.queue_result==1)return {}; // retain menu; fresh release/press retry
-                    if(admitted.queue_result!=0||!admitted.receipt)return {GameFsCode::Unavailable,0,"Inventory action queue did not accept its owner"};
-                    state_.select_result=int32_t(state_.action_selection+1);state_.action_pending=true;state_.action_receipt=admitted.receipt;state_.action_event=event;
-                    state_.action_row=state_.selected_row;++state_.action_events;state_.actions=false;state_.stateB30=0;
+                    const auto event=home_&&state_.action_selection==0?13u:home_&&state_.action_selection==1?14u:state_.action_selection==(home_?2u:0u)?15u:16u;
+                    if(event==16){
+                        Need(discard_dialog_.Begin(0,0),"Inventory TRC confirmation already active");
+                        state_.discard_row=state_.selected_row;state_.discard_item_id=state_.selected_id;
+                        state_.discard_confirmation=true;state_.discard_dialog_state=0;state_.discard_result=0;state_.discard_progress=0;
+                        ++state_.discard_prompts;state_.actions=false;state_.stateB30=2;input_.BeginContext();
+                    }else{const auto status=DispatchAction(event,state_.selected_row);if(!status)return status;}
                 }
             }else{
                 //365F4 priority and first-press-only wrapping at each bound.
@@ -116,6 +141,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
                 else if(input_.First(Cross)){state_.stateB2C=2;state_.phase=4;++state_.close_requests;transition.CloseWipe(false);input_.BeginContext();}
             }
         }
+        }
         if(state_.phase==5){
             //1A9B4:469 and return1 are identical in pending and completed paths.
             state_.loader468=1;state_.loader469=1;state_.loader498=0;state_.request14=state_.requested=false;
@@ -125,6 +151,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
     }catch(const std::exception& e){state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
 void GameInventory::Close(){
+    discard_dialog_.Retire();state_.discard_confirmation=false;state_.discard_dialog_state=3;
     clone_.Close();resource_.reset();input_.BeginContext();transition_=nullptr;dispatch_={};state_.action_pending=false;
     state_.live=state_.owner480=state_.visible=state_.actions=state_.requested=state_.request14=state_.retirement_pending=false;
     state_.phase=7;state_.loader464=state_.loader498=0;
@@ -165,6 +192,13 @@ GameFsStatus GameInventory::Draw(GameGraphics& graphics,const GameFontResource& 
             if(i-first==state_.action_selection)graphics.FillRectangle(114,y-1,464,y+25,0xFFE3C996,65535);
             const auto status=text({all[i]},120,y,340);if(!status)return status;
         }
+    }
+    if(state_.discard_confirmation){
+        //NativeInventoryTRCXYesZNo: retained DA62C text, native TRC timing;
+        //source default focus/physical mapping/CB2A pixels are not claimed.
+        if(!graphics.FillRectangle(62,80,454,172,0xFFFDF5DF,65535))return {GameFsCode::Unavailable,0,"Inventory TRC native panel"};
+        const auto prompt=text({"\x96\x7B\x93\x96\x82\xC9\x82\xB7\x82\xC4\x82\xDC\x82\xB7\x82\xA9\x81\x48"},76,91,340);if(!prompt)return prompt;
+        const auto buttons=text({"\x82\xCD\x82\xA2 (X)    \x82\xA2\x82\xA2\x82\xA6 (Z)"},76,127,340);if(!buttons)return buttons;
     }
     ++state_.draw_frames;return {};
 }
