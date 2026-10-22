@@ -688,15 +688,31 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
     return {GameFsCode::Unavailable, 0, "Actor phase owner expired"};
   //490E0/499F8: request,disable on one owner phase,release on the next.
   //The clone and its borrowed assets stay owned until this second phase.
+  ++state_.room_owner_phases;
   for(size_t i=0;i<models_.size();++i){
     auto& slot=models_[i];auto& owner=state_.room_models[i];
     if(!slot.active||!owner.retirement)continue;
-    if(owner.retirement==1){owner.retirement=2;continue;}
+    auto record=std::find_if(state_.model_retirement_history.begin(),state_.model_retirement_history.end(),
+      [&](const auto& r){return r.request==slot.retirement_request;});
+    if(owner.retirement==1){
+      owner.retirement=2;
+      if(record!=state_.model_retirement_history.end()){
+        record->disabled_phase=state_.room_owner_phases;
+        record->assets_retained_at_disable=slot.asset&&slot.asset->Live()&&!slot.retirement_watch.expired();
+        record->clone_retained_at_disable=slot.clone.Asset()==slot.asset.get();
+        record->nodes_at_disable=slot.asset->Statistics().nodes;record->motions_at_disable=uint32_t(slot.motions.size());
+      }
+      continue;
+    }
     const auto statistics=slot.asset->Statistics();
     state_.model_nodes-=statistics.nodes;state_.model_vertices-=statistics.vertices;
     state_.model_triangles-=statistics.triangles;state_.motion_templates-=uint32_t(slot.motions.size());
     slot.clone.Close();slot.motions.clear();slot.asset.reset();slot.active=false;
     owner.active=false;owner.retirement=0;--state_.model_slots;++state_.model_retirements;
+    if(record!=state_.model_retirement_history.end()){
+      record->destroyed_phase=state_.room_owner_phases;record->asset_owner_expired=slot.retirement_watch.expired();
+      record->clone_owner_cleared=slot.clone.Asset()==nullptr&&slot.motions.empty();
+    }
   }
   const auto scene = UpdateScene();
   if (!scene)
@@ -945,7 +961,7 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   slot.asset = std::move(asset);
   slot.clone = std::move(clone);
   slot.motions = std::move(motions);
-  slot.active = true;
+  slot.active = true;slot.retirement_watch.reset();slot.retirement_request=0;
   //Finite native connection of source node ownership and source scalar X.
   state_.room_models[index]={true,0,++state_.model_publications,resource,category,motion,x,anchor,root};
   const auto statistics = slot.asset->Statistics();
@@ -973,7 +989,14 @@ GameFsStatus GameActorRuntime::UpdateModel(int32_t id,int32_t selector,float x){
 GameFsStatus GameActorRuntime::RetireModel(int32_t id){
   if(!Live()||id<0||size_t(id)>=models_.size())return {GameFsCode::Unavailable,0,"GAME32 model owner/slot domain"};
   auto& slot=models_[size_t(id)];auto& owner=state_.room_models[size_t(id)];
-  if(slot.active){owner.retirement=1;++state_.model_retire_requests;} //490C8 repeats restart request7=1.
+  if(slot.active){
+    //490C8 repeats restart request7=1;history is passive and bounded.
+    if(state_.model_retirement_history.size()==16){state_.model_retirement_history.erase(state_.model_retirement_history.begin());++state_.model_retirement_history_dropped;}
+    GameModelRetirementWitness record;record.request=uint64_t(state_.model_retire_requests)+1;
+    record.generation=owner.generation;record.requested_phase=state_.room_owner_phases;record.slot=id;record.resource=owner.resource;
+    state_.model_retirement_history.push_back(record);slot.retirement_watch=slot.asset;slot.retirement_request=record.request;
+    owner.retirement=1;++state_.model_retire_requests;
+  }
   return {};
 }
 GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay) {

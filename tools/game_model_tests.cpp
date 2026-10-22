@@ -376,15 +376,23 @@ void RoomModelLifecycle(){
           &&room.Snapshot().model_slots==2&&room.Snapshot().room_models[0].resource==170,"GAME33 updates only controller fields without reload/count change");
     Check(!room.UpdateModel(a,1,0)&&room.Snapshot().room_models[0].source_x==7,"missing authored scene owner transactional refusal");
     Check(bool(room.RetireModel(a))&&room.Snapshot().room_models[0].retirement==1&&!resources.leases[0].expired(),"retire request retains clone and borrowed source");
+    {const auto r=room.Snapshot();const auto& w=r.model_retirement_history.back();Check(w.request==1&&w.slot==a&&w.resource==170&&w.generation==r.room_models[0].generation
+       &&w.requested_phase==r.room_owner_phases&&!w.disabled_phase&&!w.destroyed_phase&&!w.asset_owner_expired,"request witness cannot precredit disable/destruction");}
     Check(bool(room.AdvanceActorFrame())&&room.Snapshot().room_models[0].retirement==2&&room.Snapshot().model_slots==2
           &&!resources.leases[0].expired(),"first source owner phase disables but retains");
+    {const auto r=room.Snapshot();const auto& w=r.model_retirement_history.back();Check(w.disabled_phase==w.requested_phase+1&&!w.destroyed_phase&&w.assets_retained_at_disable
+       &&w.clone_retained_at_disable&&w.nodes_at_disable>0&&!w.asset_owner_expired&&!resources.leases[0].expired(),"natural disable retains actual clone asset and borrowed lease");}
     Check(bool(room.RetireModel(a))&&room.Snapshot().room_models[0].retirement==1,"repeated source request restarts retirement");
     Check(bool(room.AdvanceActorFrame())&&!resources.leases[0].expired()&&bool(room.AdvanceActorFrame()),"two natural phases after repeated request");
     s=room.Snapshot();Check(!s.room_models[0].active&&s.model_slots==1&&s.model_retirements==1&&resources.leases[0].expired()
           &&!resources.leases[1].expired(),"only selected model source retired after deferred destruction");
+    {const auto& w=s.model_retirement_history.back();const auto& first=s.model_retirement_history.front();Check(w.request==2&&w.requested_phase==1&&w.disabled_phase==2&&w.destroyed_phase==3
+       &&w.asset_owner_expired&&w.clone_owner_cleared&&!first.destroyed_phase,"repeated request has distinct history;only newest request destroys the exact asset owner");}
     const auto old=s.room_models[0].generation;int32_t reused=-1;
     resources.missing=true;Check(!room.CreateModel(170,0,0,2,reused)&&reused==-1&&room.Snapshot().model_slots==1,"missing resource never publishes recycled slot");
     resources.missing=false;Check(bool(room.CreateModel(170,0,0,2,reused))&&reused==0&&room.Snapshot().room_models[0].generation>old,"first inactive slot has fresh native generation");
+    for(unsigned i=0;i<20;++i)Check(bool(room.RetireModel(b)),"bounded passive history repeated source request");
+    {const auto r=room.Snapshot();Check(r.model_retirement_history.size()==16&&r.model_retirement_history_dropped==6&&r.model_slots==2&&!resources.leases[1].expired(),"history overflow drops evidence only,never retires a source owner");}
     Check(bool(room.RetireModel(b))&&bool(room.RetireModel(reused))&&bool(room.AdvanceActorFrame())&&bool(room.AdvanceActorFrame())
           &&room.Snapshot().model_slots==0,"final room slots retire naturally");
     GameGraphics graphics;GameGraphicsConfig config;config.width=config.height=config.stride=32;config.scissor_right=config.scissor_bottom=32;

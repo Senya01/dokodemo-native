@@ -36,6 +36,14 @@ struct GameRoomModelSlotSnapshot {
 // Source24300..24358: infinite repeat or final root pop produces258.
 // This does not complete the command or produce25E/VM54.
 GameActorLoopStep AdvanceActorLoop8021(std::vector<GameActorLoopFrame>& frames,uint32_t pc);
+//Passive native owner history;no strong resource/lease references escape.
+struct GameModelRetirementWitness {
+  uint64_t request=0,generation=0,requested_phase=0,disabled_phase=0,destroyed_phase=0;
+  int32_t slot=-1,resource=-1;
+  uint32_t nodes_at_disable=0,motions_at_disable=0;
+  bool assets_retained_at_disable=false,clone_retained_at_disable=false;
+  bool asset_owner_expired=false,clone_owner_cleared=false;
+};
 struct GameActorRuntimeSnapshot {
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
@@ -66,6 +74,9 @@ struct GameActorRuntimeSnapshot {
            model_triangles = 0;
   uint32_t model_publications=0,model_updates=0,model_retire_requests=0,model_retirements=0;
   std::array<GameRoomModelSlotSnapshot,100> room_models{};
+  uint64_t room_owner_phases=0;
+  uint32_t model_retirement_history_dropped=0;
+  std::vector<GameModelRetirementWitness> model_retirement_history; //last16 requests
   uint32_t motion_templates = 0, model_frames = 0;
   uint64_t model_pixel_writes = 0;
   uint32_t visible_pixels = 0;
@@ -168,6 +179,8 @@ private:
     std::shared_ptr<GameModelAsset> asset;
     GameModelClone clone;
     std::vector<GameModelMotion> motions;
+    std::weak_ptr<GameModelAsset> retirement_watch;
+    uint64_t retirement_request=0;
   };
   std::array<ModelSlot, 100> models_;
   GameActorRuntimeSnapshot state_;

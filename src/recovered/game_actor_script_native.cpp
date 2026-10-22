@@ -520,7 +520,7 @@ GameFsStatus GameActorScript::Tick() {
             CaptureInventoryItems();const auto& item=state_.inventory_items.at(action.row);
             Need(item.valid&&item.id==action.item_id,"Inventory action changed item identity");
             action.after_words=item.source_words;action.after_kinds=item.source_kinds;
-            action.after_controls=item.control_words;
+            action.after_controls=item.control_words;action.after_control_kinds=item.control_kinds;
             Need(item.source_kinds[0]==uint8_t(Value::Kind::Scalar)&&item.source_words[0]==(action.event==15?0x10000001u:0x10000000u),"Inventory action source flag write mismatch");
             if(action.event==13){
                 Need(item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&(item.source_words[1]>>28)==2
@@ -538,7 +538,11 @@ GameFsStatus GameActorScript::Tick() {
                 Need(owner.active&&!owner.retirement&&owner.resource==item.id&&owner.category==0&&owner.selector==Value{Value::Kind::Scalar,item.control_words[1]}.signed_integer()
                      &&owner.source_x==float(Value{Value::Kind::Scalar,item.control_words[2]}.signed_integer()),"Decoration returned a foreign/unsupported model owner");
             }else if(action.before_words[1]>>28){
-                Need(item.source_words[1]==0&&item.source_words[2]==0&&item.control_words[2]==0x20000000u,"Putaway did not clear source placement");
+                Need(item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&item.source_kinds[2]==uint8_t(Value::Kind::Scalar)
+                     &&item.source_words[1]==0&&item.source_words[2]==0&&item.control_kinds[2]==uint8_t(Value::Kind::Scalar)
+                     &&item.control_words[2]==0x20000000u,"Putaway did not clear typed source placement");
+                for(uint32_t i=0;i<2;++i)Need(item.control_words[i]==action.before_controls[i]&&item.control_kinds[i]==action.before_control_kinds[i],
+                     "Putaway changed source category or retained selector");
             }else{
                 Need(item.source_words[1]==action.before_words[1]&&item.source_words[2]==action.before_words[2]
                      &&item.source_kinds[1]==action.before_kinds[1]&&item.source_kinds[2]==action.before_kinds[2],"Inventory flag action changed placement");
@@ -678,8 +682,8 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
             state_.inventory_action={};auto& a=state_.inventory_action;a.pending=true;a.completions=count;
             a.generation=generation;a.receipt=out.receipt=vm_->last_callback_receipt();a.callback_frame=entered.frame_id;
             a.event=event;a.row=uint32_t(row);a.item_id=item.id;a.before_words=item.source_words;a.before_kinds=item.source_kinds;
-            a.before_controls=item.control_words;
-            if(event==13){a.gate_word=gate_word;a.definition_table=uint32_t(definition.table);a.definition_index=definition.index;
+            a.before_controls=item.control_words;a.before_control_kinds=item.control_kinds;a.gate_word=gate_word;
+            if(event==13){a.definition_table=uint32_t(definition.table);a.definition_index=definition.index;
                 a.definition_header=vm_->load_reference(definition).word;a.definition_mask=definition_mask;a.definition_width=definition_width;}
             a.row_table=uint32_t(rowref.table);a.row_index=rowref.index;a.row_header=header.word;a.suspended=before;
         }

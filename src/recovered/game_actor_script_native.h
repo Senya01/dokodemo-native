@@ -51,6 +51,7 @@ struct GameInventoryActionSnapshot {
     int32_t item_id=-1;std::array<uint32_t,3> before_words{},after_words{};
     std::array<uint8_t,3> before_kinds{},after_kinds{};
     std::array<uint32_t,3> before_controls{},after_controls{};
+    std::array<uint8_t,3> before_control_kinds{},after_control_kinds{};
     uint32_t gate_word=0,definition_table=0,definition_index=0,definition_header=0;
     uint32_t definition_mask=0,definition_width=0,layout_table=0,layout_index=0,layout_header=0;
     std::array<uint32_t,2> layout_words{};
