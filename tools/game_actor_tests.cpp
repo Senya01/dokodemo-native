@@ -75,6 +75,7 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_menu_render_retirement_regressions.h"
 #endif
+#include "game_notebook_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -473,6 +474,7 @@ GameMenuRoomRegressionChecks();
 GameMenuRenderRetirementRegressionChecks();
 #endif
 
+    ::GameNotebookRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDecorateRegressionChecks();

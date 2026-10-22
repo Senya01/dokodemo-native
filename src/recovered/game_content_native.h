@@ -91,6 +91,11 @@ struct GameContentSnapshot {
     GameActorScriptSnapshot actor_script;
     GameMainFlowSnapshot main_flow;
     GameMainMenuSnapshot main_menu;
+    GameNotebookSnapshot notebook;
+    GameNotebookRows notebook_observed;
+    uint32_t main_menu_notebook_requests=0,main_menu_notebook_completions=0;
+    uint32_t source469_resource=0;
+    uint64_t source469_generation=0,source469_poll=0;
     uint32_t main_menu_phase=0,main_menu_returns=0;
     uint32_t main_menu_inventory_requests=0,main_menu_inventory_completions=0,consumed_script_inventory_requests=0;
     uint64_t main_menu_input_epoch=0;
@@ -186,6 +191,9 @@ class GameContentBoot final : public GameResourceSource {
     GameActorScript actor_script_;
     GameMainFlow main_flow_;
     GameMainMenu main_menu_;
+    GameNotebook notebook_;
+    uint64_t inventory469_generation_=0,inventory469_poll_=0;
+    void PublishInventory469();
     GameButtonGate main_menu_entry_gate_;
     GameOwnerEventTarget main_menu_target_;
     GameMainMenuLease main_menu_lease_;
@@ -193,7 +201,8 @@ class GameContentBoot final : public GameResourceSource {
     uint64_t main_menu_entry_owner_=0,main_menu_entry_generation_=0;
     uint64_t main_menu_last_sequence_=0;
     bool MainMenuEligible()const;
-    bool MainMenuInput(const GameInputFrame&);
+    enum class MenuInputRoute { NoMatch,Consumed,Error };
+    MenuInputRoute MainMenuInput(const GameInputFrame&);
     GameFsStatus CheckMainMenuLease()const;
     bool TickMainMenu(GameGraphics&);
     GamePostModalInteraction post_modal_;
@@ -205,6 +214,9 @@ class GameContentBoot final : public GameResourceSource {
     PackageView inventory_package_;
     BpDirectory inventory_directory_;
     bool inventory_mounted_=false;
+    PackageView notebook_package_;
+    BpDirectory notebook_directory_;
+    bool notebook_mounted_=false;
     PackageView room_package_;
     BpDirectory room_directory_;
     bool room_mounted_=false;

@@ -106,6 +106,8 @@ class GameUiInstance final {
               GameUiMatrix instance_base = {}, uint32_t first_group = 0,
               uint32_t last_group = UINT32_MAX,int32_t explicit_root=-1) const;
     bool SetSourceCallback(uint32_t node, uint32_t source_pc);
+    // Passive native Draw traversal transform; no callback, raster or mutation.
+    bool WorldMatrix(uint32_t node,GameUiMatrix& out)const;
     bool ShowRoot(uint32_t index, bool visible = true);
     uint32_t VisibleRoots() const;
     GameUiNode *Node(uint32_t index);

@@ -51,6 +51,14 @@ bool GameGraphics::Inside(int32_t x, int32_t y) const noexcept {
         && (!c.scissor || (uint32_t(x) >= c.scissor_left && uint32_t(x) < c.scissor_right
             && uint32_t(y) >= c.scissor_top && uint32_t(y) < c.scissor_bottom));
 }
+bool GameGraphics::SetScissor(int32_t left,int32_t top,int32_t right,int32_t bottom){
+    std::lock_guard<std::mutex> lock(mutex_);if(!state_.live||left>right||top>bottom)return false;
+    auto& c=state_.config;
+    c.scissor_left=uint32_t((std::clamp)(left,0,int32_t(c.width)));
+    c.scissor_right=uint32_t((std::clamp)(right,0,int32_t(c.width)));
+    c.scissor_top=uint32_t((std::clamp)(top,0,int32_t(c.height)));
+    c.scissor_bottom=uint32_t((std::clamp)(bottom,0,int32_t(c.height)));return true;
+}
 void GameGraphics::Pixel(uint32_t x, uint32_t y, uint32_t color, uint16_t depth) noexcept {
     const auto& c = state_.config;
     const auto at = size_t(y) * c.stride + x;

@@ -339,6 +339,35 @@ bool GameUiInstance::SetSourceCallback(uint32_t node, uint32_t pc) {
     nodes_[node].source_callback_pc = pc;
     return true;
 }
+bool GameUiInstance::WorldMatrix(uint32_t target,GameUiMatrix& out)const{
+    try{
+        Need(resource_&&target<nodes_.size(),"UI world query owner/index");
+        std::vector<bool> path(nodes_.size(),false);uint32_t calls=0;bool found=false;GameUiMatrix captured;
+        std::function<void(uint32_t,const GameUiMatrix&)> visit;
+        visit=[&](uint32_t index,const GameUiMatrix& parent){
+            Need(index<nodes_.size()&&!path[index]&&++calls<=32768,"UI world query cycle/extent");path[index]=true;
+            const auto& n=nodes_[index];const auto flags=uint32_t(n.encoded_initial[2])|uint32_t(n.encoded_initial[3])<<16;
+            auto world=parent;if(!(flags&4))world.tx=world.ty=0;
+            if(!(flags&2)){world.a=world.d=1;world.b=world.c=0;}
+            const auto cosine=std::cos(-n.angle),sine=std::sin(-n.angle);GameUiMatrix result;
+            result.tx=world.a*n.position[0]+world.c*n.position[1]+world.tx;
+            result.ty=world.b*n.position[0]+world.d*n.position[1]+world.ty;
+            result.a=(world.a*cosine+world.c*sine)*n.scale[0];result.b=(world.b*cosine+world.d*sine)*n.scale[0];
+            result.c=(-world.a*sine+world.c*cosine)*n.scale[1];result.d=(-world.b*sine+world.d*cosine)*n.scale[1];
+            for(auto v:{result.a,result.b,result.c,result.d,result.tx,result.ty})Need(std::isfinite(v)&&std::abs(v)<=1e7f,"UI world query transform");
+            if(index==target){
+                Need(!found||(captured.a==result.a&&captured.b==result.b&&captured.c==result.c&&captured.d==result.d
+                     &&captured.tx==result.tx&&captured.ty==result.ty),"UI world query ambiguous node owner");captured=result;found=true;
+            }
+            if(n.texture<0)visit(~uint32_t(n.texture),result);
+            if(n.encoded_initial[1])visit(n.encoded_initial[1],result);
+            if(n.encoded_initial[0])visit(n.encoded_initial[0],parent);
+            path[index]=false;
+        };
+        for(uint32_t root=0;root<resource_->RootCount();++root)if(nodes_[root].visible)visit(root,{});
+        if(found)out=captured;return found;
+    }catch(...){return false;}
+}
 bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::string &error,
                           GameUiCallbacks *callbacks, GameUiMatrix base, uint32_t first_group,
                           uint32_t last_group,int32_t explicit_root) const {

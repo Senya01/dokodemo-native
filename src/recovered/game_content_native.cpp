@@ -418,6 +418,15 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 ++state_.opened_resources;
                 return {};
             }
+            if(mount=="MTOMO"&&game_filesystem_){
+                // Actual resource9 ctor prefix selects this package; retain its
+                // parent backing independently of child clone/template teardown.
+                if(!notebook_mounted_){
+                    const auto status=game_filesystem_->LoadMember("MTOMO.BPM",notebook_package_);if(!status)return status;
+                    notebook_directory_=BpDirectory::Parse(notebook_package_,notebook_package_.Describe().size);notebook_mounted_=true;
+                }
+                out=notebook_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
             if(mount=="MOCHI"&&game_filesystem_){
                 if(!inventory_mounted_){
                     const auto status=game_filesystem_->LoadMember("MOCHI.BPM",inventory_package_);if(!status)return status;
@@ -498,13 +507,16 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if(state_.actor_script.started){
         // Mailbox overflow is an out-of-band focus/release loss. Its synthetic
         // frame has no sequence or epoch, so disarm before either filter.
-        if(frame.overflow_resync){
+        if(frame.overflow_resync||!frame.focused){
             main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;main_flow_.ResetInput();
             returned_interaction_.SuspendInput();state_.returned_interaction=returned_interaction_.Snapshot();
-            post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
-            if(state_.main_menu_phase){main_menu_.Input(frame);if(inventory_.Modal())inventory_.Input(frame);}
-            else if(inventory_.Modal())inventory_.Input(frame);
-            else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(frame);
+            auto loss=frame;loss.overflow_resync=true;
+            post_modal_.Input(loss);state_.post_modal=post_modal_.Snapshot();
+            if(state_.main_menu_phase){
+                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);
+            }
+            else if(inventory_.Modal())inventory_.Input(loss);
+            else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(loss);
             if(state_.actor_script.awaiting_message)actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);
             else actor_message_gate_.Stop();
             state_.actor_message_input_armed=false;return false;
@@ -516,6 +528,11 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
                ||frame.returned_owner!=lease.available_owner||frame.returned_generation!=lease.available_generation
                ||frame.sequence<=main_menu_last_sequence_)return false;
             main_menu_last_sequence_=frame.sequence;
+            if(state_.main_menu_phase==7&&notebook_.Modal()){
+                if(!state_.main_menu_child_ready||notebook_.Snapshot().phase!=3)return false;
+                const auto status=CheckMainMenuLease();if(!status){state_.status=status;state_.blocked=true;return false;}
+                return notebook_.Input(frame);
+            }
             if(state_.main_menu_phase==7&&inventory_.Modal()){
                 if(!state_.main_menu_child_ready||inventory_.Snapshot().phase!=3)return false;
                 const auto status=CheckMainMenuLease();if(!status){state_.status=status;state_.blocked=true;return false;}
@@ -523,7 +540,8 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             }
             return main_menu_.Input(frame);
         }
-        if(MainMenuInput(frame))return true;
+        const auto menu_route=MainMenuInput(frame);
+        if(menu_route!=MenuInputRoute::NoMatch)return menu_route==MenuInputRoute::Consumed;
         if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
         if(!inventory_.Modal())main_flow_.Input(frame);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
@@ -763,7 +781,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
-    main_menu_entry_gate_.Stop();main_menu_.Close();state_.main_menu=main_menu_.Snapshot();
+    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
@@ -774,6 +792,7 @@ bool GameContentBoot::Close() {
     actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
+    notebook_directory_.Reset();notebook_package_.Reset();notebook_mounted_=false;
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
     actor_dictionary_.Reset();actor_directory_.Reset();actor_package_.Reset();state_.actor_dictionary_live=false;
     if(!title_.Close())return false;
@@ -835,12 +854,25 @@ GameReturnedInteractionGate GameContentBoot::ReturnedGate()const{
     gate.source469=state_.source_loader469;gate.manager9=actor_runtime_.Snapshot().manager_request9;
     gate.message_context=state_.actor_message_contexts;return gate;
 }
+void GameContentBoot::PublishInventory469(){
+    const auto i=inventory_.Snapshot();const auto serial=uint64_t(i.pending_polls)+i.completed_polls;
+    if(i.generation&&i.loader469==1&&serial&&(i.generation!=inventory469_generation_||serial>inventory469_poll_)){
+        inventory469_generation_=i.generation;inventory469_poll_=serial;
+        state_.source_loader469=true;state_.source469_resource=14;state_.source469_generation=i.generation;state_.source469_poll=serial;
+    }
+}
 bool GameContentBoot::MainMenuEligible()const{
     const auto available=returned_interaction_.Snapshot();const auto flow=main_flow_.Snapshot();
     const auto actor=actor_script_.Snapshot();const auto ui=scene_ui_.Snapshot();
     const auto transition=scene_ui_.TitleTransitionOwner().Snapshot();
+    // NativeSourceZeroMenuBorrow: after an actual resource9 poll, the same
+    // already admitted available activation may still lend menu ownership.
+    // Returned Circle's source469 gate and token remain unchanged.
+    const bool source_zero=state_.source469_resource==9&&!state_.source_loader469&&state_.main_menu_notebook_completions
+        &&available.admitted&&available.script_generation==actor.generation&&available.run_id==actor.vm_current.run_id
+        &&actor.owned_conversation.dispatch_ready;
     return !state_.closed&&!state_.blocked&&!state_.main_menu_phase&&state_.current_scene==4&&state_.load_state==6
-        &&state_.source_loader469&&available.live&&available.eligible&&!available.revoked&&!available.event_posted
+        &&available.live&&(available.eligible||source_zero)&&!available.revoked&&!available.event_posted
         &&available.owner&&available.generation&&actor.manager_flag68&&actor.runtime.camera_mode!=0
         &&actor.live&&!actor.blocked&&!actor.completed&&actor.context_enabled&&!actor.awaiting_message&&!actor.awaiting_choice&&!actor.awaiting_input
         &&!actor.inventory_requested&&!actor.source_main_input_suppressed48&&actor.callback_depth==0&&actor.queued_callbacks==0
@@ -848,32 +880,32 @@ bool GameContentBoot::MainMenuEligible()const{
         &&flow.live&&flow.phase1C==0&&flow.substate24==0&&flow.return20==0
         &&GameMainMenuCanBorrowTransition(transition)&&ui.live&&!ui.storage_dialog&&!ui.awaiting_confirmation;
 }
-bool GameContentBoot::MainMenuInput(const GameInputFrame& frame){
+GameContentBoot::MenuInputRoute GameContentBoot::MainMenuInput(const GameInputFrame& frame){
     // WindowsAvailableMainMenu borrows an existing source-qualified available
     // lease. It does not clear469, consume/rearm that token, or add a PC route.
     returned_interaction_.CheckInputOwners(actor_script_.Snapshot(),main_flow_.Snapshot(),ReturnedGate());
     const auto available=returned_interaction_.Snapshot();state_.returned_interaction=available;
     state_.main_menu_available=MainMenuEligible();state_.main_menu_source_right_blocked=state_.source_loader469;
-    if(!state_.main_menu_available){main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return false;}
+    if(!state_.main_menu_available){main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return MenuInputRoute::NoMatch;}
     if(frame.returned_owner!=available.owner||frame.returned_generation!=available.generation
        ||frame.message_context!=state_.actor_message_contexts||frame.message_owner_generation!=state_.actor_script.generation){
-        main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return false;
+        main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return MenuInputRoute::Consumed;
     }
     if(!main_menu_entry_ready_||main_menu_entry_owner_!=available.owner||main_menu_entry_generation_!=available.generation){
         main_menu_entry_gate_.Begin();main_menu_entry_ready_=true;main_menu_entry_owner_=available.owner;main_menu_entry_generation_=available.generation;
     }
-    if(frame.overflow_resync){main_menu_entry_gate_.Begin();return false;}
-    if(!main_menu_entry_gate_.Observe(frame,Right))return false;
+    if(frame.overflow_resync){main_menu_entry_gate_.Begin();return MenuInputRoute::NoMatch;}
+    if(!main_menu_entry_gate_.Observe(frame,Right))return MenuInputRoute::NoMatch;
     try{
         const auto actor=actor_script_.Snapshot();main_menu_target_=actor_script_.OwnerEventTarget();
         main_menu_lease_={actor.generation,actor.vm_current.run_id,available.owner,available.generation,state_.actor_message_contexts,state_.main_menu_input_epoch+1};
-        const auto status=main_flow_.BeginAvailableMenu();if(!status){state_.status=status;state_.blocked=true;return false;}
+        const auto status=main_flow_.BeginAvailableMenu();if(!status){state_.status=status;state_.blocked=true;return MenuInputRoute::Error;}
         state_.main_menu_input_epoch=main_menu_lease_.input_epoch;state_.main_menu_phase=1;state_.main_menu_available=false;
         main_menu_last_sequence_=frame.sequence;state_.main_menu_child_ready=false;
         main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;returned_interaction_.SuspendInput();
         actor_message_gate_.Stop();main_flow_.ResetInput();state_.main_flow=main_flow_.Snapshot();state_.returned_interaction=returned_interaction_.Snapshot();
-        return true;
-    }catch(const std::exception& e){state_.status={GameFsCode::Unavailable,0,e.what()};state_.blocked=true;return false;}
+        return MenuInputRoute::Consumed;
+    }catch(const std::exception& e){state_.status={GameFsCode::Unavailable,0,e.what()};state_.blocked=true;return MenuInputRoute::Error;}
 }
 GameFsStatus GameContentBoot::CheckMainMenuLease()const{
     try{
@@ -901,7 +933,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         switch(state_.main_menu_phase){
         case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
         case 2:{
-            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0);
+            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent());
             if(status)status=main_flow_.MenuOpened();
             int32_t queue=-1;if(status)status=actor_script_.PostMenuEvent(main_menu_target_,10,main_menu_.Snapshot().generation,queue);
             if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event10 queue refused"};
@@ -911,6 +943,18 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.Tick();
             if(status&&main_menu_.Snapshot().state78==3){
                 const auto result=main_menu_.Snapshot().result;status=main_flow_.PollMenuResult(result);
+                if(status&&result==3){
+                    GameNotebookRows rows;status=actor_script_.ReadMenuNotebook(main_menu_target_,rows);
+                    state_.notebook_observed=rows; // retain actual reached data even on Unsupported
+                    const auto actor=actor_script_.Snapshot();
+                    const GameNotebookLease lease{actor.generation,actor.vm_current.run_id,state_.actor_message_contexts,
+                        main_menu_.Snapshot().generation,main_menu_lease_.available_owner,main_menu_lease_.available_generation,state_.main_menu_input_epoch+1};
+                    // Prior498 belongs to the real last resource14 owner. Action3
+                    // does not write498/4A0 or manufacture a GAME41 request.
+                    if(status)status=notebook_.Request(rows,lease,inventory_.Snapshot().loader498);
+                    if(status)status=actor_script_.BindMenuNotebook(main_menu_target_,notebook_.Snapshot().generation,main_menu_.Snapshot().generation,rows);
+                    if(status){++state_.main_menu_notebook_requests;++state_.main_menu_input_epoch;state_.main_menu_child_ready=false;}
+                }
                 if(status&&result==5){
                     // Source237F0: direct resource14 request; no GAME41 call.
                     // Only the spent initial observer retires, retaining origin history.
@@ -943,7 +987,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 5:
             if(actor_script_.Snapshot().menu_close_return.returned
                &&actor_script_.Snapshot().menu_close_return.menu_generation==main_menu_.Snapshot().generation){
-                if(main_flow_.Snapshot().menu_result50==5){
+                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3){
                     int32_t queue=-1;status=actor_script_.PostMenuEvent(main_menu_target_,18,main_menu_.Snapshot().generation,queue);
                     if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event18 queue refused"};
                     if(status)state_.main_menu_phase=6;
@@ -965,8 +1009,25 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             // callbacks; only subsequent cache pressure can evict those images.
             status=main_menu_.RetireClosedRender();
             if(!status)break;
+            if(main_flow_.Snapshot().menu_result50==3){
+                status=notebook_.Tick(*this,scene_ui_.TitleTransitionOwner());
+                const auto child=notebook_.Snapshot();
+                if(status&&child.polls&&child.loader469==0&&child.generation==actor_script_.Snapshot().menu_notebook_generation){
+                    state_.source_loader469=false;state_.source469_resource=9;state_.source469_generation=child.generation;state_.source469_poll=child.polls;
+                }
+                if(status&&!state_.main_menu_child_ready&&child.phase==3){
+                    ++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
+                    if(!notebook_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"NOTE ready input epoch refused"};
+                }
+                if(status&&notebook_.ClosedAndRetired()){
+                    status=actor_script_.CompleteMenuNotebook(main_menu_target_,notebook_.Snapshot());
+                    if(status){++state_.main_menu_notebook_completions;finish();}
+                }
+                break;
+            }
             if(inventory_.Snapshot().phase==1)state_.main_menu_inventory_child_clock=actor_script_.Snapshot().vm_current.clock_tick;
             status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
+            if(status)PublishInventory469();
             if(status&&inventory_.Snapshot().action_pending&&actor_script_.Snapshot().inventory_action.completed){
                 const auto actor=actor_script_.Snapshot();const auto& action=actor.inventory_action;
                 status=inventory_.CompleteAction(action.generation,action.receipt,actor.inventory_items,&action.certificate);
@@ -986,10 +1047,13 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     }
     state_.actor_script=actor_script_.Snapshot();state_.main_flow=main_flow_.Snapshot();state_.main_menu=main_menu_.Snapshot();
     state_.inventory=inventory_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
+    state_.notebook=notebook_.Snapshot();
     if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+        if(notebook_.Modal())return notebook_.Draw(surface,font_);
         return inventory_.Modal()?inventory_.Draw(surface,font_):main_menu_.Draw(surface);
     });
     state_.main_menu=main_menu_.Snapshot();
+    state_.notebook=notebook_.Snapshot(); // publish actual post-draw empty batch/lease observations
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
         returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
@@ -1081,7 +1145,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.inventory=inventory_.Snapshot();
         //1A9B4's stable469 is1 in BOTH pending and ready branches. Neither
         //468 completion nor deferred retirement proves a persistent clear.
-        if(state_.inventory.loader469==1)state_.source_loader469=true;
+        PublishInventory469();
         if(state_.status){state_.status=post_modal_.Update(state_.inventory,state_.main_flow,actor_script_,state_.source_loader469);state_.post_modal=post_modal_.Snapshot();}
         state_.sound_bank=sound_bank_.Snapshot();
         //Publish ONCE,after both room and text. CopyGameFrame must never see

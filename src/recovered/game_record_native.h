@@ -32,6 +32,9 @@ class GameRecordStore final {
     const GameRecordSlot& At(uint32_t bank,uint32_t row)const{return banks_.at(bank).at(row);}
     GameRecordSlot& At(uint32_t bank,uint32_t row){return banks_.at(bank).at(row);}
     bool Live()const{return state_.live;}
+    // Read-only3E35C/25020 interpretation of the native owned record banks.
+    // Cold marker1..10 is not PSP-save/profile availability evidence.
+    bool OtherProfilesPresent()const{if(!state_.live)return false;for(size_t i=1;i<markers_.size();++i)if(markers_[i]!=-1)return true;return false;}
     void Close(){state_.live=false;}
   private:
     std::array<std::array<GameRecordSlot,28>,11> banks_{};

@@ -8,12 +8,13 @@ int32_t GameMainMenuControl::Resolve(bool full,int32_t row,int32_t column)noexce
     if(row<0||column<0||column>=4||row>=(full?7:4))return -1;
     return full?a[row][column]:b[row][column];
 }
-bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene){
+bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles){
     if((state_.live&&state_.state78!=3)||!full||!lease.script_generation||!lease.run_id
        ||!lease.available_owner||!lease.available_generation||!lease.message_context||!lease.input_epoch)return false;
     const auto old=state_;state_={};state_.generation=old.generation+1;state_.opens=old.opens+1;
     state_.cancels=old.cancels;state_.closed=old.closed;state_.rejected=old.rejected;state_.unsupported=old.unsupported;
     state_.live=true;state_.full=full;state_.source_scene_nonzero=scene;state_.lease=lease;state_.state78=0;
+    state_.notebook_enabled=notebook;state_.other_profiles=profiles;
     input_.BeginContext();return true;
 }
 bool GameMainMenuControl::Input(const GameInputFrame& f){
@@ -31,8 +32,20 @@ void GameMainMenuControl::Tick(uint8_t mode){
     if(state_.state78==0){if(mode!=1){state_.state78=1;input_.BeginContext();}return;}
     if(state_.state78==2){if(mode!=1){state_.state78=3;state_.result=Resolve(state_.full,state_.row,state_.column);++state_.closed;input_.BeginContext();}return;}
     if(state_.state78!=1)return;
+    if(mode==1){input_.BeginContext();return;}
     input_.Tick();
     const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2);
+    if(state_.substate7C==1){
+        const auto max=state_.other_profiles?3:2;
+        if(down){if(state_.column<max)++state_.column;else if(down==1)state_.column=0;return;}
+        if(up){if(state_.column>0)--state_.column;else if(up==1)state_.column=max;return;}
+        if(input_.First(Circle)){
+            if(state_.column==0){state_.state78=2;input_.BeginContext();}else ++state_.unsupported;
+            return;
+        }
+        if(input_.First(Cross)||input_.First(Left)){state_.substate7C=0;input_.BeginContext();}
+        return;
+    }
     if(down){
         if(state_.row<6)++state_.row;else if(down==1)state_.row=0;
         if((!state_.source_scene_nonzero&&state_.row==2)||(state_.source_scene_nonzero&&state_.row==1))++state_.row;
@@ -44,11 +57,13 @@ void GameMainMenuControl::Tick(uint8_t mode){
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
     if(input_.First(Circle)){
+        if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
         else ++state_.unsupported;
         return;
     }
     if(input_.First(Right)){
+        if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3||state_.row==4||state_.row==6)++state_.unsupported;
         return;
     }
@@ -74,10 +89,10 @@ void GameMainMenu::Auxiliary(){
     const uint32_t indices[]={9,10,11,12,17,18},frames[]={5,6,6,5,6,5};
     for(uint32_t i=0;i<6;++i){auto* c=clone_.Control(indices[i]);c->frame=frames[i];c->mode=2;c->active=1;}
 }
-GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene){
+GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles){
     if(Modal()||!full)return {GameFsCode::Unavailable,0,"Main menu finite full-mode owner only"};
     auto status=Load(source);if(!status)return status;
-    if(!control_.Begin(lease,full,scene))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
+    if(!control_.Begin(lease,full,scene,notebook,profiles))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return {GameFsCode::Unavailable,0,"Main menu opening clip"};
     auto* main=clone_.Control(0);*main={0,0,1,1};
     auto* context=clone_.Control(1);context->frame=scene?2:1;context->mode=2;context->active=1;
@@ -90,6 +105,14 @@ GameFsStatus GameMainMenu::Tick(){
     std::string error;if(!clone_.Update(error))return {GameFsCode::Unavailable,0,error};
     auto* main=clone_.Control(0);if(!main)return {GameFsCode::Unavailable,0,"Main menu primary control retired"};
     control_.Tick(main->mode);const auto after=control_.Snapshot();
+    if(before.state78==1&&after.state78==1&&before.substate7C!=after.substate7C){
+        const auto clip=after.substate7C==1?(after.other_profiles?3u:2u):0u;
+        if(!clone_.Bind(0,clip,0))return {GameFsCode::Unavailable,0,"Main menu Notebook submenu clip"};
+        *main={0,clip,1,1};
+        auto* selected=clone_.Control(after.other_profiles?10:9);
+        selected->frame=after.substate7C==1?uint32_t(after.column+2):(after.other_profiles?4u:3u);
+    }
+    if(after.state78==1&&after.substate7C==1)clone_.Control(after.other_profiles?10:9)->frame=uint32_t(after.column+2);
     if(before.state78==1&&after.state78==2){
         if(!clone_.ShowRoot(0)||!clone_.Bind(0,1,0))return {GameFsCode::Unavailable,0,"Main menu closing clip"};
         *main={0,1,1,1};Auxiliary();
@@ -116,7 +139,7 @@ GameMainMenuSnapshot GameMainMenu::Snapshot()const{
 }
 GameFsStatus GameMainMenu::RetireClosedRender(){
     const auto s=Snapshot();
-    if(!s.live||s.state78!=3||s.result!=5)return {GameFsCode::Unavailable,0,"Only resolved inventory menu render may retire"};
+    if(!s.live||s.state78!=3||(s.result!=5&&s.result!=3))return {GameFsCode::Unavailable,0,"Only resolved finite child menu render may retire"};
     if(!resource_)return {};
     last_frame_=s.frame;last_clip_=s.clip;last_mode_=s.mode;
     clone_.Close();resource_.reset();++render_retirements_;return {};

@@ -69,6 +69,8 @@ class GameGraphics final {
 public:
     bool Initialize(const GameGraphicsConfig& config);
     bool Clear(uint32_t native_argb, uint16_t depth = 0);
+    // D1DC native pixel scissor; signed source bounds clamp to the framebuffer.
+    bool SetScissor(int32_t left,int32_t top,int32_t right,int32_t bottom);
     bool FillRectangle(int32_t left, int32_t top, int32_t right, int32_t bottom,
                        uint32_t native_argb, uint16_t depth = 0);
     bool DrawTriangle(const std::array<GameVertex, 3>& vertices);

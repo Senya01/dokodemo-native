@@ -2,6 +2,7 @@
 #include "game_actor_dictionary_native.h"
 #include "game_actor_runtime_native.h"
 #include "game_inventory_native.h"
+#include "game_notebook_native.h"
 #include "game_inventory_mark_native.h"
 #include "game_inventory_placement_native.h"
 #include "game_record_native.h"
@@ -118,6 +119,11 @@ struct GameMenuCallbackSnapshot {
     script::VmStateWitness suspended,restored;
 };
 struct GameActorScriptSnapshot {
+    GameNotebookRows notebook_rows;
+    GameNotebookRows notebook_after;
+    bool menu_notebook_live=false;
+    uint64_t menu_notebook_generation=0,menu_notebook_parent=0;
+    uint32_t menu_notebook_requests=0,menu_notebook_completions=0;
     GameOrdinaryControlObservation ordinary_controls;
     GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return;
     GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
@@ -269,6 +275,9 @@ class GameActorScript final {
     bool MenuPlacementAvailable()const;
     bool ValidateMenuInventoryCertificate(const GameOwnerEventTarget&,const GameInventoryActionCertificate&)const;
     GameFsStatus CompleteMenuInventory(const GameOwnerEventTarget&,const GameInventorySnapshot&);
+    GameFsStatus ReadMenuNotebook(const GameOwnerEventTarget&,GameNotebookRows&)const;
+    GameFsStatus BindMenuNotebook(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameNotebookRows&);
+    GameFsStatus CompleteMenuNotebook(const GameOwnerEventTarget&,const GameNotebookSnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,bool owned_dispatch,int32_t& queue_result);

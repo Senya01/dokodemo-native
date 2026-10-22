@@ -114,7 +114,7 @@ GameFsStatus GameMainFlow::PollMenuCancel(){
 }
 GameFsStatus GameMainFlow::PollMenuResult(int32_t result){
     if(state_.phase1C!=7||state_.menu58!=2)return {GameFsCode::Unavailable,0,"Main menu completion owner mismatch"};
-    if(result!=-1&&result!=5)return {GameFsCode::Unavailable,0,"Main menu result outside Cancel/inventory domain"};
+    if(result!=-1&&result!=5&&result!=3)return {GameFsCode::Unavailable,0,"Main menu result outside finite Cancel/inventory/Notebook domain"};
     state_.menu_result54=result;state_.menu58=5;state_.last_pc=0x23748;return {};
 }
 GameFsStatus GameMainFlow::RetireMenuCancel(){
@@ -122,7 +122,7 @@ GameFsStatus GameMainFlow::RetireMenuCancel(){
     return RetireMenuResult();
 }
 GameFsStatus GameMainFlow::RetireMenuResult(){
-    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=5)||state_.return20)
+    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=5&&state_.menu_result54!=3)||state_.return20)
         return {GameFsCode::Unavailable,0,"Main menu Cancel retirement owner mismatch"};
     state_.menu_result50=state_.menu_result54;state_.menu_result54=-1;state_.menu58=0;
     state_.phase1C=state_.return20;state_.return20=0;state_.last_pc=0x238B0;input_.BeginContext();return {};

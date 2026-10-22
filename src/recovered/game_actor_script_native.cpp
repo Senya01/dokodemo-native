@@ -1116,6 +1116,47 @@ GameFsStatus GameActorScript::CompleteMenuInventory(const GameOwnerEventTarget& 
         state_.menu_inventory_live=false;++state_.menu_inventory_completions;state_.inventory_items=std::move(items);return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::ReadMenuNotebook(const GameOwnerEventTarget& expected,GameNotebookRows& out)const{
+    try{
+        Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"NOTE read needs idle owning VM");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
+             "NOTE actual registered context/Local0 replaced");
+        out=GameObserveNotebookRows(*vm_,state_.generation,bindings_.at(11));return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::BindMenuNotebook(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameNotebookRows& rows){
+    if(!gui||gui<=state_.menu_notebook_generation||!parent||state_.menu_notebook_live||state_.menu_inventory_live
+       ||state_.inventory_requested||!vm_||!vm_->context_enabled())return {GameFsCode::Unavailable,0,"NOTE origin/generation unavailable"};
+    GameNotebookRows current;auto status=ReadMenuNotebook(target,current);if(!status)return status;
+    if(!rows.valid||current.sha!=rows.sha||current.run_id!=rows.run_id||current.code_sha!=rows.code_sha)
+        return {GameFsCode::Unavailable,0,"NOTE registration changed before binding"};
+    state_.notebook_rows=current;state_.menu_notebook_generation=gui;state_.menu_notebook_parent=parent;
+    state_.menu_notebook_live=true;++state_.menu_notebook_requests;return {};
+}
+GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& target,const GameNotebookSnapshot& gui){
+    try{
+        Need(state_.live&&vm_&&state_.menu_notebook_live&&gui.generation==state_.menu_notebook_generation
+             &&gui.lease.parent_generation==state_.menu_notebook_parent,"NOTE completion origin replaced");
+        const auto& pause=state_.menu_pause_return;
+        Need(pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_notebook_parent
+             &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"NOTE needs actual disabled18/32 owner");
+        Need(gui.phase==7&&gui.retired_generation==gui.generation&&!gui.live&&!gui.owner46C&&!gui.request9&&!gui.retirement_pending
+             &&gui.state23C==3&&gui.loader498==0&&gui.loader469==0&&gui.close_requests&&gui.close_completions&&gui.polls
+             &&gui.retirement_requests,"NOTE needs actual current open/close/poll/deferred drain");
+        GameNotebookRows current;const auto status=ReadMenuNotebook(target,current);Need(bool(status),status.detail.c_str());
+        const auto& before=state_.notebook_rows;
+        Need(current.sha==before.sha&&current.run_id==before.run_id&&current.code_sha==before.code_sha
+             &&current.script_generation==before.script_generation&&current.root_table==before.root_table
+             &&current.root_index==before.root_index&&current.root_header==before.root_header,"NOTE registered typed data changed during modal");
+        // NativeActualClosedNotebookWake: genuine child retirement is the only
+        // wake. The original post32 enable producer remains an explicit cut.
+        state_.notebook_after=current;
+        vm_->resume_modal_context();state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{
     Need(state_.live&&vm_&&program_.header().local_count>0,"Owner event target requires live context/local owner");
     return {state_.generation,vm_->context_value(),vm_->read_slot(script::Table::Local,0)};
