@@ -177,7 +177,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);});
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -685,6 +685,68 @@ GameFsStatus GameActorScript::Tick() {
         return {};
     } catch(const std::exception& e) {state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected,uint32_t event,uint64_t generation,int32_t& queue){
+    queue=-1;
+    try{
+        Need(state_.live&&vm_&&generation&&(event==10||event==11)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
+        Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input
+             &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu callback requires its idle owning VM");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word
+             &&target.callback.word==0x7008DA28u,"Menu callback registry/callback replaced");
+        const auto saved=vm_->current_witness();
+        Need(saved.valid&&!saved.event_envelope_present&&vm_->context_enabled(),"Menu callback needs its live enabled suspended caller");
+        const auto flag=vm_->read_slot(script::Table::Global,0x9A78);
+        queue=vm_->post_owner_nil_event(target.callback,int32_t(event));
+        state_.owner_event_callback_word=target.callback.word;state_.owner_event_result=queue;++state_.owner_event_calls;
+        if(queue==0){
+            auto& c=state_.menu_callback;c={};c.pending=true;c.event=event;c.menu_generation=generation;
+            c.receipt=vm_->last_callback_receipt();c.callback_frame=vm_->current_witness().frame_id;c.suspended=saved;
+            c.flag_before=flag.word;c.kind_before=uint8_t(flag.kind);
+        }
+        return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexcept{
+    auto& c=state_.menu_callback;if(!c.pending||c.returned||c.failed||t.opcode!=0x32)return;
+    try{
+        const auto& x=t.before;const auto& y=t.after;const auto& s=c.suspended;
+        const auto same=[](const script::ValueWitness& a,const script::ValueWitness& b){return a.kind==b.kind&&a.word==b.word&&a.table==b.table&&a.index==b.index&&a.cp932_bytes==b.cp932_bytes&&a.cp932_sha256==b.cp932_sha256;};
+        bool valid=t.callback_receipt==c.receipt&&x.frame_id==c.callback_frame&&x.code_entry==0x8DA28&&x.current_pc==0x8DD8B
+            &&x.event_envelope_present&&!y.event_envelope_present&&y.run_id==s.run_id&&y.code_sha256==s.code_sha256
+            &&y.context_word==s.context_word&&y.frame_id==s.frame_id&&y.code_entry==s.code_entry&&y.current_pc==s.current_pc
+            &&y.call_depth==s.call_depth&&y.active_blocks==s.active_blocks&&y.event_scope_depth==s.event_scope_depth+1
+            &&y.operand_cells==s.operand_cells&&y.frame_cells==s.frame_cells&&same(y.result,s.result)
+            &&y.deadline_tick==(s.relative_deadline23>0?y.clock_tick+uint32_t(s.relative_deadline23):0);
+        for(uint32_t i=0;i<s.frame_captured;++i)valid=valid&&same(s.frame_values[i],y.frame_values[i]);
+        for(uint32_t i=0;i<s.operands_captured;++i)valid=valid&&same(s.operands[i],y.operands[i]);
+        const auto flag=vm_->read_slot(script::Table::Global,0x9A78);c.flag_after=flag.word;c.kind_after=uint8_t(flag.kind);
+        valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u);
+        c.restored=y;c.returned=valid;c.failed=!valid;
+    }catch(...){c.failed=true;}
+}
+GameFsStatus GameActorScript::TickMenuOwner(){
+    try{
+        Need(state_.live&&vm_&&!state_.blocked,"Menu modal VM retired or blocked");
+        vm_->clock_tick(++state_.native_clock_ticks);
+        if(runtime_){const auto status=runtime_->AdvanceActorFrame();Need(bool(status),status.detail.c_str());}
+        auto& c=state_.menu_callback;
+        if(c.pending){
+            for(uint32_t i=0;i<256&&!c.returned&&!c.failed;++i){
+                const auto e=vm_->run(1);Need(e.status!=script::Status::Stopped,e.diagnostic.text().c_str());
+            }
+            Need(!c.failed,"Menu callback did not restore its source envelope/typed flag");
+            Need(c.returned,"Menu callback exceeded finite instruction domain");
+            const auto after=vm_->current_witness();
+            Need(after.event_scope_depth==c.suspended.event_scope_depth&&!after.event_envelope_present,"Menu callback public scope did not restore");
+            c.pending=false;
+            if(c.event==10)state_.menu_open_return=c;else state_.menu_close_return=c;
+        }
+        return {};
+    }catch(const std::exception& e){state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameMessageTarget GameActorScript::MessageTarget()const{
     Need(state_.live&&state_.awaiting_message&&vm_,"Message target needs live awaiting context");
     return {state_.generation,state_.messages,state_.pc,vm_->context_value()};
@@ -900,6 +962,18 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
         out.op55_calls=vm_->op55_calls();out.op55_first_pc=vm_->op55_first_pc();out.op55_first_before=vm_->op55_first_before();out.op55_first_after=vm_->op55_first_after();out.op55_first_table=vm_->op55_first_table();out.op55_first_index=vm_->op55_first_index();
         out.ctx_reference_branches=vm_->ctx_reference_branches();out.ctx_reference_first_pc=vm_->ctx_reference_first_pc();out.ctx_reference_first_index=vm_->ctx_reference_first_index();
         out.native_reserved_local_nil=vm_->native_reserved_local_nil();
+        auto& controls=out.ordinary_controls;controls.generation=state_.generation;
+        try{
+            controls.run_id=vm_->current_witness().run_id;controls.error_code=1;
+            const auto capture=[](const Value& v){script::ValueWitness w;w.kind=v.kind;w.word=v.word;w.table=uint32_t(v.table);w.index=v.index;return w;};
+            const auto header=vm_->read_slot(script::Table::Global,9);controls.values[0]=capture(header);
+            Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)>8,"Ordinary Global9 array extent");
+            controls.values[1]=capture(vm_->read_slot(script::Table::Global,18));
+            controls.values[2]=capture(vm_->read_slot(script::Table::Global,0x9A76));
+            controls.values[3]=capture(vm_->read_slot(script::Table::Ctx28,0x3DF7));
+            controls.values[4]=capture(vm_->read_slot(script::Table::Ctx28,0x2871));
+            controls.valid=true;controls.error_code=0;
+        }catch(...){/* Observation failure never changes input eligibility. */}
         out.vm_current=vm_->current_witness();out.normal_return=vm_->last_normal_return();out.farewell_return=vm_->last_normal_return(1);
         if(word_consumer_row_index_!=UINT32_MAX)out.word_consumer_row=ObserveWordRow(word_consumer_row_index_);
         if(out.vm_current.frame_captured&&out.vm_current.frame_values[0].kind==Value::Kind::Scalar&&out.vm_current.frame_values[0].word>>28==2){

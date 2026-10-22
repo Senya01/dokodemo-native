@@ -20,6 +20,8 @@ struct GameMainFlowSnapshot {
     int32_t last_event_argument=0;
     bool last_extension_busy=false,last_loader469=false;
     int32_t circle_counter=-1;
+    uint32_t menu58=0;
+    int32_t menu_result50=-1,menu_result54=-1;
 };
 //230E8/23238 source owner starts at0,never manufactured at phase5.
 //Only current byte8 path and actual manager9 return are implemented here.
@@ -29,6 +31,12 @@ class GameMainFlow final {
     GameFsStatus Initialize(GameActorRuntime&,EventDispatch);
     bool Input(const GameInputFrame&);
     GameFsStatus Tick(const GameMainFlowGate&);
+    GameFsStatus BeginAvailableMenu();
+    GameFsStatus AdvanceMenuOpening();
+    GameFsStatus MenuOpened();
+    GameFsStatus PollMenuCancel();
+    GameFsStatus RetireMenuCancel();
+    void ResetInput(){input_.BeginContext();}
     GameMainFlowSnapshot Snapshot()const{return state_;}
     void Close();
   private:

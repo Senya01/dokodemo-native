@@ -42,6 +42,11 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_greeting_regressions.h"
 #endif
+#include "game_main_menu_regressions.h"
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_main_menu_callback_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -371,6 +376,19 @@ void RuntimeOwners(){
     model_owner.Close();model_fade.Retire();
 }
 void Focused(){
+    {
+        GameTransition fade;
+        Check(!GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu refuses missing transition owner");
+        Check(fade.Initialize({{0,0}})&&GameMainMenuCanBorrowTransition(fade.Snapshot()),"Windows menu borrows stationary closed endpoint");
+        Check(fade.StartGameOpen()&&!GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu refuses opening transition");
+        for(unsigned i=0;i<40;++i)fade.Update();
+        Check(fade.Snapshot().state==2&&GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu borrows actual completed open endpoint");
+        fade.CloseWipe();
+        Check(!GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu refuses closing transition");
+        for(unsigned i=0;i<40;++i)fade.Update();
+        Check(fade.Snapshot().state==0&&GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu borrows actual inventory-close endpoint without restarting fade");
+        fade.Retire();Check(!GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu refuses retired transition owner");
+    }
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryActionRegressionChecks();
@@ -384,6 +402,12 @@ GameWordOp55RegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameGreetingRegressionChecks();
+#endif
+
+    GameMainMenuRegressionChecks();
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMainMenuNilAbiRegressionChecks();
 #endif
 
     

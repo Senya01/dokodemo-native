@@ -496,6 +496,22 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     if (state_.closed)
         return false;
     if(state_.actor_script.started){
+        // Mailbox overflow is an out-of-band focus/release loss. Its synthetic
+        // frame has no sequence or epoch, so disarm before either filter.
+        if(frame.overflow_resync){
+            main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;main_flow_.ResetInput();
+            returned_interaction_.SuspendInput();state_.returned_interaction=returned_interaction_.Snapshot();
+            post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
+            if(state_.main_menu_phase)main_menu_.Input(frame);
+            else if(inventory_.Modal())inventory_.Input(frame);
+            else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(frame);
+            if(state_.actor_script.awaiting_message)actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);
+            else actor_message_gate_.Stop();
+            state_.actor_message_input_armed=false;return false;
+        }
+        if(frame.main_menu_epoch!=state_.main_menu_input_epoch)return false;
+        if(state_.main_menu_phase){return main_menu_.Input(frame);}
+        if(MainMenuInput(frame))return true;
         if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
         if(!inventory_.Modal())main_flow_.Input(frame);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
@@ -510,6 +526,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
         if(state_.actor_script.awaiting_choice)return scene_ui_.HandleChoiceInput(frame);
         const bool edge=actor_message_gate_.Observe(frame);
         const bool accepted=state_.actor_script.awaiting_message&&edge&&actor_script_.AcknowledgeMessage(&actor_message_target_);
+        if(accepted)state_.actor_script=actor_script_.Snapshot();
         state_.actor_message_stale_inputs=actor_message_gate_.Rejected();
         state_.actor_message_input_armed=actor_message_gate_.Armed();
         return accepted;
@@ -524,7 +541,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
     return accepted;
 }
 bool GameContentBoot::ProcessText(const GameTextEvent& event){
-    if(state_.closed||inventory_.Modal())return false;
+    if(state_.closed||inventory_.Modal()||state_.main_menu_phase)return false;
     if(state_.actor_script.awaiting_input&&GameInput32KeyboardActivity(scene_ui_.Editor(),event))
         state_.actor_input_remaining=9000;
     //WindowsInput32LatinKana229:source14E44/14F90 direct-success subset.
@@ -734,6 +751,8 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    main_menu_entry_gate_.Stop();main_menu_.Close();state_.main_menu=main_menu_.Snapshot();
+    main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
     main_flow_.Close();state_.main_flow=main_flow_.Snapshot();
@@ -794,7 +813,7 @@ bool GameContentBoot::Close() {
 GameReturnedInteractionGate GameContentBoot::ReturnedGate()const{
     GameReturnedInteractionGate gate;
     const auto ui=scene_ui_.Snapshot();const auto choice=scene_ui_.Choice();
-    gate.ui_idle=ui.live&&!ui.storage_dialog&&!ui.awaiting_confirmation&&ui.dialog_state==3
+    gate.ui_idle=!state_.main_menu_phase&&ui.live&&!ui.storage_dialog&&!ui.awaiting_confirmation&&ui.dialog_state==3
         &&(!ui.editor.live||ui.editor.source_state==3)&&choice.state==3&&!state_.closed&&!state_.blocked;
     const auto inventory=inventory_.Snapshot();
     gate.inventory_retired=inventory.phase==7&&!inventory.live&&!inventory.owner480&&!inventory.request14
@@ -804,9 +823,108 @@ GameReturnedInteractionGate GameContentBoot::ReturnedGate()const{
     gate.source469=state_.source_loader469;gate.manager9=actor_runtime_.Snapshot().manager_request9;
     gate.message_context=state_.actor_message_contexts;return gate;
 }
+bool GameContentBoot::MainMenuEligible()const{
+    const auto available=returned_interaction_.Snapshot();const auto flow=main_flow_.Snapshot();
+    const auto actor=actor_script_.Snapshot();const auto ui=scene_ui_.Snapshot();
+    const auto transition=scene_ui_.TitleTransitionOwner().Snapshot();
+    return !state_.closed&&!state_.blocked&&!state_.main_menu_phase&&state_.current_scene==4&&state_.load_state==6
+        &&state_.source_loader469&&available.live&&available.eligible&&!available.revoked&&!available.event_posted
+        &&available.owner&&available.generation&&actor.manager_flag68&&actor.runtime.camera_mode!=0
+        &&actor.live&&!actor.blocked&&!actor.completed&&actor.context_enabled&&!actor.awaiting_message&&!actor.awaiting_choice&&!actor.awaiting_input
+        &&!actor.inventory_requested&&!actor.source_main_input_suppressed48&&actor.callback_depth==0&&actor.queued_callbacks==0
+        &&actor.callbacks_posted==actor.callbacks_returned&&actor.vm_current.valid&&!actor.vm_current.event_envelope_present
+        &&flow.live&&flow.phase1C==0&&flow.substate24==0&&flow.return20==0
+        &&GameMainMenuCanBorrowTransition(transition)&&ui.live&&!ui.storage_dialog&&!ui.awaiting_confirmation;
+}
+bool GameContentBoot::MainMenuInput(const GameInputFrame& frame){
+    // WindowsAvailableMainMenu borrows an existing source-qualified available
+    // lease. It does not clear469, consume/rearm that token, or add a PC route.
+    returned_interaction_.CheckInputOwners(actor_script_.Snapshot(),main_flow_.Snapshot(),ReturnedGate());
+    const auto available=returned_interaction_.Snapshot();state_.returned_interaction=available;
+    state_.main_menu_available=MainMenuEligible();state_.main_menu_source_right_blocked=state_.source_loader469;
+    if(!state_.main_menu_available){main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return false;}
+    if(frame.returned_owner!=available.owner||frame.returned_generation!=available.generation
+       ||frame.message_context!=state_.actor_message_contexts||frame.message_owner_generation!=state_.actor_script.generation){
+        main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;return false;
+    }
+    if(!main_menu_entry_ready_||main_menu_entry_owner_!=available.owner||main_menu_entry_generation_!=available.generation){
+        main_menu_entry_gate_.Begin();main_menu_entry_ready_=true;main_menu_entry_owner_=available.owner;main_menu_entry_generation_=available.generation;
+    }
+    if(frame.overflow_resync){main_menu_entry_gate_.Begin();return false;}
+    if(!main_menu_entry_gate_.Observe(frame,Right))return false;
+    try{
+        const auto actor=actor_script_.Snapshot();main_menu_target_=actor_script_.OwnerEventTarget();
+        main_menu_lease_={actor.generation,actor.vm_current.run_id,available.owner,available.generation,state_.actor_message_contexts,state_.main_menu_input_epoch+1};
+        const auto status=main_flow_.BeginAvailableMenu();if(!status){state_.status=status;state_.blocked=true;return false;}
+        state_.main_menu_input_epoch=main_menu_lease_.input_epoch;state_.main_menu_phase=1;state_.main_menu_available=false;
+        main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;returned_interaction_.SuspendInput();
+        actor_message_gate_.Stop();main_flow_.ResetInput();state_.main_flow=main_flow_.Snapshot();state_.returned_interaction=returned_interaction_.Snapshot();
+        return true;
+    }catch(const std::exception& e){state_.status={GameFsCode::Unavailable,0,e.what()};state_.blocked=true;return false;}
+}
+GameFsStatus GameContentBoot::CheckMainMenuLease()const{
+    try{
+        const auto actor=actor_script_.Snapshot();const auto available=returned_interaction_.Snapshot();const auto target=actor_script_.OwnerEventTarget();
+        if(!actor.live||actor.blocked||actor.generation!=main_menu_lease_.script_generation||actor.vm_current.run_id!=main_menu_lease_.run_id
+           ||!actor_runtime_.OwnersLive()||actor.runtime.camera_mode==0||state_.current_scene!=4
+           ||!available.live||available.revoked||available.owner!=main_menu_lease_.available_owner||available.generation!=main_menu_lease_.available_generation
+           ||available.event_posted||target.generation!=main_menu_target_.generation||target.callback.kind!=main_menu_target_.callback.kind
+           ||target.callback.word!=main_menu_target_.callback.word||target.context.word!=main_menu_target_.context.word
+           ||main_menu_target_.context.context_owner.expired()||target.context.context_owner.lock()!=main_menu_target_.context.context_owner.lock())
+            return {GameFsCode::Unavailable,0,"Main menu borrowed owner replaced or retired"};
+        return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
+    auto status=CheckMainMenuLease();
+    if(status)status=actor_script_.TickMenuOwner();
+    if(status){
+        switch(state_.main_menu_phase){
+        case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
+        case 2:{
+            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0);
+            if(status)status=main_flow_.MenuOpened();
+            int32_t queue=-1;if(status)status=actor_script_.PostMenuEvent(main_menu_target_,10,main_menu_.Snapshot().generation,queue);
+            if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event10 queue refused"};
+            if(status)state_.main_menu_phase=3;break;
+        }
+        case 3:
+            status=main_menu_.Tick();
+            if(status&&main_menu_.Snapshot().state78==3){
+                status=main_flow_.PollMenuCancel();if(status)state_.main_menu_phase=4;
+            }
+            break;
+        case 4:{
+            // A separate main-flow invocation after GUIready/result poll.
+            status=main_flow_.RetireMenuCancel();int32_t queue=-1;
+            if(status)status=actor_script_.PostMenuEvent(main_menu_target_,11,main_menu_.Snapshot().generation,queue);
+            if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event11 queue refused"};
+            if(status)state_.main_menu_phase=5;break;
+        }
+        case 5:
+            if(actor_script_.Snapshot().menu_close_return.returned){
+                ++state_.main_menu_returns;++state_.main_menu_input_epoch;state_.main_menu_phase=0;
+                main_menu_target_={};main_menu_lease_={};main_flow_.ResetInput();returned_interaction_.SuspendInput();
+                main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;
+            }
+            break;
+        default:status={GameFsCode::Unavailable,0,"Main menu finite native owner phase"};break;
+        }
+    }
+    state_.actor_script=actor_script_.Snapshot();state_.main_flow=main_flow_.Snapshot();state_.main_menu=main_menu_.Snapshot();
+    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){return main_menu_.Draw(surface);});
+    state_.main_menu=main_menu_.Snapshot();
+    state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
+    if(status&&!state_.main_menu_phase){
+        returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
+        state_.main_menu_available=MainMenuEligible();
+    }
+    return bool(status);
+}
 bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
     if(state_.actor_dictionary_requested){
         if(!state_.actor_script.started)return false;
+        if(state_.main_menu_phase)return TickMainMenu(graphics);
         const auto before=state_.actor_script;
         //Named native single-worker phase0 poll before the next KSC slice.
         //Use the prior published text phase: an acknowledgement cannot also
@@ -927,6 +1045,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());
             state_.returned_interaction=returned_interaction_.Snapshot();
         }
+        state_.main_menu_available=MainMenuEligible();state_.main_menu_source_right_blocked=state_.source_loader469;
+        if(!state_.main_menu_available){main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;}
         state_.blocked=!bool(state_.status);state_.frontier_pc=0x74C18;
         const auto script_ok=bool(state_.status);
         if(state_.actor_script.runtime.command_blocked){

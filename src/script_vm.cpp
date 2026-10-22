@@ -400,6 +400,21 @@ int32_t Vm::post_owner_event(const Value& code,int32_t event_id,int32_t argument
     }else enter_callback(std::move(callback));
     ++next_callback_receipt_;++callbacks_posted_;return 0;
 }
+int32_t Vm::post_owner_nil_event(const Value& code,int32_t event_id){
+    if(!context_||context_->vm!=this||stopped_)return -1;
+    if(code.word>>28!=7)return 1;
+    const auto* command=program_.command(code.word&0x0FFFFFFF);
+    if(code.kind!=Value::Kind::Code||!command||command->opcode!=0x30)
+        throw std::runtime_error("Owner NIL event target needs admitted code/frame prologue");
+    Value nil;nil.kind=Value::Kind::Scalar;
+    PendingCallback callback{code.word&0x0FFFFFFF,Value::integer(event_id),nil,{},false};
+    callback.receipt=next_callback_receipt_+1;
+    if(event_depth_||event_envelope_){
+        if(pending_callbacks_.size()==64)return 1;
+        pending_callbacks_.push_back(std::move(callback));
+    }else enter_callback(std::move(callback));
+    ++next_callback_receipt_;++callbacks_posted_;return 0;
+}
 void Vm::enter_callback(PendingCallback callback){
     if(event_envelope_)throw std::runtime_error("Nested immediate native event envelope");
     for(const auto* value:{&callback.first,&callback.second})

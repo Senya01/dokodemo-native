@@ -228,6 +228,7 @@ public:
     //1B4C0/6B4B8 owner event uses the same envelope/queue,callerID=-1:
     //two scalar arguments,without the context-token third argument.
     int32_t post_owner_event(const Value& code,int32_t event_id,int32_t argument);
+    int32_t post_owner_nil_event(const Value& code,int32_t event_id);
     uint32_t callback_depth()const noexcept{return event_depth_;}
     uint32_t queued_callbacks()const noexcept{return uint32_t(pending_callbacks_.size());}
     uint64_t deadline_tick()const noexcept{return wait_until_;}

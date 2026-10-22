@@ -31,6 +31,14 @@ std::string Text(const PackageView &image, uint32_t at) {
     throw std::runtime_error("B2A resource name unterminated");
 }
 } // namespace
+void GameResourceSource::TrimUnusedTextures(){
+    // Native cache pressure policy: live resources/clones keep their exact
+    // shared image. Only the cache's sole remaining ownership may be retired.
+    for(auto i=texture_cache_.begin();i!=texture_cache_.end();){
+        if(i->second.use_count()==1){i=texture_cache_.erase(i);++texture_cache_evictions_;}
+        else ++i;
+    }
+}
 GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::shared_ptr<GameImage> &out) {
     std::string key = path;
     for (auto &c : key)
@@ -41,6 +49,7 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
         out = found->second;
         return {};
     }
+    if (texture_cache_.size() >= 512)TrimUnusedTextures();
     if (texture_cache_.size() >= 512)
         return {GameFsCode::Bounds, 0, "native texture cache cap512"};
     PackageView image;
@@ -51,7 +60,9 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
     status = decoded->DecodeGim(std::move(image));
     if (!status)
         return status;
-    if (uint64_t(TextureCachePixels()) + uint64_t(decoded->Width()) * decoded->Height() > 16 * 1024 * 1024)
+    const auto pixels=uint64_t(decoded->Width())*decoded->Height();
+    if (uint64_t(TextureCachePixels()) + pixels > 16 * 1024 * 1024)TrimUnusedTextures();
+    if (uint64_t(TextureCachePixels()) + pixels > 16 * 1024 * 1024)
         return {GameFsCode::Bounds, 0, "native decoded texture budget64MiB"};
     texture_cache_.emplace(std::move(key), decoded);
     out = std::move(decoded);
@@ -267,6 +278,9 @@ GameUiControl *GameUiInstance::AddControl(uint32_t clip) {
     return &controls_.back();
 }
 GameUiControl *GameUiInstance::Control(uint32_t index) {
+    return index < controls_.size() ? &controls_[index] : nullptr;
+}
+const GameUiControl *GameUiInstance::Control(uint32_t index)const {
     return index < controls_.size() ? &controls_[index] : nullptr;
 }
 bool GameUiInstance::Update(std::string &error) {

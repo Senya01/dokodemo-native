@@ -15,6 +15,7 @@ class GameResourceSource {
     GameFsStatus TextureResource(const std::string &path, std::shared_ptr<GameImage> &out);
     void ClearTextureCache() { texture_cache_.clear(); }
     uint32_t TextureCacheSize() const { return uint32_t(texture_cache_.size()); }
+    uint64_t TextureCacheEvictions() const { return texture_cache_evictions_; }
     uint32_t TextureCachePixels() const {
         uint32_t pixels = 0;
         for (const auto &item : texture_cache_)
@@ -23,7 +24,9 @@ class GameResourceSource {
     }
 
   private:
+    void TrimUnusedTextures();
     std::map<std::string, std::shared_ptr<GameImage>> texture_cache_;
+    uint64_t texture_cache_evictions_=0;
 };
 struct GameUiTexture {
     int16_t origin_x = 0, origin_y = 0;
@@ -95,6 +98,7 @@ class GameUiInstance final {
     // 96514 creates a separate8-byte animation control, not a node record.
     GameUiControl *AddControl(uint32_t clip);
     GameUiControl *Control(uint32_t index);
+    const GameUiControl *Control(uint32_t index)const;
     bool Update(std::string &error);
     // 96870/96F20/97FC0. Both matrices at a root are the same instance base;
     // children inherit current parent world, not previous-frame cached state.

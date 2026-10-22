@@ -96,6 +96,29 @@ GameFsStatus GameMainFlow::Tick(const GameMainFlowGate& gate){
     return {};
 }
 void GameMainFlow::Close(){state_.live=false;runtime_=nullptr;dispatch_={};input_.BeginContext();}
+GameFsStatus GameMainFlow::BeginAvailableMenu(){
+    if(!state_.live||!runtime_||!runtime_->OwnersLive()||state_.phase1C||state_.substate24||state_.return20)
+        return {GameFsCode::Unavailable,0,"Main menu requires its idle live main-flow owner"};
+    state_.phase1C=7;state_.menu58=0;state_.last_pc=0x23D0C;input_.BeginContext();return {};
+}
+GameFsStatus GameMainFlow::AdvanceMenuOpening(){
+    if(state_.phase1C!=7||state_.menu58!=0)return {GameFsCode::Unavailable,0,"Main menu state0 owner mismatch"};
+    state_.menu58=1;state_.last_pc=0x23970;return {};
+}
+GameFsStatus GameMainFlow::MenuOpened(){
+    if(state_.phase1C!=7||state_.menu58!=1)return {GameFsCode::Unavailable,0,"Main menu opening owner mismatch"};
+    state_.menu58=2;state_.last_pc=0x2399C;return {};
+}
+GameFsStatus GameMainFlow::PollMenuCancel(){
+    if(state_.phase1C!=7||state_.menu58!=2)return {GameFsCode::Unavailable,0,"Main menu completion owner mismatch"};
+    state_.menu_result54=-1;state_.menu58=5;state_.last_pc=0x23748;return {};
+}
+GameFsStatus GameMainFlow::RetireMenuCancel(){
+    if(state_.phase1C!=7||state_.menu58!=5||state_.menu_result54!=-1||state_.return20)
+        return {GameFsCode::Unavailable,0,"Main menu Cancel retirement owner mismatch"};
+    state_.menu_result50=state_.menu_result54;state_.menu_result54=-1;state_.menu58=0;
+    state_.phase1C=state_.return20;state_.return20=0;state_.last_pc=0x238B0;input_.BeginContext();return {};
+}
 GameFsStatus GamePostModalInteraction::Update(const GameInventorySnapshot& inventory,const GameMainFlowSnapshot& flow,GameActorScript& script,bool source469){
     if(!state_.error.empty())return {GameFsCode::Unavailable,0,state_.error};
     const auto current=script.Snapshot();

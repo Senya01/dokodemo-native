@@ -5,6 +5,7 @@
 #include "game_title_native.h"
 #include "game_actor_script_native.h"
 #include "game_main_flow_native.h"
+#include "game_main_menu_native.h"
 #include "game_returned_interaction_native.h"
 #include <array>
 #include <vector>
@@ -70,6 +71,8 @@ struct GameContentSnapshot {
     int32_t previous_scene = -1, current_scene = -1, next_scene = -1;
     uint32_t requested_bits = 0, owned_bits = 0, completed_bits = 0;
     uint32_t package_bytes = 0, package_slots = 0, frontier_pc = 0;
+    uint32_t texture_cache_entries=0,texture_cache_pixels=0;
+    uint64_t texture_cache_evictions=0;
     GameFontSnapshot font;
     GameSceneUiSnapshot scene_ui;
     GameSoundBankSnapshot sound_bank;
@@ -87,6 +90,10 @@ struct GameContentSnapshot {
     std::array<uint8_t,16> actor_dictionary_prefix{};
     GameActorScriptSnapshot actor_script;
     GameMainFlowSnapshot main_flow;
+    GameMainMenuSnapshot main_menu;
+    uint32_t main_menu_phase=0,main_menu_returns=0;
+    uint64_t main_menu_input_epoch=0;
+    bool main_menu_available=false,main_menu_source_right_blocked=false;
     GamePostModalSnapshot post_modal;
     GameReturnedInteractionSnapshot returned_interaction;
     bool source_loader469=false; //17910 cold0;stable inventory poll1 persists
@@ -136,7 +143,8 @@ class GameContentBoot final : public GameResourceSource {
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override;
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
-        return state_;
+        auto out=state_;out.texture_cache_entries=TextureCacheSize();out.texture_cache_pixels=TextureCachePixels();
+        out.texture_cache_evictions=TextureCacheEvictions();return out;
     }
     const GameFontResource &Font() const {
         return font_;
@@ -173,6 +181,16 @@ class GameContentBoot final : public GameResourceSource {
     BpDirectory actor_directory_;
     GameActorScript actor_script_;
     GameMainFlow main_flow_;
+    GameMainMenu main_menu_;
+    GameButtonGate main_menu_entry_gate_;
+    GameOwnerEventTarget main_menu_target_;
+    GameMainMenuLease main_menu_lease_;
+    bool main_menu_entry_ready_=false;
+    uint64_t main_menu_entry_owner_=0,main_menu_entry_generation_=0;
+    bool MainMenuEligible()const;
+    bool MainMenuInput(const GameInputFrame&);
+    GameFsStatus CheckMainMenuLease()const;
+    bool TickMainMenu(GameGraphics&);
     GamePostModalInteraction post_modal_;
     GameReturnedConversationInteraction returned_interaction_;
     GameReturnedInteractionGate ReturnedGate()const;

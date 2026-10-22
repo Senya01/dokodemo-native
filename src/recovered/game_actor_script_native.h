@@ -91,7 +91,24 @@ struct GameWordRowObservation {
     std::array<script::ValueWitness,19> fields{};
 };
 GameWordRowObservation GameObserveWordRow(const script::Vm&,uint64_t generation,uint32_t row) noexcept;
+// Current source R-prefix guards, captured without executing script reads.
+// No pointer, owner lease, callback or permission is created by this evidence.
+struct GameOrdinaryControlObservation {
+    bool valid=false;
+    uint64_t generation=0,run_id=0;
+    uint32_t error_code=0;
+    std::array<script::ValueWitness,5> values{}; // Global9 header,[8],Global9A76,Ctx3DF7,Ctx2871
+};
+struct GameMenuCallbackSnapshot {
+    bool pending=false,returned=false,failed=false;
+    uint32_t event=0,flag_before=0,flag_after=0;
+    uint8_t kind_before=0,kind_after=0;
+    uint64_t menu_generation=0,receipt=0,callback_frame=0;
+    script::VmStateWitness suspended,restored;
+};
 struct GameActorScriptSnapshot {
+    GameOrdinaryControlObservation ordinary_controls;
+    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return;
     GameOwnedConversationSnapshot owned_conversation;
     uint64_t post_modal_observation_refusals=0;
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
@@ -214,6 +231,8 @@ class GameActorScript final {
                             const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
                             GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr,GameSoundBank* sound=nullptr);
     GameFsStatus Tick();
+    GameFsStatus TickMenuOwner();
+    GameFsStatus PostMenuEvent(const GameOwnerEventTarget&,uint32_t event,uint64_t menu_generation,int32_t& queue_result);
     bool AcknowledgeMessage(const GameMessageTarget* expected=nullptr);
     GameMessageTarget MessageTarget()const;
     GameChoiceTarget ChoiceTarget()const;
@@ -235,6 +254,7 @@ class GameActorScript final {
     void CaptureInventoryItems();
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
     void ObserveWordSelection(const script::FrameTransition&)noexcept;
+    void ObserveMenuCallback(const script::FrameTransition&)noexcept;
     void RecordInventoryModelService(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,bool=true);
     script::Value Service(uint8_t,const std::vector<script::Value>&);
     script::Value GameService(const std::vector<script::Value>&);

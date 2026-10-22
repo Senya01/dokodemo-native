@@ -187,6 +187,23 @@ struct Resources : GameResourceSource {
         return {};
     }
 };
+void TextureCacheOwnershipTests(){
+    Resources source;std::vector<std::shared_ptr<GameImage>> live(512);
+    for(uint32_t i=0;i<512;++i)Check(bool(source.TextureResource("cache"+std::to_string(i)+".GIM",live[i])),"bounded live texture acquisitions");
+    const auto first=live[0];std::weak_ptr<GameImage> retired=live[1];
+    std::shared_ptr<GameImage> replacement;
+    const auto requests=source.requests;
+    Check(!source.TextureResource("extra.GIM",replacement)&&!replacement&&source.requests==requests,"full live cache refuses without opening or evicting owners");
+    live[1].reset();
+    Check(bool(source.TextureResource("extra.GIM",replacement))&&retired.expired()&&source.TextureCacheEvictions()==1,"cache-only image retires on pressure");
+    Check(source.TextureCacheSize()==512&&source.TextureCachePixels()==512*4,"caps survive cache-only replacement");
+    const auto after=source.requests;std::shared_ptr<GameImage> hit;
+    Check(bool(source.TextureResource("CACHE0.GIM",hit))&&hit==first&&source.requests==after,"live identity and case-folded cache hit survive trim");
+    live[2].reset();const auto evictions=source.TextureCacheEvictions();
+    Check(!source.TextureResource("absent",hit)&&hit==first&&source.TextureCacheEvictions()==evictions+1,"failed acquisition preserves caller output and all live owners");
+    Check(live[3]&&live[3]->Pixels().size()==4,"other live image remains decoded");
+    source.ClearTextureCache();Check(source.TextureCacheSize()==0&&first->Pixels().size()==4&&replacement->Pixels().size()==4,"clearing cache does not retire externally owned images");
+}
 void ImageTests() {
     GameImage image;
     Check(bool(image.DecodeGim(View(Gim()))) && image.Width() == 2 && image.Height() == 2,
@@ -469,6 +486,7 @@ int main() {
     ChoiceTests();
     try {
         ImageTests();
+        TextureCacheOwnershipTests();
         OwnerTests();
         BankTests();
         FontDrawTests();

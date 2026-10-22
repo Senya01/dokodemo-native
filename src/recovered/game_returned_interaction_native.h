@@ -36,6 +36,7 @@ class GameReturnedConversationInteraction final {
     GameFsStatus Update(const GameActorScriptSnapshot&,const GameMainFlowSnapshot&,const GameReturnedInteractionGate&);
     bool Input(const GameInputFrame&);
     void CheckInputOwners(const GameActorScriptSnapshot&,const GameMainFlowSnapshot&,const GameReturnedInteractionGate&);
+    void SuspendInput(){input_.Stop();state_.eligible=state_.armed=false;}
     GameReturnedInteractionSnapshot Snapshot()const{return state_;}
     void Close();
   private:

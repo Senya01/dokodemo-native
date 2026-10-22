@@ -109,6 +109,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
                             const GameFontResource &font);
     bool DrawColdFrame(GameGraphics &graphics);
     GameTransition& TitleTransitionOwner()noexcept{return transition_;} //worker-owned,never exposed to UI thread
+    const GameTransition& TitleTransitionOwner()const noexcept{return transition_;}
     GameFsStatus ShowStorageDialog(const GameFontResource &font, uint32_t native_error);
     bool HandleDialogInput(const GameInputFrame &frame);
     GameFsStatus BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
