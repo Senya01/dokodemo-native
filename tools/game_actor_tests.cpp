@@ -34,6 +34,10 @@
 #include "game_inventory_discard_regressions.h"
 #endif
 #include "game_kana_regressions.h"
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_word_op55_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -366,6 +370,11 @@ void Focused(){
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryActionRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameWordOp55RegressionChecks();
 #endif
 
     

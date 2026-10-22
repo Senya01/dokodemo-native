@@ -109,6 +109,7 @@ struct GameActorScriptSnapshot {
     //Independent stable-table watch bound at the actual first builtin53
     //consumer frame. A successor message need not have numeric Frame[0].
     GameWordRowObservation word_consumer_row;
+    GameWordRowObservation word_clear_row;uint32_t word_clear_writes=0;
     uint32_t word_consumer_source_pc=0,word_consumer_source_entry=0;
     uint64_t word_consumer_source_frame_id=0;
     script::NormalReturnWitness normal_return;
@@ -134,6 +135,7 @@ struct GameActorScriptSnapshot {
     uint32_t e2_calls=0,e2_left_word=0,e2_right_word=0,e2_result_word=0;
     uint32_t d0_calls=0,d0_left_word=0,d0_right_word=0,d0_result_word=0;
     uint32_t d5_calls=0,d5_first_pc=0,d5_first_left_word=0,d5_first_right_word=0,d5_first_result_word=0;
+    uint32_t op55_calls=0,op55_first_pc=0,op55_first_before=0,op55_first_after=0,op55_first_table=0,op55_first_index=0;
     uint32_t ctx_reference_branches=0,ctx_reference_first_pc=0,ctx_reference_first_index=0;
     bool native_reserved_local_nil=false;
     std::vector<std::string> choice_options;

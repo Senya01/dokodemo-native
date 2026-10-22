@@ -528,6 +528,7 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     e2_calls_=e2_left_word_=e2_right_word_=e2_result_word_=0;
     d0_calls_=d0_left_word_=d0_right_word_=d0_result_word_=0;
     d5_calls_=d5_first_pc_=d5_first_left_word_=d5_first_right_word_=d5_first_result_word_=0;
+    op55_calls_=op55_first_pc_=op55_first_before_=op55_first_after_=op55_first_table_=op55_first_index_=0;
     ctx_reference_branches_=ctx_reference_first_pc_=ctx_reference_first_index_=0;
     pc_ = code_pc; display_state_ = 0; display_count_ = 0; frame_reserved_ = false; stopped_ = false;
     stack_.clear(); frame_ = std::make_shared<std::vector<Value>>(arguments);
@@ -834,6 +835,28 @@ Event Vm::step() {
                 stack_.back()=Value::integer(index+1);next=program_.operand(*cmd,1,3);
                 if(!program_.command(next))throw std::runtime_error("Foreach target outside script");
             } else stack_.resize(stack_.size()-3);
+        } else if(op==0x55) {
+            //6EE3C ->769F4: consume reference into result30; no value push.
+            //The checked native boundary refuses malformed/retired operands.
+            if(stack_.empty()||stack_.back().kind!=Value::Kind::Reference)
+                return stop(cmd,"Opcode55 needs a live typed reference");
+            const auto ref=stack_.back();
+            if(ref.table==Table::Ctx28&&(!context_||ref.context_owner.lock()!=context_||context_->vm!=this
+                ||context_->thread!=std::this_thread::get_id()))
+                return stop(cmd,"Opcode55 needs its live context-table owner");
+            const auto old=load_reference(ref);
+            if(!usable(old))return stop(cmd,"Opcode55 unknown/opaque referent");
+            auto value=old;const auto tag=old.word>>28;
+            const bool numeric_cell=(old.kind==Value::Kind::Scalar&&tag<=3)
+                ||(old.kind==Value::Kind::Timestamp&&tag==3);
+            if(numeric_cell&&tag==1)value.word=0x10000000u;
+            else if(numeric_cell&&(tag==2||tag==3))
+                value.word=(old.word&0xF0000000u)|((old.word-1u)&0x0FFFFFFFu);
+            if(numeric_cell&&tag)store_reference(ref,value);
+            stack_.pop_back();result_=ref;
+            if(!op55_calls_){op55_first_pc_=cmd->pc;op55_first_before_=old.word;op55_first_after_=value.word;
+                op55_first_table_=uint32_t(ref.table);op55_first_index_=ref.index;}
+            ++op55_calls_;
         } else if(op==0x52||op==0x53) {
             const auto ref=pop(),old=load_reference(ref);result_=ref;
             if(op==0x52)stack_.push_back(old);

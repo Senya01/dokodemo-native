@@ -368,6 +368,23 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         // subsequent executed game queries/mutations,not a parser self-check.
         vm_->access_observer([this](const Value& ref,bool write){
             if(dictionary_.OwnsCell(ref)){if(write)++state_.dictionary_game_writes;else ++state_.dictionary_game_reads;}
+            // Passive proof of the reached DBC descending row-clear consumer.
+            // Peek never invokes this callback or supplies VM values/results.
+            if(write&&vm_->pc()==0xDDF){
+                try{
+                    const auto current=vm_->current_witness();
+                    const auto row=vm_->read_slot(script::Table::Frame,0),record=vm_->read_slot(script::Table::Frame,1);
+                    const auto index=vm_->read_slot(script::Table::Frame,2);
+                    if(current.code_entry==0xDBC&&row.kind==Value::Kind::Scalar&&row.word>>28==2
+                       &&index.kind==Value::Kind::Scalar&&index.word>>28==2&&(index.word&0x0FFFFFFF)<19){
+                        const auto observed=ObserveWordRow(row.word&0x0FFFFFFF);
+                        if(observed.valid&&record.kind==Value::Kind::Reference&&uint32_t(record.table)==observed.table&&record.index==observed.index
+                           &&ref.table==record.table&&uint32_t(ref.index)==uint32_t(record.index)+1+(index.word&0x0FFFFFFF)){
+                            ++state_.word_clear_writes;state_.word_clear_row=observed;
+                        }
+                    }
+                }catch(...){/* Evidence failure does not change execution. */}
+            }
         });
         return False();
     }
@@ -866,6 +883,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
         out.d5_calls=vm_->d5_calls();out.d5_first_pc=vm_->d5_first_pc();out.d5_first_left_word=vm_->d5_first_left_word();out.d5_first_right_word=vm_->d5_first_right_word();out.d5_first_result_word=vm_->d5_first_result_word();
+        out.op55_calls=vm_->op55_calls();out.op55_first_pc=vm_->op55_first_pc();out.op55_first_before=vm_->op55_first_before();out.op55_first_after=vm_->op55_first_after();out.op55_first_table=vm_->op55_first_table();out.op55_first_index=vm_->op55_first_index();
         out.ctx_reference_branches=vm_->ctx_reference_branches();out.ctx_reference_first_pc=vm_->ctx_reference_first_pc();out.ctx_reference_first_index=vm_->ctx_reference_first_index();
         out.native_reserved_local_nil=vm_->native_reserved_local_nil();
         out.vm_current=vm_->current_witness();out.normal_return=vm_->last_normal_return();out.farewell_return=vm_->last_normal_return(1);
