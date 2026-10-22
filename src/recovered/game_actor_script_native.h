@@ -2,6 +2,7 @@
 #include "game_actor_dictionary_native.h"
 #include "game_actor_runtime_native.h"
 #include "game_inventory_native.h"
+#include "game_inventory_mark_native.h"
 #include "game_record_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
@@ -50,7 +51,7 @@ struct GameInventoryModelService {
     int32_t slot=-1,resource=-1,category=0,selector=0,x=0;
 };
 struct GameInventoryActionSnapshot {
-    bool pending=false,returned=false,completed=false,failed=false;
+    bool pending=false,returned=false,completed=false,failed=false,menu_origin=false;
     uint64_t generation=0,receipt=0,callback_frame=0;
     uint32_t event=0,row=0,completions=0,row_table=0,row_index=0,row_header=0;
     int32_t item_id=-1;std::array<uint32_t,3> before_words{},after_words{};
@@ -64,6 +65,9 @@ struct GameInventoryActionSnapshot {
     uint32_t definition_mask=0,definition_width=0,layout_table=0,layout_index=0,layout_header=0;
     std::array<uint32_t,2> layout_words{};
     uint32_t model_service_count=0;
+    uint32_t flag_store_count=0,flag_store_pc=0,flag_store_word=0;
+    uint32_t nil6_returns=0,flag_returns=0,protected_writes=0;
+    uint64_t nil6_return_executed=0,flag_store_executed=0,flag_return_executed=0;
     std::array<GameInventoryModelService,64> model_services{};
     script::VmStateWitness suspended,restored;
 };
@@ -107,18 +111,11 @@ struct GameMenuCallbackSnapshot {
     uint64_t menu_generation=0,receipt=0,callback_frame=0;
     script::VmStateWitness suspended,restored;
 };
-struct GameInventoryRowsObservation {
-    bool valid=false;
-    uint64_t generation=0,run_id=0;
-    uint32_t table=0,index=0,header=0,rows=0,cells=0,valid_items=0;
-    std::array<char,65> code_sha256{};
-    std::array<uint8_t,32> sha256{};
-};
-GameInventoryRowsObservation GameObserveInventoryRows(const script::Vm&,uint64_t,const script::Value&,std::vector<GameInventoryItem>&);
 struct GameActorScriptSnapshot {
     GameOrdinaryControlObservation ordinary_controls;
     GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return;
-    GameInventoryRowsObservation menu_inventory_before,menu_inventory_after;
+    GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
+    GameInventoryMarkSnapshot menu_mark;
     bool menu_inventory_live=false;
     uint64_t inventory_gui_generation=0;
     uint64_t menu_inventory_parent_generation=0;
@@ -254,6 +251,7 @@ class GameActorScript final {
     GameChoiceTarget InputTarget()const;
     GameFsStatus CompleteInput(const GameChoiceTarget&,std::string text,std::string auxiliary,bool timed_out);
     GameInventoryActionAdmission PostInventoryAction(uint64_t inventory_generation,uint32_t event,int32_t row);
+    GameInventoryActionAdmission PostMenuInventoryAction(const GameOwnerEventTarget&,uint64_t inventory_generation,uint32_t event,int32_t row);
     bool CanResumeInventory()const;
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
     GameFsStatus BindScriptInventory(uint64_t gui_generation,uint32_t script_request);
@@ -269,6 +267,9 @@ class GameActorScript final {
     GameWordRowObservation ObserveWordRow(uint32_t row)const noexcept;
     void Close();
   private:
+    GameInventoryActionAdmission PostInventoryActionImpl(uint64_t,uint32_t,int32_t,bool);
+    void CompleteInventoryActionReadback();
+    void ObserveInventoryStore(const script::Value&,bool)noexcept;
     void CaptureInventoryItems();
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
     void ObserveWordSelection(const script::FrameTransition&)noexcept;
@@ -283,6 +284,7 @@ class GameActorScript final {
     GameActorDictionary dictionary_;
     GameAsciiClass70Owner ascii_class70_;
     GameOwnedConversation owned_conversation_;
+    GameInventoryMarkChain menu_mark_;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;

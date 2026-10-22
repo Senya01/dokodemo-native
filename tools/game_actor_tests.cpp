@@ -53,6 +53,10 @@
 #endif
 
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_mark_regressions.h"
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_menu_render_retirement_regressions.h"
 #endif
 #include <algorithm>
@@ -421,6 +425,11 @@ GameMainMenuNilAbiRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameMenuInventoryRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuMarkRegressionChecks();
 #endif
 
     

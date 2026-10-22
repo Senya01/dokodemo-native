@@ -14,6 +14,9 @@ struct GameInventoryItem {
     std::string name,description;
 };
 enum class GameInventoryOrigin:uint32_t { Script41,MainMenu5 };
+struct GameInventoryActionDescriptor {uint32_t event=0,source_result=0;const char* label=nullptr;};
+uint32_t GameInventoryActionCount(GameInventoryOrigin,bool home)noexcept;
+GameInventoryActionDescriptor GameInventoryActionAt(GameInventoryOrigin,bool home,uint32_t index)noexcept;
 struct GameInventoryActionAdmission {
     GameFsStatus status;int32_t queue_result=-1;uint64_t receipt=0;
 };
