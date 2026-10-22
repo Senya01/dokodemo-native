@@ -20,6 +20,19 @@ struct GameActorLoopStep {
   uint32_t pc=0,depth=0;
   bool set_ready258=false,repeated=false;
 };
+//NativeSceneAnchorLocalX: source4865C indices, native world * local-X.
+//Original parent+10/view-space and source48FFC scheduling remain non-matching.
+GameFsStatus RoomModelRootNativeSceneAnchorLocalX(int32_t selector,float x,
+    const std::vector<GameModelPose>& scene_pose,GameMatrix& root,int32_t& anchor);
+struct GameRoomModelSlotSnapshot {
+  bool active=false;
+  uint32_t retirement=0; //490C8 request,490E0 disable,then499F8 release
+  uint64_t generation=0;
+  int32_t resource=-1,category=0,selector=0;
+  float source_x=0;
+  int32_t anchor_node=-1;
+  GameMatrix native_root=ModelIdentity();
+};
 // Source24300..24358: infinite repeat or final root pop produces258.
 // This does not complete the command or produce25E/VM54.
 GameActorLoopStep AdvanceActorLoop8021(std::vector<GameActorLoopFrame>& frames,uint32_t pc);
@@ -51,6 +64,8 @@ struct GameActorRuntimeSnapshot {
            loader_interval = 0;
   uint32_t model_slots = 0, model_nodes = 0, model_vertices = 0,
            model_triangles = 0;
+  uint32_t model_publications=0,model_updates=0,model_retire_requests=0,model_retirements=0;
+  std::array<GameRoomModelSlotSnapshot,100> room_models{};
   uint32_t motion_templates = 0, model_frames = 0;
   uint64_t model_pixel_writes = 0;
   uint32_t visible_pixels = 0;
@@ -136,6 +151,8 @@ public:
   GameFsStatus AdvanceActorFrame();
   GameFsStatus CreateModel(int32_t resource, int32_t category, int32_t motion,
                            float x, int32_t &slot);
+  GameFsStatus UpdateModel(int32_t slot,int32_t selector,float x);
+  GameFsStatus RetireModel(int32_t slot);
   GameFsStatus Draw(GameGraphics &,const std::function<GameFsStatus(GameGraphics&)>& overlay={});
   GameActorRuntimeSnapshot Snapshot() const { return state_; }
   void Close();
@@ -188,6 +205,8 @@ private:
   GameFsStatus ApplySceneLightToggle(int32_t value);
   GameFsStatus ApplyScenePair(uint32_t pair);
   GameFsStatus UpdateScene();
+  GameFsStatus RoomModelRoot(int32_t selector,float x,GameMatrix& root,int32_t& anchor) const;
+  GameFsStatus UpdateRoomModels();
   GameFsStatus UpdateCamera();
   std::shared_ptr<GameUiResource> intro_resource_;
   GameUiInstance intro_clone_;

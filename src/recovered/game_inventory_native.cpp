@@ -93,8 +93,8 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
                 else if(input_.First(Cross)||(input_.First(Circle)&&state_.action_selection==count-1)){
                     state_.select_result=input_.First(Cross)?0:int32_t(count);state_.actions=false;state_.stateB30=0;++state_.action_cancels;input_.BeginContext();
                 }else if(input_.First(Circle)){
-                    const auto event=home_&&state_.action_selection==1?14u:state_.action_selection==(home_?2u:0u)?15u:0u;
-                    if(!event||!dispatch_){state_.action_frontier=0x1B4C0;return {GameFsCode::Unavailable,0,"Inventory decorate/discard action is not implemented"};}
+                    const auto event=home_&&state_.action_selection==0?13u:home_&&state_.action_selection==1?14u:state_.action_selection==(home_?2u:0u)?15u:0u;
+                    if(!event||!dispatch_){state_.action_frontier=0x1B4C0;return {GameFsCode::Unavailable,0,"Inventory discard action is not implemented"};}
                     const auto admitted=dispatch_(state_.generation,event,state_.selected_row);
                     state_.action_queue_result=admitted.queue_result;input_.BeginContext();
                     if(!admitted.status)return admitted.status;

@@ -5,6 +5,37 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+GameFsStatus RoomModelRootNativeSceneAnchorLocalX(int32_t selector,float x,
+    const std::vector<GameModelPose>& scene_pose,GameMatrix& root,int32_t& anchor){
+  constexpr std::array<int32_t,9> nodes{{54,55,56,141,61,57,58,59,60}};
+  if(selector<0||selector>int32_t(nodes.size())||!std::isfinite(x))
+    return {GameFsCode::Unavailable,0,"NativeSceneAnchorLocalX selector/scalar domain"};
+  const int32_t selected=selector?nodes[size_t(selector-1)]:-1;
+  if(selected>=0&&size_t(selected)>=scene_pose.size())
+    return {GameFsCode::Unavailable,0,"NativeSceneAnchorLocalX authored scene anchor absent"};
+  auto basis=selected<0?ModelIdentity():scene_pose[size_t(selected)].world;
+  for(float v:basis)if(!std::isfinite(v))return {GameFsCode::Unavailable,0,"NativeSceneAnchorLocalX nonfinite authored pose"};
+  auto local=ModelIdentity();local[12]=x;
+  const auto result=ModelMultiply(basis,local);
+  for(float v:result)if(!std::isfinite(v))return {GameFsCode::Unavailable,0,"NativeSceneAnchorLocalX transform overflow"};
+  root=result;anchor=selected;return {};
+}
+GameFsStatus GameActorRuntime::RoomModelRoot(int32_t selector,float x,GameMatrix& root,int32_t& anchor) const{
+  if(selector&&(!state_.scene_model_live||!scene_asset_||!scene_asset_->Live()))
+    return {GameFsCode::Unavailable,0,"Room model authored scene owner expired"};
+  return RoomModelRootNativeSceneAnchorLocalX(selector,x,scene_clone_.Pose(),root,anchor);
+}
+GameFsStatus GameActorRuntime::UpdateRoomModels(){
+  for(size_t i=0;i<models_.size();++i){
+    auto& slot=models_[i];auto& owner=state_.room_models[i];
+    if(!slot.active||owner.retirement>=2)continue;
+    GameMatrix root;int32_t anchor=-1;auto status=RoomModelRoot(owner.selector,owner.source_x,root,anchor);
+    if(!status)return status;
+    status=slot.clone.Update(root);if(!status)return status;
+    owner.native_root=root;owner.anchor_node=anchor;
+  }
+  return {};
+}
 namespace {
 PackageView AscRecord(const PackageView &image, uint32_t index) {
   const auto size = image.Describe().size;
@@ -655,9 +686,22 @@ GameFsStatus GameActorRuntime::UpdateActorPose() {
 GameFsStatus GameActorRuntime::AdvanceActorFrame() {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Actor phase owner expired"};
+  //490E0/499F8: request,disable on one owner phase,release on the next.
+  //The clone and its borrowed assets stay owned until this second phase.
+  for(size_t i=0;i<models_.size();++i){
+    auto& slot=models_[i];auto& owner=state_.room_models[i];
+    if(!slot.active||!owner.retirement)continue;
+    if(owner.retirement==1){owner.retirement=2;continue;}
+    const auto statistics=slot.asset->Statistics();
+    state_.model_nodes-=statistics.nodes;state_.model_vertices-=statistics.vertices;
+    state_.model_triangles-=statistics.triangles;state_.motion_templates-=uint32_t(slot.motions.size());
+    slot.clone.Close();slot.motions.clear();slot.asset.reset();slot.active=false;
+    owner.active=false;owner.retirement=0;--state_.model_slots;++state_.model_retirements;
+  }
   const auto scene = UpdateScene();
   if (!scene)
     return scene;
+  const auto room=UpdateRoomModels();if(!room)return room;
   const auto camera=UpdateCamera();if(!camera)return camera;
   if(state_.intro_live){std::string error;if(!intro_clone_.Update(error))return {GameFsCode::Unavailable,0,error};
     ++state_.intro_updates;for(uint32_t i=0;i<3;++i)state_.intro_controls[i]=*intro_clone_.Control(i);}
@@ -859,10 +903,12 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   if (resource < 0 || uint32_t(resource) >= GameModelResources.size())
     return {GameFsCode::Unavailable, 0,
             "Render31 resource outside finite208 table"};
-  if (category != 0 || motion != 0 || x != 0)
+  if (category != 0 || motion < 0 || motion > 9 || !std::isfinite(x))
     return {
         GameFsCode::Unavailable, 0,
         "Render31 reached category/transform/motion domain not yet recovered"};
+  GameMatrix root;int32_t anchor=-1;
+  auto controller=RoomModelRoot(motion,x,root,anchor);if(!controller)return controller;
   if (state_.model_slots >= models_.size())
     return {}; // source returns -1 on full pool
   size_t index = 0;
@@ -890,7 +936,7 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   status = clone.Initialize(asset);
   if (!status)
     return status;
-  status = clone.Update(ModelIdentity());
+  status = clone.Update(root);
   if (!status)
     return status;
   auto &slot = models_[index];
@@ -900,6 +946,8 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   slot.clone = std::move(clone);
   slot.motions = std::move(motions);
   slot.active = true;
+  //Finite native connection of source node ownership and source scalar X.
+  state_.room_models[index]={true,0,++state_.model_publications,resource,category,motion,x,anchor,root};
   const auto statistics = slot.asset->Statistics();
   ++state_.model_slots;
   state_.model_nodes += statistics.nodes;
@@ -911,11 +959,29 @@ GameFsStatus GameActorRuntime::CreateModel(int32_t resource, int32_t category,
   out = int32_t(index);
   return {};
 }
+GameFsStatus GameActorRuntime::UpdateModel(int32_t id,int32_t selector,float x){
+  if(!Live()||id<0||size_t(id)>=models_.size())return {GameFsCode::Unavailable,0,"GAME33 model owner/slot domain"};
+  auto& slot=models_[size_t(id)];auto& owner=state_.room_models[size_t(id)];
+  if(!slot.active)return {}; //49740 has no allocation or replacement operation.
+  if(owner.retirement||owner.category!=0||selector<0||selector>9||!std::isfinite(x))
+    return {GameFsCode::Unavailable,0,"GAME33 unsupported live model controller"};
+  GameMatrix root;int32_t anchor=-1;auto status=RoomModelRoot(selector,x,root,anchor);if(!status)return status;
+  status=slot.clone.Update(root);if(!status)return status;
+  owner.selector=selector;owner.source_x=x;owner.native_root=root;owner.anchor_node=anchor;++state_.model_updates;
+  return {};
+}
+GameFsStatus GameActorRuntime::RetireModel(int32_t id){
+  if(!Live()||id<0||size_t(id)>=models_.size())return {GameFsCode::Unavailable,0,"GAME32 model owner/slot domain"};
+  auto& slot=models_[size_t(id)];auto& owner=state_.room_models[size_t(id)];
+  if(slot.active){owner.retirement=1;++state_.model_retire_requests;} //490C8 repeats restart request7=1.
+  return {};
+}
 GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay) {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Actor render owners expired"};
-  if (!state_.model_slots)
-    return {};
+  //Before the first room/camera publication this owner is only bootstrapped.
+  //After any model publication,zero remaining slots must still draw/present.
+  if(!state_.model_publications&&!state_.camera_bindings)return {};
   if (!state_.camera_bindings || !state_.camera_follows_actor)
     return {GameFsCode::Unavailable, 0,
             "Room render needs actual following-camera binding;static131D0 "
@@ -946,8 +1012,8 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   if (!graphics.Clear(0xFF000000, 0))
     return {GameFsCode::Unavailable, 0, "Room clear failed"};
   const auto prior_pixels = graphics.Snapshot().mesh_pixels;
-  for (const auto &slot : models_)
-    if (slot.active) {
+  for (size_t i=0;i<models_.size();++i)
+    if (const auto& slot=models_[i];slot.active&&state_.room_models[i].retirement<2) {
       const auto status = slot.clone.Draw(graphics, camera);
       if (!status)
         return status;
@@ -1034,6 +1100,7 @@ void GameActorRuntime::Close() {
     slot.active = false;
   }
   state_.model_slots = 0;
+  for(auto& owner:state_.room_models){owner.active=false;owner.retirement=0;}
   selection_.Reset();
   transition_ = nullptr;
   resources_ = nullptr;

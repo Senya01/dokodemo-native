@@ -21,6 +21,10 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_inventory_action_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_inventory_decorate_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -236,10 +240,96 @@ void OwnedCtxReferenceBranchChecks(){
     }
 }
 
+//Keep the independent runtime-owner checks out of the VM fixture stack frame.
+void RuntimeOwners(){
+    Lease owner_input(Dictionary());GameTransition fade;Check(fade.Initialize({{0,0}}),"transition source-produced center");
+    GameActorRuntime actor;Check(bool(actor.Initialize(0,owner_input.View(),fade)),"typed actor/camera owners admitted");
+    Check(actor.WaitReady()&&actor.Snapshot().active_command==-1,"23FD0 actual cold258ready producer");
+    Check(bool(actor.BindCamera(1))&&actor.Snapshot().camera_follows_actor&&actor.Snapshot().actor_position[2]==600,
+          "72 binds live source actor point,not zero/null");
+    Check(actor.Snapshot().manager_camera_request4C==-1&&bool(actor.RequestCamera(1))
+          &&actor.Snapshot().manager_camera_request4C==1&&actor.Snapshot().camera_requests_consumed==0
+          &&actor.Snapshot().camera_fov_degrees==30,"GAME44 setter publishes request without consuming or changing camera");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().manager_camera_request4C==-1
+          &&actor.Snapshot().camera_manager_state28==4&&actor.Snapshot().camera_fov_degrees==30
+          &&!actor.Snapshot().camera_complete2C,"23488 clear/start then camera samples ratio0;not completion");
+    float fov=30;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){
+        Check(bool(actor.AdvanceActorFrame()),"live camera interpolation update");
+        const auto now=actor.Snapshot();Check(now.camera_fov_degrees<=fov&&now.camera_fov_degrees>=18,"monotone actual curve target,not forced result");fov=now.camera_fov_degrees;
+    }
+    Check(actor.Snapshot().camera_complete2C&&fov==18&&actor.Snapshot().camera_manager_state28==4
+          &&actor.Snapshot().camera_completions==1&&actor.WaitReady(),"camera threshold completion is independent of BCFC cold ready");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0,"manager observes camera completion on later phase");
+    Check(!actor.Snapshot().manager_request9&&bool(actor.RequestManager9())&&actor.Snapshot().manager_request9,"GAME3 sets separate source manager9 request,not transition completion");
+    Check(bool(actor.RequestCamera(0))&&actor.Snapshot().camera_fov_degrees==18&&actor.Snapshot().camera_completions==1,"camera-out setter returns before interpolation or completion");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_transition_mode1C==2&&actor.Snapshot().camera_ratio<1
+        &&actor.Snapshot().camera_fov_degrees==18&&!actor.Snapshot().camera_complete2C,"out samples ratio1 before decreasing,retains first FOV");
+    fov=18;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){Check(bool(actor.AdvanceActorFrame()),"real camera-out phase");
+        const auto now=actor.Snapshot();Check(now.camera_fov_degrees>=fov&&now.camera_fov_degrees<=30,"camera-out monotone literal30 endpoint");fov=now.camera_fov_degrees;}
+    Check(actor.Snapshot().camera_complete2C&&actor.Snapshot().camera_completions==2&&actor.Snapshot().camera_transition_mode1C==0&&fov==30,"out completes only ratio<0/currentFOV>=30");
+    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0&&actor.Snapshot().manager_request9,"camera poll doesnot consume separate manager9 flag");
+    Check(bool(actor.StartTransition())&&fade.Snapshot().group==5&&fade.Snapshot().state==1,
+          "service6 starts real existing transition,not a returned success flag");
+    int32_t absent_slot=3;
+    Check(!actor.CreateModel(170,0,0,0,absent_slot)&&absent_slot==-1&&actor.Snapshot().model_slots==0,
+          "service31 cannot allocate a successful slot without actual resource owner");
+    {
+        GameMainFlow flow;std::vector<std::pair<uint32_t,int32_t>> events;
+        Check(bool(flow.Initialize(actor,[&](uint32_t event,int32_t arg){events.emplace_back(event,arg);return GameFsStatus{};})),"source constructor owns zeroed main-flow states");
+        GameMainFlowGate gate;gate.fade_state=2;
+        Check(flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0,"never force mainflow directly to phase5/state4");
+        Check(bool(actor.RequestManager())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==1,"actual byte8 transitions phase0 to1");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==5&&!actor.Snapshot().manager_request8&&!actor.Snapshot().manager_request9,
+              "phase1 byte8 branch clears9 then8 before phase5;old9 is cancelled not completed");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"real substate0 clear happens before4");
+        Check(bool(actor.RequestManager9())&&bool(actor.RequestCamera(1)),"independent later GAME3 andcamera setter admitted");
+        gate.extension_busy=true;
+        for(unsigned n=0;n<25;++n)Check(bool(flow.Tick(gate)),"busy gate remainspending without quota completion");
+        Check(actor.Snapshot().manager_request9&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"actualbusy gate prevents9clear");
+        gate.extension_busy=false;gate.manager_switch_pending=true;
+        Check(!flow.Tick(gate)&&actor.Snapshot().manager_request9,"unimplemented realswitch cannotbypassgate orclear9");
+        gate.manager_switch_pending=false;
+        Check(bool(flow.Tick(gate))&&!actor.Snapshot().manager_request9&&flow.Snapshot().substate24==11
+              &&actor.Snapshot().manager_camera_request4C==1,"2365C clearsrequest9 beforecamera requesthasbeenconsumed");
+        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0
+              &&flow.Snapshot().outer_returns==1,"236B0 latch returnsouter0;notLoadMan scenechange");
+        gate.loader469=true;const auto returns=flow.Snapshot().outer_returns;
+        flow.Input({0,true,false,1});flow.Input({Circle,true,false,2});Check(bool(flow.Tick(gate)),"stable469 blocksfreshCircle");
+        Check(events.empty()&&flow.Snapshot().phase1C==0&&flow.Snapshot().outer_returns==returns,"UIclose/poll completion doesnotfabricate469zero or event");
+        gate.choice_busy48=true;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Cross,true,false,4});flow.Tick(gate);
+        Check(events.empty()&&flow.Snapshot().input_suppressed48,"state9 main owner48 suppresses source Cross event12");
+        gate.choice_busy48=false;flow.Tick(gate);Check(events.empty(),"held Cross cannot dispatch after SELECT clears48");
+        //Separate gate0 fixture checks source input priority,not connected469 proof.
+        gate.loader469=false;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Circle,true,false,4});
+        Check(bool(flow.Tick(gate))&&events==std::vector<std::pair<uint32_t,int32_t>>{{0,0}}&&flow.Snapshot().phase1C==1,
+              "sourcephase0 freshCircle dispatches real0/0 thenphase1 evenwhen callbackcanbenoop");
+        Check(bool(actor.RequestManager9())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().phase1_request9_consumed==1,
+              "separatephase1 byte9consumer returns0withoutsubstate11");
+        flow.Close();Check(!flow.Input({Circle,true,false,5})&&!flow.Tick(gate),"retiredmainflow refuseslateinput/requests");
+        Check(bool(actor.AdvanceActorFrame()),"remainingindependentcamera requeststillowned");
+    }
+    Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
+          "zeroed1B188 manager receives actualservice0 request,not completion");
+    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
+    actor.Close();fade.Retire();Check(!actor.Snapshot().live,"typed actor/camera owners retired");
+    Lease model_input(Dictionary());GameTransition model_fade;Check(model_fade.Initialize({{0,0}}),"model error test fade");
+    MissingResources missing;GameActorRuntime model_owner;
+    Check(bool(model_owner.Initialize(0,model_input.View(),model_fade,&missing)),"model error owner initialized");
+    int32_t failed_slot=0;
+    Check(!model_owner.CreateModel(170,0,0,0,failed_slot)&&failed_slot==-1&&missing.calls==1&&model_owner.Snapshot().model_slots==0,
+          "real resource failure cannot publish first inactive model slot");
+    Check(!model_owner.CreateModel(170,1,0,0,failed_slot)&&missing.calls==1,"unrecovered category refuses before I/O");
+    model_owner.Close();model_fade.Retire();
+}
 void Focused(){
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryActionRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameInventoryDecorateRegressionChecks();
 #endif
 
     OwnedCtxReferenceBranchChecks();
@@ -614,84 +704,7 @@ GameOwnedConversationRegressionChecks();
     script::Vm event_scope(scopes);event_scope.start();
     Check(event_scope.run().status==script::Status::Complete&&event_scope.result().signed_integer()==8&&event_scope.event_scope_depth()==0,
           "nested event and opcode-cost scopes preserve result and balance");
-    Lease owner_input(Dictionary());GameTransition fade;Check(fade.Initialize({{0,0}}),"transition source-produced center");
-    GameActorRuntime actor;Check(bool(actor.Initialize(0,owner_input.View(),fade)),"typed actor/camera owners admitted");
-    Check(actor.WaitReady()&&actor.Snapshot().active_command==-1,"23FD0 actual cold258ready producer");
-    Check(bool(actor.BindCamera(1))&&actor.Snapshot().camera_follows_actor&&actor.Snapshot().actor_position[2]==600,
-          "72 binds live source actor point,not zero/null");
-    Check(actor.Snapshot().manager_camera_request4C==-1&&bool(actor.RequestCamera(1))
-          &&actor.Snapshot().manager_camera_request4C==1&&actor.Snapshot().camera_requests_consumed==0
-          &&actor.Snapshot().camera_fov_degrees==30,"GAME44 setter publishes request without consuming or changing camera");
-    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().manager_camera_request4C==-1
-          &&actor.Snapshot().camera_manager_state28==4&&actor.Snapshot().camera_fov_degrees==30
-          &&!actor.Snapshot().camera_complete2C,"23488 clear/start then camera samples ratio0;not completion");
-    float fov=30;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){
-        Check(bool(actor.AdvanceActorFrame()),"live camera interpolation update");
-        const auto now=actor.Snapshot();Check(now.camera_fov_degrees<=fov&&now.camera_fov_degrees>=18,"monotone actual curve target,not forced result");fov=now.camera_fov_degrees;
-    }
-    Check(actor.Snapshot().camera_complete2C&&fov==18&&actor.Snapshot().camera_manager_state28==4
-          &&actor.Snapshot().camera_completions==1&&actor.WaitReady(),"camera threshold completion is independent of BCFC cold ready");
-    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0,"manager observes camera completion on later phase");
-    Check(!actor.Snapshot().manager_request9&&bool(actor.RequestManager9())&&actor.Snapshot().manager_request9,"GAME3 sets separate source manager9 request,not transition completion");
-    Check(bool(actor.RequestCamera(0))&&actor.Snapshot().camera_fov_degrees==18&&actor.Snapshot().camera_completions==1,"camera-out setter returns before interpolation or completion");
-    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_transition_mode1C==2&&actor.Snapshot().camera_ratio<1
-        &&actor.Snapshot().camera_fov_degrees==18&&!actor.Snapshot().camera_complete2C,"out samples ratio1 before decreasing,retains first FOV");
-    fov=18;for(unsigned i=0;i<100&&!actor.Snapshot().camera_complete2C;++i){Check(bool(actor.AdvanceActorFrame()),"real camera-out phase");
-        const auto now=actor.Snapshot();Check(now.camera_fov_degrees>=fov&&now.camera_fov_degrees<=30,"camera-out monotone literal30 endpoint");fov=now.camera_fov_degrees;}
-    Check(actor.Snapshot().camera_complete2C&&actor.Snapshot().camera_completions==2&&actor.Snapshot().camera_transition_mode1C==0&&fov==30,"out completes only ratio<0/currentFOV>=30");
-    Check(bool(actor.AdvanceActorFrame())&&actor.Snapshot().camera_manager_state28==0&&actor.Snapshot().manager_request9,"camera poll doesnot consume separate manager9 flag");
-    Check(bool(actor.StartTransition())&&fade.Snapshot().group==5&&fade.Snapshot().state==1,
-          "service6 starts real existing transition,not a returned success flag");
-    int32_t absent_slot=3;
-    Check(!actor.CreateModel(170,0,0,0,absent_slot)&&absent_slot==-1&&actor.Snapshot().model_slots==0,
-          "service31 cannot allocate a successful slot without actual resource owner");
-    {
-        GameMainFlow flow;std::vector<std::pair<uint32_t,int32_t>> events;
-        Check(bool(flow.Initialize(actor,[&](uint32_t event,int32_t arg){events.emplace_back(event,arg);return GameFsStatus{};})),"source constructor owns zeroed main-flow states");
-        GameMainFlowGate gate;gate.fade_state=2;
-        Check(flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0,"never force mainflow directly to phase5/state4");
-        Check(bool(actor.RequestManager())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==1,"actual byte8 transitions phase0 to1");
-        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==5&&!actor.Snapshot().manager_request8&&!actor.Snapshot().manager_request9,
-              "phase1 byte8 branch clears9 then8 before phase5;old9 is cancelled not completed");
-        Check(bool(flow.Tick(gate))&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"real substate0 clear happens before4");
-        Check(bool(actor.RequestManager9())&&bool(actor.RequestCamera(1)),"independent later GAME3 andcamera setter admitted");
-        gate.extension_busy=true;
-        for(unsigned n=0;n<25;++n)Check(bool(flow.Tick(gate)),"busy gate remainspending without quota completion");
-        Check(actor.Snapshot().manager_request9&&flow.Snapshot().substate24==4&&flow.Snapshot().request9_consumed==0,"actualbusy gate prevents9clear");
-        gate.extension_busy=false;gate.manager_switch_pending=true;
-        Check(!flow.Tick(gate)&&actor.Snapshot().manager_request9,"unimplemented realswitch cannotbypassgate orclear9");
-        gate.manager_switch_pending=false;
-        Check(bool(flow.Tick(gate))&&!actor.Snapshot().manager_request9&&flow.Snapshot().substate24==11
-              &&actor.Snapshot().manager_camera_request4C==1,"2365C clearsrequest9 beforecamera requesthasbeenconsumed");
-        Check(bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().return20==0&&flow.Snapshot().substate24==0
-              &&flow.Snapshot().outer_returns==1,"236B0 latch returnsouter0;notLoadMan scenechange");
-        gate.loader469=true;const auto returns=flow.Snapshot().outer_returns;
-        flow.Input({0,true,false,1});flow.Input({Circle,true,false,2});Check(bool(flow.Tick(gate)),"stable469 blocksfreshCircle");
-        Check(events.empty()&&flow.Snapshot().phase1C==0&&flow.Snapshot().outer_returns==returns,"UIclose/poll completion doesnotfabricate469zero or event");
-        gate.choice_busy48=true;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Cross,true,false,4});flow.Tick(gate);
-        Check(events.empty()&&flow.Snapshot().input_suppressed48,"state9 main owner48 suppresses source Cross event12");
-        gate.choice_busy48=false;flow.Tick(gate);Check(events.empty(),"held Cross cannot dispatch after SELECT clears48");
-        //Separate gate0 fixture checks source input priority,not connected469 proof.
-        gate.loader469=false;flow.Input({0,true,false,3});flow.Tick(gate);flow.Input({Circle,true,false,4});
-        Check(bool(flow.Tick(gate))&&events==std::vector<std::pair<uint32_t,int32_t>>{{0,0}}&&flow.Snapshot().phase1C==1,
-              "sourcephase0 freshCircle dispatches real0/0 thenphase1 evenwhen callbackcanbenoop");
-        Check(bool(actor.RequestManager9())&&bool(flow.Tick(gate))&&flow.Snapshot().phase1C==0&&flow.Snapshot().phase1_request9_consumed==1,
-              "separatephase1 byte9consumer returns0withoutsubstate11");
-        flow.Close();Check(!flow.Input({Circle,true,false,5})&&!flow.Tick(gate),"retiredmainflow refuseslateinput/requests");
-        Check(bool(actor.AdvanceActorFrame()),"remainingindependentcamera requeststillowned");
-    }
-    Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
-          "zeroed1B188 manager receives actualservice0 request,not completion");
-    owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
-    actor.Close();fade.Retire();Check(!actor.Snapshot().live,"typed actor/camera owners retired");
-    Lease model_input(Dictionary());GameTransition model_fade;Check(model_fade.Initialize({{0,0}}),"model error test fade");
-    MissingResources missing;GameActorRuntime model_owner;
-    Check(bool(model_owner.Initialize(0,model_input.View(),model_fade,&missing)),"model error owner initialized");
-    int32_t failed_slot=0;
-    Check(!model_owner.CreateModel(170,0,0,0,failed_slot)&&failed_slot==-1&&missing.calls==1&&model_owner.Snapshot().model_slots==0,
-          "real resource failure cannot publish first inactive model slot");
-    Check(!model_owner.CreateModel(170,1,0,0,failed_slot)&&missing.calls==1,"unrecovered category refuses before I/O");
-    model_owner.Close();model_fade.Retire();
+    RuntimeOwners();
     for(const auto values: {std::pair<int,int>{-2,-1},{3,3},{7,6}}){
         auto comparison=Fixture({0x30,0,0x80,uint8_t(values.first),0x80,uint8_t(values.second),0xC3,0x70,0x38});
         script::Vm compare(comparison);compare.start();

@@ -38,12 +38,24 @@ class GameAsciiClass70Owner final {
     uint64_t generation_=0;
     script::Value current_,other_;
 };
+struct GameInventoryModelService {
+    bool returned=false;
+    uint32_t service=0,pc=0,entry=0,result_word=0;
+    uint64_t receipt=0,frame=0;
+    int32_t slot=-1,resource=-1,category=0,selector=0,x=0;
+};
 struct GameInventoryActionSnapshot {
     bool pending=false,returned=false,completed=false,failed=false;
     uint64_t generation=0,receipt=0,callback_frame=0;
     uint32_t event=0,row=0,completions=0,row_table=0,row_index=0,row_header=0;
     int32_t item_id=-1;std::array<uint32_t,3> before_words{},after_words{};
     std::array<uint8_t,3> before_kinds{},after_kinds{};
+    std::array<uint32_t,3> before_controls{},after_controls{};
+    uint32_t gate_word=0,definition_table=0,definition_index=0,definition_header=0;
+    uint32_t definition_mask=0,definition_width=0,layout_table=0,layout_index=0,layout_header=0;
+    std::array<uint32_t,2> layout_words{};
+    uint32_t model_service_count=0;
+    std::array<GameInventoryModelService,64> model_services{};
     script::VmStateWitness suspended,restored;
 };
 struct GameOwnerEventTarget {
@@ -200,6 +212,7 @@ class GameActorScript final {
   private:
     void CaptureInventoryItems();
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
+    void RecordInventoryModelService(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,bool=true);
     script::Value Service(uint8_t,const std::vector<script::Value>&);
     script::Value GameService(const std::vector<script::Value>&);
     script::Value DispatchGameService(const std::vector<script::Value>&);

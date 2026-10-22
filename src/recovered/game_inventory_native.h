@@ -9,6 +9,8 @@ struct GameInventoryItem {
     bool valid=false;
     std::array<uint32_t,3> source_words{};
     std::array<uint8_t,3> source_kinds{};
+    std::array<uint32_t,3> control_words{}; //actual row3/type,row8/selector,row9/spacing
+    std::array<uint8_t,3> control_kinds{};
     std::string name,description;
 };
 struct GameInventoryActionAdmission {
@@ -33,8 +35,8 @@ struct GameInventorySnapshot {
     std::vector<GameInventoryItem> items;
 };
 // Source41 -> resource14. Typed native ownership and modal SELECT layout;
-// List/filter/navigation plus owned script events14/15; placed-item removal,
-// decorate13 and confirmed discard16 remain explicit frontiers,not direct awards.
+// List/filter/navigation and owned script events13/14/15. The VM owns all
+// placement/flag writes; confirmed discard16 remains an explicit frontier.
 class GameInventory final {
   public:
     GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={});

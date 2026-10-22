@@ -196,7 +196,23 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
         const auto resource=field(0),category=field(3),motion=field(8),x=field(9);
         int32_t slot=-1;const auto status=runtime_->CreateModel(resource,category,motion,float(x),slot);
-        Need(bool(status),status.detail.c_str());return Value::integer(slot);
+        const auto result=Value::integer(slot);
+        RecordInventoryModelService(31,slot,resource,category,motion,x,status?result.word:0,bool(status));
+        Need(bool(status),status.detail.c_str());return result;
+    }
+    case 32: {
+        Need(runtime_!=nullptr,"GAME32 requires live model slot owner");const auto slot=Number(arg);
+        const auto status=runtime_->RetireModel(slot);
+        RecordInventoryModelService(32,slot,-1,0,0,0,status?False().word:0,bool(status));
+        Need(bool(status),status.detail.c_str());return False();
+    }
+    case 33: {
+        Need(runtime_!=nullptr,"GAME33 requires live model slot owner");
+        const auto field=[&](uint32_t index){return Number(vm_->load_reference(vm_->indexed_reference(arg,index)));};
+        const auto slot=field(6),selector=field(8),x=field(9);
+        const auto status=runtime_->UpdateModel(slot,selector,float(x));
+        RecordInventoryModelService(33,slot,field(0),field(3),selector,x,status?False().word:0,bool(status));
+        Need(bool(status),status.detail.c_str());return False();
     }
     case 36: {
         Need(runtime_&&bool(clock_),"GAME36 needs live scene owner and native civil clock");
@@ -466,6 +482,7 @@ void GameActorScript::CaptureInventoryItems(){
             item.name=name.cp932;item.description=description.cp932;item.date_word=field(4).word&0x0FFFFFFF;
             item.category=Number(field(5))==1?2:((field(7).word>>28)==0?1:0);
             for(uint32_t n=0;n<3;++n){const auto value=field(5+n);item.source_words[n]=value.word;item.source_kinds[n]=uint8_t(value.kind);}
+            for(uint32_t n=0;n<3;++n){const auto value=field(n==0?3:n+7);item.control_words[n]=value.word;item.control_kinds[n]=uint8_t(value.kind);}
         }
         }
         state_.inventory_items.push_back(std::move(item));
@@ -503,9 +520,29 @@ GameFsStatus GameActorScript::Tick() {
             CaptureInventoryItems();const auto& item=state_.inventory_items.at(action.row);
             Need(item.valid&&item.id==action.item_id,"Inventory action changed item identity");
             action.after_words=item.source_words;action.after_kinds=item.source_kinds;
-            Need(item.source_kinds[0]==uint8_t(Value::Kind::Scalar)&&item.source_words[0]==(action.event==15?0x10000001u:0x10000000u)
-                 &&item.source_words[1]==action.before_words[1]&&item.source_words[2]==action.before_words[2]
-                 &&item.source_kinds[1]==action.before_kinds[1]&&item.source_kinds[2]==action.before_kinds[2],"Inventory action source field write mismatch");
+            action.after_controls=item.control_words;
+            Need(item.source_kinds[0]==uint8_t(Value::Kind::Scalar)&&item.source_words[0]==(action.event==15?0x10000001u:0x10000000u),"Inventory action source flag write mismatch");
+            if(action.event==13){
+                Need(item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&(item.source_words[1]>>28)==2
+                     &&item.source_kinds[2]==uint8_t(Value::Kind::Scalar)&&(item.source_words[2]>>28)==2,"Decoration did not produce a typed model/placement");
+                const auto slot=Value{Value::Kind::Scalar,item.source_words[1]}.signed_integer();
+                const auto candidate=Value{Value::Kind::Scalar,item.source_words[2]}.signed_integer();
+                Value layouts;layouts.kind=Value::Kind::Reference;layouts.table=script::Table::Global;layouts.index=0x4EAE;
+                const auto layout=vm_->load_reference(vm_->indexed_reference(layouts,uint32_t(candidate)));
+                Need(layout.kind==Value::Kind::Reference,"Decoration layout source reference");
+                action.layout_table=uint32_t(layout.table);action.layout_index=layout.index;action.layout_header=vm_->load_reference(layout).word;
+                for(uint32_t i=0;i<2;++i)action.layout_words[i]=vm_->load_reference(vm_->indexed_reference(layout,i)).word;
+                Need(item.control_words[1]==action.layout_words[0],"Decoration did not retain actual layout selector");
+                const auto room=runtime_->Snapshot();Need(slot>=0&&size_t(slot)<room.room_models.size(),"Decoration source model allocation unavailable");
+                const auto& owner=room.room_models[size_t(slot)];
+                Need(owner.active&&!owner.retirement&&owner.resource==item.id&&owner.category==0&&owner.selector==Value{Value::Kind::Scalar,item.control_words[1]}.signed_integer()
+                     &&owner.source_x==float(Value{Value::Kind::Scalar,item.control_words[2]}.signed_integer()),"Decoration returned a foreign/unsupported model owner");
+            }else if(action.before_words[1]>>28){
+                Need(item.source_words[1]==0&&item.source_words[2]==0&&item.control_words[2]==0x20000000u,"Putaway did not clear source placement");
+            }else{
+                Need(item.source_words[1]==action.before_words[1]&&item.source_words[2]==action.before_words[2]
+                     &&item.source_kinds[1]==action.before_kinds[1]&&item.source_kinds[2]==action.before_kinds[2],"Inventory flag action changed placement");
+            }
             action.pending=false;action.completed=true;++action.completions;
         }
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
@@ -603,28 +640,57 @@ GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t gener
     try{
         Need(state_.live&&vm_&&state_.inventory_requested&&generation==state_.inventory_requests&&!state_.inventory_action.pending,
              "Inventory action owner/generation unavailable");
-        Need((event==14||event==15)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
+        Need((event==13||event==14||event==15)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input&&!vm_->context_enabled()
              &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Inventory action requires its suspended nonmodal callback owner");
         CaptureInventoryItems();const auto item=state_.inventory_items.at(size_t(row));
-        Need(item.valid&&item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&item.source_words[1]==0,
-             "Inventory placed-item removal helper3405 is not implemented");
+        Need(item.valid&&item.source_kinds[1]==uint8_t(Value::Kind::Scalar),"Inventory source model field domain");
+        uint32_t gate_word=0;
+        if(event==13||item.source_words[1]>>28){
+            Need(runtime_&&runtime_->OwnersLive(),"Inventory model operation requires its live runtime owner");
+            const auto gate=vm_->load_reference(vm_->indexed_reference(script::Value{Value::Kind::Reference,0,script::Table::Ctx28,0x243F},0));
+            Need(gate.kind==Value::Kind::Scalar&&gate.word==0x20000000u,"Inventory model operation requires actual source integer-zero owner gate");gate_word=gate.word;
+            if(item.source_words[1]>>28){
+                const auto slot=Value{Value::Kind::Scalar,item.source_words[1]}.signed_integer();const auto room=runtime_->Snapshot();
+                Need(slot>=0&&size_t(slot)<room.room_models.size()&&room.room_models[size_t(slot)].active
+                     &&!room.room_models[size_t(slot)].retirement&&room.room_models[size_t(slot)].resource==item.id,
+                     "Inventory placed model owner no longer belongs to this row");
+            }else Need(item.source_words[1]==0,"Decoration requires canonical NIL model field");
+        }else Need(item.source_words[1]==0,"Inventory model field must be canonical NIL");
         const auto registered=bindings_.at(35);
         Need(registered.kind==Value::Kind::Reference&&registered.table==script::Table::Global&&registered.index==0x4FAD,"GAME35 registration differs from source Global4FAD owner");
         const auto rowref=vm_->load_reference(vm_->indexed_reference(registered,uint32_t(row)));
         const auto header=vm_->load_reference(rowref);const auto before=vm_->current_witness();const auto target=OwnerEventTarget();
         Need(rowref.kind==Value::Kind::Reference&&header.kind==Value::Kind::ArrayHeader&&before.valid&&!before.event_envelope_present
              &&target.callback.word==0x7008DA28u,"Inventory source row/callback identity");
+        Value definition;uint32_t definition_mask=0,definition_width=0;
+        if(event==13){
+            Value definitions;definitions.kind=Value::Kind::Reference;definitions.table=script::Table::Global;definitions.index=0x44ED;
+            definition=vm_->load_reference(vm_->indexed_reference(definitions,uint32_t(item.id)));
+            Need(definition.kind==Value::Kind::Reference,"Decoration actual item definition reference");
+            const auto mask=vm_->load_reference(vm_->indexed_reference(definition,7)),width=vm_->load_reference(vm_->indexed_reference(definition,8));
+            Need(mask.kind==Value::Kind::Scalar&&mask.word>>28==2&&width.kind==Value::Kind::Scalar&&width.word>>28==2,"Decoration reached integer definition domain");
+            definition_mask=mask.word;definition_width=width.word;
+        }
         out.status=PostMainFlowEvent(event,row,&target);out.queue_result=state_.owner_event_result;
         if(out.status&&out.queue_result==0){
             const auto entered=vm_->current_witness();const auto count=state_.inventory_action.completions;
             state_.inventory_action={};auto& a=state_.inventory_action;a.pending=true;a.completions=count;
             a.generation=generation;a.receipt=out.receipt=vm_->last_callback_receipt();a.callback_frame=entered.frame_id;
             a.event=event;a.row=uint32_t(row);a.item_id=item.id;a.before_words=item.source_words;a.before_kinds=item.source_kinds;
+            a.before_controls=item.control_words;
+            if(event==13){a.gate_word=gate_word;a.definition_table=uint32_t(definition.table);a.definition_index=definition.index;
+                a.definition_header=vm_->load_reference(definition).word;a.definition_mask=definition_mask;a.definition_width=definition_width;}
             a.row_table=uint32_t(rowref.table);a.row_index=rowref.index;a.row_header=header.word;a.suspended=before;
         }
     }catch(const std::exception& e){out.status={GameFsCode::Unavailable,0,e.what()};}
     return out;
+}
+void GameActorScript::RecordInventoryModelService(uint32_t id,int32_t slot,int32_t resource,int32_t category,int32_t selector,int32_t x,uint32_t result,bool returned){
+    auto& a=state_.inventory_action;if(!a.pending)return;
+    Need(a.model_service_count<a.model_services.size(),"Inventory bounded model operation evidence overflow");
+    const auto w=vm_->current_witness();Need(w.event_envelope_present,"Inventory model operation lost callback owner");
+    a.model_services[a.model_service_count++]={returned,id,w.current_pc,w.code_entry,result,a.receipt,w.frame_id,slot,resource,category,selector,x};
 }
 void GameActorScript::ObserveInventoryAction(const script::FrameTransition& t)noexcept{
     auto& a=state_.inventory_action;if(!a.pending||a.returned||a.failed)return;

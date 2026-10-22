@@ -329,6 +329,72 @@ struct TitleSource final : GameResourceSource {
         return {};
     }
 };
+void RoomAnchorLocalX(){
+    //Independent authored-pose literals: a quarter-turn sends local X into Y.
+    std::vector<GameModelPose> pose(142);for(auto& p:pose)p.world=ModelIdentity();
+    GameMatrix root=ModelIdentity();int32_t anchor=-9;
+    const std::array<int32_t,9> nodes{{54,55,56,141,61,57,58,59,60}};
+    for(size_t i=0;i<nodes.size();++i){pose[size_t(nodes[i])].world[12]=float(nodes[i]);
+        Check(bool(RoomModelRootNativeSceneAnchorLocalX(int32_t(i+1),0,pose,root,anchor))&&anchor==nodes[i]&&root[12]==float(nodes[i]),"source selector map uses actual authored node");}
+    auto& m=pose[57].world;m=ModelIdentity();m[0]=0;m[1]=1;m[4]=-1;m[5]=0;m[12]=10;m[13]=20;m[14]=30;
+    Check(bool(RoomModelRootNativeSceneAnchorLocalX(6,2,pose,root,anchor))&&anchor==57&&root[12]==10&&root[13]==22&&root[14]==30,
+          "NativeSceneAnchorLocalX rotates local spacing before world translation");
+    m[13]=40;Check(bool(RoomModelRootNativeSceneAnchorLocalX(6,-3,pose,root,anchor))&&root[12]==10&&root[13]==37,
+          "fresh authored pose replaces old transform without accumulating spacing");
+    const auto prior=root;const auto prior_anchor=anchor;
+    Check(!RoomModelRootNativeSceneAnchorLocalX(10,0,pose,root,anchor)&&root==prior&&anchor==prior_anchor,"out-of-range selector preserves output");
+    Check(!RoomModelRootNativeSceneAnchorLocalX(6,std::numeric_limits<float>::infinity(),pose,root,anchor)&&root==prior,"nonfinite source spacing refusal");
+    auto short_pose=pose;short_pose.resize(57);
+    Check(!RoomModelRootNativeSceneAnchorLocalX(6,0,short_pose,root,anchor)&&root==prior,"missing selected authored node refusal");
+    m[0]=std::numeric_limits<float>::quiet_NaN();
+    Check(!RoomModelRootNativeSceneAnchorLocalX(6,0,pose,root,anchor)&&root==prior,"invalid authored transform refusal");
+    Check(bool(RoomModelRootNativeSceneAnchorLocalX(0,-5,{},root,anchor))&&anchor==-1&&root[12]==-5&&root[13]==0,
+          "native unparented local-X policy has no fabricated scene owner");
+}
+void RoomModelLifecycle(){
+    //Synthetic DVS through the actual resource/asset/clone owner,not a fake slot.
+    struct RoomSource final:GameResourceSource{
+        bool missing=false;uint32_t calls=0;std::vector<std::weak_ptr<Lease>> leases;
+        GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
+            ++calls;if(missing)return {GameFsCode::NotFound,0,"selected room fixture absent"};
+            Check(path=="BG_ROOM\\Wallpaper0\\model01.DVS","source-selected static resource path");
+            auto lease=std::make_shared<Lease>(Fixture());leases.push_back(lease);out=PackageStorage::Attach(lease,lease->b.size());return {};
+        }
+    } resources;
+    auto selection=std::make_shared<Lease>(Fixture());GameTransition transition;
+    Check(transition.Initialize({{0,0}}),"room slot owner transition");GameActorRuntime room;
+    Check(bool(room.Initialize(0,PackageStorage::Attach(selection,selection->b.size()),transition,&resources)),"room slot source owner");
+    {GameGraphics boot;uint32_t overlays=0;
+        Check(bool(room.Draw(boot,[&](GameGraphics&){++overlays;return GameFsStatus{};}))&&overlays==0&&room.Snapshot().model_frames==0,
+              "bootstrap before first room/camera has no admitted frame to publish");}
+    int32_t a=-1,b=-1;
+    Check(bool(room.CreateModel(170,0,0,-5,a))&&a==0&&bool(room.CreateModel(170,0,0,1,b))&&b==1,"real two-clone slot admission with stored spacing");
+    auto s=room.Snapshot();Check(s.model_slots==2&&s.model_publications==2&&s.room_models[0].source_x==-5&&s.room_models[0].native_root[12]==-5,"native unparented controller retains actual source spacing");
+    const auto requests=resources.calls;
+    int32_t absent=-1;Check(!room.CreateModel(170,0,6,0,absent)&&absent==-1&&resources.calls==requests,"missing scene owner refuses before asset acquisition");
+    Check(bool(room.UpdateModel(a,0,7))&&resources.calls==requests&&room.Snapshot().model_updates==1
+          &&room.Snapshot().model_slots==2&&room.Snapshot().room_models[0].resource==170,"GAME33 updates only controller fields without reload/count change");
+    Check(!room.UpdateModel(a,1,0)&&room.Snapshot().room_models[0].source_x==7,"missing authored scene owner transactional refusal");
+    Check(bool(room.RetireModel(a))&&room.Snapshot().room_models[0].retirement==1&&!resources.leases[0].expired(),"retire request retains clone and borrowed source");
+    Check(bool(room.AdvanceActorFrame())&&room.Snapshot().room_models[0].retirement==2&&room.Snapshot().model_slots==2
+          &&!resources.leases[0].expired(),"first source owner phase disables but retains");
+    Check(bool(room.RetireModel(a))&&room.Snapshot().room_models[0].retirement==1,"repeated source request restarts retirement");
+    Check(bool(room.AdvanceActorFrame())&&!resources.leases[0].expired()&&bool(room.AdvanceActorFrame()),"two natural phases after repeated request");
+    s=room.Snapshot();Check(!s.room_models[0].active&&s.model_slots==1&&s.model_retirements==1&&resources.leases[0].expired()
+          &&!resources.leases[1].expired(),"only selected model source retired after deferred destruction");
+    const auto old=s.room_models[0].generation;int32_t reused=-1;
+    resources.missing=true;Check(!room.CreateModel(170,0,0,2,reused)&&reused==-1&&room.Snapshot().model_slots==1,"missing resource never publishes recycled slot");
+    resources.missing=false;Check(bool(room.CreateModel(170,0,0,2,reused))&&reused==0&&room.Snapshot().room_models[0].generation>old,"first inactive slot has fresh native generation");
+    Check(bool(room.RetireModel(b))&&bool(room.RetireModel(reused))&&bool(room.AdvanceActorFrame())&&bool(room.AdvanceActorFrame())
+          &&room.Snapshot().model_slots==0,"final room slots retire naturally");
+    GameGraphics graphics;GameGraphicsConfig config;config.width=config.height=config.stride=32;config.scissor_right=config.scissor_bottom=32;
+    Check(graphics.Initialize(config)&&bool(room.BindCamera(1)),"empty room still has live renderer/camera");uint32_t overlays=0;
+    Check(bool(room.Draw(graphics,[&](GameGraphics& g){++overlays;return g.Clear(0xFF123456)?GameFsStatus{}:GameFsStatus{GameFsCode::Unavailable,0,"overlay clear"};})),"zero room slots still present owned overlay");
+    GameGraphicsFrame frame;Check(overlays==1&&graphics.CopyFront(frame)&&frame.pixels[0]==0xFF123456&&room.Snapshot().model_frames==1,"empty-room frame is cleared/swapped,not stale");
+    graphics.Close();
+    room.Close();Check(resources.leases[1].expired()&&resources.leases[2].expired()&&!room.UpdateModel(0,0,0)&&!room.RetireModel(0),"close releases every clone/source and refuses late operation");
+    transition.Retire();
+}
 struct ActorSource final:GameResourceSource {
     bool fail_motion=false;
     bool scene_assets=false,season_missing=false;
@@ -712,6 +778,7 @@ int main() {
     try {
         MathAndSkin();
         GeometryAndRaster();
+        RoomAnchorLocalX();RoomModelLifecycle();
         Type12RegionDescriptor();
         Motion();
         ActorChannelOrder();

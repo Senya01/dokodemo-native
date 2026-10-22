@@ -877,6 +877,13 @@ Event Vm::step() {
             }
             stack_.push_back(last_random_);
         } else if(op==0x70) { result_=pop();
+        } else if(op==0xB0) {
+            //71814 tag2: SUBU then low28 mask;min signed28 wraps to itself.
+            //Other source conversions remain outside this reached domain.
+            const auto value=pop();
+            if(value.kind!=Value::Kind::Scalar||(value.word>>28)!=2)
+                throw std::runtime_error("B0 requires a tagged integer in the reached domain");
+            stack_.push_back(Value::integer(int32_t((0u-uint32_t(value.signed_integer()))&0x0FFFFFFF)));
         } else if(op==0xB1) {
             const auto value=pop();
             if((value.kind!=Value::Kind::Scalar&&value.kind!=Value::Kind::Timestamp)||(value.word>>28)>3)
