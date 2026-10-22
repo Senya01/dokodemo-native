@@ -120,7 +120,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);});
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -245,23 +245,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(Number(arg)==0,"Reached GAME41 inventory mode0 only");
         state_.inventory_mode=0;state_.inventory_requested=true;++state_.inventory_requests;
         state_.inventory_setter_result_word=0x10000000;
-        const auto found=bindings_.find(35);Need(found!=bindings_.end(),"GAME41 needs actual GAME35 item registration");
-        const auto header=vm_->load_reference(found->second);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==170,"Inventory actual170 item rows");
-        state_.inventory_items.clear();
-        for(uint32_t i=0;i<170;++i){
-            const auto row=vm_->load_reference(vm_->indexed_reference(found->second,i));Need(row.kind==Value::Kind::Reference,"Inventory row reference");
-            const auto field=[&](uint32_t n){return vm_->load_reference(vm_->indexed_reference(row,n));};
-            const auto item_id=field(0);GameInventoryItem item;item.row=i;
-            if(item_id.word>>28!=0){
-                item.id=Number(item_id);item.valid=item.id>=0;
-                if(item.valid){const auto name=field(1),description=field(2);
-                    Need(name.kind==Value::Kind::String&&description.kind==Value::Kind::String,"Inventory real CP932 name and description");
-                    item.name=name.cp932;item.description=description.cp932;item.date_word=field(4).word&0x0FFFFFFF;
-                    item.category=Number(field(5))==1?2:((field(7).word>>28)==0?1:0);
-                }
-            }
-            state_.inventory_items.push_back(std::move(item));
-        }
+        CaptureInventoryItems();
         return False(); //1C834 queues resource14;not a synchronous GUI result
     }
     case 43: {
@@ -467,6 +451,26 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
     }
     throw std::runtime_error(unimplemented.str());
 }
+void GameActorScript::CaptureInventoryItems(){
+    const auto found=bindings_.find(35);Need(found!=bindings_.end(),"GAME41 needs actual GAME35 item registration");
+    const auto header=vm_->load_reference(found->second);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==170,"Inventory actual170 item rows");
+    state_.inventory_items.clear();
+    for(uint32_t i=0;i<170;++i){
+        const auto row=vm_->load_reference(vm_->indexed_reference(found->second,i));Need(row.kind==Value::Kind::Reference,"Inventory row reference");
+        const auto field=[&](uint32_t n){return vm_->load_reference(vm_->indexed_reference(row,n));};
+        const auto item_id=field(0);GameInventoryItem item;item.row=i;
+        if(item_id.word>>28!=0){
+        item.id=Number(item_id);item.valid=item.id>=0;
+        if(item.valid){const auto name=field(1),description=field(2);
+            Need(name.kind==Value::Kind::String&&description.kind==Value::Kind::String,"Inventory real CP932 name and description");
+            item.name=name.cp932;item.description=description.cp932;item.date_word=field(4).word&0x0FFFFFFF;
+            item.category=Number(field(5))==1?2:((field(7).word>>28)==0?1:0);
+            for(uint32_t n=0;n<3;++n){const auto value=field(5+n);item.source_words[n]=value.word;item.source_kinds[n]=uint8_t(value.kind);}
+        }
+        }
+        state_.inventory_items.push_back(std::move(item));
+    }
+}
 GameFsStatus GameActorScript::Tick() {
     if(!state_.live||!vm_)return {GameFsCode::Unavailable,0,"KSC owner not live"};
     //The source global clock advances independently of VM interpreter entries.
@@ -489,6 +493,21 @@ GameFsStatus GameActorScript::Tick() {
         ++state_.ticks;
         const auto event=vm_->run(200000);
         dictionary_.Capture(*vm_);
+        auto& action=state_.inventory_action;
+        Need(!action.pending||!action.failed,"Inventory callback receipt/restoration failed");
+        if(action.pending&&action.returned){
+            Need(!action.failed&&!vm_->context_enabled()&&vm_->callback_depth()==action.suspended.event_scope_depth,"Inventory action failed to restore suspended disabled context/scope");
+            const auto registered=bindings_.at(35);const auto rowref=vm_->load_reference(vm_->indexed_reference(registered,action.row));
+            Need(rowref.kind==Value::Kind::Reference&&uint32_t(rowref.table)==action.row_table&&rowref.index==action.row_index
+                 &&vm_->load_reference(rowref).word==action.row_header,"Inventory action source row replaced");
+            CaptureInventoryItems();const auto& item=state_.inventory_items.at(action.row);
+            Need(item.valid&&item.id==action.item_id,"Inventory action changed item identity");
+            action.after_words=item.source_words;action.after_kinds=item.source_kinds;
+            Need(item.source_kinds[0]==uint8_t(Value::Kind::Scalar)&&item.source_words[0]==(action.event==15?0x10000001u:0x10000000u)
+                 &&item.source_words[1]==action.before_words[1]&&item.source_words[2]==action.before_words[2]
+                 &&item.source_kinds[1]==action.before_kinds[1]&&item.source_kinds[2]==action.before_kinds[2],"Inventory action source field write mismatch");
+            action.pending=false;action.completed=true;++action.completions;
+        }
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
         if(event.status==script::Status::Stopped)throw std::runtime_error(event.diagnostic.text());
         if(event.status==script::Status::Yield)++state_.yields;
@@ -578,6 +597,49 @@ GameFsStatus GameActorScript::CompleteInput(const GameChoiceTarget& expected,std
         GameFsStatus status;if(timed_out)status=PostMainFlowEvent(20,0);
         state_.source_main_input_suppressed48=false;return status;
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t generation,uint32_t event,int32_t row){
+    GameInventoryActionAdmission out;
+    try{
+        Need(state_.live&&vm_&&state_.inventory_requested&&generation==state_.inventory_requests&&!state_.inventory_action.pending,
+             "Inventory action owner/generation unavailable");
+        Need((event==14||event==15)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
+        Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input&&!vm_->context_enabled()
+             &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Inventory action requires its suspended nonmodal callback owner");
+        CaptureInventoryItems();const auto item=state_.inventory_items.at(size_t(row));
+        Need(item.valid&&item.source_kinds[1]==uint8_t(Value::Kind::Scalar)&&item.source_words[1]==0,
+             "Inventory placed-item removal helper3405 is not implemented");
+        const auto registered=bindings_.at(35);
+        Need(registered.kind==Value::Kind::Reference&&registered.table==script::Table::Global&&registered.index==0x4FAD,"GAME35 registration differs from source Global4FAD owner");
+        const auto rowref=vm_->load_reference(vm_->indexed_reference(registered,uint32_t(row)));
+        const auto header=vm_->load_reference(rowref);const auto before=vm_->current_witness();const auto target=OwnerEventTarget();
+        Need(rowref.kind==Value::Kind::Reference&&header.kind==Value::Kind::ArrayHeader&&before.valid&&!before.event_envelope_present
+             &&target.callback.word==0x7008DA28u,"Inventory source row/callback identity");
+        out.status=PostMainFlowEvent(event,row,&target);out.queue_result=state_.owner_event_result;
+        if(out.status&&out.queue_result==0){
+            const auto entered=vm_->current_witness();const auto count=state_.inventory_action.completions;
+            state_.inventory_action={};auto& a=state_.inventory_action;a.pending=true;a.completions=count;
+            a.generation=generation;a.receipt=out.receipt=vm_->last_callback_receipt();a.callback_frame=entered.frame_id;
+            a.event=event;a.row=uint32_t(row);a.item_id=item.id;a.before_words=item.source_words;a.before_kinds=item.source_kinds;
+            a.row_table=uint32_t(rowref.table);a.row_index=rowref.index;a.row_header=header.word;a.suspended=before;
+        }
+    }catch(const std::exception& e){out.status={GameFsCode::Unavailable,0,e.what()};}
+    return out;
+}
+void GameActorScript::ObserveInventoryAction(const script::FrameTransition& t)noexcept{
+    auto& a=state_.inventory_action;if(!a.pending||a.returned||a.failed)return;
+    const auto& x=t.before;const auto& y=t.after;const auto& s=a.suspended;
+    if(t.callback_receipt!=a.receipt||x.run_id!=s.run_id||y.run_id!=s.run_id||x.code_sha256!=s.code_sha256||y.context_word!=s.context_word){a.failed=true;return;}
+    if(t.opcode!=0x32)return;
+    a.restored=y;
+    const auto same=[](const script::ValueWitness& l,const script::ValueWitness& r){return l.kind==r.kind&&l.word==r.word&&l.table==r.table&&l.index==r.index&&l.cp932_bytes==r.cp932_bytes&&l.cp932_sha256==r.cp932_sha256;};
+    bool valid=x.frame_id==a.callback_frame&&x.code_entry==0x8DA28&&x.current_pc==0x8DD8B&&x.event_envelope_present&&!y.event_envelope_present
+        &&y.frame_id==s.frame_id&&y.code_entry==s.code_entry&&y.current_pc==s.current_pc&&y.call_depth==s.call_depth
+        &&y.active_blocks==s.active_blocks&&y.event_scope_depth==s.event_scope_depth+1&&y.operand_cells==s.operand_cells&&y.frame_cells==s.frame_cells
+        &&same(y.result,s.result)&&y.deadline_tick==(s.relative_deadline23>0?y.clock_tick+uint32_t(s.relative_deadline23):0);
+    for(uint32_t i=0;i<s.frame_captured;++i)valid=valid&&same(s.frame_values[i],y.frame_values[i]);
+    for(uint32_t i=0;i<s.operands_captured;++i)valid=valid&&same(s.operands[i],y.operands[i]);
+    a.failed=!valid;a.returned=valid;
 }
 bool GameActorScript::CanResumeInventory()const{
     return state_.inventory_requested&&vm_&&!vm_->context_enabled()&&vm_->callbacks_returned()>0;

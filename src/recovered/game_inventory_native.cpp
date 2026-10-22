@@ -7,7 +7,7 @@ namespace dokodemo::recovered {
 namespace {
 void Need(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 }
-GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context){
+GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context,GameInventoryActionDispatch dispatch){
     if(Modal())return {GameFsCode::Busy,0,"Inventory resource14 already pending"};
     if(items.size()>170)return {GameFsCode::Bounds,0,"Native inventory170-row admission"};
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory row index/provenance mismatch"};
@@ -15,7 +15,15 @@ GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool ho
     const auto requests=state_.requests+1,retired=state_.retirements;
     state_={};state_.generation=generation;state_.requests=uint32_t(requests);state_.retirements=retired;
     state_.items=std::move(items);state_.requested=state_.request14=true;state_.loader498=2;state_.phase=1;
-    home_=home_context;input_.BeginContext();return {};
+    home_=home_context;dispatch_=std::move(dispatch);input_.BeginContext();return {};
+}
+GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items){
+    if(!state_.live||state_.phase!=3||!state_.action_pending||generation!=state_.generation||receipt!=state_.action_receipt)
+        return {GameFsCode::Unavailable,0,"Inventory action completion owner/receipt changed"};
+    if(items.size()!=state_.items.size())return {GameFsCode::Bounds,0,"Inventory action row set replaced"};
+    for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory action row identity"};
+    state_.items=std::move(items);state_.action_pending=false;++state_.action_completions;
+    Rebuild();input_.BeginContext();return {};
 }
 void GameInventory::Rebuild(){
     auto& rows=state_.filtered_rows;rows.clear();
@@ -60,7 +68,7 @@ GameFsStatus GameInventory::Initialize(GameResourceSource& source,GameTransition
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameInventory::Input(const GameInputFrame& frame){
-    if(!state_.live||state_.phase!=3)return false;
+    if(!state_.live||state_.phase!=3||state_.action_pending)return false;
     input_.Observe(frame);state_.input_focused=frame.focused;return true;
 }
 GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& transition){
@@ -76,7 +84,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
         else if(state_.phase==4&&transition.Snapshot().state==0){
             Need(clone_.ShowRoot(0,false),"Inventory close root");auto* control=clone_.Control(0);control->mode=control->active=0;
             state_.visible=false;state_.stateB2C=3;state_.phase=5;++state_.close_completions;
-        }else if(state_.phase==3){
+        }else if(state_.phase==3&&!state_.action_pending){
             input_.Tick();
             if(state_.actions){
                 const uint32_t count=home_?5:3;
@@ -85,7 +93,15 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
                 else if(input_.First(Cross)||(input_.First(Circle)&&state_.action_selection==count-1)){
                     state_.select_result=input_.First(Cross)?0:int32_t(count);state_.actions=false;state_.stateB30=0;++state_.action_cancels;input_.BeginContext();
                 }else if(input_.First(Circle)){
-                    state_.action_frontier=0x1B4C0;return {GameFsCode::Unavailable,0,"Inventory action script events13..16 are not implemented"};
+                    const auto event=home_&&state_.action_selection==1?14u:state_.action_selection==(home_?2u:0u)?15u:0u;
+                    if(!event||!dispatch_){state_.action_frontier=0x1B4C0;return {GameFsCode::Unavailable,0,"Inventory decorate/discard action is not implemented"};}
+                    const auto admitted=dispatch_(state_.generation,event,state_.selected_row);
+                    state_.action_queue_result=admitted.queue_result;input_.BeginContext();
+                    if(!admitted.status)return admitted.status;
+                    if(admitted.queue_result==1)return {}; // retain menu; fresh release/press retry
+                    if(admitted.queue_result!=0||!admitted.receipt)return {GameFsCode::Unavailable,0,"Inventory action queue did not accept its owner"};
+                    state_.select_result=int32_t(state_.action_selection+1);state_.action_pending=true;state_.action_receipt=admitted.receipt;state_.action_event=event;
+                    state_.action_row=state_.selected_row;++state_.action_events;state_.actions=false;state_.stateB30=0;
                 }
             }else{
                 //365F4 priority and first-press-only wrapping at each bound.
@@ -109,7 +125,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
     }catch(const std::exception& e){state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
 void GameInventory::Close(){
-    clone_.Close();resource_.reset();input_.BeginContext();transition_=nullptr;
+    clone_.Close();resource_.reset();input_.BeginContext();transition_=nullptr;dispatch_={};state_.action_pending=false;
     state_.live=state_.owner480=state_.visible=state_.actions=state_.requested=state_.request14=state_.retirement_pending=false;
     state_.phase=7;state_.loader464=state_.loader498=0;
 }

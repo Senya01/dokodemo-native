@@ -17,6 +17,10 @@
 #include "game_owned_conversation_regressions.h"
 #endif
 #include "game_input32_regressions.h"
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_inventory_action_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -233,6 +237,11 @@ void OwnedCtxReferenceBranchChecks(){
 }
 
 void Focused(){
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameInventoryActionRegressionChecks();
+#endif
+
     OwnedCtxReferenceBranchChecks();
     AsciiClass70OwnerChecks();
     NilBytePair0DChecks();

@@ -874,10 +874,15 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
         if(state_.status&&state_.actor_script.inventory_requests>inventory_.Snapshot().requests){
-            state_.status=inventory_.Request(state_.actor_script.inventory_items,true);
+            state_.status=inventory_.Request(state_.actor_script.inventory_items,true,[this](uint64_t generation,uint32_t event,int32_t row){return actor_script_.PostInventoryAction(generation,event,row);});
             actor_message_gate_.Stop();state_.actor_message_input_armed=false;
         }
         if(state_.status&&inventory_.Modal())state_.status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
+        state_.actor_script=actor_script_.Snapshot();
+        if(state_.status&&inventory_.Snapshot().action_pending&&state_.actor_script.inventory_action.completed){
+            const auto& action=state_.actor_script.inventory_action;
+            state_.status=inventory_.CompleteAction(action.generation,action.receipt,state_.actor_script.inventory_items);
+        }
         if(state_.status&&inventory_.ClosedAndRetired()&&actor_script_.CanResumeInventory()){
             //NamedNativeModalSuspendResumeTriggeredOnlyByActualClose: original
             //post32 enable38 producer remains unrecovered. No frame/ack wake.
