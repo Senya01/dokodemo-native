@@ -441,6 +441,89 @@ inline void CompletionQueueDeadlineAndRestart() {
     Require(!vm.complete_input("late","late") && vm.run(20).diagnostic.text()==error.diagnostic.text()
             && vm.executed()==executed && Same(vm.result(),reference),"late input completion cannot mask an unsupported continuation");
 }
+
+// Group 6: explicitly synthetic scaffolding, two real call20/Input32/return31
+// paths in ONE run. The old weak ctx2C alias follows publication B; owned A
+// survives in the ancestor frame and in copied Values. No restart or old suite.
+inline void SameRunInputResultReuse() {
+    std::vector<uint8_t> code{0x30,10,0x4E,1,0,2,0,0x4E,5,0,2,0,0x80,37,0x91,1,0};
+    const auto call_a=uint32_t(code.size());Append(code,{0x20,1,0,0,0});
+    Append(code,{0x91,4,0,0x89,0x51,0x91,1,0,0x90,4,0});Text(code,Marker());code.push_back(0x70);
+    const auto copy_a=uint32_t(code.size());Append(code,{0x57,0x91,5,0});
+    const auto call_b=uint32_t(code.size());Append(code,{0x20,1,0,0,0});
+    // Save B's returned reference in slot8, but deliberately copy through A's
+    // earlier weak reference in slot4 rather than using B's fresh result.
+    Append(code,{0x91,8,0,0x89,0x51,0x91,5,0,0x90,4,0});Text(code,Marker());code.push_back(0x70);
+    const auto copy_b=uint32_t(code.size());code.push_back(0x57);
+    Append(code,{0x91,1,0,0x85,0xF4,0x91,1,0,0x80,1,0xF4,
+                 0x91,5,0,0x85,0xF4,0x91,5,0,0x80,1,0xF4,
+                 0x90,0,0,0x90,9,0,0x8B,0x7D,6,0x38});
+    const auto callee=uint32_t(code.size());Put(code,call_a+2,callee,3);Put(code,call_b+2,callee,3);
+    Append(code,{0x30,1,0x91,0,0,0x8B,0x7A,1,0x80,2});Text(code,Prompt());
+    Append(code,{0x8B,0x20,2,0x89,0x70});const auto return_pc=uint32_t(code.size());code.push_back(0x31);
+    auto program=Program(std::move(code));script::Vm vm(program);std::vector<Value> callee_frames;uint32_t consumers=0;
+    const auto untouched=Value::string("synthetic caller cell survives both copies");
+    vm.host_service([&](uint8_t id,const std::vector<Value>& arguments) {
+        if (id==0x7A) {
+            Require(arguments.size()==1 && arguments[0].kind==Value::Kind::Reference && vm.call_depth()==1,
+                    "same-run input executes in an actual callee frame");
+            callee_frames.push_back(arguments[0]);return Value::string("temporary callee result");
+        }
+        Require(id==0x7D && arguments.size()==6 && arguments[0].cp932=="shirt" && arguments[1].cp932=="SHIRT"
+                && arguments[2].cp932=="destination B changed" && arguments[3].cp932=="destination auxiliary changed"
+                && arguments[4].cp932==Prompt() && Same(arguments[5],untouched) && vm.call_depth()==0,
+                "real F4 consumer reads owned A after B publication and both later mutations");
+        ++consumers;return Value::integer(91);
+    });
+    std::vector<Value> arguments(10,Nil());arguments[0]=Value::string(Prompt());arguments[9]=untouched;
+    StatusIs(vm.start(arguments),Status::Running,"same-run input start");vm.trace_normal_return_at(return_pc);
+    StepTo(vm,call_a,"same-run ancestor setup");
+    const auto root=vm.current_witness();
+    auto copy=[&](uint32_t pc,uint16_t destination,uint32_t sequence) {
+        StepTo(vm,pc,"same-run ordinary return and57 setup");const auto& returned=vm.last_normal_return();
+        Require(returned.valid && returned.sequence==sequence && returned.opcode_pc==return_pc
+                && returned.before.call_depth==1 && returned.after.call_depth==0 && returned.after.frame_id==root.frame_id
+                && returned.after.run_id==root.run_id && callee_frames.size()==sequence && callee_frames.back().frame_owner.expired(),
+                "ordinary31 retires each callee and restores the same ancestor in the same run");
+        const auto before=vm.current_witness();const auto operands=vm.stack();const auto result=vm.result();
+        std::vector<Value> frame;for(uint16_t i=0;i<10;++i)frame.push_back(vm.read_slot(Table::Frame,i));
+        Require(operands.size()==3 && operands[0].signed_integer()==37 && operands[1].table==Table::Frame
+                && operands[1].index==destination && Same(operands[2],frame[4]) && result.cp932==Marker(),
+                "same-run57 receives caller destination and the saved old input alias with an arbitrary result/operand");
+        const auto target=operands[1];const auto event=vm.step();const auto after=vm.current_witness();
+        Require(event.status==Status::Running && event.opcode==0x57 && event.next_pc==pc+1 && vm.pc()==pc+1
+                && vm.executed()==before.executed+1 && Same(vm.result(),result) && vm.stack().size()==1
+                && Same(vm.stack()[0],operands[0]) && after.frame_id==before.frame_id && after.run_id==root.run_id
+                && after.code_entry==before.code_entry && vm.call_depth()==0,"true57 preserves result, prefix operand and caller identity");
+        for(uint16_t i=0;i<10;++i)if(i!=destination+1 && i!=destination+2)
+            Require(Same(vm.read_slot(Table::Frame,i),frame[i]),"true57 preserves every other caller cell including both headers and saved aliases");
+        return target;
+    };
+    StatusIs(vm.run(100),Status::Input,"same-run first Input32");Require(vm.complete_input("shirt","SHIRT"),"publish A");
+    const auto old=vm.result(),old0=vm.indexed_reference(old,0),old1=vm.indexed_reference(old,1);
+    const auto a=copy(copy_a,1,1),a0=vm.indexed_reference(a,0),a1=vm.indexed_reference(a,1);
+    const auto owned_a0=vm.load_reference(a0),owned_a1=vm.load_reference(a1);
+    Require(owned_a0.cp932=="shirt" && owned_a1.cp932=="SHIRT","first true57 owns A in the ancestor");
+    StatusIs(vm.run(100),Status::Input,"same-run second Input32");
+    Require(vm.current_witness().run_id==root.run_id && vm.call_depth()==1 && callee_frames.size()==2
+            && !callee_frames.back().frame_owner.expired() && Same(vm.load_reference(a0),owned_a0)
+            && Same(vm.load_reference(a1),owned_a1),"owned A survives another actual call while its ancestor remains live");
+    InputResultIs(vm,old,"shirt","SHIRT");Require(vm.complete_input("book","BOOK"),"publish B without restart");
+    Require(Same(vm.result(),old) && vm.load_reference(old0).cp932=="book" && vm.load_reference(old1).cp932=="BOOK",
+            "second publication reuses the same live weak buffer and its earlier indexed aliases");
+    InputResultIs(vm,old,"book","BOOK");const auto b=copy(copy_b,5,2),b0=vm.indexed_reference(b,0),b1=vm.indexed_reference(b,1);
+    Require(Same(vm.read_slot(Table::Frame,8),old) && vm.load_reference(b0).cp932=="book" && vm.load_reference(b1).cp932=="BOOK",
+            "second true57 copies B through the first publication's saved alias");
+    vm.store_reference(old0,Value::string("source B changed"));vm.store_reference(old1,Value::string("source auxiliary changed"));
+    Require(vm.load_reference(b0).cp932=="book" && vm.load_reference(b1).cp932=="BOOK","B destination owns copies independent of reused source");
+    vm.store_reference(b0,Value::string("destination B changed"));vm.store_reference(b1,Value::string("destination auxiliary changed"));
+    Require(vm.load_reference(old0).cp932=="source B changed" && vm.load_reference(old1).cp932=="source auxiliary changed"
+            && Same(vm.load_reference(a0),owned_a0) && Same(vm.load_reference(a1),owned_a1)
+            && owned_a0.cp932=="shirt" && owned_a1.cp932=="SHIRT","later source and B destination mutations leave both owned A cells intact");
+    StatusIs(vm.run(50),Status::Complete,"same-run caller consumer");
+    Require(consumers==1 && vm.current_witness().run_id==root.run_id && !old.frame_owner.expired()
+            && Same(vm.load_reference(a0),owned_a0) && Same(vm.load_reference(a1),owned_a1),"one uninterrupted run consumes A with its weak buffer still live");
+}
 } // namespace dokodemo::input32_regression_detail
 
 inline void GameInput32RegressionChecks() {
@@ -449,4 +532,5 @@ inline void GameInput32RegressionChecks() {
     dokodemo::input32_regression_detail::ResultToCallerArrayAndConsumer();
     dokodemo::input32_regression_detail::FiniteArrayDomainsAndFailures();
     dokodemo::input32_regression_detail::CompletionQueueDeadlineAndRestart();
+    dokodemo::input32_regression_detail::SameRunInputResultReuse();
 }
