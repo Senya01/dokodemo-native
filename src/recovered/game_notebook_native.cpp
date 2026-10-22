@@ -3,6 +3,8 @@
 #include "core_hash.h"
 #include <stdexcept>
 #include <cmath>
+#include <cstring>
+#include <type_traits>
 
 namespace dokodemo::recovered {
 namespace {void Require(bool yes,const char* why){if(!yes)throw std::runtime_error(why);}}
@@ -81,7 +83,7 @@ GameFsStatus GameNotebook::Initialize(GameResourceSource& source,GameTransition&
     if(!status)return status;
     GameUiInstance copy;Require(copy.Clone(image),"NOTE clone failed");
     for(uint32_t i=0;i<10;++i)Require(copy.Bind(i,i,0),"NOTE constructor root binding");
-    for(uint32_t r:{0u,6u})Require(copy.ShowRoot(r,false),"NOTE constructor hidden root");
+    for(uint32_t r:{0u,6u,8u})Require(copy.ShowRoot(r,false),"NOTE constructor/source-gated root");
     static constexpr uint32_t clips[]={0,1,5,3,4,6,8};
     for(uint32_t i=0;i<7;++i){auto* c=copy.AddControl(clips[i]);Require(c!=nullptr,"NOTE constructor control");
         if(i!=0&&i!=5){c->frame=i==4?5:1;c->mode=2;c->active=1;}}
@@ -111,7 +113,21 @@ bool GameNotebook::Input(const GameInputFrame& f){
        ||f.returned_owner!=l.available_owner||f.returned_generation!=l.available_generation){++state_.rejected;return false;}
     state_.last_sequence=f.sequence;input_.Observe(f);return true;
 }
-GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade){
+GameFsStatus GameNotebook::PrepareSelf(GameNotebookSelfImage image){
+    if(!state_.live||state_.phase!=3||state_.state26C!=2||self_image_.owner.valid)
+        return {GameFsCode::Unavailable,0,"NOTE self-details preparation owner/state/pending replaced"};
+    try{
+        Require(image.owner.valid&&image.owner.script_generation==state_.lease.script_generation
+             &&image.owner.run_id==state_.lease.run_id&&image.owner.sha==state_.rows.slot0.sha
+             &&image.code_sha==state_.rows.code_sha,"NOTE self-details initial record replaced");
+        auto projection=GameProjectNotebookSelf(image);
+        self_image_=std::move(image);self_projection_=std::move(projection);return {};
+    }catch(const std::exception& e){
+        state_.error=e.what();++state_.unsupported;state_.state26C=1;++state_.input_boundaries;input_.BeginContext();
+        return {GameFsCode::Unavailable,0,e.what()};
+    }
+}
+GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade,RngNativeOwner* rng){
     try{
         if(state_.phase==1)return Initialize(source,fade);
         if(!state_.live)return {};
@@ -119,7 +135,8 @@ GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade)
         if(state_.phase==6){
             // NativeSingleWorkerDeferredPlus4: a distinct invocation after the
             // actual completed poll. Do not turn queueing into immediate free.
-            text_records_.clear();font_=nullptr;state_.text_owner=false;state_.text_capacity=state_.text_used=0;
+            std::vector<uint8_t>().swap(text_records_);font_=nullptr;self_image_={};self_projection_={};
+            state_.text_owner=false;state_.text_capacity=state_.text_used=0;
             clone_.Close();resource_.reset();
             state_.live=state_.owner46C=state_.retirement_pending=false;state_.retired_generation=state_.generation;
             ++state_.retirements;state_.phase=7;return {};
@@ -136,6 +153,49 @@ GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade)
         }return {};}
         if(state_.phase!=3)return {};
         input_.Tick();
+        if(state_.state26C==2){
+            Require(self_image_.owner.valid&&rng&&rng->Available(),"NOTE self-details current image/RNG owner unavailable");
+            // NativeValidatedPreviewPublication: the pure source producer is
+            // admitted before publishing any new UI root. No partial success
+            // is shown when an unsupported conversion is reached.
+            auto projection=GameProjectNotebookSelf(self_image_);
+            const auto selector=projection.selector90;
+            static constexpr int32_t frames[]={5,4,1,2,3};
+            const int32_t base=selector>=0&&selector<5?frames[selector]:selector==8?6:7;
+            // All three outputs of the closed31-bit nonnegative C3234 domain are sampled
+            // into private clone candidates before consuming the shared RNG.
+            // Allocation/bind failure cannot expose half a view or resample.
+            std::array<GameUiInstance,3> candidates;
+            for(uint32_t i=0;i<3;++i){
+                auto& candidate=candidates[i];candidate=clone_;
+                const auto frame=selector==-1?22:uint32_t(3*base)+i-2;
+                Require(candidate.ShowRoot(0,false)&&candidate.ShowRoot(6)&&candidate.Bind(6,6,0)
+                     &&candidate.ShowRoot(8)&&candidate.Bind(8,8,frame),"NOTE preview authored root binding");
+                candidate.Control(0)->mode=candidate.Control(0)->active=0;
+                *candidate.Control(5)={0,6,1,1};*candidate.Control(6)={frame,8,2,1};
+            }
+            static_assert(std::is_nothrow_move_assignable_v<GameUiInstance>);
+            static_assert(std::is_nothrow_move_assignable_v<GameNotebookSelfProjection>);
+            ++state_.producer_returns;state_.rng_seed_before=rng->CurrentSeed64();
+            const auto raw=rng->NextC3234();++state_.rng_calls;
+            state_.rng_raw=raw;state_.rng_seed_after=rng->CurrentSeed64();
+            state_.variant278=uint32_t(int32_t(raw)%3+1);
+            state_.preview_frame=selector==-1?22:uint32_t(3*base)+state_.variant278-3;
+            clone_=std::move(candidates[state_.variant278-1]);
+            state_.preview_record=self_image_.owner;state_.preview=std::move(projection);
+            state_.state26C=3;state_.ordinary270=1;++state_.preview_generation;++state_.preview_opens;
+            ++state_.input_boundaries;input_.BeginContext();return {};
+        }
+        if(state_.state26C==3){
+            if(state_.ordinary270==2){
+                Require(clone_.ShowRoot(6,false)&&clone_.ShowRoot(8,false)&&clone_.ShowRoot(0)&&clone_.Bind(0,0,0),"NOTE preview parent restore");
+                *clone_.Control(0)={0,0,1,1};clone_.Control(5)->active=0;clone_.Control(6)->active=0;
+                state_.ordinary270=3;state_.state26C=1;++state_.preview_returns;++state_.input_boundaries;
+                self_image_={};self_projection_={};input_.BeginContext();return {};
+            }
+            if(input_.First(Cross)){state_.ordinary270=2;++state_.preview_back_requests;input_.BeginContext();}
+            return {};
+        }
         state_.selection250=-1; //actual empty clamp24C-1; no invented selected row
         if(input_.Repeat(Down,10,2)||input_.Repeat(Up,10,2))return {};
         const auto right=input_.Repeat(Right,10,2),left=input_.Repeat(Left,10,2);
@@ -150,16 +210,51 @@ GameFsStatus GameNotebook::Tick(GameResourceSource& source,GameTransition& fade)
         }
         if(input_.First(Circle))return {};
         if(input_.First(Triangle)){
+            if(rng&&rng->Available()){
+                state_.requested274=1;state_.state26C=2;++state_.preview_requests;return {};
+            }
             ++state_.unsupported;
-            state_.error="Unsupported NOTE self-details: source2C91C index0 producer/text consumer not implemented";
+            state_.error="Unsupported NOTE self-details: current source record/RNG owner unavailable";
             return {}; // nonfatal refusal: preserve real ordinary Cancel and owner
         }
         if(input_.First(Cross)){state_.state23C=2;state_.phase=4;++state_.close_requests;fade.CloseWipe(false);input_.BeginContext();}
         return {};
     }catch(const std::exception& e){state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
 }
-bool GameNotebook::DrawUiCallback(uint32_t pc,uint32_t node,const GameUiMatrix&,uint32_t,GameGraphics&,std::string& error){
+bool GameNotebook::DrawUiCallback(uint32_t pc,uint32_t node,const GameUiMatrix& world,uint32_t,GameGraphics& graphics,std::string& error){
     ++state_.callback_reaches;
+    static constexpr uint32_t preview[]={0x2BED8,0x2BFDC,0x2C0DC,0x2C1DC,0x2C340,0x2C440,0x2C544,0x2C648};
+    if(node>=211&&node<=218&&pc==preview[node-211]&&state_.state26C==3&&state_.ordinary270!=3){
+        try{
+            Require(state_.live&&state_.owner46C&&resource_&&font_&&font_->Snapshot().ready
+                 &&self_image_.owner.valid&&state_.text_owner&&text_records_.size()==1024*44,"NOTE preview callback owners");
+            // Each actual callback owns its reset/scale/flush, including an
+            // actual NULL lookup. Glyph width/raster math is the existing
+            // NativeCp932Atlas adapter, not full common FONT reconstruction.
+            state_.text_setup_stage=1;state_.text_capacity=1024;state_.text_used=0;
+            state_.text_setup_stage=2;state_.text_scale_x=state_.text_scale_y=0;state_.text_setup_stage=3;
+            state_.text_scale_x=state_.text_scale_y=1;state_.text_setup_stage=4;++state_.font_resets;
+            const auto text=GameNotebookSelfCallbackText(self_projection_,node);
+            if(GameNotebookSelfCallbackEmits(self_projection_,node)){
+                GameFontBitmap bitmap;std::array<GameFontDrawRecord,1024> records;
+                const auto status=font_->RasterizeCp932({text},440,bitmap,records.data(),uint32_t(records.size()));
+                Require(bool(status),status.detail.c_str());
+                ++state_.preview_emissions;if(text.empty())++state_.preview_empty_emissions;
+                state_.text_used=bitmap.glyphs;state_.preview_glyphs+=bitmap.glyphs;
+                std::memcpy(text_records_.data(),records.data(),bitmap.glyphs*sizeof(GameFontDrawRecord));
+                // 93CFC selector1 subtracts half measured line width; selector0
+                // keeps the callback's current origin. Native atlas measurement
+                // and UI centered viewspace remain explicit Windows policies.
+                const bool center=node==211||node==212||node==218;
+                const float left=world.tx+240.0f-(center?float(bitmap.advance_width)*0.5f:0);
+                const float top=world.ty+136.0f;
+                Require(std::isfinite(left)&&std::isfinite(top)&&std::abs(left)<1e6f&&std::abs(top)<1e6f,"NOTE preview native text position");
+                Require(graphics.DrawImage(bitmap.pixels,bitmap.width,bitmap.height,int32_t(left),int32_t(top),0xFFFFFFFF,65535),"NOTE preview FONT flush");
+            }else ++state_.preview_guarded_callbacks;
+            state_.text_flush_selector=-1;state_.text_setup_stage=5;++state_.font_flushes;
+            state_.preview_callback_mask|=1u<<(node-211);return true;
+        }catch(const std::exception& e){error=e.what();return false;}
+    }
     if(state_.live&&state_.owner46C&&resource_){
         bool empty=false;
         if(pc==0x2BA60&&node==92)empty=!row_text_present_[0];
@@ -175,8 +270,10 @@ bool GameNotebook::DrawUiCallback(uint32_t pc,uint32_t node,const GameUiMatrix&,
 GameFsStatus GameNotebook::Draw(GameGraphics& graphics,const GameFontResource& font){
     if(!state_.live||!state_.visible||state_.state23C==3)return {};
     if(!font.Snapshot().ready||text_records_.size()!=1024*44)return {GameFsCode::Unavailable,0,"NOTE borrowed FONT/text owner retired"};
+    font_=&font;
     GameUiDrawStats stats;std::string error;
     if(!clone_.Draw(graphics,stats,error,this))return {GameFsCode::Unavailable,0,error};
+    if(state_.state26C==3){++state_.draw_frames;++state_.preview_draws;state_.quads=stats.quads;return {};}
     GameUiMatrix view;
     if(!clone_.WorldMatrix(76,view))return {GameFsCode::Unavailable,0,"NOTE node76 current world/scissor owner unavailable"};
     // NativeUiViewspaceScissor: native UI coordinates are centered, while
@@ -200,7 +297,8 @@ GameFsStatus GameNotebook::Draw(GameGraphics& graphics,const GameFontResource& f
     ++state_.draw_frames;state_.quads=stats.quads;return {};
 }
 GameNotebookSnapshot GameNotebook::Snapshot()const{auto s=state_;if(auto* c=clone_.Control(0)){s.frame=c->frame;s.clip=c->clip;s.mode=c->mode;}return s;}
-void GameNotebook::Close(){text_records_.clear();font_=nullptr;state_.text_owner=false;state_.text_capacity=state_.text_used=0;
+void GameNotebook::Close(){std::vector<uint8_t>().swap(text_records_);font_=nullptr;self_image_={};self_projection_={};
+    state_.text_owner=false;state_.text_capacity=state_.text_used=0;
     clone_.Close();resource_.reset();input_.BeginContext();
     state_.live=state_.visible=state_.owner46C=state_.request9=state_.retirement_pending=false;state_.phase=7;}
 }

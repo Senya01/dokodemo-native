@@ -1172,8 +1172,35 @@ GameFsStatus GameActorScript::BindMenuNotebook(const GameOwnerEventTarget& targe
     GameNotebookRows current;auto status=ReadMenuNotebook(target,current);if(!status)return status;
     if(!rows.valid||current.sha!=rows.sha||current.run_id!=rows.run_id||current.code_sha!=rows.code_sha)
         return {GameFsCode::Unavailable,0,"NOTE registration changed before binding"};
+    GameNotebookSelfImage self;
+    try{self=GameObserveNotebookSelf(*vm_,state_.generation,bindings_.at(11));}catch(...){/* Optional index0 must not narrow legacy empty NOTE admission. */}
+    notebook_self_before_=std::move(self);notebook_self_registration_=state_.notebook_registrations;
+    state_.notebook_self_before=notebook_self_before_.owner;state_.notebook_self_after={};
     state_.notebook_rows=current;state_.menu_notebook_generation=gui;state_.menu_notebook_parent=parent;
     state_.menu_notebook_live=true;++state_.menu_notebook_requests;return {};
+}
+GameFsStatus GameActorScript::ReadMenuNotebookSelf(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,GameNotebookSelfImage& out,bool for_preview)const{
+    try{
+        Need(state_.menu_notebook_live&&gui==state_.menu_notebook_generation&&parent==state_.menu_notebook_parent,
+             "NOTE self-details GUI/parent owner replaced");
+        const auto& pause=state_.menu_pause_return;
+        Need(vm_&&pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==parent
+             &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"NOTE self-details needs actual disabled18/32 owner");
+        GameNotebookRows rows;const auto status=ReadMenuNotebook(target,rows);Need(bool(status),status.detail.c_str());
+        Need(rows.sha==state_.notebook_rows.sha&&rows.run_id==state_.notebook_rows.run_id&&rows.code_sha==state_.notebook_rows.code_sha,
+             "NOTE self-details GAME11 registration/legacy image changed");
+        if(!notebook_self_before_.owner.valid&&!for_preview){out={};return {};}
+        Need(state_.notebook_registrations==notebook_self_registration_,"NOTE self-details GAME11 registration replaced");
+        auto image=GameObserveNotebookSelf(*vm_,state_.generation,bindings_.at(11));
+        if(for_preview)Need(profile_.live&&image.fields.size()>1&&image.fields[1].kind==Value::Kind::String
+             &&image.fields[1].cp932==profile_.player,"NOTE self-details does not match current GAME20(0) player owner");
+        const auto& before=notebook_self_before_;
+        Need(before.owner.valid&&image.owner.sha==before.owner.sha&&image.code_sha==before.code_sha
+             &&image.owner.run_id==before.owner.run_id&&image.owner.script_generation==before.owner.script_generation
+             &&image.owner.row_table==before.owner.row_table&&image.owner.row_index==before.owner.row_index
+             &&image.owner.row_header==before.owner.row_header,"NOTE self-details immutable index0 changed");
+        out=std::move(image);return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& target,const GameNotebookSnapshot& gui){
     try{
@@ -1190,10 +1217,19 @@ GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& t
         Need(current.sha==before.sha&&current.run_id==before.run_id&&current.code_sha==before.code_sha
              &&current.script_generation==before.script_generation&&current.root_table==before.root_table
              &&current.root_index==before.root_index&&current.root_header==before.root_header,"NOTE registered typed data changed during modal");
+        if(gui.preview_opens){
+            Need(gui.state26C==1&&gui.ordinary270==3&&gui.preview_opens==gui.preview_returns,"NOTE nested preview not returned to live parent");
+        }
+        if(notebook_self_before_.owner.valid){
+            GameNotebookSelfImage self;const auto checked=ReadMenuNotebookSelf(target,gui.generation,gui.lease.parent_generation,self,gui.preview_opens!=0);
+            Need(bool(checked),checked.detail.c_str());
+            if(gui.preview_opens)Need(gui.preview_record.sha==self.owner.sha,"NOTE preview record certificate replaced");
+            state_.notebook_self_after=self.owner;
+        }
         // NativeActualClosedNotebookWake: genuine child retirement is the only
         // wake. The original post32 enable producer remains an explicit cut.
         state_.notebook_after=current;
-        vm_->resume_modal_context();state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
+        vm_->resume_modal_context();notebook_self_before_={};state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{
@@ -1374,6 +1410,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
     }if(runtime_){out.runtime=runtime_->Snapshot();out.source_flag2A980=out.runtime.source_flag2A980!=0;}return out;
 }
 void GameActorScript::Close() {
+    notebook_self_before_={};notebook_self_registration_=0;
     menu_mark_.End();
     menu_placement_.End();
     owned_conversation_.Close();

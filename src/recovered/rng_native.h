@@ -30,6 +30,7 @@ public:
 class RngNativeOwner {
 public:
     bool Available() const noexcept;
+    uint64_t CurrentSeed64()const noexcept{return storage_?storage_->seed:0;}
     RngSnapshot Snapshot() const;
     void ImportCurrentState64(uint64_t state, uint64_t scenario_identity,
                               std::string provenance);

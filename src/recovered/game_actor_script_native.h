@@ -146,6 +146,7 @@ struct GameActorScriptSnapshot {
     bool flow5_guards_valid=false;
     GameNotebookRows notebook_rows;
     GameNotebookRows notebook_after;
+    GameNotebookSlotObservation notebook_self_before,notebook_self_after;
     bool menu_notebook_live=false;
     uint64_t menu_notebook_generation=0,menu_notebook_parent=0;
     uint32_t menu_notebook_requests=0,menu_notebook_completions=0;
@@ -303,6 +304,7 @@ class GameActorScript final {
     GameFsStatus ReadMenuNotebook(const GameOwnerEventTarget&,GameNotebookRows&)const;
     GameFsStatus BindMenuNotebook(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameNotebookRows&);
     GameFsStatus CompleteMenuNotebook(const GameOwnerEventTarget&,const GameNotebookSnapshot&);
+    GameFsStatus ReadMenuNotebookSelf(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameNotebookSelfImage&,bool for_preview=true)const;
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,bool owned_dispatch,int32_t& queue_result);
@@ -333,6 +335,8 @@ class GameActorScript final {
     GameOwnedConversation owned_conversation_;
     GameInventoryMarkChain menu_mark_;
     GameInventoryPlacementProof menu_placement_;
+    GameNotebookSelfImage notebook_self_before_;
+    uint32_t notebook_self_registration_=0;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;

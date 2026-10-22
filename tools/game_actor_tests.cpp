@@ -81,6 +81,7 @@
 #include "game_flow5_regressions.h"
 #endif
 #include "game_notebook_slot_probe_regressions.h"
+#include "game_notebook_self_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -486,6 +487,7 @@ GameFlow5RegressionChecks();
 #endif
 
     ::GameNotebookSlotProbeRegressionChecks();
+    ::GameNotebookSelfRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameInventoryDecorateRegressionChecks();

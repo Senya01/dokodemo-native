@@ -1015,8 +1015,26 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.RetireClosedRender();
             if(!status)break;
             if(main_flow_.Snapshot().menu_result50==3){
-                status=notebook_.Tick(*this,scene_ui_.TitleTransitionOwner());
+                const auto prior=notebook_.Snapshot();
+                if(prior.phase==3){
+                    GameNotebookSelfImage self;
+                    status=actor_script_.ReadMenuNotebookSelf(main_menu_target_,prior.generation,prior.lease.parent_generation,self,
+                                                           prior.state26C==2||prior.state26C==3||prior.preview_opens);
+                    if(status&&prior.state26C==2){
+                        status=notebook_.PrepareSelf(std::move(self));
+                        // A finite conversion refusal is reported by the child,
+                        // while its ordinary Cancel remains usable. An actor
+                        // identity/integrity failure above still blocks.
+                        const auto refused=notebook_.Snapshot();
+                        if(!status&&refused.state26C==1&&refused.unsupported==prior.unsupported+1)status={};
+                    }
+                }
+                if(status)status=notebook_.Tick(*this,scene_ui_.TitleTransitionOwner(),title_rng_);
                 const auto child=notebook_.Snapshot();
+                if(status&&child.phase==3&&child.input_boundaries!=prior.input_boundaries){
+                    ++state_.main_menu_input_epoch;
+                    if(!notebook_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"NOTE nested input epoch refused"};
+                }
                 if(status&&child.polls&&child.loader469==0&&child.generation==actor_script_.Snapshot().menu_notebook_generation){
                     state_.source_loader469=false;state_.source469_resource=9;state_.source469_generation=child.generation;state_.source469_poll=child.polls;
                 }
