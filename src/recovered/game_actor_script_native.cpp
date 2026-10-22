@@ -177,7 +177,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
         owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);});
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -876,6 +876,20 @@ GameFsStatus GameActorScript::PostPostModalInteraction(const GameOwnerEventTarge
         ++state_.post_modal_observation_refusals;owned_conversation_.SupersedePostModal();
     }
     return status;
+}
+void GameActorScript::ObserveWordSelection(const script::FrameTransition& t)noexcept{
+    if(!state_.live||!vm_||t.opcode!=0x31||!t.before.valid||!t.after.valid||t.before.code_entry!=0x89B6
+       ||t.before.run_id!=t.after.run_id||t.before.code_sha256!=t.after.code_sha256)return;
+    const auto sequence=++state_.word_selection_returns;
+    state_.word_selection_return={true,sequence,t.before.current_pc,t.before,t.after};
+    // Success is the actual final31/id result, separate from Input32 completion
+    // and from refusals. The row capture executes no VM read/write operation.
+    const auto& result=t.after.result;
+    if(t.before.current_pc!=0x8A56||!t.before.frame_captured||result.kind!=Value::Kind::Scalar||result.word>>28!=2
+       ||t.before.frame_values[0].kind!=Value::Kind::Scalar||t.before.frame_values[0].word!=result.word)return;
+    const auto row=result.word&0x0FFFFFFF;if(row>=600)return;
+    state_.word_accepted_return=state_.word_selection_return;
+    state_.word_accepted_row=ObserveWordRow(row);
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
     auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();

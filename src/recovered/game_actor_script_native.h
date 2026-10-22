@@ -110,6 +110,10 @@ struct GameActorScriptSnapshot {
     //consumer frame. A successor message need not have numeric Frame[0].
     GameWordRowObservation word_consumer_row;
     GameWordRowObservation word_clear_row;uint32_t word_clear_writes=0;
+    // Passive source89B6 selection outcome; no admission or owning lease.
+    uint64_t word_selection_returns=0;
+    script::NormalReturnWitness word_selection_return,word_accepted_return;
+    GameWordRowObservation word_accepted_row;
     uint32_t word_consumer_source_pc=0,word_consumer_source_entry=0;
     uint64_t word_consumer_source_frame_id=0;
     script::NormalReturnWitness normal_return;
@@ -230,6 +234,7 @@ class GameActorScript final {
   private:
     void CaptureInventoryItems();
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
+    void ObserveWordSelection(const script::FrameTransition&)noexcept;
     void RecordInventoryModelService(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,bool=true);
     script::Value Service(uint8_t,const std::vector<script::Value>&);
     script::Value GameService(const std::vector<script::Value>&);

@@ -55,7 +55,7 @@ struct Options {
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
     bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false,kanaWindowFixture=false,gameplayWindowFixture=false,continuationWindowFixture=false;
-    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot;
+    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot,fixtureChoiceHistory;
 };
 Options ParseOptions() {
     Options options;
@@ -80,6 +80,7 @@ Options ParseOptions() {
         else if(arg==L"--actor-channel-window-test"){options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;options.connectedStartupWindowTest=true;}
         else if(arg==L"--native-title-layout"&&i+1<count){std::wstring policy=args[++i];if(policy!=L"characters"&&policy!=L"menu")throw std::runtime_error("native title layout must be characters or menu");options.nativeTitleMenu=policy==L"menu";}
         else if(arg==L"--native-save-root" && i+1<count)options.nativeSaveRoot=args[++i];
+        else if(arg==L"--fixture-choice-history"&&i+1<count)options.fixtureChoiceHistory=args[++i];
         else if(arg==L"--test-game-rng-seed"&&i+1<count){
             const std::wstring raw=args[++i];size_t used=0;const auto word=std::stoull(raw,&used,10);
             if(used!=raw.size()||raw.empty()||raw.front()==L'-'||word>UINT32_MAX)throw std::runtime_error("Fixture RNG seed must be uint32 decimal");
@@ -97,6 +98,7 @@ Options ParseOptions() {
     }
     LocalFree(args);
     if(options.testRngSeedReplay&&!options.post21WindowFixture)throw std::runtime_error("Captured RNG seed replay requires explicit post21 window fixture");
+    if(!options.fixtureChoiceHistory.empty()&&!options.continuationWindowFixture)throw std::runtime_error("Choice history requires explicit continuation fixture");
     options.assets = ResolveAssets(options.assets);
     if (options.startupMedia.empty()) options.startupMedia = options.assets.parent_path() / L"iso";
     options.startupMedia = std::filesystem::absolute(options.startupMedia);
@@ -1862,6 +1864,9 @@ void WriteGameBootValue(std::ostream& out, const dokodemo::recovered::GameBootOb
     out<<",\"candidate_word_row\":";write_word_row(boot.content.actor_script.candidate_word_row);
     out<<",\"word_consumer_row\":";write_word_row(boot.content.actor_script.word_consumer_row);
     out<<",\"word_clear_writes\":"<<boot.content.actor_script.word_clear_writes<<",\"word_clear_row\":";write_word_row(boot.content.actor_script.word_clear_row);
+    out<<",\"word_selection_returns\":"<<boot.content.actor_script.word_selection_returns<<",\"word_selection_return\":";WriteNormalReturnWitness(out,boot.content.actor_script.word_selection_return);
+    out<<",\"word_accepted_return\":";WriteNormalReturnWitness(out,boot.content.actor_script.word_accepted_return);
+    out<<",\"word_accepted_row\":";write_word_row(boot.content.actor_script.word_accepted_row);
     out<<",\"word_consumer_source_pc\":"<<boot.content.actor_script.word_consumer_source_pc
        <<",\"word_consumer_source_entry\":"<<boot.content.actor_script.word_consumer_source_entry
        <<",\"word_consumer_source_frame_id\":"<<boot.content.actor_script.word_consumer_source_frame_id;
@@ -4376,6 +4381,15 @@ struct Application {
     unsigned playStep=0,playCycles=0;uint64_t playGeneration=0,playOrigin=0,playReceipt=0,playWait=0;
     uint32_t playPosted=0;bool playPassed=false;
     unsigned gameplayUi=0,gameplayPosts=0,gameplayCuts=0;uint64_t gameplayWait=0,gameplayGeneration=0;uint32_t gameplayPosted=0,gameplayBaseline=0;bool gameplayPassed=false,gameplayKnownInput=false,gameplayCorrectedInput=false,gameplayWordRow=false,gameplayEcho=false;
+    std::vector<std::pair<uint32_t,std::string>> fixtureChoiceHistory;
+    std::vector<std::string> fixtureChoiceOptions;
+    uint64_t fixtureChoiceContext=0,fixtureChoiceOwner=0;
+    uint32_t fixtureChoicePC=0,fixtureChoiceTarget=0,fixtureChoicePrevious=0,fixtureChoiceRequest=0;
+    uint32_t fixtureChoiceImported=0,fixtureChoiceCompleted=0,fixtureChoiceNovel=0;
+    std::string fixtureInputExpected;
+    uint64_t fixtureInputContext=0,fixtureInputGeneration=0;
+    uint32_t fixtureInputRequest=0,fixtureInputPC=0,fixtureInputScriptContext=0,fixtureGreetingAnswers=0;
+    bool fixtureGreetingObserved=false;
     unsigned kanaStep=0,kanaUiStep=0,kanaSeekStep=0,kanaSeekCount=0;uint64_t kanaWait=0;
     uint64_t kanaSeekGeneration=0;uint32_t kanaSeekPosted=0;
     uint32_t kanaInputBefore=0,kanaAckBefore=0,kanaChoiceBefore=0;
@@ -4406,7 +4420,45 @@ struct Application {
     std::shared_ptr<dokodemo::platform::WindowsClockCache> sourceClockCache=
         std::make_shared<dokodemo::platform::WindowsClockCache>();
     int width = 1080, height = 760; HDC bufferDC = nullptr; HBITMAP buffer = nullptr; HGDIOBJ oldBuffer = nullptr; void* pixels = nullptr;
+    void LoadFixtureChoiceHistory(){
+        if(options.fixtureChoiceHistory.empty())return;
+        if(std::filesystem::file_size(options.fixtureChoiceHistory)>65536)throw std::runtime_error("Fixture choice journal size bound");
+        std::ifstream in(options.fixtureChoiceHistory,std::ios::binary);std::string line;
+        if(!std::getline(in,line)||line!="DOKODEMO_UI_CHOICES_V1")throw std::runtime_error("Fixture choice journal header");
+        while(std::getline(in,line)){
+            std::istringstream fields(line);uint32_t pc=0;std::string text,extra;
+            if(!(fields>>pc>>text)||fields>>extra||text.size()>8192||text.empty()||text.size()%2
+               ||!std::all_of(text.begin(),text.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f');}))
+                throw std::runtime_error("Fixture choice journal record");
+            const auto key=std::make_pair(pc,text);
+            if(std::find(fixtureChoiceHistory.begin(),fixtureChoiceHistory.end(),key)==fixtureChoiceHistory.end())fixtureChoiceHistory.push_back(key);
+            if(fixtureChoiceHistory.size()>128)throw std::runtime_error("Fixture choice journal count bound");
+        }
+        if(in.bad())throw std::runtime_error("Fixture choice journal read");
+        fixtureChoiceImported=uint32_t(fixtureChoiceHistory.size());
+    }
+    bool FixtureChoiceSeen(uint32_t pc,const std::string& text)const{
+        return std::find(fixtureChoiceHistory.begin(),fixtureChoiceHistory.end(),std::make_pair(pc,StartupHexBytes(reinterpret_cast<const uint8_t*>(text.data()),text.size())))!=fixtureChoiceHistory.end();
+    }
+    bool RecordFixtureChoice(){
+        const auto& text=fixtureChoiceOptions.at(fixtureChoiceTarget);
+        const bool novel=!FixtureChoiceSeen(fixtureChoicePC,text);
+        auto next=fixtureChoiceHistory;
+        if(novel){
+            if(next.size()>=128)return false;
+            next.emplace_back(fixtureChoicePC,StartupHexBytes(reinterpret_cast<const uint8_t*>(text.data()),text.size()));
+        }
+        std::ostringstream serialized;serialized<<"DOKODEMO_UI_CHOICES_V1\n";
+        for(const auto& entry:next)serialized<<entry.first<<' '<<entry.second<<'\n';
+        const auto bytes=serialized.str();if(bytes.size()>65536)return false;
+        std::ofstream out(options.evidence/L"fixture-choice-history.txt",std::ios::binary|std::ios::trunc);
+        out.write(bytes.data(),std::streamsize(bytes.size()));out.flush();out.close();
+        if(!out)return false;
+        fixtureChoiceHistory=std::move(next);++fixtureChoiceCompleted;if(novel)++fixtureChoiceNovel;
+        return true;
+    }
     explicit Application(Options value) : options(std::move(value)) {
+        LoadFixtureChoiceHistory();
         images = FindImages(options.assets);
         // Prefer a prepared background/full screen to glyphs or tiny atlas members.
         for (size_t i = 0; i < images.size(); ++i) {
@@ -4774,8 +4826,13 @@ struct Application {
         // Completion means only a healthy observation cut, never a new feature.
         if(options.gameplayWindowFixture&&c.post_modal.event_posted){
             const auto& a=c.actor_script;const auto& r=c.returned_interaction;const auto phase=a.runtime.actor_phases;
-            const auto cut=[&](const wchar_t* label){const auto name=std::wstring(L"explore-")+std::to_wstring(++gameplayCuts)+L"-"+label;save(name.c_str());};
-            const auto fail=[&](const wchar_t* label){cut(label);storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);};
+            const auto cut=[&](const wchar_t* label){
+                const auto name=std::wstring(L"explore-")+std::to_wstring(++gameplayCuts)+L"-"+label;
+                if(!options.continuationWindowFixture||std::wstring_view(label)==L"choice-target"||std::wstring_view(label)==L"available"||std::wstring_view(label)==L"input-typed"
+                   ||std::wstring_view(label)==L"greeting-prompt"||std::wstring_view(label)==L"greeting-word-observation")save(name.c_str());
+                else WriteStartupObservation(options.evidence/(name+L".json"),startupObservation);
+            };
+            const auto fail=[&](const wchar_t* label){save(label);storageBoundaryPassed=false;PostMessageW(window,WM_CLOSE,0,0);};
             if(gameplayPassed){storageBoundaryPassed=true;return;}
             const std::string corrected_word="\x82\xBD\x82\xEB\x82\xA4";
             const auto& row=a.word_consumer_row;
@@ -4790,6 +4847,10 @@ struct Application {
             }
             if(a.awaiting_message&&c.actor_message_glyphs&&a.message.find(corrected_word)!=std::string::npos&&!gameplayEcho){
                 gameplayEcho=true;cut(L"corrected-word-font");
+            }
+            if(!fixtureGreetingObserved&&fixtureGreetingAnswers&&a.word_accepted_return.valid&&a.awaiting_message&&c.actor_message_glyphs
+               &&a.message.find("\x82\xA8\x82\xC1\x82\xB7")!=std::string::npos){
+                fixtureGreetingObserved=true;cut(L"greeting-word-observation"); // Evidence cut; not an acceptance predicate.
             }
             const auto& cleared=a.word_clear_row;
             const bool cleared_proof=cleared.valid&&cleared.generation==a.generation&&cleared.run_id==a.vm_current.run_id
@@ -4812,28 +4873,68 @@ struct Application {
                 if(r.generation!=gameplayGeneration||!r.event_posted||r.queue_result!=0){fail(L"post-refused");return;}
                 ++gameplayPosts;cut(L"posted");button(0);gameplayUi=0;gameplayWait=phase+300;
             }else if(!gameplayUi&&a.awaiting_message&&c.actor_message_glyphs){
-                cut(L"message");gameplayBaseline=a.message_acknowledgements;button(0);gameplayWait=phase+3;gameplayUi=3;
+                cut(options.continuationWindowFixture&&a.message.find("\x82\xC8\x82\xA9\x82\xE6\x82\xB5\x93\xAF\x8E\x6D\x82\xCC")!=std::string::npos?L"greeting-prompt":L"message");
+                gameplayBaseline=a.message_acknowledgements;button(0);gameplayWait=phase+3;gameplayUi=3;
             }else if(gameplayUi==3&&phase>=gameplayWait&&c.actor_message_input_armed){
                 button(Circle);gameplayWait=phase+300;gameplayUi=4;
             }else if(gameplayUi==4&&a.message_acknowledgements==gameplayBaseline+1){
                 button(0);gameplayUi=0;gameplayWait=phase+300;
             }else if(!gameplayUi&&a.awaiting_choice&&c.actor_choice.state==1){
                 cut(L"choice");gameplayBaseline=a.choice_completions;button(0);gameplayWait=phase+3;gameplayUi=5;
+                if(options.continuationWindowFixture){
+                    fixtureChoiceOptions=c.actor_choice.options;fixtureChoicePC=a.pc;fixtureChoiceRequest=a.choice_requests;
+                    fixtureChoiceContext=c.actor_choice.context;fixtureChoiceOwner=c.actor_choice.owner_generation;
+                    if(fixtureChoiceOptions.empty()||fixtureChoiceOptions.size()>32||c.actor_choice.row>=fixtureChoiceOptions.size()
+                       ||std::any_of(fixtureChoiceOptions.begin(),fixtureChoiceOptions.end(),[](const auto& text){return text.empty();})){fail(L"fixture-choice-domain");return;}
+                    fixtureChoiceTarget=c.actor_choice.row;
+                    for(uint32_t i=uint32_t(fixtureChoiceOptions.size());i-->0;)if(!FixtureChoiceSeen(a.pc,fixtureChoiceOptions[i])){fixtureChoiceTarget=i;break;}
+                }
+            }else if((gameplayUi==5||gameplayUi==9)&&options.continuationWindowFixture){
+                if(!a.awaiting_choice||a.pc!=fixtureChoicePC||a.choice_requests!=fixtureChoiceRequest||c.actor_choice.state!=1
+                   ||c.actor_choice.context!=fixtureChoiceContext||c.actor_choice.owner_generation!=fixtureChoiceOwner||c.actor_choice.options!=fixtureChoiceOptions){fail(L"fixture-choice-owner-changed");return;}
+                if(gameplayUi==9){
+                    if(c.actor_choice.row!=fixtureChoicePrevious){button(0);gameplayWait=phase+3;gameplayUi=5;}
+                    else if(phase>=gameplayWait){fail(L"fixture-choice-arrow-not-consumed");return;}
+                }else if(phase>=gameplayWait){
+                    if(c.actor_choice.row!=fixtureChoiceTarget){fixtureChoicePrevious=c.actor_choice.row;button(c.actor_choice.row<fixtureChoiceTarget?Down:Up);gameplayWait=phase+8;gameplayUi=9;}
+                    else {cut(L"choice-target");button(Circle);gameplayWait=phase+300;gameplayUi=6;}
+                }
             }else if(gameplayUi==5&&phase>=gameplayWait){
                 button(Circle);gameplayWait=phase+300;gameplayUi=6;
             }else if(gameplayUi==6&&!a.awaiting_choice&&a.choice_completions==gameplayBaseline+1){
+                if(options.continuationWindowFixture){
+                    if(c.actor_choice.context!=fixtureChoiceContext||c.actor_choice.owner_generation!=fixtureChoiceOwner||c.actor_choice.state!=3
+                       ||c.actor_choice.timed_out||c.actor_choice.row!=fixtureChoiceTarget||c.actor_choice.result!=fixtureChoiceTarget+1
+                       ||a.choice_result_word!=(0x20000000u|(fixtureChoiceTarget+1))){fail(L"fixture-choice-result-mismatch");return;}
+                    if(!RecordFixtureChoice()){fail(L"fixture-choice-journal-unavailable");return;}
+                }
                 cut(L"choice-result");button(0);gameplayUi=0;gameplayWait=phase+300;
             }else if(!gameplayUi&&a.awaiting_input&&e.live&&e.source_state==1&&e.focused){
                 cut(L"input");if(a.input_mode!=0){fail(L"input-domain");return;}
-                gameplayBaseline=a.input_completions;button(0);PostText(GameTextKind::Home);
-                for(unsigned i=0;i<8;++i)PostText(GameTextKind::Delete);
-                CommitUnicode(options.continuationWindowFixture?L"\u3042\u304D":a.input_completions?L"\u305F\u308D\u3046":L"\u306D\u3053");gameplayWait=phase+3;gameplayUi=7;
-            }else if(gameplayUi==7&&phase>=gameplayWait&&e.staged==(options.continuationWindowFixture?"\x82\xA0\x82\xAB":gameplayBaseline?"\x82\xBD\x82\xEB\x82\xA4":"\x82\xCB\x82\xB1")){
-                cut(L"input-typed");if(!PostText(GameTextKind::Confirm)){fail(L"confirm-refused");return;}
+                // Test text answers an actually rendered source question. This
+                // selects no source result/category and creates no input route.
+                const bool greeting=options.continuationWindowFixture
+                    &&a.message.find("\x82\xC8\x82\xA9\x82\xE6\x82\xB5\x93\xAF\x8E\x6D\x82\xCC")!=std::string::npos;
+                fixtureInputExpected=options.continuationWindowFixture?(greeting?"\x82\xA8\x82\xC1\x82\xB7":"\x82\xA0\x82\xAB")
+                    :a.input_completions?corrected_word:"\x82\xCB\x82\xB1";
+                fixtureInputContext=e.context;fixtureInputGeneration=a.generation;fixtureInputRequest=a.input_requests;
+                fixtureInputPC=a.pc;fixtureInputScriptContext=a.context_word;
+                if(!fixtureInputContext||textGate.Id()!=fixtureInputContext){fail(L"fixture-input-owner");return;}
+                gameplayBaseline=a.input_completions;button(0);
+                if(!PostText(GameTextKind::Home,fixtureInputContext)){fail(L"fixture-input-edit-refused");return;}
+                for(unsigned i=0;i<8;++i)if(!PostText(GameTextKind::Delete,fixtureInputContext)){fail(L"fixture-input-edit-refused");return;}
+                if(!CommitUnicode(options.continuationWindowFixture?(greeting?L"\u304A\u3063\u3059":L"\u3042\u304D")
+                    :a.input_completions?L"\u305F\u308D\u3046":L"\u306D\u3053")){fail(L"fixture-input-text-refused");return;}
+                gameplayWait=phase+3;gameplayUi=7;
+            }else if(gameplayUi==7&&phase>=gameplayWait&&e.staged==fixtureInputExpected){
+                if(!a.awaiting_input||a.generation!=fixtureInputGeneration||a.input_requests!=fixtureInputRequest||a.pc!=fixtureInputPC
+                   ||a.context_word!=fixtureInputScriptContext||!e.live||e.source_state!=1||!e.focused||e.context!=fixtureInputContext){fail(L"fixture-input-owner-changed");return;}
+                cut(L"input-typed");if(!PostText(GameTextKind::Confirm,fixtureInputContext)){fail(L"confirm-refused");return;}
                 gameplayWait=phase+300;gameplayUi=8;
             }else if(gameplayUi==8&&!a.awaiting_input&&a.input_completions==gameplayBaseline+1){
-                const std::string expected=options.continuationWindowFixture?"\x82\xA0\x82\xAB":gameplayBaseline?corrected_word:"\x82\xCB\x82\xB1";
-                if(a.input_timed_out||a.input_text!=expected||a.input_auxiliary!=expected){fail(L"input-result-mismatch");return;}
+                if(a.generation!=fixtureInputGeneration||a.input_requests!=fixtureInputRequest||a.context_word!=fixtureInputScriptContext
+                   ||a.input_timed_out||a.input_text!=fixtureInputExpected||a.input_auxiliary!=fixtureInputExpected){fail(L"input-result-mismatch");return;}
+                if(fixtureInputExpected=="\x82\xA8\x82\xC1\x82\xB7")++fixtureGreetingAnswers;
                 if(!gameplayBaseline)gameplayKnownInput=true;else gameplayCorrectedInput=true;
                 cut(L"input-result");button(0);gameplayUi=0;gameplayWait=phase+300;
             }
@@ -6430,6 +6531,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
                 << ",\"manager9_next_message_held_refused\":"<<(app.managerNextHeldRefused?"true":"false")
                 << ",\"inventory_actions_window_fixture\":"<<(options.inventoryActionWindowFixture?"true":"false")
                 << ",\"inventory_actions_passed\":"<<(app.inventoryActionPassed?"true":"false")
+                << ",\"fixture_choice_imported\":"<<app.fixtureChoiceImported<<",\"fixture_choice_completed\":"<<app.fixtureChoiceCompleted<<",\"fixture_choice_novel\":"<<app.fixtureChoiceNovel
+                << ",\"fixture_greeting_answers\":"<<app.fixtureGreetingAnswers
+                << ",\"fixture_text_policy\":\"ActualRenderedGreetingPromptOssuOtherwiseAki;StrictReactionFixtureNekoTarou;TestTextOnlyNoCategoryOrResultInjection\""
                 << ",\"continuation_window_fixture\":"<<(options.continuationWindowFixture?"true":"false")
                 << ",\"gameplay_exploration_fixture\":"<<(options.gameplayWindowFixture?"true":"false")<<",\"gameplay_exploration_passed\":"<<(app.gameplayPassed?"true":"false")<<",\"gameplay_posts\":"<<app.gameplayPosts<<",\"gameplay_known_input\":"<<(app.gameplayKnownInput?"true":"false")<<",\"gameplay_corrected_input\":"<<(app.gameplayCorrectedInput?"true":"false")<<",\"gameplay_word_row\":"<<(app.gameplayWordRow?"true":"false")<<",\"gameplay_echo\":"<<(app.gameplayEcho?"true":"false")
                 << ",\"kana_word_window_fixture\":"<<(options.kanaWindowFixture?"true":"false")<<",\"kana_word_passed\":"<<(app.kanaPassed?"true":"false")<<",\"kana_held_refused\":"<<(app.kanaHeldRefused?"true":"false")<<",\"kana_closing_observed\":"<<(app.kanaClosing?"true":"false")<<",\"kana_consumer_passed\":"<<(app.kanaWordPassed?"true":"false")<<",\"kana_echo_seen\":"<<(app.kanaEchoSeen?"true":"false")<<",\"kana_offered_interactions\":"<<app.kanaSeekCount

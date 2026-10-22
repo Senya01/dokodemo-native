@@ -38,6 +38,10 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_word_op55_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_greeting_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -375,6 +379,11 @@ GameInventoryActionRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameWordOp55RegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameGreetingRegressionChecks();
 #endif
 
     
