@@ -110,16 +110,25 @@ GameFsStatus GameMainFlow::MenuOpened(){
     state_.menu58=2;state_.last_pc=0x2399C;return {};
 }
 GameFsStatus GameMainFlow::PollMenuCancel(){
+    return PollMenuResult(-1);
+}
+GameFsStatus GameMainFlow::PollMenuResult(int32_t result){
     if(state_.phase1C!=7||state_.menu58!=2)return {GameFsCode::Unavailable,0,"Main menu completion owner mismatch"};
-    state_.menu_result54=-1;state_.menu58=5;state_.last_pc=0x23748;return {};
+    if(result!=-1&&result!=5)return {GameFsCode::Unavailable,0,"Main menu result outside Cancel/inventory domain"};
+    state_.menu_result54=result;state_.menu58=5;state_.last_pc=0x23748;return {};
 }
 GameFsStatus GameMainFlow::RetireMenuCancel(){
-    if(state_.phase1C!=7||state_.menu58!=5||state_.menu_result54!=-1||state_.return20)
+    if(state_.menu_result54!=-1)return {GameFsCode::Unavailable,0,"Main menu Cancel result mismatch"};
+    return RetireMenuResult();
+}
+GameFsStatus GameMainFlow::RetireMenuResult(){
+    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=5)||state_.return20)
         return {GameFsCode::Unavailable,0,"Main menu Cancel retirement owner mismatch"};
     state_.menu_result50=state_.menu_result54;state_.menu_result54=-1;state_.menu58=0;
     state_.phase1C=state_.return20;state_.return20=0;state_.last_pc=0x238B0;input_.BeginContext();return {};
 }
 GameFsStatus GamePostModalInteraction::Update(const GameInventorySnapshot& inventory,const GameMainFlowSnapshot& flow,GameActorScript& script,bool source469){
+    if(state_.spent_history)return {};
     if(!state_.error.empty())return {GameFsCode::Unavailable,0,state_.error};
     const auto current=script.Snapshot();
     state_.source_gate_blocked=source469&&flow.phase1C==0;
@@ -152,6 +161,7 @@ GameFsStatus GamePostModalInteraction::Update(const GameInventorySnapshot& inven
     return {};
 }
 bool GamePostModalInteraction::Input(const GameInputFrame& frame){
+    if(state_.spent_history)return false;
     if(frame.overflow_resync){if(state_.eligible)input_.Begin();else input_.Stop();state_.armed=false;++state_.rejected;return false;}
     if(frame.sequence<=state_.last_sequence){++state_.rejected;return false;}
     state_.last_sequence=frame.sequence;
@@ -168,4 +178,10 @@ bool GamePostModalInteraction::Input(const GameInputFrame& frame){
     state_.event_posted=true;state_.eligible=false;state_.armed=false;++state_.posted;input_.Stop();return true;
 }
 void GamePostModalInteraction::Close(){state_.live=state_.eligible=state_.armed=false;script_=nullptr;target_={};input_.Stop();state_.error="Post-modal interaction retired";}
+GameFsStatus GamePostModalInteraction::RetireConsumedInventory(){
+    if(state_.spent_history)return {};
+    if(!state_.event_posted||!state_.callback_returned||!state_.error.empty())
+        return {GameFsCode::Unavailable,0,"Only consumed post-modal origin may become spent history"};
+    state_.spent_history=true;state_.live=state_.eligible=state_.armed=false;script_=nullptr;target_={};input_.Stop();return {};
+}
 } //namespace dokodemo::recovered

@@ -7,14 +7,16 @@ namespace dokodemo::recovered {
 namespace {
 void Need(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 }
-GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context,GameInventoryActionDispatch dispatch){
+GameFsStatus GameInventory::Request(std::vector<GameInventoryItem> items,bool home_context,GameInventoryActionDispatch dispatch,GameInventoryOrigin origin){
+    if(origin!=GameInventoryOrigin::Script41&&origin!=GameInventoryOrigin::MainMenu5)return {GameFsCode::Bounds,0,"Inventory request origin unavailable"};
     if(Modal())return {GameFsCode::Busy,0,"Inventory resource14 already pending"};
     if(items.size()>170)return {GameFsCode::Bounds,0,"Native inventory170-row admission"};
     for(size_t i=0;i<items.size();++i)if(items[i].row!=i)return {GameFsCode::Bounds,0,"Inventory row index/provenance mismatch"};
     const auto generation=state_.generation+1;
     const auto requests=state_.requests+1,retired=state_.retirements;
     discard_dialog_.Retire();state_={};state_.generation=generation;state_.requests=uint32_t(requests);state_.retirements=retired;
-    state_.items=std::move(items);state_.requested=state_.request14=true;state_.loader498=2;state_.phase=1;
+    state_.origin=origin;state_.items=std::move(items);state_.requested=state_.request14=true;
+    state_.loader498=origin==GameInventoryOrigin::MainMenu5?0:2;state_.phase=1;
     home_=home_context;dispatch_=std::move(dispatch);input_.BeginContext();return {};
 }
 GameFsStatus GameInventory::CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items){
@@ -92,7 +94,7 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
         if(state_.phase==1)return Initialize(source,transition);
         if(state_.phase==6){ //93504 is deferred;drain before releasing child owners
             clone_.Close();resource_.reset();state_.live=state_.owner480=state_.retirement_pending=false;
-            state_.loader464=0;state_.phase=7;++state_.retirements;input_.BeginContext();return {};
+            state_.loader464=0;state_.phase=7;state_.retired_generation=state_.generation;++state_.retirements;input_.BeginContext();return {};
         }
         if(!state_.live)return {};
         std::string error;Need(clone_.Update(error),error.c_str());
@@ -137,7 +139,10 @@ GameFsStatus GameInventory::Tick(GameResourceSource& source,GameTransition& tran
                     if(right){if(state_.filter<5)++state_.filter;else if(right==1)state_.filter=1;}
                     else{if(state_.filter>1)--state_.filter;else if(left==1)state_.filter=5;}
                     if(prior!=state_.filter){state_.selection=0;Rebuild();clone_.Control(1)->frame=state_.filter;++state_.navigation;}
-                }else if(input_.First(Circle)&&state_.count){state_.actions=true;state_.stateB30=1;state_.action_selection=0;++state_.action_opens;input_.BeginContext();}
+                }else if(input_.First(Circle)&&state_.count){
+                    if(state_.origin==GameInventoryOrigin::MainMenu5){++state_.unsupported_actions;input_.BeginContext();}
+                    else{state_.actions=true;state_.stateB30=1;state_.action_selection=0;++state_.action_opens;input_.BeginContext();}
+                }
                 else if(input_.First(Cross)){state_.stateB2C=2;state_.phase=4;++state_.close_requests;transition.CloseWipe(false);input_.BeginContext();}
             }
         }

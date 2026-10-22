@@ -11,15 +11,15 @@ struct GameMainMenuLease {
     uint64_t script_generation=0,run_id=0,available_owner=0,available_generation=0,message_context=0,input_epoch=0;
 };
 struct GameMainMenuSnapshot {
-    bool live=false,full=false,source_scene_nonzero=false;
+    bool live=false,full=false,source_scene_nonzero=false,render_live=false;
     uint64_t generation=0;
     GameMainMenuLease lease;
     uint32_t state78=3,opens=0,cancels=0,closed=0,rejected=0,unsupported=0;
     int32_t row=0,column=0,result=-1;
-    uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0;
+    uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0,render_retirements=0;
 };
-// Finite source full-mode main rows. Actions/submenus refuse without a result;
-// Cancel alone commits -1 after the real closing-control completion.
+// Finite full-mode rows: inventory row5 or Cancel. Other actions refuse.
+// Result5/-1 publishes only after real closing-control completion.
 class GameMainMenuControl final {
   public:
     bool Begin(GameMainMenuLease,bool full,bool source_scene_nonzero);
@@ -39,6 +39,9 @@ class GameMainMenu final {
     bool Input(const GameInputFrame& frame){return control_.Input(frame);}
     GameFsStatus Tick();
     GameFsStatus Draw(GameGraphics&);
+    // NativeClosedMenuRenderRetirement: after result5 and callback18, release
+    // only the hidden template/clone. Keep the resolved control/borrowed lease.
+    GameFsStatus RetireClosedRender();
     GameMainMenuSnapshot Snapshot()const;
     bool Modal()const{return control_.Snapshot().live&&control_.Snapshot().state78!=3;}
     void Close();
@@ -48,6 +51,6 @@ class GameMainMenu final {
     std::shared_ptr<GameUiResource> resource_;
     GameUiInstance clone_;
     GameMainMenuControl control_;
-    uint32_t draw_frames_=0,quads_=0;
+    uint32_t draw_frames_=0,quads_=0,render_retirements_=0,last_frame_=0,last_clip_=0,last_mode_=0;
 };
 }

@@ -54,6 +54,37 @@ GameWordRowObservation GameObserveWordRow(const script::Vm& vm,uint64_t generati
     }catch(...){/* Fixed evidence remains invalid; no owner or VM mutation. */}
     return out;
 }
+GameInventoryRowsObservation GameObserveInventoryRows(const script::Vm& vm,uint64_t generation,const Value& registered,std::vector<GameInventoryItem>& items){
+    const auto current=vm.current_witness();
+    Need(current.valid&&current.run_id&&registered.kind==Value::Kind::Reference
+         &&registered.table==script::Table::Global&&registered.index==0x4FAD,"Inventory actual GAME35/Global4FAD registration required");
+    GameInventoryRowsObservation out;out.generation=generation;out.run_id=current.run_id;out.code_sha256=current.code_sha256;
+    out.table=uint32_t(registered.table);out.index=registered.index;
+    std::vector<uint8_t> bytes;std::vector<GameInventoryItem> next;
+    const auto append=[&](uint32_t n){for(unsigned i=0;i<4;++i)bytes.push_back(uint8_t(n>>(8*i)));};
+    const auto capture=[&](const Value& v){append(uint32_t(v.kind));append(v.word);append(uint32_t(v.table));append(v.index);
+        append(uint32_t(v.kind==Value::Kind::String?v.cp932.size():0));if(v.kind==Value::Kind::String)bytes.insert(bytes.end(),v.cp932.begin(),v.cp932.end());};
+    const auto at=[&](Value root,uint32_t n){const auto index=uint32_t(root.index)+1+n;Need(index<=UINT16_MAX,"Inventory typed row extent");root.index=uint16_t(index);return vm.peek_reference(root);};
+    const auto header=vm.peek_reference(registered);Need(header.kind==Value::Kind::ArrayHeader&&(header.word&0xFFF)==170,"Inventory actual170-row table");
+    out.header=header.word;out.rows=170;capture(registered);capture(header);
+    for(uint32_t i=0;i<170;++i){
+        const auto row=at(registered,i);Need(row.kind==Value::Kind::Reference&&(row.table==script::Table::Global||row.table==script::Table::Local||row.table==script::Table::Ctx28),"Inventory stable typed row owner");
+        const auto row_header=vm.peek_reference(row);const auto count=row_header.word&0xFFF;
+        Need(row_header.kind==Value::Kind::ArrayHeader&&count>=10&&count<=64,"Inventory finite actual row header");
+        capture(row);capture(row_header);std::array<Value,10> first;
+        for(uint32_t n=0;n<count;++n){const auto value=at(row,n);capture(value);if(n<10)first[n]=value;}
+        out.cells+=count;GameInventoryItem item;item.row=i;
+        if(first[0].word>>28){item.id=Number(first[0]);item.valid=item.id>=0;
+            if(item.valid){Need(first[1].kind==Value::Kind::String&&first[2].kind==Value::Kind::String,"Inventory owned display strings");
+                item.name=first[1].cp932;item.description=first[2].cp932;item.date_word=first[4].word&0x0FFFFFFF;
+                item.category=Number(first[5])==1?2:((first[7].word>>28)==0?1:0);
+                for(uint32_t n=0;n<3;++n){item.source_words[n]=first[5+n].word;item.source_kinds[n]=uint8_t(first[5+n].kind);
+                    const auto k=n==0?3u:n+7;item.control_words[n]=first[k].word;item.control_kinds[n]=uint8_t(first[k].kind);}
+                ++out.valid_items;}}
+        next.push_back(std::move(item));
+    }
+    out.sha256=core::sha256(bytes.data(),bytes.size());out.valid=true;items=std::move(next);return out;
+}
 script::Value GameNilBytePair0D(const std::vector<script::Value>& args){
     Need(args.size()==1,"Builtin0D argc");const auto& value=args[0];
     if(value.kind==Value::Kind::String&&value.word>>28==6&&value.cp932.size()==2){
@@ -688,7 +719,7 @@ GameFsStatus GameActorScript::Tick() {
 GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected,uint32_t event,uint64_t generation,int32_t& queue){
     queue=-1;
     try{
-        Need(state_.live&&vm_&&generation&&(event==10||event==11)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
+        Need(state_.live&&vm_&&generation&&(event==10||event==11||event==18)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input
              &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu callback requires its idle owning VM");
         const auto target=OwnerEventTarget();
@@ -704,7 +735,7 @@ GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected
         if(queue==0){
             auto& c=state_.menu_callback;c={};c.pending=true;c.event=event;c.menu_generation=generation;
             c.receipt=vm_->last_callback_receipt();c.callback_frame=vm_->current_witness().frame_id;c.suspended=saved;
-            c.flag_before=flag.word;c.kind_before=uint8_t(flag.kind);
+            c.flag_before=flag.word;c.kind_before=uint8_t(flag.kind);c.enabled_before=vm_->context_enabled();
         }
         return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
@@ -723,7 +754,9 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
         for(uint32_t i=0;i<s.frame_captured;++i)valid=valid&&same(s.frame_values[i],y.frame_values[i]);
         for(uint32_t i=0;i<s.operands_captured;++i)valid=valid&&same(s.operands[i],y.operands[i]);
         const auto flag=vm_->read_slot(script::Table::Global,0x9A78);c.flag_after=flag.word;c.kind_after=uint8_t(flag.kind);
-        valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u);
+        c.enabled_after=vm_->context_enabled();
+        valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u)
+            &&c.enabled_after==(c.event!=18);
         c.restored=y;c.returned=valid;c.failed=!valid;
     }catch(...){c.failed=true;}
 }
@@ -742,7 +775,7 @@ GameFsStatus GameActorScript::TickMenuOwner(){
             const auto after=vm_->current_witness();
             Need(after.event_scope_depth==c.suspended.event_scope_depth&&!after.event_envelope_present,"Menu callback public scope did not restore");
             c.pending=false;
-            if(c.event==10)state_.menu_open_return=c;else state_.menu_close_return=c;
+            if(c.event==10)state_.menu_open_return=c;else if(c.event==11)state_.menu_close_return=c;else state_.menu_pause_return=c;
         }
         return {};
     }catch(const std::exception& e){state_.blocked=true;state_.error=e.what();return {GameFsCode::Unavailable,0,e.what()};}
@@ -806,7 +839,7 @@ GameFsStatus GameActorScript::CompleteInput(const GameChoiceTarget& expected,std
 GameInventoryActionAdmission GameActorScript::PostInventoryAction(uint64_t generation,uint32_t event,int32_t row){
     GameInventoryActionAdmission out;
     try{
-        Need(state_.live&&vm_&&state_.inventory_requested&&generation==state_.inventory_requests&&!state_.inventory_action.pending,
+        Need(state_.live&&vm_&&state_.inventory_requested&&generation==state_.inventory_gui_generation&&!state_.inventory_action.pending,
              "Inventory action owner/generation unavailable");
         Need((event==13||event==14||event==15||event==16)&&row>=0&&uint32_t(row)<state_.inventory_items.size(),"Inventory action event/row domain");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input&&!vm_->context_enabled()
@@ -882,10 +915,61 @@ bool GameActorScript::CanResumeInventory()const{
 }
 GameFsStatus GameActorScript::CompleteInventory(const GameInventorySnapshot& gui){
     try{
-        Need(state_.live&&CanResumeInventory()&&gui.generation==state_.inventory_requests,"Inventory stale or unready context resume");
-        Need(gui.phase==7&&!gui.live&&!gui.owner480&&!gui.request14&&gui.stateB2C==3&&gui.loader468==1&&gui.loader498==0&&gui.retirements>0,
+        Need(state_.live&&CanResumeInventory()&&gui.generation==state_.inventory_gui_generation&&gui.origin==GameInventoryOrigin::Script41,"Inventory stale or unready context resume");
+        Need(gui.phase==7&&gui.retired_generation==gui.generation&&!gui.live&&!gui.owner480&&!gui.request14&&gui.stateB2C==3&&gui.loader468==1&&gui.loader498==0&&gui.retirements>0,
              "Native modal resume requires genuine close,poll completion and deferred retirement");
         vm_->resume_modal_context();state_.inventory_requested=false;++state_.inventory_completions;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::BindScriptInventory(uint64_t generation,uint32_t request){
+    if(!state_.live||!vm_||!state_.inventory_requested||state_.menu_inventory_live
+       ||request!=state_.inventory_requests||!generation||generation<=state_.inventory_gui_generation)
+        return {GameFsCode::Unavailable,0,"Script inventory request/GUI binding refused"};
+    state_.inventory_gui_generation=generation;return {};
+}
+GameFsStatus GameActorScript::ReadMenuInventory(const GameOwnerEventTarget& expected,std::vector<GameInventoryItem>& items){
+    try{
+        Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu inventory read needs its idle VM owner");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
+             "Menu inventory registered context/callback changed");
+        state_.menu_inventory_before=GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),items);
+        state_.inventory_items=items;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::BindMenuInventory(const GameOwnerEventTarget& expected,uint64_t generation,uint64_t menu_generation){
+    std::vector<GameInventoryItem> items;const auto status=ReadMenuInventory(expected,items);if(!status)return status;
+    if(!generation||!menu_generation||generation<=state_.inventory_gui_generation||state_.inventory_requested
+       ||state_.menu_inventory_live||!vm_->context_enabled())
+        return {GameFsCode::Unavailable,0,"Direct menu inventory origin/generation unavailable"};
+    state_.inventory_gui_generation=generation;state_.menu_inventory_parent_generation=menu_generation;
+    state_.menu_inventory_live=true;++state_.menu_inventory_requests;return {};
+}
+GameFsStatus GameActorScript::CompleteMenuInventory(const GameOwnerEventTarget& expected,const GameInventorySnapshot& gui){
+    try{
+        Need(state_.live&&vm_&&state_.menu_inventory_live&&!state_.inventory_requested&&!state_.inventory_action.pending
+             &&gui.generation==state_.inventory_gui_generation&&gui.origin==GameInventoryOrigin::MainMenu5,"Menu inventory completion origin replaced");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word,"Menu inventory callback owner replaced");
+        const auto& pause=state_.menu_pause_return;
+        Need(pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_inventory_parent_generation
+             &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu inventory needs actual source18 disabled owner");
+        Need(gui.phase==7&&gui.retired_generation==gui.generation&&!gui.live&&!gui.owner480&&!gui.request14&&!gui.retirement_pending&&gui.stateB2C==3
+             &&gui.loader468==1&&gui.loader498==0&&gui.retirements>0&&gui.retirement_requests>0
+             &&gui.close_requests>0&&gui.close_completions>0&&gui.completed_polls>0,"Menu inventory needs real close/poll/deferred retirement");
+        std::vector<GameInventoryItem> items;
+        state_.menu_inventory_after=GameObserveInventoryRows(*vm_,state_.generation,bindings_.at(35),items);
+        const auto& before=state_.menu_inventory_before;const auto& after=state_.menu_inventory_after;
+        Need(before.valid&&after.valid&&before.generation==after.generation&&before.run_id==after.run_id
+             &&before.code_sha256==after.code_sha256&&before.table==after.table&&before.index==after.index
+             &&before.header==after.header&&before.rows==after.rows&&before.cells==after.cells
+             &&before.valid_items==after.valid_items&&before.sha256==after.sha256,
+             "Menu inventory Cancel changed registered typed item RAM");
+        vm_->resume_modal_context();state_.menu_inventory_live=false;++state_.menu_inventory_completions;state_.inventory_items=std::move(items);return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameOwnerEventTarget GameActorScript::OwnerEventTarget()const{

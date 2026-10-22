@@ -13,14 +13,17 @@ struct GameInventoryItem {
     std::array<uint8_t,3> control_kinds{};
     std::string name,description;
 };
+enum class GameInventoryOrigin:uint32_t { Script41,MainMenu5 };
 struct GameInventoryActionAdmission {
     GameFsStatus status;int32_t queue_result=-1;uint64_t receipt=0;
 };
 using GameInventoryActionDispatch=std::function<GameInventoryActionAdmission(uint64_t,uint32_t,int32_t)>;
 struct GameInventorySnapshot {
+    GameInventoryOrigin origin=GameInventoryOrigin::Script41;
     bool live=false,requested=false,visible=false,actions=false,retirement_pending=false;
     bool request14=false,owner480=false,input_focused=false;
     uint64_t generation=0;
+    uint64_t retired_generation=0;
     uint32_t phase=0,stateB2C=3,stateB30=0,filter=1,count=0,selection=0;
     int32_t selected_row=-1,selected_id=-1,select_result=0;
     uint32_t loader464=0,loader468=0,loader469=0,loader498=0;
@@ -28,6 +31,7 @@ struct GameInventorySnapshot {
     uint32_t retirement_requests=0,retirements=0,navigation=0,action_opens=0,action_cancels=0;
     uint32_t draw_frames=0,quads=0,glyphs=0,resource_nodes=0,resource_clips=0,texture_count=0;
     uint32_t action_selection=0,action_frontier=0,action_events=0,action_completions=0;
+    uint32_t unsupported_actions=0;
     bool discard_confirmation=false;
     uint32_t discard_prompts=0,discard_cancelled=0,discard_accepted=0;
     int32_t discard_dialog_state=3,discard_result=0,discard_row=-1,discard_item_id=-1;
@@ -43,14 +47,14 @@ struct GameInventorySnapshot {
 //confirmation precedes16;NativeInventoryTRCXYesZNo is a nonmatching panel/input adapter.
 class GameInventory final {
   public:
-    GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={});
+    GameFsStatus Request(std::vector<GameInventoryItem> items,bool home_context=true,GameInventoryActionDispatch dispatch={},GameInventoryOrigin origin=GameInventoryOrigin::Script41);
     GameFsStatus CompleteAction(uint64_t generation,uint64_t receipt,std::vector<GameInventoryItem> items);
     GameFsStatus Tick(GameResourceSource&,GameTransition&);
     bool Input(const GameInputFrame&);
     GameFsStatus Draw(GameGraphics&,const GameFontResource&);
     GameInventorySnapshot Snapshot()const{return state_;}
     bool Modal()const{return state_.phase>=1&&state_.phase<=6;}
-    bool ClosedAndRetired()const{return state_.phase==7&&state_.retirements>0;}
+    bool ClosedAndRetired()const{return state_.generation&&state_.phase==7&&state_.retired_generation==state_.generation;}
     void Close();
   private:
     GameInventorySnapshot state_;

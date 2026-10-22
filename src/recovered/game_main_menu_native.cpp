@@ -29,7 +29,7 @@ bool GameMainMenuControl::Input(const GameInputFrame& f){
 void GameMainMenuControl::Tick(uint8_t mode){
     if(!state_.live)return;
     if(state_.state78==0){if(mode!=1){state_.state78=1;input_.BeginContext();}return;}
-    if(state_.state78==2){if(mode!=1){state_.state78=3;++state_.closed;input_.BeginContext();}return;}
+    if(state_.state78==2){if(mode!=1){state_.state78=3;state_.result=Resolve(state_.full,state_.row,state_.column);++state_.closed;input_.BeginContext();}return;}
     if(state_.state78!=1)return;
     input_.Tick();
     const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2);
@@ -40,9 +40,14 @@ void GameMainMenuControl::Tick(uint8_t mode){
         if(state_.row>0)--state_.row;else if(up==1)state_.row=6;
         if((!state_.source_scene_nonzero&&state_.row==2)||(state_.source_scene_nonzero&&state_.row==1))--state_.row;
     }
+    if(down||up)return; // source directional path returns before confirmation
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
-    if(input_.First(Circle)){++state_.unsupported;return;}
+    if(input_.First(Circle)){
+        if(state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
+        else ++state_.unsupported;
+        return;
+    }
     if(input_.First(Right)){
         if(state_.row==3||state_.row==4||state_.row==6)++state_.unsupported;
         return;
@@ -104,8 +109,17 @@ GameFsStatus GameMainMenu::Draw(GameGraphics& graphics){
     ++draw_frames_;quads_=stats.quads;return {};
 }
 GameMainMenuSnapshot GameMainMenu::Snapshot()const{
-    auto out=control_.Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;out.mode=c->mode;}
+    auto out=control_.Snapshot();out.frame=last_frame_;out.clip=last_clip_;out.mode=last_mode_;
+    if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;out.mode=c->mode;}
+    out.render_live=bool(resource_);out.render_retirements=render_retirements_;
     out.draw_frames=draw_frames_;out.quads=quads_;return out;
+}
+GameFsStatus GameMainMenu::RetireClosedRender(){
+    const auto s=Snapshot();
+    if(!s.live||s.state78!=3||s.result!=5)return {GameFsCode::Unavailable,0,"Only resolved inventory menu render may retire"};
+    if(!resource_)return {};
+    last_frame_=s.frame;last_clip_=s.clip;last_mode_=s.mode;
+    clone_.Close();resource_.reset();++render_retirements_;return {};
 }
 void GameMainMenu::Close(){control_.Close();clone_.Close();resource_.reset();}
 }

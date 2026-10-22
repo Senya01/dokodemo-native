@@ -502,7 +502,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;main_flow_.ResetInput();
             returned_interaction_.SuspendInput();state_.returned_interaction=returned_interaction_.Snapshot();
             post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
-            if(state_.main_menu_phase)main_menu_.Input(frame);
+            if(state_.main_menu_phase){main_menu_.Input(frame);if(inventory_.Modal())inventory_.Input(frame);}
             else if(inventory_.Modal())inventory_.Input(frame);
             else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(frame);
             if(state_.actor_script.awaiting_message)actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);
@@ -510,7 +510,19 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             state_.actor_message_input_armed=false;return false;
         }
         if(frame.main_menu_epoch!=state_.main_menu_input_epoch)return false;
-        if(state_.main_menu_phase){return main_menu_.Input(frame);}
+        if(state_.main_menu_phase){
+            const auto& lease=main_menu_lease_;
+            if(frame.message_owner_generation!=lease.script_generation||frame.message_context!=lease.message_context
+               ||frame.returned_owner!=lease.available_owner||frame.returned_generation!=lease.available_generation
+               ||frame.sequence<=main_menu_last_sequence_)return false;
+            main_menu_last_sequence_=frame.sequence;
+            if(state_.main_menu_phase==7&&inventory_.Modal()){
+                if(!state_.main_menu_child_ready||inventory_.Snapshot().phase!=3)return false;
+                const auto status=CheckMainMenuLease();if(!status){state_.status=status;state_.blocked=true;return false;}
+                return inventory_.Input(frame);
+            }
+            return main_menu_.Input(frame);
+        }
         if(MainMenuInput(frame))return true;
         if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
         if(!inventory_.Modal())main_flow_.Input(frame);
@@ -857,6 +869,7 @@ bool GameContentBoot::MainMenuInput(const GameInputFrame& frame){
         main_menu_lease_={actor.generation,actor.vm_current.run_id,available.owner,available.generation,state_.actor_message_contexts,state_.main_menu_input_epoch+1};
         const auto status=main_flow_.BeginAvailableMenu();if(!status){state_.status=status;state_.blocked=true;return false;}
         state_.main_menu_input_epoch=main_menu_lease_.input_epoch;state_.main_menu_phase=1;state_.main_menu_available=false;
+        main_menu_last_sequence_=frame.sequence;state_.main_menu_child_ready=false;
         main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;returned_interaction_.SuspendInput();
         actor_message_gate_.Stop();main_flow_.ResetInput();state_.main_flow=main_flow_.Snapshot();state_.returned_interaction=returned_interaction_.Snapshot();
         return true;
@@ -878,6 +891,12 @@ GameFsStatus GameContentBoot::CheckMainMenuLease()const{
 bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     auto status=CheckMainMenuLease();
     if(status)status=actor_script_.TickMenuOwner();
+    const auto finish=[&]{
+        ++state_.main_menu_returns;++state_.main_menu_input_epoch;state_.main_menu_phase=0;
+        state_.main_menu_child_ready=false;
+        main_menu_target_={};main_menu_lease_={};main_flow_.ResetInput();returned_interaction_.SuspendInput();
+        main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;
+    };
     if(status){
         switch(state_.main_menu_phase){
         case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
@@ -891,28 +910,76 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 3:
             status=main_menu_.Tick();
             if(status&&main_menu_.Snapshot().state78==3){
-                status=main_flow_.PollMenuCancel();if(status)state_.main_menu_phase=4;
+                const auto result=main_menu_.Snapshot().result;status=main_flow_.PollMenuResult(result);
+                if(status&&result==5){
+                    // Source237F0: direct resource14 request; no GAME41 call.
+                    // Only the spent initial observer retires, retaining origin history.
+                    status=post_modal_.RetireConsumedInventory();state_.post_modal=post_modal_.Snapshot();
+                    std::vector<GameInventoryItem> items;
+                    if(status)status=actor_script_.ReadMenuInventory(main_menu_target_,items);
+                    if(status)status=inventory_.Request(std::move(items),true,{},GameInventoryOrigin::MainMenu5);
+                    if(status)status=actor_script_.BindMenuInventory(main_menu_target_,inventory_.Snapshot().generation,main_menu_.Snapshot().generation);
+                    if(status){
+                        ++state_.main_menu_inventory_requests;++state_.main_menu_input_epoch;
+                        const auto request=inventory_.Snapshot();state_.main_menu_inventory_request_phase=request.phase;
+                        state_.main_menu_inventory_request498=request.loader498;state_.main_menu_inventory_request_clock=actor_script_.Snapshot().vm_current.clock_tick;
+                        state_.main_menu_inventory_child_clock=state_.main_menu_inventory_retire_clock=0;
+                    }
+                }
+                if(status)state_.main_menu_phase=4;
             }
             break;
         case 4:{
             // A separate main-flow invocation after GUIready/result poll.
-            status=main_flow_.RetireMenuCancel();int32_t queue=-1;
+            status=main_flow_.RetireMenuResult();int32_t queue=-1;
             if(status)status=actor_script_.PostMenuEvent(main_menu_target_,11,main_menu_.Snapshot().generation,queue);
             if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event11 queue refused"};
             if(status)state_.main_menu_phase=5;break;
         }
         case 5:
-            if(actor_script_.Snapshot().menu_close_return.returned){
-                ++state_.main_menu_returns;++state_.main_menu_input_epoch;state_.main_menu_phase=0;
-                main_menu_target_={};main_menu_lease_={};main_flow_.ResetInput();returned_interaction_.SuspendInput();
-                main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;
+            if(actor_script_.Snapshot().menu_close_return.returned
+               &&actor_script_.Snapshot().menu_close_return.menu_generation==main_menu_.Snapshot().generation){
+                if(main_flow_.Snapshot().menu_result50==5){
+                    int32_t queue=-1;status=actor_script_.PostMenuEvent(main_menu_target_,18,main_menu_.Snapshot().generation,queue);
+                    if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event18 queue refused"};
+                    if(status)state_.main_menu_phase=6;
+                }else finish();
+            }
+            break;
+        case 6:{
+            const auto actor=actor_script_.Snapshot();const auto& pause=actor.menu_pause_return;
+            if(pause.returned&&pause.menu_generation==main_menu_.Snapshot().generation
+               &&pause.receipt>actor.menu_close_return.receipt&&!pause.enabled_after&&!actor.context_enabled)state_.main_menu_phase=7;
+            break;
+        }
+        case 7:
+            // NativeMenuInventorySingleWorkerAfterCallbacks. Original relative
+            // allocator-vs11/18 phase order is unknown; request-before-retire is proved.
+            scene_ui_.TitleTransitionOwner().Update();
+            // NativeClosedMenuRenderRetirement: the hidden MMENU images are
+            // no longer render owners. Preserve its result/lease and actual
+            // callbacks; only subsequent cache pressure can evict those images.
+            status=main_menu_.RetireClosedRender();
+            if(!status)break;
+            if(inventory_.Snapshot().phase==1)state_.main_menu_inventory_child_clock=actor_script_.Snapshot().vm_current.clock_tick;
+            status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());
+            if(status&&!state_.main_menu_child_ready&&inventory_.Snapshot().phase==3){
+                ++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
+            }
+            if(status&&inventory_.ClosedAndRetired()){
+                state_.main_menu_inventory_retire_clock=actor_script_.Snapshot().vm_current.clock_tick;
+                status=actor_script_.CompleteMenuInventory(main_menu_target_,inventory_.Snapshot());
+                if(status){++state_.main_menu_inventory_completions;finish();}
             }
             break;
         default:status={GameFsCode::Unavailable,0,"Main menu finite native owner phase"};break;
         }
     }
     state_.actor_script=actor_script_.Snapshot();state_.main_flow=main_flow_.Snapshot();state_.main_menu=main_menu_.Snapshot();
-    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){return main_menu_.Draw(surface);});
+    state_.inventory=inventory_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
+    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+        return inventory_.Modal()?inventory_.Draw(surface,font_):main_menu_.Draw(surface);
+    });
     state_.main_menu=main_menu_.Snapshot();
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
@@ -984,8 +1051,10 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         // Existing phase6 transition and group2 authored room consumers stay
         // live even when a later unimplemented script service stops progress.
         scene_ui_.TitleTransitionOwner().Update();
-        if(state_.status&&state_.actor_script.inventory_requests>inventory_.Snapshot().requests){
+        if(state_.status&&state_.actor_script.inventory_requests>state_.consumed_script_inventory_requests){
             state_.status=inventory_.Request(state_.actor_script.inventory_items,true,[this](uint64_t generation,uint32_t event,int32_t row){return actor_script_.PostInventoryAction(generation,event,row);});
+            if(state_.status)state_.status=actor_script_.BindScriptInventory(inventory_.Snapshot().generation,state_.actor_script.inventory_requests);
+            if(state_.status)state_.consumed_script_inventory_requests=state_.actor_script.inventory_requests;
             actor_message_gate_.Stop();state_.actor_message_input_armed=false;
         }
         if(state_.status&&inventory_.Modal())state_.status=inventory_.Tick(*this,scene_ui_.TitleTransitionOwner());

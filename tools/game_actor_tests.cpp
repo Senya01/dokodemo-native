@@ -47,6 +47,14 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_main_menu_callback_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_inventory_regressions.h"
+#endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_menu_render_retirement_regressions.h"
+#endif
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -408,6 +416,16 @@ GameGreetingRegressionChecks();
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameMainMenuNilAbiRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuInventoryRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameMenuRenderRetirementRegressionChecks();
 #endif
 
     
@@ -966,6 +984,7 @@ void Selected(const char* path,bool with_main_flow=false,bool after17=false,bool
     Check(!requested.blocked&&requested.inventory_requests==1&&requested.inventory_setter_result_word==0x10000000
           &&requested.inventory_items.size()==170&&!requested.context_enabled&&requested.callbacks_returned==1,"actual41False and27/32 suspend after ack15");
     GameInventory inventory;Check(bool(inventory.Request(requested.inventory_items)),"actual registered item rows request");
+    Check(bool(game.BindScriptInventory(inventory.Snapshot().generation,requested.inventory_requests)),"bind actual script request separately from GUI generation");
     Check(bool(inventory.Tick(resources,transition)),"actual MOCHIMONO assets initialized");
     Check(inventory.Snapshot().stateB2C==0&&inventory.Snapshot().loader468==0,"constructor3 reset to open0 cannot complete");
     for(unsigned i=0;i<80&&inventory.Snapshot().phase!=3;++i){transition.Update();Check(bool(inventory.Tick(resources,transition)),"real open fade pending");}

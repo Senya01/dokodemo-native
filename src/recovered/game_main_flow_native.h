@@ -36,6 +36,8 @@ class GameMainFlow final {
     GameFsStatus MenuOpened();
     GameFsStatus PollMenuCancel();
     GameFsStatus RetireMenuCancel();
+    GameFsStatus PollMenuResult(int32_t);
+    GameFsStatus RetireMenuResult();
     void ResetInput(){input_.BeginContext();}
     GameMainFlowSnapshot Snapshot()const{return state_;}
     void Close();
@@ -49,6 +51,7 @@ class GameMainFlow final {
     GameMainFlowSnapshot state_;
 };
 struct GamePostModalSnapshot {
+    bool spent_history=false;
     bool live=false,eligible=false,armed=false,source_gate_blocked=false;
     bool fresh_input=false,event_posted=false,callback_returned=false;
     uint64_t generation=0,inventory_generation=0,script_generation=0,last_sequence=0;
@@ -62,6 +65,7 @@ class GamePostModalInteraction final {
   public:
     GameFsStatus Update(const GameInventorySnapshot&,const GameMainFlowSnapshot&,GameActorScript&,bool source469);
     bool Input(const GameInputFrame&);
+    GameFsStatus RetireConsumedInventory();
     GamePostModalSnapshot Snapshot()const{return state_;}
     void Close();
   private:

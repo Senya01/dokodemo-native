@@ -101,14 +101,28 @@ struct GameOrdinaryControlObservation {
 };
 struct GameMenuCallbackSnapshot {
     bool pending=false,returned=false,failed=false;
+    bool enabled_before=false,enabled_after=false;
     uint32_t event=0,flag_before=0,flag_after=0;
     uint8_t kind_before=0,kind_after=0;
     uint64_t menu_generation=0,receipt=0,callback_frame=0;
     script::VmStateWitness suspended,restored;
 };
+struct GameInventoryRowsObservation {
+    bool valid=false;
+    uint64_t generation=0,run_id=0;
+    uint32_t table=0,index=0,header=0,rows=0,cells=0,valid_items=0;
+    std::array<char,65> code_sha256{};
+    std::array<uint8_t,32> sha256{};
+};
+GameInventoryRowsObservation GameObserveInventoryRows(const script::Vm&,uint64_t,const script::Value&,std::vector<GameInventoryItem>&);
 struct GameActorScriptSnapshot {
     GameOrdinaryControlObservation ordinary_controls;
-    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return;
+    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return;
+    GameInventoryRowsObservation menu_inventory_before,menu_inventory_after;
+    bool menu_inventory_live=false;
+    uint64_t inventory_gui_generation=0;
+    uint64_t menu_inventory_parent_generation=0;
+    uint32_t menu_inventory_requests=0,menu_inventory_completions=0;
     GameOwnedConversationSnapshot owned_conversation;
     uint64_t post_modal_observation_refusals=0;
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
@@ -242,6 +256,10 @@ class GameActorScript final {
     GameInventoryActionAdmission PostInventoryAction(uint64_t inventory_generation,uint32_t event,int32_t row);
     bool CanResumeInventory()const;
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
+    GameFsStatus BindScriptInventory(uint64_t gui_generation,uint32_t script_request);
+    GameFsStatus ReadMenuInventory(const GameOwnerEventTarget&,std::vector<GameInventoryItem>&);
+    GameFsStatus BindMenuInventory(const GameOwnerEventTarget&,uint64_t gui_generation,uint64_t menu_generation);
+    GameFsStatus CompleteMenuInventory(const GameOwnerEventTarget&,const GameInventorySnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
     GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,bool owned_dispatch,int32_t& queue_result);
