@@ -35,6 +35,17 @@ void GameMainMenuControl::Tick(uint8_t mode){
     if(mode==1){input_.BeginContext();return;}
     input_.Tick();
     const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2);
+    if(state_.substate7C==3){
+        // NativeSystemFirstLeafOnly. Down from0 needs the unavailable4E67C
+        // registry result to choose1/2. Fresh Up from0 wraps directly to2 at
+        //1310C; that other leaf is outside this finite native selection domain.
+        // Both refusals consume priority, without a claimed source no-op.
+        if(down||up){++state_.unsupported;state_.unsupported_pc=down?0x4E67C:0x1310C;return;}
+        // At column0 source1311C takes7C7 before the conditional gate query.
+        if(input_.First(Circle)){state_.state78=2;input_.BeginContext();return;}
+        if(input_.First(Cross)||input_.First(Left)){state_.substate7C=0;input_.BeginContext();}
+        return;
+    }
     if(state_.substate7C==1){
         const auto max=state_.other_profiles?3:2;
         if(down){if(state_.column<max)++state_.column;else if(down==1)state_.column=0;return;}
@@ -57,12 +68,14 @@ void GameMainMenuControl::Tick(uint8_t mode){
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
     if(input_.First(Circle)){
+        if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
         else ++state_.unsupported;
         return;
     }
     if(input_.First(Right)){
+        if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3||state_.row==4||state_.row==6)++state_.unsupported;
         return;
@@ -106,13 +119,15 @@ GameFsStatus GameMainMenu::Tick(){
     auto* main=clone_.Control(0);if(!main)return {GameFsCode::Unavailable,0,"Main menu primary control retired"};
     control_.Tick(main->mode);const auto after=control_.Snapshot();
     if(before.state78==1&&after.state78==1&&before.substate7C!=after.substate7C){
-        const auto clip=after.substate7C==1?(after.other_profiles?3u:2u):0u;
-        if(!clone_.Bind(0,clip,0))return {GameFsCode::Unavailable,0,"Main menu Notebook submenu clip"};
+        const auto system=after.substate7C==3||before.substate7C==3;
+        const auto clip=after.substate7C==3?5u:after.substate7C==1?(after.other_profiles?3u:2u):0u;
+        if(!clone_.Bind(0,clip,0))return {GameFsCode::Unavailable,0,"Main menu authored submenu clip"};
         *main={0,clip,1,1};
-        auto* selected=clone_.Control(after.other_profiles?10:9);
-        selected->frame=after.substate7C==1?uint32_t(after.column+2):(after.other_profiles?4u:3u);
+        auto* selected=clone_.Control(system?12:after.other_profiles?10:9);
+        selected->frame=after.substate7C?uint32_t(after.column+2):(system?5u:after.other_profiles?4u:3u);
     }
     if(after.state78==1&&after.substate7C==1)clone_.Control(after.other_profiles?10:9)->frame=uint32_t(after.column+2);
+    if(after.state78==1&&after.substate7C==3)clone_.Control(12)->frame=uint32_t(after.column+2);
     if(before.state78==1&&after.state78==2){
         if(!clone_.ShowRoot(0)||!clone_.Bind(0,1,0))return {GameFsCode::Unavailable,0,"Main menu closing clip"};
         *main={0,1,1,1};Auxiliary();

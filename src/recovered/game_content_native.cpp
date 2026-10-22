@@ -427,6 +427,16 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                     diary_directory_=BpDirectory::Parse(diary_package_,diary_package_.Describe().size);diary_mounted_=true;}
                 out=diary_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
             }
+            if(mount=="OPTION"&&game_filesystem_){
+                const auto request=system_option_.Snapshot();
+                if(!request.requested||!request.constructor_entered||request.failed)
+                    return {GameFsCode::Unavailable,0,"OPTION package requires current resource10 constructor"};
+                if(!system_option_mounted_){
+                    const auto status=game_filesystem_->LoadMember("OPTION.BPM",system_option_package_);if(!status)return status;
+                    system_option_directory_=BpDirectory::Parse(system_option_package_,system_option_package_.Describe().size);system_option_mounted_=true;
+                }
+                out=system_option_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
             if(mount=="MTOMO"&&game_filesystem_){
                 // Actual resource9 ctor prefix selects this package; retain its
                 // parent backing independently of child clone/template teardown.
@@ -835,7 +845,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
-    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
+    main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();system_option_.Abort();state_.system_option=system_option_.Snapshot();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
     post_modal_.Close();state_.post_modal=post_modal_.Snapshot();
@@ -848,6 +858,7 @@ bool GameContentBoot::Close() {
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
     notebook_directory_.Reset();notebook_package_.Reset();notebook_mounted_=false;
     wordmemo_directory_.Reset();wordmemo_package_.Reset();wordmemo_mounted_=false;
+    system_option_directory_.Reset();system_option_package_.Reset();system_option_mounted_=false;
     diary_directory_.Reset();diary_package_.Reset();diary_mounted_=false;
     diary_picture_directory_.Reset();diary_picture_package_.Reset();diary_picture_stem_.clear();
     room_directory_.Reset();room_package_.Reset();room_mounted_=false;game_filesystem_=nullptr;
@@ -978,6 +989,11 @@ GameFsStatus GameContentBoot::CheckMainMenuLease()const{
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
+    if(state_.main_menu_phase==8&&state_.system_option.failed){
+        // A stopped unsupported consumer gets no subsequent owner VM/service
+        // slice. Normal Close still aborts its partial native construction.
+        state_.status=state_.system_option.failure;state_.blocked=true;return false;
+    }
     auto status=CheckMainMenuLease();
     if(status)status=actor_script_.TickMenuOwner();
     const auto finish=[&]{
@@ -1000,6 +1016,13 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.Tick();
             if(status&&main_menu_.Snapshot().state78==3){
                 const auto result=main_menu_.Snapshot().result;status=main_flow_.PollMenuResult(result);
+                if(status&&result==13){
+                    // Source23844 direct24FF4(10,1). The source initializer
+                    // precedes publication474/Open; it may genuinely refuse.
+                    status=system_option_.Request(main_menu_lease_,{{StateWord(0x10),StateWord(0x14),StateWord(0x18)}});
+                    state_.system_option=system_option_.Snapshot();
+                    if(status){state_.main_menu_phase=8;break;}
+                }
                 if(status&&result==6){
                     GameRecordImage image;GameDiaryOpenInputs inputs;
                     if(!loadman_||!loadman_->confirmed58)status={GameFsCode::Unavailable,0,"Diary raw LoadMan58 has no confirmed TITLE producer"};
@@ -1082,6 +1105,11 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                &&pause.receipt>actor.menu_close_return.receipt&&!pause.enabled_after&&!actor.context_enabled)state_.main_menu_phase=7;
             break;
         }
+        case 8:
+            // NativeSingleWorkerResource10BeforeRetire: original allocator vs
+            // callback scheduling is unknown. Stop once, before11/18, when the
+            // actual owned constructor has no native consumer.
+            status=system_option_.Advance(*this);state_.system_option=system_option_.Snapshot();break;
         case 7:
             // NativeMenuInventorySingleWorkerAfterCallbacks. Original relative
             // allocator-vs11/18 phase order is unknown; request-before-retire is proved.

@@ -182,7 +182,7 @@ for(uint32_t phase=0;phase<3;++phase) {
   Check(!m.Begin(other,true,true)&&!m.Begin(other,false,true)&&Same(before,m.Snapshot()),"live replacement unchanged");
 }
 for(int32_t row=0;row<7;++row) {
-  if(row==5)continue; // inventory is now supported; separate owning regressions
+  if(row==5||row==6)continue; // separate inventory/System owning regressions
   Case f(row==2);
   for(unsigned guard=0;f.State().row!=row&&guard<7;++guard)f.Press(Down);
   Check(f.State().row==row,"reach each full-mode row");

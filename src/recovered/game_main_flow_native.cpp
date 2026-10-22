@@ -118,7 +118,7 @@ GameFsStatus GameMainFlow::PollMenuCancel(){
 }
 GameFsStatus GameMainFlow::PollMenuResult(int32_t result){
     if(state_.phase1C!=7||state_.menu58!=2)return {GameFsCode::Unavailable,0,"Main menu completion owner mismatch"};
-    if(result!=-1&&result!=5&&result!=3&&result!=4&&result!=6)return {GameFsCode::Unavailable,0,"Main menu result outside finite Cancel/inventory/Notebook/Wordmemo domain"};
+    if(result!=-1&&result!=5&&result!=3&&result!=4&&result!=6&&result!=13)return {GameFsCode::Unavailable,0,"Main menu result outside finite ordinary domain"};
     state_.menu_result54=result;state_.menu58=5;state_.last_pc=0x23748;return {};
 }
 GameFsStatus GameMainFlow::RetireMenuCancel(){

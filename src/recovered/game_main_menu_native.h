@@ -15,6 +15,7 @@ struct GameMainMenuSnapshot {
     uint64_t generation=0;
     GameMainMenuLease lease;
     uint32_t state78=3,substate7C=0,opens=0,cancels=0,closed=0,rejected=0,unsupported=0;
+    uint32_t unsupported_pc=0;
     int32_t row=0,column=0,result=-1;
     uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0,render_retirements=0;
 };

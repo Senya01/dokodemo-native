@@ -6,6 +6,7 @@
 #include "game_actor_script_native.h"
 #include "game_main_flow_native.h"
 #include "game_main_menu_native.h"
+#include "game_system_option_native.h"
 #include "game_returned_interaction_native.h"
 #include <array>
 #include <vector>
@@ -97,6 +98,7 @@ struct GameContentSnapshot {
     GameDiarySnapshot diary;
     std::shared_ptr<const GameRecordImage> diary_observed,diary_current;
     uint32_t main_menu_diary_requests=0,main_menu_diary_completions=0;
+    GameSystemOptionSnapshot system_option;
     GameWordMemoSnapshot wordmemo;
     GameWordMemoRows wordmemo_observed;
     uint32_t main_menu_wordmemo_requests=0,main_menu_wordmemo_completions=0;
@@ -207,6 +209,10 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo {
     GameNotebook notebook_;
     GameWordMemo wordmemo_;
     GameDiary diary_;
+    GameSystemOptionFrontier system_option_;
+    PackageView system_option_package_;
+    BpDirectory system_option_directory_;
+    bool system_option_mounted_=false;
     PackageView diary_package_,diary_picture_package_;
     BpDirectory diary_directory_,diary_picture_directory_;
     bool diary_mounted_=false;
