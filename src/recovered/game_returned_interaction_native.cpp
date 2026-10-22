@@ -25,10 +25,12 @@ bool GameReturnedConversationInteraction::SameTarget()const{
 }
 bool GameReturnedConversationInteraction::Ready(const GameActorScriptSnapshot& s,const GameMainFlowSnapshot& f,const GameReturnedInteractionGate& g)const{
     const auto& v=s.vm_current;
+    const bool owned=activation_.State().kind==GameConversationProofKind::OwnedMain;
+    const bool main=owned?s.owned_conversation.dispatch_ready:(v.code_entry==0x8DDB5&&v.call_depth==1);
     return s.live&&s.started&&!s.completed&&!s.blocked&&s.error.empty()&&s.context_enabled
         &&!s.awaiting_message&&!s.awaiting_choice&&!s.awaiting_input&&!s.inventory_requested&&!s.source_main_input_suppressed48
         &&v.valid&&v.context_registered&&!v.stopped&&!v.event_envelope_present&&s.callback_depth==0&&s.queued_callbacks==0
-        &&s.callbacks_posted==s.callbacks_returned&&v.code_entry==0x8DDB5&&v.call_depth==1
+        &&s.callbacks_posted==s.callbacks_returned&&main
         &&v.run_id==state_.run_id&&s.generation==state_.script_generation
         &&g.ui_idle&&g.inventory_retired&&g.old_post_modal_consumed&&g.source469
         &&f.live&&f.phase1C==0&&f.substate24==0&&f.return20==0&&f.outer_returns>0;
@@ -53,7 +55,7 @@ GameFsStatus GameReturnedConversationInteraction::Update(const GameActorScriptSn
     if(state_.event_posted&&s.callbacks_returned>callback_baseline_){state_.callback_returned=true;state_.returned_callbacks=s.callbacks_returned-callback_baseline_;}
     if(!state_.event_posted)callback_baseline_=s.callbacks_returned;
     const bool new_main_consumer=a.main_consumed;
-    if(!state_.admitted&&new_main_consumer&&g.manager9&&Ready(s,f,g)){
+    if(!state_.admitted&&new_main_consumer&&(a.kind==GameConversationProofKind::OwnedMain||g.manager9)&&Ready(s,f,g)){
         try{
             target_=resolve_();
             if(target_.generation!=s.generation||target_.context.kind!=script::Value::Kind::Context

@@ -2,12 +2,13 @@
 #include "game_actor_script_native.h"
 
 namespace dokodemo::recovered {
-enum class GameConversationProofKind : uint8_t { None=0, Legacy85438=1, Topic2B483=2 };
+enum class GameConversationProofKind : uint8_t { None=0, Legacy85438=1, Topic2B483=2, OwnedMain=3 };
 struct GameConversationActivationSnapshot {
     bool live=false,body_bound=false,body_completed=false,farewell_bound=false;
     bool returned=false,main_consumed=false,consumed=false,revoked=false;
     GameConversationProofKind kind=GameConversationProofKind::None;
     uint64_t id=0,script_generation=0,run_id=0,body_frame=0,body_caller_frame=0;
+    uint64_t owned_receipt=0,origin_activation=0;
     uint64_t body_prior_sequence=0,body_sequence=0,message_frame=0,caller_frame=0;
     uint64_t message_context=0,prior_sequence=0,return_sequence=0;
     uint32_t body_message=0,body_ack=0,body_pc=0,body_caller_entry=0,body_caller_pc=0;
@@ -41,6 +42,8 @@ class GameConversationActivation final {
     script::VmStateWitness body_wait_,farewell_wait_;
     script::NormalReturnWitness prior_body_,body_return_,prior_farewell_,farewell_return_;
     uint64_t last_body_frame_=0,last_body_sequence_=0,last_farewell_frame_=0;
+    uint64_t owned_pending_receipt_=0,last_owned_receipt_=0;
+    GameOwnedConversationSnapshot owned_completion_;
     uint32_t farewell_ack_=0;
 };
 }

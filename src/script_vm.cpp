@@ -378,11 +378,12 @@ int32_t Vm::post_callback(const Value& target,const Value& code,const Value& fir
         }
     }
     PendingCallback callback{code.word&0x0FFFFFFF,first,second,context_value()};
+    callback.receipt=vm.next_callback_receipt_+1;
     if(vm.event_depth_||vm.event_envelope_){
         if(vm.pending_callbacks_.size()==64)return 1; // checked native queue bound
         vm.pending_callbacks_.push_back(std::move(callback));
     }else vm.enter_callback(std::move(callback));
-    ++vm.callbacks_posted_;return 0;
+    ++vm.next_callback_receipt_;++vm.callbacks_posted_;return 0;
 }
 int32_t Vm::post_owner_event(const Value& code,int32_t event_id,int32_t argument){
     if(!context_||context_->vm!=this||stopped_)return -1;
@@ -392,18 +393,19 @@ int32_t Vm::post_owner_event(const Value& code,int32_t event_id,int32_t argument
     if(code.kind!=Value::Kind::Code||!command||command->opcode!=0x30)
         throw std::runtime_error("Owner event target needs admitted typed code/frame prologue");
     PendingCallback callback{code.word&0x0FFFFFFF,Value::integer(event_id),Value::integer(argument),{},false};
+    callback.receipt=next_callback_receipt_+1;
     if(event_depth_||event_envelope_){
         if(pending_callbacks_.size()==64)return 1;
         pending_callbacks_.push_back(std::move(callback));
     }else enter_callback(std::move(callback));
-    ++callbacks_posted_;return 0;
+    ++next_callback_receipt_;++callbacks_posted_;return 0;
 }
 void Vm::enter_callback(PendingCallback callback){
     if(event_envelope_)throw std::runtime_error("Nested immediate native event envelope");
     for(const auto* value:{&callback.first,&callback.second})
         if(value->kind==Value::Kind::Reference&&value->table==Table::Frame&&value->frame_owner.expired())
             throw std::runtime_error("Queued callback frame reference expired before dispatch");
-    auto saved=std::make_unique<EventEnvelope>();saved->pc=pc_;saved->reserved=frame_reserved_;saved->frame_id=frame_id_;saved->code_entry=code_entry_;
+    auto saved=std::make_unique<EventEnvelope>();saved->receipt=callback.receipt;saved->pc=pc_;saved->reserved=frame_reserved_;saved->frame_id=frame_id_;saved->code_entry=code_entry_;
     saved->enabled=context_enabled_;saved->waiting=waiting_event_;saved->signal=event_signal_;
     const auto delta=uint32_t(wait_until_-clock_tick_)&0x7FFFFF;
     saved->deadline_delta=int32_t(delta&0x400000?delta|0xFF800000:delta);
@@ -572,6 +574,24 @@ std::string Vm::expand(const Command& cmd) const {
     }
     throw std::runtime_error("Missing inline terminator");
 }
+bool Vm::owns_active_frame(uint64_t id,uint32_t entry)const noexcept{
+    if(stopped_||event_envelope_||!context_||context_->vm!=this||context_->thread!=std::this_thread::get_id())return false;
+    if(frame_id_==id&&code_entry_==entry)return true;
+    for(const auto& f:calls_)if(f.frame_id==id&&f.code_entry==entry)return true;
+    return false;
+}
+bool Vm::active_call_matches(uint64_t caller,uint32_t entry,uint32_t pc,uint32_t resume,
+                            uint64_t callee,uint32_t callee_entry)const noexcept{
+    if(!owns_active_frame(caller,entry))return false;
+    for(size_t i=0;i<calls_.size();++i){
+        const auto& f=calls_[i];
+        const auto next_id=i+1<calls_.size()?calls_[i+1].frame_id:frame_id_;
+        const auto next_entry=i+1<calls_.size()?calls_[i+1].code_entry:code_entry_;
+        if(f.frame_id==caller&&f.code_entry==entry&&f.call_pc==pc&&f.return_pc==resume
+           &&next_id==callee&&next_entry==callee_entry)return true;
+    }
+    return false;
+}
 Event Vm::step() {
     const Command* cmd = program_.command(pc_);
     if (stopped_) { Event event; event.pc = event.next_pc = pc_; event.file_offset = pc_ + 28; event.opcode = last_error_.opcode; event.diagnostic = last_error_; return event; }
@@ -582,6 +602,11 @@ Event Vm::step() {
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
     size_t captured_normal_return=normal_returns_.size();
+    const bool observe_frame=bool(frame_observer_)&&((cmd->opcode>=0x20&&cmd->opcode<=0x23)
+        ||cmd->opcode==0x31||cmd->opcode==0x32||cmd->opcode==0x1C);
+    FrameTransition transition;
+    if(observe_frame){transition.opcode=uint8_t(cmd->opcode);transition.before=current_witness();
+        transition.callback_receipt=event_envelope_?event_envelope_->receipt:0;}
     try {
         int op = cmd->opcode;
         const auto pop = [&]() {
@@ -1056,6 +1081,10 @@ Event Vm::step() {
         ++executed_; pc_ = next;
         if(captured_normal_return<normal_returns_.size()){
             auto& trace=normal_returns_[captured_normal_return];trace.after=current_witness();trace.valid=trace.before.valid&&trace.after.valid;
+        }
+        if(observe_frame){
+            transition.after=current_witness();
+            try{frame_observer_(transition);}catch(...){frame_observer_failed_=true;frame_observer_={};}
         }
         if(op==0x0E)drain_callback();
         event.next_pc = pc_; return event;

@@ -8,4 +8,6 @@ struct GameValueArrayResult { int32_t selected=0;uint32_t rows=0,predicates=0,wr
 GameValueArrayResult GameValueArray97(script::Vm&,const std::vector<script::Value>&);
 GameValueArrayResult GameValueArray98(script::Vm&,const std::vector<script::Value>&);
 GameValueArrayResult GameValueArray96(script::Vm&,const std::vector<script::Value>&);
+// Single-object ordered predicate conjunction (78450); empty list is false.
+GameValueArrayResult GameValueArray99(script::Vm&,const std::vector<script::Value>&);
 } // namespace dokodemo::recovered

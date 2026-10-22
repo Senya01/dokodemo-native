@@ -119,6 +119,8 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         Need(bool(attached),attached.detail.c_str());
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
         vm_=std::make_unique<script::Vm>(program_);
+        owned_conversation_=GameOwnedConversation{};
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -163,6 +165,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(runtime_!=nullptr,"GAME3 needs live game manager owner");
         state_.game3_execution=vm_->current_witness();
         const auto status=runtime_->RequestManager9();Need(bool(status),status.detail.c_str());
+        owned_conversation_.Game3(state_.game3_execution);
         ++state_.game3_calls;state_.game3_result_word=False().word;return False();
     }
     case 0: {
@@ -450,10 +453,11 @@ Value GameActorScript::Service(uint8_t id,const std::vector<Value>& args) {
         while(days>=GameProfile::Days(year,month)){days-=GameProfile::Days(year,month);++month;}
         return Value::integer(int32_t((packed(uint32_t(year-2000))<<16)|(packed(uint32_t(month))<<8)|packed(uint32_t(days+1))));
     }
-    if(id==0x60||id==0x61||id==0x62) {
-        const auto result=id==0x60?GameValueArray96(*vm_,args):id==0x61?GameValueArray97(*vm_,args):GameValueArray98(*vm_,args);
+    if(id==0x60||id==0x61||id==0x62||id==0x63) {
+        const auto result=id==0x60?GameValueArray96(*vm_,args):id==0x61?GameValueArray97(*vm_,args):id==0x62?GameValueArray98(*vm_,args):GameValueArray99(*vm_,args);
         if(id!=0x61){++state_.array_query_calls;state_.array_query_matches+=uint32_t(result.selected);state_.last_query_indices=result.indices;}
         state_.array_actions+=result.writes;
+        if(id==0x63){auto value=False();value.word|=uint32_t(result.selected);return value;}
         return Value::integer(result.selected);
     }
     std::ostringstream unimplemented;unimplemented<<"Unimplemented reached KSC builtin id="<<unsigned(id)<<" argc="<<args.size()<<" args=";
@@ -607,8 +611,19 @@ GameFsStatus GameActorScript::PostMainFlowEvent(uint32_t event_id,int32_t argume
         ++state_.owner_event_calls;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::PostConversationInteraction(const GameOwnerEventTarget& target,uint64_t origin,int32_t& result){
+    if(!vm_||!origin)return {GameFsCode::Unavailable,0,"Conversation transaction needs its live source activation"};
+    const auto before=vm_->current_witness();const auto previous=owned_conversation_.Snapshot(*vm_);
+    const auto main=before.code_entry==0x8DDB5?before.frame_id:previous.main_frame;
+    if(!vm_->owns_active_frame(main,0x8DDB5)||(previous.accepted&&(!previous.completed||!previous.dispatch_ready)))
+        return {GameFsCode::Unavailable,0,"Conversation transaction has no current owning main frame"};
+    const auto status=PostMainFlowEvent(0,0,&target);result=state_.owner_event_result;
+    if(status&&result==0&&!owned_conversation_.Begin(before,state_.generation,origin,vm_->last_callback_receipt(),main))
+        return {GameFsCode::Unavailable,0,"Accepted conversation event could not bind its source receipt"};
+    return status;
+}
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
         out.e2_calls=vm_->e2_calls();out.e2_left_word=vm_->e2_left_word();out.e2_right_word=vm_->e2_right_word();out.e2_result_word=vm_->e2_result_word();
         out.d0_calls=vm_->d0_calls();out.d0_left_word=vm_->d0_left_word();out.d0_right_word=vm_->d0_right_word();out.d0_result_word=vm_->d0_result_word();
@@ -632,6 +647,7 @@ GameActorScriptSnapshot GameActorScript::Snapshot() const {
     }if(runtime_){out.runtime=runtime_->Snapshot();out.source_flag2A980=out.runtime.source_flag2A980!=0;}return out;
 }
 void GameActorScript::Close() {
+    owned_conversation_.Close();
     ascii_class70_.Close();state_.ascii_class70_live=false;state_.ascii_class70_generation=0;
     state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
     state_=Snapshot();

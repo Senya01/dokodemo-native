@@ -12,6 +12,10 @@
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 #include "game_natural_loop_regressions.h"
 #endif
+
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+#include "game_owned_conversation_regressions.h"
+#endif
 #include "game_input32_regressions.h"
 #include <algorithm>
 #include <fstream>
@@ -240,6 +244,11 @@ void Focused(){
     
 #ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
 GameNaturalLoopRegressionChecks();
+#endif
+
+    
+#ifdef DOKODEMO_PRIVATE_SOURCE_FIXTURES
+GameOwnedConversationRegressionChecks();
 #endif
 
     const std::array<int32_t,10> modes{{INT32_MIN,-1,0,1,2,3,4,5,6,INT32_MAX}};
@@ -476,8 +485,29 @@ GameNaturalLoopRegressionChecks();
     const auto found=GameValueArray96(vm,{root,output,condition});
     Check(found.selected==1&&found.indices==std::vector<uint32_t>{0}&&vm.load_reference(vm.indexed_reference(output,0)).signed_integer()==0,
           "96 writes actual zero-based match indices and returns count");
+    const auto single=GameValueArray99(vm,{record,condition});
+    Check(single.selected==1&&single.rows==1&&single.predicates==1&&single.writes==0,
+          "99 tests one owned object without mutation, not a container row scan");
     vm.store_reference(needle,script::Value::string("absent"));
     Check(GameValueArray98(vm,{root,condition,actions}).selected==0,"no-match result,no invented selection");
+    Check(GameValueArray99(vm,{record,condition}).selected==0,"99 false predicate returns false");
+    // Actual reached two-triple shape: field8 mask8 and field7 equality32768.
+    auto p99=Fixture({0x30,0,0x38},{0x90000009,0,0,0,0,0,0,0,0x20008000,0x20000020,
+                    0x90000006,0x20000008,0x20000006,0x20000008,0x20000007,0x20000000,0x20008000,
+                    0x90000000,0x90000002,0x20000000,0x20000000});
+    script::Vm v99(p99);Check(v99.start().status==script::Status::Running,"99 fixture starts");
+    auto object=root,conditions=root;conditions.index=10;
+    auto m99=GameValueArray99(v99,{object,conditions});
+    Check(!m99.selected&&m99.predicates==1&&!m99.writes,"99 actual mask32&8 rejects and short-circuits");
+    v99.store_reference(v99.indexed_reference(object,8),script::Value::integer(8));
+    m99=GameValueArray99(v99,{object,conditions});
+    Check(m99.selected==1&&m99.predicates==2&&!m99.writes,"99 ordered AND admits both true predicates");
+    v99.store_reference(v99.indexed_reference(object,7),script::Value::integer(0));
+    Check(!GameValueArray99(v99,{object,conditions}).selected,"99 later predicate cannot be skipped");
+    auto empty=root;empty.index=17;Check(!GameValueArray99(v99,{object,empty}).selected,"99 empty predicate list is false");
+    auto malformed=root;malformed.index=18;bool bad99=false;
+    try{(void)GameValueArray99(v99,{object,malformed});}catch(const std::exception&){bad99=true;}
+    Check(bad99,"99 malformed triple extent refuses");
     input.live=false;Check(dictionary.ReadRecord(vm,0)==before,"imported strings survive input retirement");
     vm.store_reference(vm.indexed_reference(record,1),script::Value::string("changed"));
     Check(dictionary.ReadRecord(vm,0).first=="changed","query reads mutable game tree,not cached file text");

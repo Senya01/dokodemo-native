@@ -86,4 +86,15 @@ GameValueArrayResult GameValueArray96(script::Vm& vm,const std::vector<script::V
     }
     return s;
 }
+GameValueArrayResult GameValueArray99(script::Vm& vm,const std::vector<script::Value>& args){
+    Need(args.size()==2,"Array99 argc");GameValueArrayResult s;
+    (void)Count(vm,args[0]);const auto words=Count(vm,args[1]);
+    Need(words%3==0,"Array99 predicate triples");s.rows=1;
+    bool matches=false; // source78450 returns false for an empty condition array
+    for(uint32_t t=0;t<uint32_t(words)/3;++t){
+        const auto index=Number(Element(vm,args[1],3*t)),op=Number(Element(vm,args[1],3*t+1));
+        matches=Predicate(vm,args[0],index,op,args[1],3*t+2,s);if(!matches)break;
+    }
+    s.selected=matches?1:0;return s; // read-only, handler6A724 publishes Boolean
+}
 } // namespace dokodemo::recovered

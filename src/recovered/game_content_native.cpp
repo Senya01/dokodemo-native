@@ -988,8 +988,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.main_flow=main_flow_.Snapshot();
             state_.status=returned_interaction_.Initialize([this]{return actor_script_.OwnerEventTarget();},
                 [this](const GameOwnerEventTarget& target,int32_t& result){
-                    const auto status=actor_script_.PostMainFlowEvent(0,0,&target);
-                    result=actor_script_.Snapshot().owner_event_result;return status;
+                    return actor_script_.PostConversationInteraction(target,returned_interaction_.Snapshot().activation.id,result);
                 });
             if(!state_.status)throw std::runtime_error(state_.status.detail);
             ++state_.opened_resources;state_.blocked=false;

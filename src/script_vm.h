@@ -145,6 +145,13 @@ struct NormalReturnWitness {
     uint32_t opcode_pc=0;
     VmStateWitness before,after;
 };
+// Committed native frame transitions. No owning Value or frame lease escapes.
+// Domain consumers decide which source calls constitute an interaction.
+struct FrameTransition {
+    uint8_t opcode=0;
+    uint64_t callback_receipt=0;
+    VmStateWitness before,after;
+};
 
 enum class Status { Running, Message, Choice, Yield, HostYield, Waiting, Complete, Stopped, Input };
 struct Event {
@@ -176,6 +183,13 @@ public:
     const std::vector<Value>& stack() const { return stack_; }
     uint32_t pc() const { return pc_; }
     VmStateWitness current_witness() const noexcept;
+    using FrameObserver=std::function<void(const FrameTransition&)>;
+    void frame_observer(FrameObserver observer){frame_observer_=std::move(observer);frame_observer_failed_=false;}
+    bool frame_observer_failed()const noexcept{return frame_observer_failed_;}
+    uint64_t last_callback_receipt()const noexcept{return next_callback_receipt_;}
+    bool owns_active_frame(uint64_t frame_id,uint32_t entry)const noexcept;
+    bool active_call_matches(uint64_t caller,uint32_t entry,uint32_t pc,uint32_t resume,
+                             uint64_t callee,uint32_t callee_entry)const noexcept;
     void trace_normal_return_at(uint32_t pc, size_t slot=0,uint32_t alternate_pc=UINT32_MAX) noexcept {
         if(slot<normal_returns_.size()){return_probe_pcs_[slot]=pc;return_probe_alternate_pcs_[slot]=alternate_pc;normal_returns_[slot]={};}
     }
@@ -291,8 +305,9 @@ private:
         std::weak_ptr<std::vector<Value>> frame;
     };
     std::vector<ControlBlock> blocks_;
-    struct PendingCallback {uint32_t pc=0;Value first,second,caller;bool include_caller=true;};
+    struct PendingCallback {uint32_t pc=0;Value first,second,caller;bool include_caller=true;uint64_t receipt=0;};
     struct EventEnvelope {
+        uint64_t receipt=0;
         uint32_t pc=0;bool reserved=false,enabled=true,waiting=false,signal=true;
         uint64_t frame_id=0;
         uint32_t code_entry=0;
@@ -308,6 +323,9 @@ private:
     std::unique_ptr<EventEnvelope> event_envelope_;
     bool context_enabled_=true,event_override_=false;
     uint32_t callbacks_posted_=0,callbacks_returned_=0;
+    uint64_t next_callback_receipt_=0; // monotonic across start_at/run incarnations
+    FrameObserver frame_observer_;
+    bool frame_observer_failed_=false;
     void enter_callback(PendingCallback callback);
     void drain_callback();
     uint32_t blocks_entered_ = 0, blocks_closed_ = 0, switches_ = 0;

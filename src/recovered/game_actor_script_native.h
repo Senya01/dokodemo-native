@@ -5,6 +5,7 @@
 #include "game_record_native.h"
 #include "game_profile_native.h"
 #include "rng_native.h"
+#include "game_owned_conversation_native.h"
 #include <map>
 
 namespace dokodemo::recovered {
@@ -62,6 +63,7 @@ struct GameWordRowObservation {
 };
 GameWordRowObservation GameObserveWordRow(const script::Vm&,uint64_t generation,uint32_t row) noexcept;
 struct GameActorScriptSnapshot {
+    GameOwnedConversationSnapshot owned_conversation;
     bool live=false,started=false,completed=false,blocked=false,awaiting_message=false;
     uint64_t generation=0;
     bool autoload_imported=false,profile_loaded_marker=false,manager_flag68=false;
@@ -181,6 +183,7 @@ class GameActorScript final {
     GameFsStatus CompleteInventory(const GameInventorySnapshot&);
     GameOwnerEventTarget OwnerEventTarget()const;
     GameFsStatus PostMainFlowEvent(uint32_t event_id,int32_t argument,const GameOwnerEventTarget* expected=nullptr);
+    GameFsStatus PostConversationInteraction(const GameOwnerEventTarget&,uint64_t origin_activation,int32_t& queue_result);
     GameActorScriptSnapshot Snapshot() const;
     GameWordRowObservation ObserveWordRow(uint32_t row)const noexcept;
     void Close();
@@ -193,6 +196,7 @@ class GameActorScript final {
     std::unique_ptr<script::Vm> vm_;
     GameActorDictionary dictionary_;
     GameAsciiClass70Owner ascii_class70_;
+    GameOwnedConversation owned_conversation_;
     GameProfileRecord profile_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
