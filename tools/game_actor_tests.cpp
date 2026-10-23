@@ -100,6 +100,7 @@
 #include "game_options_processor_regressions.h"
 #include "game_options_control_regressions.h"
 #include "game_options_wave_regressions.h"
+#include "game_options_port24_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -525,6 +526,7 @@ GameFlow5RegressionChecks();
     GameOptionsProcessorRegressionChecks();
     GameOptionsControlRegressionChecks();
     GameOptionsWaveRegressionChecks();
+    GameOptionsPort24RegressionChecks();
     {
         GameFontResource font;GameFontBitmap bitmap;GameFontDrawRecord glyphs[2]{};
         Check(bool(font.Initialize(dokodemo::diary_tests::Font())),"Diary spacing fixture FONT");

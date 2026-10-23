@@ -2,6 +2,7 @@
 #include "game_filesystem_native.h"
 #include <array>
 #include <functional>
+#include <memory>
 namespace dokodemo::recovered {
 class GameSourceSoundControl;
 struct GameSourcePortSnapshot {
@@ -69,6 +70,16 @@ struct GameSourceWaveSnapshot {
  std::array<uint32_t,7> store_pc{},store_index{};
 };
 bool GameSourceWaveExact(const GameSourceWaveSnapshot&,const GameSourceWaveSnapshot&)noexcept;
+struct GameSourcePortInputSnapshot {
+ bool entered=false,allocation_live=false,zeroed=false,bound=false,read_known=false,read_returned=false,packet_complete=false,child_entered=false,child_returned=false;
+ uint64_t block_owner=0,block_generation=0,block_serial=0,sound_owner=0,sound_generation=0,port_owner=0,port_generation=0;
+ uintptr_t block_base=0,node_address=0,port_storage=0,packet_storage=0,mode_slot=0;
+ uint32_t bytes=0,count=0,stride=0,zero_writes=0,zero_readbacks=0,index=0,flags=0,read_pc=0,read_offset=0,value=0,stack_known=0,stack_writes=0,child_pc=0,child_delay_pc=0,frontier=0;
+ int32_t port_id=-1,note=0,bank=-1,channels=0;
+ std::array<uint32_t,13> words{};
+ std::array<uint32_t,8> store_index{},store_pc{};
+};
+bool GameSourcePortInputExact(const GameSourcePortInputSnapshot&,const GameSourcePortInputSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -95,6 +106,7 @@ struct GameSourceSequenceSnapshot {
  GameSourceProcessorSnapshot processor;
  GameSourceControlSnapshot control;
  GameSourceWaveSnapshot wave;
+ GameSourcePortInputSnapshot port_input;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -118,6 +130,10 @@ class GameSourceSequencePool final {
  bool Clear58540();
  GameFsStatus Start580D4(uint32_t,uint16_t,uint16_t,uint32_t,bool=false,const std::function<GameFsStatus()>& retain={});
  GameFsStatus AllocatePort5A5AC();
+ GameFsStatus InitializeNativePortComponent(uint64_t,uint64_t);
+ GameFsStatus ReadProducedPort24();
+ struct ChildPacket;
+ GameFsStatus AllocateChild5ABF0(Port&,int32_t,int32_t,int32_t,const ChildPacket&);
  GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
  using ReadByte=std::function<uint8_t(uint32_t)>;
  using ControlCall=std::function<GameFsStatus()>;
@@ -127,14 +143,24 @@ class GameSourceSequencePool final {
  GameFsStatus ProcessKind59168(Node&,Track&,int32_t,const ReadByte&,const ControlCall&);
  GameFsStatus Control5900C(Node&,Track&,const ControlCall&);
  GameFsStatus Submit5B9E4(Port&,const std::array<uint32_t,6>&,const ControlCall&);
- GameFsStatus Dispatch5B9E4(uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall& wave={});
+ GameFsStatus Dispatch5B9E4(uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall& wave={},const ControlCall& port_input={});
  Port* LookupPort5A1B4(int32_t);
- GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall&);
+ GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall&,const ControlCall&);
  GameFsStatus Prepare5B040(Port&,int32_t);
- GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t,const WaveCall&);
+ GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t,const WaveCall&,const ControlCall&);
  GameFsStatus Wave557B8(int32_t,uint32_t,uintptr_t&,const WaveCall&);
- GameFsStatus ContinueChild5B180(Port&,int32_t,int32_t);
+ GameFsStatus ContinueChild5B180(Port&,int32_t,int32_t,const ControlCall&);
  GameFsStatus ReadPortWord24(Port&);
+ //NativeOwnedZeroedPortPool16: source-layout allocation/clear and +24
+ //persistence only. Native Link pointers are NEVER packed into PSP32 slots.
+ std::unique_ptr<uint32_t[]> port_source_;
+ uint64_t port_source_owner_=0,port_source_generation_=0,port_source_serial_=0;
+ uint64_t port_sound_owner_=0,port_sound_generation_=0;
+ Port* port_source_binding_=nullptr;
+ uint64_t port_binding_owner_=0,port_binding_generation_=0;
+ uint32_t port_binding_index_=0,port_zero_writes_=0,port_zero_readbacks_=0;
+ struct ChildPacket {std::array<uint32_t,13> words{};uintptr_t mode_slot=0;uint32_t port_word24=0;};
+ ChildPacket child_packet_;
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
  std::array<Port,16> ports_{};
