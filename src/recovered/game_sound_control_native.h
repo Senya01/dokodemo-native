@@ -99,6 +99,7 @@ class GameOptionsChildCallScope final {
  GameSourceSoundSnapshot expected_;
  GameSourceFeedbackRead issued_;
  uint64_t serial_=0,gui_generation_=0,input_epoch_=0;
+ bool slot_=false;
  bool active_=false,actor_prepared_=false,component_=false,sealed_=false,published_=false,committed_=false;
 };
 bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead&)noexcept;
@@ -111,6 +112,7 @@ bool GameSourceControlPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceWavePrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourcePort24PrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceChildPrefixValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourceSlotPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
@@ -142,6 +144,7 @@ class GameSourceSoundControl final {
     GameFsStatus ServiceWave(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServicePort24(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServiceChild(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus ServiceSlot(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     void ObserveWorkerTick()noexcept;
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
@@ -158,6 +161,7 @@ class GameSourceSoundControl final {
     GameFsStatus ReadProducedPort24(bool advance_child=false);
     GameFsStatus BeginOwnedChild5ABF0(const GameSourceSequencePool::ChildPacket&);
     GameFsStatus ServiceChildScoped(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&,GameOptionsChildCallScope&);
+    GameFsStatus ServiceSlotScoped(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&,GameOptionsChildCallScope&);
     GameOptionsChildCallScope* active_child_scope_=nullptr;
     uint64_t child_component_serial_=0;
     GameSourceVoicePool voices_;

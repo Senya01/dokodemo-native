@@ -311,8 +311,8 @@ GameFsStatus GameContentBoot::ReadOptionFeedback(const GameOptionSettingsSnapsho
 GameFsStatus GameContentBoot::ServiceOptionVoice(const GameOptionSettingsSnapshot& expected,GameSourceFeedbackRead& out){
  if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options voice service settings owner"};
  GameOptionsChildCallScope scope;const auto gui=system_option_.Snapshot();
- auto status=actor_script_.PrepareMenuOptionChildService(main_menu_target_,gui,scope);if(!status)return status;
- const auto effect=sound_bank_.ServiceOptionsChildScoped(gui.sound_owner,out,scope);if(!GameSourceChildPrefixValid(out))return effect;
+ auto status=actor_script_.PrepareMenuOptionSlotService(main_menu_target_,gui,scope);if(!status)return status;
+ const auto effect=sound_bank_.ServiceOptionsSlotScoped(gui.sound_owner,out,scope);if(!GameSourceSlotPrefixValid(out))return effect;
  if(!system_option_.PublishChildVoiceService(out,scope))return {GameFsCode::Unavailable,0,"Options actual scoped child publication"};
  status=actor_script_.CommitMenuOptionVoiceService(main_menu_target_,out);if(!status)return status;
  if(!system_option_.CommitChildVoiceScope(scope))return {GameFsCode::Unavailable,0,"Options actual child commit scope"};return effect;
@@ -1222,7 +1222,8 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
                 if(!status&&child.failed&&child.row_writes){
-                    if(child.row_voice_service.outcome==9)actor_script_.VerifyMenuOptionChildPrefix(main_menu_target_,child);
+                    if(child.row_voice_service.outcome==10)actor_script_.VerifyMenuOptionSlotPrefix(main_menu_target_,child);
+                    else if(child.row_voice_service.outcome==9)actor_script_.VerifyMenuOptionChildPrefix(main_menu_target_,child);
                     else if(child.row_voice_service.outcome==8)actor_script_.VerifyMenuOptionPort24Prefix(main_menu_target_,child);
                     else if(child.row_voice_service.outcome==7)actor_script_.VerifyMenuOptionWavePrefix(main_menu_target_,child);
                     else if(child.row_voice_service.outcome==6)actor_script_.VerifyMenuOptionControlPrefix(main_menu_target_,child);
