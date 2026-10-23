@@ -183,7 +183,7 @@ GameFsStatus GameSourceSoundControl::Feedback4AC38(const GameSourceSoundSnapshot
     return {GameFsCode::Unavailable,0,record.bank_handle<0?"Unsupported feedback branch4AD08":"Unsupported feedback continuation4ACA0"};
 }
 bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead& r)noexcept{
-    if(!r.attempted||!r.bank_attached||!r.bank_handle_known||!r.read_returned||!r.getter_returned||r.start_returned||r.handle_stored||r.feedback_returned
+    if(r.outcome!=0||!r.attempted||!r.bank_attached||!r.bank_handle_known||!r.read_returned||!r.getter_returned||r.start_returned||r.handle_stored||r.feedback_returned
        ||r.context_index!=5||r.read_pc!=0x4AC84||r.frontier!=0x56598||r.selector||r.gain!=45||r.params_written!=6
        ||r.virtual_target!=0x4AF54||r.wrapper!=0x56930||r.issuer!=0x56598||r.bank_handle<0||r.group||r.event!=6||r.extra||r.mode!=2||r.rate!=1.0f)return false;
     const auto& b=r.owner;const auto& a=r.after;
@@ -404,6 +404,20 @@ GameFsStatus GameSourceSoundControl::ServiceProcessor(const GameSourceSoundSnaps
  }
  r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
 }
+GameFsStatus GameSourceSoundControl::ServiceControl(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+ out={};const auto current=Snapshot();
+ if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!current.voice.returned||current.voice.services)
+  return {GameFsCode::Unavailable,0,"NativePort current service owner unavailable"};
+ const auto tick_serial=worker_tick_serial_,previous_ns=worker_previous_ns_,current_ns=worker_current_ns_; //freeze f12 provenance before562D4 callback
+ auto r=feedback_;r.owner=current;r.outcome=6;
+ auto status=voices_.Service(true,[&]{return AdmitSequence58C04(true);});
+ if(status){auto& q=voices_.sequences_.state_;q.worker_tick_serial=tick_serial;q.worker_previous_ns=previous_ns;q.worker_current_ns=current_ns;
+  if(tick_serial<2||!previous_ns||current_ns<previous_ns){q.frontier=0x5A06C;status={GameFsCode::Unavailable,0,"5A06C missing actual consecutive worker timestamps"};}
+  else status=voices_.sequences_.Update5A06C(current_ns-previous_ns,[&](uint32_t at){return bank_.ReadU8(at);},[&]{return DispatchControl5B9E4();});
+  voices_.state_.frontier=q.frontier;
+ }
+ r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
+}
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  if(r.outcome!=4||r.frontier!=0x59DD4||r.after.voice.frontier!=r.frontier||!r.after.voice.callback_returned)return false;
  auto legacy=r;legacy.outcome=3;legacy.frontier=0x5A5AC;
@@ -447,6 +461,31 @@ bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  e.operands={64,0,64,4096};e.operand_begin={0xB3D,0xB3F,0xB40,0xB42};e.operand_end={0xB3F,0xB40,0xB42,0xB45};e.operand_call={0x5935C,0x5936C,0x5937C,0x5938C};
  e.bytes={0xD0,1,0x64,0,1,0x64,2,0x40,0x96};e.command={0,64,uint32_t(q.bank_ids[0]),0,64,4096};
  return q.track.cursor_offset==0xB45&&GameSourceProcessorExact(p,e);
+}
+GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(){
+ auto& pool=voices_.sequences_;auto& q=pool.state_;GameSourceBankRegistration entry;
+ if(!registry_||!registry_->Readback(q.bank,entry)||entry.word30!=2||owned_bank_refs_!=2||q.current_refs!=2||!q.command_released)
+  return {GameFsCode::Unavailable,0,"5B9E4 private current bank references unavailable"};
+ return pool.Dispatch5B9E4(entry.chunks[0],entry.sizes[0],[&](uint32_t at){return bank_.ReadU8(at);},[&]{
+  uint32_t before=0,after=0;GameSourceBankRegistration actual;
+  if(q.control.bank!=q.bank||!registry_->Retain(q.control.bank,before,after)||!registry_->Readback(q.control.bank,actual)||before!=2||after!=3||actual.word30!=after)
+   return GameFsStatus{GameFsCode::Unavailable,0,"5B344 actual D0 control retain/readback unavailable"};
+  owned_bank_refs_=after;q.current_refs=after;auto& c=q.control;c.bank_retained=true;c.retain_pc=0x5B344;c.retain_writer=0x55A2C;c.refs_before=before;c.refs_after=after;return GameFsStatus{};
+ });
+}
+bool GameSourceControlPrefixValid(const GameSourceFeedbackRead& r)noexcept{
+ const auto& q=r.after.voice.sequence;const auto& c=q.control;
+ if(r.outcome!=6||r.frontier!=0x557B8||r.after.voice.frontier!=r.frontier||q.frontier!=r.frontier||q.current_refs!=3)return false;
+ auto legacy=r;legacy.outcome=5;legacy.frontier=0x5B9E4;legacy.after.voice.frontier=0x5B9E4;legacy.after.voice.sequence.frontier=0x5B9E4;legacy.after.voice.sequence.current_refs=2;legacy.after.voice.sequence.control={};
+ if(!GameSourceProcessorPrefixValid(legacy)||!c.wave_output_storage)return false;
+ const uintptr_t identities[]={q.ids_storage,q.output_storage,q.track.storage,q.track.context_storage,q.port.storage,q.processor.command_storage};
+ for(auto address:identities)if(c.wave_output_storage==address)return false;
+ GameSourceControlSnapshot e;e.entered=e.lookup_returned=e.command_dispatched=e.prepare_entered=e.prepare_returned=e.bank_retained=e.region_returned=e.region_selected=e.child_entered=e.wave_attempted=true;
+ e.port_storage=q.port.storage;e.command_storage=q.processor.command_storage;e.wave_output_storage=c.wave_output_storage;e.port_owner=q.port.owner;e.port_generation=q.port.generation;e.port_id=q.port.id;
+ e.note=64;e.bank=r.bank_handle;e.program=0;e.lookup_pc=0x5A1B4;e.source_stride=0x80;e.pool_count=16;e.lookup_flags=1;e.dispatch_pc=0x5BA44;e.handler_target=0x5B2F4;e.prepare_pc=0x5B33C;e.prepare_return_pc=0x5B09C;
+ e.retain_pc=0x5B344;e.retain_writer=0x55A2C;e.refs_before=2;e.refs_after=3;e.rgnd_base=24;e.group_count=1;e.region_count=41;e.region_first=40;e.region_offset=0x728;e.walk_count=33;e.stride_reads=32;e.selected_flags=9;e.selected_byteC=10;e.selected_byteD=0;e.selected_wave=30;e.child_call_pc=0x5B494;e.child_target=0x5B130;e.wave_call_pc=0x5B178;e.frontier=0x557B8;
+ for(uint32_t i=0;i<33;++i){e.offsets[i]=40+56*i;e.lows[i]=e.highs[i]=32+int32_t(i);if(i<32)e.strides[i]=56;}
+ e.child_args={q.port.id,64,r.bank_handle,30,10,0,-1};return GameSourceControlExact(c,e);
 }
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;

@@ -84,6 +84,7 @@ bool GameSourceVoiceServiceValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceSequencePrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourceControlPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
@@ -111,6 +112,7 @@ class GameSourceSoundControl final {
     GameFsStatus ServiceSequence(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServicePort(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServiceProcessor(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus ServiceControl(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     void ObserveWorkerTick()noexcept;
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
@@ -122,6 +124,7 @@ class GameSourceSoundControl final {
     GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);
     GameFsStatus Issue56598(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t);
     GameFsStatus AdmitSequence58C04(bool advance_port=false);
+    GameFsStatus DispatchControl5B9E4();
     GameSourceVoicePool voices_;
     bool voice_admission_=false;
     uint32_t owned_bank_refs_=0;

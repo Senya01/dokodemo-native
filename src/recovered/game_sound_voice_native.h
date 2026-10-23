@@ -41,6 +41,21 @@ struct GameSourceProcessorSnapshot {
  std::array<uint32_t,6> command{};
 };
 bool GameSourceProcessorExact(const GameSourceProcessorSnapshot&,const GameSourceProcessorSnapshot&)noexcept;
+struct GameSourceControlSnapshot {
+ bool entered=false,lookup_returned=false,command_dispatched=false,prepare_entered=false,prepare_returned=false,bank_retained=false;
+ bool region_returned=false,region_selected=false,child_entered=false,wave_attempted=false,wave_output_known=false,wave_result_known=false;
+ bool wave_returned=false,child_returned=false,handler_returned=false,control_returned=false;
+ uintptr_t port_storage=0,command_storage=0,wave_output_storage=0;
+ uint64_t port_owner=0,port_generation=0;
+ int32_t port_id=-1,note=0,bank=-1,program=0;
+ uint32_t lookup_pc=0,source_stride=0,pool_count=0,lookup_flags=0,dispatch_pc=0,handler_target=0,prepare_pc=0,prepare_return_pc=0;
+ uint32_t retain_pc=0,retain_writer=0,refs_before=0,refs_after=0,rgnd_base=0,group_count=0,region_count=0,region_first=0,region_offset=0;
+ uint32_t walk_count=0,stride_reads=0,selected_flags=0,selected_byteC=0,selected_byteD=0,selected_wave=0,child_call_pc=0,child_target=0,wave_call_pc=0,frontier=0;
+ std::array<uint32_t,33> offsets{},strides{};
+ std::array<int32_t,33> lows{},highs{};
+ std::array<int32_t,7> child_args{};
+};
+bool GameSourceControlExact(const GameSourceControlSnapshot&,const GameSourceControlSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -65,6 +80,7 @@ struct GameSourceSequenceSnapshot {
  int32_t update_quantum=0,processor_quantum=0;
  uintptr_t processor_context=0;
  GameSourceProcessorSnapshot processor;
+ GameSourceControlSnapshot control;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -90,11 +106,18 @@ class GameSourceSequencePool final {
  GameFsStatus AllocatePort5A5AC();
  GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
  using ReadByte=std::function<uint8_t(uint32_t)>;
- GameFsStatus Update5A06C(uint64_t,const ReadByte& read={});
- GameFsStatus ProcessContext59DD4(Node&,int32_t,const ReadByte&);
- GameFsStatus ProcessKind59168(Node&,Track&,int32_t,const ReadByte&);
- GameFsStatus Control5900C(Node&,Track&);
- GameFsStatus Submit5B9E4(Port&,const std::array<uint32_t,6>&);
+ using ControlCall=std::function<GameFsStatus()>;
+ GameFsStatus Update5A06C(uint64_t,const ReadByte& read={},const ControlCall& control={});
+ GameFsStatus ProcessContext59DD4(Node&,int32_t,const ReadByte&,const ControlCall&);
+ GameFsStatus ProcessKind59168(Node&,Track&,int32_t,const ReadByte&,const ControlCall&);
+ GameFsStatus Control5900C(Node&,Track&,const ControlCall&);
+ GameFsStatus Submit5B9E4(Port&,const std::array<uint32_t,6>&,const ControlCall&);
+ GameFsStatus Dispatch5B9E4(uint32_t,uint32_t,const ReadByte&,const ControlCall&);
+ Port* LookupPort5A1B4(int32_t);
+ GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&);
+ GameFsStatus Prepare5B040(Port&,int32_t);
+ GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t);
+ GameFsStatus Wave557B8(int32_t,uint32_t,uintptr_t&);
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
  std::array<Port,16> ports_{};
@@ -103,6 +126,7 @@ class GameSourceSequencePool final {
  Track* current_track_=nullptr;
  Node* current_=nullptr;
  GameSourceSequenceSnapshot state_;
+ uintptr_t wave_output_=0; //native backing initialized; source output is UNKNOWN before557B8 writes
  std::array<uint32_t,6> command_{}; //actual stable native storage for source stack command
  uint64_t generation_=0; //survives retired observation reset between owning voices
 };
