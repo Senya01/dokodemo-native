@@ -444,7 +444,16 @@ GameSceneUiSnapshot GameSceneUiBootstrap::Snapshot() const {
         out.visible_roots += clone.VisibleRoots();
     return out;
 }
+GameFsStatus GameSceneUiBootstrap::PrepareOptionsPrompt(){
+    // Attach a typed borrow to the existing47784 resources; no new clone or
+    // source idle/readiness publication is produced by this operation.
+    if(!state_.live||!owners_[3]||!font_||dialog_.Snapshot().state!=3||state_.storage_dialog||profile_confirmation_||clones_[2].VisibleRoots())
+        return {GameFsCode::Unavailable,0,"Options requires idle actual global TRC owner"};
+    if(options_prompt_.Snapshot().live)return {};
+    return options_prompt_.Initialize(clones_[2],resources_[2],*font_,text_buffers_[2],1024);
+}
 bool GameSceneUiBootstrap::Close() {
+    options_prompt_.Close(); //borrowed global before clone/template/text/FONT
     choice_.Retire();
     editor_.Retire();font_=nullptr;
     profile_confirmation_=false;

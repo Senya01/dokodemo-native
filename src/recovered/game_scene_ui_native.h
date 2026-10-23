@@ -5,6 +5,7 @@
 #include "game_input_native.h"
 #include "game_text_native.h"
 #include "game_sound_control_native.h"
+#include "game_trc_prompt_native.h"
 #include <array>
 #include "../game73_audio_request.h"
 
@@ -111,6 +112,8 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool DrawColdFrame(GameGraphics &graphics);
     GameTransition& TitleTransitionOwner()noexcept{return transition_;} //worker-owned,never exposed to UI thread
     const GameTransition& TitleTransitionOwner()const noexcept{return transition_;}
+    GameTrcPrompt& OptionsPromptOwner()noexcept{return options_prompt_;}
+    GameFsStatus PrepareOptionsPrompt();
     GameFsStatus ShowStorageDialog(const GameFontResource &font, uint32_t native_error);
     bool HandleDialogInput(const GameInputFrame &frame);
     GameFsStatus BeginEditor(std::string_view initial,uint32_t maximum,std::string label,
@@ -148,6 +151,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     std::shared_ptr<GameImage> moving_;
     GameTransition transition_;
     GameDialogController dialog_;
+    GameTrcPrompt options_prompt_;
     std::vector<uint32_t> dialog_pixels_;
     uint32_t dialog_width_ = 0, dialog_height_ = 0;
     GameSceneUiSnapshot state_;

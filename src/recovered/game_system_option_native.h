@@ -103,6 +103,9 @@ struct GameSystemOptionSnapshot {
     uint32_t restore_writes=0;
     std::array<GameOptionWriteReceipt,3> restore_receipts{};
     GameOwnedMessageSnapshot message;
+    GameTrcPromptSnapshot prompt;
+    uint64_t prompt_bound_owner=0,prompt_bound_generation=0;
+    uint32_t input_boundaries=0,boundary_cause=0,prompt_opens=0,prompt_returns=0;
 };
 // Finite readonly first-row Options owner; other input routes explicitly refuse.
 // Source1A3B0 cannot publish LoadMan474 or call34F1C until347C8 returns.
@@ -110,12 +113,12 @@ class GameSystemOptionFrontier final {
   public:
     GameFsStatus Request(GameMainMenuLease,std::array<uint32_t,3> passive_settings);
     GameFsStatus Advance(GameResourceSource&);
-    GameFsStatus Initialize(GameResourceSource&,const GameFontResource&,GameOptionSettings&,GameTransition&);
+    GameFsStatus Initialize(GameResourceSource&,const GameFontResource&,GameOptionSettings&,GameTransition&,GameTrcPrompt* prompt=nullptr);
     GameFsStatus Tick(GameTransition&);
     GameFsStatus Draw(GameGraphics&,const GameFontResource&);
     bool Input(const GameInputFrame&);
     bool SetInputEpoch(uint64_t);
-    void DisarmInput(){input_.BeginContext();}
+    void DisarmInput(){input_.BeginContext();if(prompt_&&prompt_->Snapshot().parent==state_.generation)prompt_->Disarm();}
     bool Modal()const{return state_.live&&state_.phase>=2&&state_.phase<=6;}
     bool ClosedAndRetired()const{return state_.phase==7&&state_.retired_generation==state_.generation&&state_.generation;}
     GameSystemOptionSnapshot Snapshot()const;
@@ -131,5 +134,7 @@ class GameSystemOptionFrontier final {
     const GameFontResource* font_=nullptr;
     GameMenuInput input_;
     GameOwnedOptionMessage message_;
+    GameTrcPrompt* prompt_=nullptr;
+    bool PromptOwnerLive()const;
 };
 }

@@ -221,12 +221,13 @@ GameFsStatus GameSystemOptionFrontier::PrepareTemplate(GameResourceSource& sourc
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 void GameSystemOptionFrontier::Abort()noexcept{
+    if(prompt_)prompt_->Abort(state_.generation);prompt_=nullptr;
     message_.Close();settings_=nullptr;font_=nullptr;input_.BeginContext();state_.live=state_.visible=state_.request10=state_.owner474=state_.retirement_pending=false;
     clone_.Close();resource_.reset();state_.template_owner=state_.clone_owner=false;
     state_.requested=false; // Native failed-construction teardown, not93504/poll.
 }
 
-GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,const GameFontResource& font,GameOptionSettings& settings,GameTransition& fade){
+GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,const GameFontResource& font,GameOptionSettings& settings,GameTransition& fade,GameTrcPrompt* prompt){
     if(state_.failed)return state_.failure;
     const auto current=settings.OptionSettings();
     if(!current.live||!current.owner||!current.generation||current.words!=state_.passive_settings||!fade.Snapshot().live)
@@ -235,6 +236,9 @@ GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,con
     status=message_.Initialize(source,font,current.words[0]);if(!status)return Refuse(status);
     status=message_.BindRateSource(settings);if(!status)return Refuse(status);
     //347C8 returned: only now1A3B0 can publish474 and invoke34F1C.
+    prompt_=prompt;
+    if(prompt_){const auto p=prompt_->Snapshot();if(!p.live||p.failed||!p.resource_live||!p.font_live)return Refuse({GameFsCode::Unavailable,0,"Options actual TRC borrow retired before Open"});
+        state_.prompt_bound_owner=p.owner;state_.prompt_bound_generation=p.generation;}
     settings_=&settings;font_=&font;state_.settings=current;state_.sound_owner=settings.OptionSoundOwner();state_.current_words=current.words;state_.owner474=state_.live=state_.visible=state_.request10=true;
     state_.state44=0;state_.previous50=state_.selection56=state_.substate48=0;state_.loader469=1;
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return Refuse({GameFsCode::Unavailable,0,"34F1C Open root refused"});
@@ -244,37 +248,46 @@ GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,con
     ++state_.source_ui_sound_intents; //source4AC38(5,0,12,128); audio equivalence remains qualified
     state_.opened=true;++state_.opens;state_.phase=2;input_.BeginContext();return {};
 }
-bool GameSystemOptionFrontier::SetInputEpoch(uint64_t epoch){if(!state_.live||state_.phase!=3||epoch<=state_.input_epoch)return false;state_.input_epoch=epoch;input_.BeginContext();return true;}
+bool GameSystemOptionFrontier::SetInputEpoch(uint64_t epoch){if(!state_.live||state_.phase!=3||epoch<=state_.input_epoch)return false;
+    if(prompt_&&state_.substate48&& !prompt_->SetInputEpoch(epoch))return false;
+    state_.input_epoch=epoch;input_.BeginContext();return true;}
 bool GameSystemOptionFrontier::Input(const GameInputFrame& f){
-    if(f.overflow_resync||!f.focused){input_.BeginContext();++state_.rejected;return false;}
+    if(f.overflow_resync||!f.focused){DisarmInput();++state_.rejected;return false;}
     if(state_.failed)return false;
+    if(!PromptOwnerLive()){++state_.rejected;return false;}
     const auto& l=state_.child_lease;
     if(!state_.live||state_.phase!=3||f.sequence<=state_.last_sequence||f.main_menu_epoch!=state_.input_epoch
        ||f.message_owner_generation!=l.script_generation||f.message_context!=l.context||f.returned_owner!=l.available_owner||f.returned_generation!=l.available_generation){++state_.rejected;return false;}
     if(!settings_||!SameSettings(state_.settings,settings_->OptionSettings())||!font_||!font_->Snapshot().ready){++state_.rejected;return false;}
     if(state_.sound_owner.live&&!GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner())){++state_.rejected;return false;}
+    if(state_.substate48){if(!prompt_||prompt_->Snapshot().state864!=1){++state_.rejected;return false;}
+        if(!prompt_->Input(f)){++state_.rejected;return false;}state_.last_sequence=f.sequence;return true;}
     state_.last_sequence=f.sequence;input_.Observe(f);return true;
 }
 GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
     if(state_.failed)return state_.failure;
     if(!state_.live)return {}; // retired/current-generation callbacks cannot replay
     try{
+        NeedOption(PromptOwnerLive(),"Options frozen actual TRC owner replaced/retired");
         NeedOption(state_.live&&settings_&&SameSettings(state_.settings,settings_->OptionSettings())&&font_&&font_->Snapshot().ready,"Options bound settings/FONT owner replaced");
         NeedOption(fade.Snapshot().live,"Options transition owner retired");
         NeedOption(!state_.sound_owner.live||GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner()),"Options bound source sound owner replaced");
         if(state_.phase==6){message_.Close();clone_.Close();resource_.reset();state_.live=state_.visible=state_.owner474=state_.retirement_pending=false;
             state_.template_owner=state_.clone_owner=state_.requested=false;state_.retired=true;state_.retired_generation=state_.generation;++state_.retirements;state_.phase=7;return {};}
         std::string error;NeedOption(clone_.Update(error),error.c_str());
-        if(state_.phase==2){if(fade.Snapshot().state==2){state_.state44=1;state_.phase=3;input_.BeginContext();}return {};}
+        if(state_.phase==2){if(fade.Snapshot().state==2){state_.state44=1;state_.phase=3;input_.BeginContext();++state_.input_boundaries;state_.boundary_cause=1;}return {};}
         if(state_.phase==4){if(fade.Snapshot().state==0){NeedOption(clone_.ShowRoot(0,false),"Options close hide root");clone_.Control(0)->mode=clone_.Control(0)->active=0;
             state_.state44=3;state_.visible=false;++state_.close_completions;state_.loader469=0;state_.request10=false;++state_.polls;state_.poll_completed=true;
             state_.retirement_pending=true;++state_.retirement_requests;state_.phase=6;}return {};}
         if(state_.phase!=3)return {};
-        input_.Tick();
-        bool right_completed=false,after_key_done=false;
+        bool nested_at_entry=state_.substate48!=0;
+        if(prompt_){const auto before=prompt_->Snapshot();const auto status=prompt_->Tick();if(!status)return Refuse(status);
+            if(nested_at_entry&&before.state864==0&&prompt_->Snapshot().state864==1){++state_.input_boundaries;state_.boundary_cause=3;}}
+        if(!nested_at_entry)input_.Tick();
+        bool right_completed=false,after_key_done=false,circle_completed=false;
         // Query in source priority. Later counters are not sampled after an
         // earlier nonzero direction consumed this key invocation.
-        const auto down=input_.Repeat(Down,10,2),up=down?0:input_.Repeat(Up,10,2),right=(down||up)?0:input_.Repeat(Right,10,2),left=(down||up||right)?0:input_.Repeat(Left,10,2);
+        const auto down=nested_at_entry?0:input_.Repeat(Down,10,2),up=(nested_at_entry||down)?0:input_.Repeat(Up,10,2),right=(nested_at_entry||down||up)?0:input_.Repeat(Right,10,2),left=(nested_at_entry||down||up||right)?0:input_.Repeat(Left,10,2);
         if(right&&settings_->OptionRightWritable()){
             NeedOption(!state_.right_steps&&state_.selection56==0&&state_.previous50==0&&state_.substate48==0
                        &&state_.current_words==std::array<uint32_t,3>{{2,3,3}}&&state_.passive_settings==state_.current_words,
@@ -307,11 +320,17 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
                        &&GameSourceSoundSnapshotExact(state_.gain.source.after,settings_->OptionSoundOwner()),"Options genuine source gain return receipt refused");
             state_.sound_owner=state_.gain.source.after;state_.gain_returned=true;right_completed=true;
         }
-        if(!right_completed&&(down||up||right||left||input_.First(Circle))){
+        if(!nested_at_entry&&!right_completed&&!down&&!up&&!right&&!left&&input_.First(Circle)){
+            if(!prompt_){++state_.unsupported;state_.source_consumer=0x352BC;
+                return Refuse({GameFsCode::Unavailable,0,"Unsupported Options actual global TRC owner unavailable at352BC"});}
+            NeedOption(prompt_&&prompt_->Snapshot().live&&!prompt_->Snapshot().failed&&prompt_->Snapshot().state864==3,"Unsupported Options actual global TRC owner unavailable at352BC");
+            state_.substate48=2;circle_completed=true;++state_.source_ui_sound_intents;
+        }
+        if(!right_completed&&!circle_completed&&(down||up||right||left)){
             ++state_.unsupported;state_.source_consumer=down?0x350B0:up?0x3512C:right?0x3516C:left?0x351EC:0x352BC;
             return Refuse({GameFsCode::Unavailable,0,"Unsupported Options readonly input consumer at "+std::to_string(state_.source_consumer)});
         }
-        else if(!right_completed&&input_.First(Cross)){
+        else if(!nested_at_entry&&!right_completed&&!circle_completed&&input_.First(Cross)){
             if(settings_->OptionBackupWritable()){
                 for(uint32_t stage=0;stage<3;++stage){GameOptionWriteReceipt receipt;state_.source_consumer=0x3526C+stage*8;
                     const auto status=settings_->WriteOptionBackup(state_.settings,stage,state_.passive_settings[stage],receipt);if(!status)return Refuse(status);
@@ -332,10 +351,17 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
         }
         //35078 returns into34C54 even after Close:352E0 with48=0 and
         // unchanged50==56 skips gain, then still services the real message.
+        if(state_.substate48==2){
+            const auto status=prompt_->Open(state_.generation,state_.input_epoch);if(!status)return Refuse(status);
+            state_.substate48=3;++state_.prompt_opens;++state_.input_boundaries;state_.boundary_cause=2;input_.BeginContext();
+        }else if(state_.substate48==3&&prompt_->Snapshot().state864==3){
+            const auto p=prompt_->Snapshot();NeedOption(p.parent==state_.generation&&p.result86C==2&&p.no_choices==p.returns,"TRC No result/current owner unavailable");
+            state_.substate48=0;++state_.prompt_returns;++state_.input_boundaries;state_.boundary_cause=4;input_.BeginContext();
+        }
         if(!after_key_done)++state_.after_key_updates;
         // The finite route keeps50==56 after Right and after distinct Cancel.
         // Cancel never changes localC, and never returns before this tail.
-        NeedOption(state_.previous50==state_.selection56&&state_.substate48==0,"Unsupported Options dirty common update");
+        NeedOption(state_.previous50==state_.selection56&&(state_.substate48==0||state_.substate48==3),"Unsupported Options dirty common update");
         if(message_.Snapshot().complete68){auto status=message_.SetRate(settings_->OptionSettings().words[0]);NeedOption(bool(status),status.detail.c_str());
             status=message_.Text(help_text);NeedOption(bool(status),status.detail.c_str());}
         const auto status=message_.Tick();NeedOption(bool(status),status.detail.c_str());
@@ -346,6 +372,7 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
     if(state_.failed)return state_.failure;
     if(!state_.live||!state_.visible||state_.state44==3)return {};
     try{
+        NeedOption(PromptOwnerLive(),"Options draw frozen TRC borrow retired");
         NeedOption(font_==&font&&font.Snapshot().ready&&settings_&&SameSettings(state_.settings,settings_->OptionSettings()),"Options draw dependency retired");
         NeedOption(!state_.sound_owner.live||GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner()),"Options draw source sound owner retired");
         // NativeJoinedManualRoots:34DC4 owns exactly three explicit root2
@@ -372,8 +399,10 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
             n->position=n->base_position;
             GameUiDrawStats bar;NeedOption(clone_.Draw(graphics,bar,error,nullptr,{},0,UINT32_MAX,2),error.c_str());quads+=bar.quads;++state_.manual_bars;state_.bar_frames[row]=frame;
         }
-        auto status=message_.Draw(graphics);NeedOption(bool(status),status.detail.c_str());++state_.draw_frames;state_.quads=quads;return {};
+        auto status=message_.Draw(graphics);NeedOption(bool(status),status.detail.c_str());if(prompt_&&state_.substate48){status=prompt_->Draw(graphics);if(!status)return Refuse(status);}
+        ++state_.draw_frames;state_.quads=quads;return {};
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
-GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.message=message_.Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}return out;}
+bool GameSystemOptionFrontier::PromptOwnerLive()const{if(!prompt_)return !state_.prompt_bound_owner;const auto p=prompt_->Snapshot();return p.live&&!p.failed&&p.resource_live&&p.font_live&&p.owner==state_.prompt_bound_owner&&p.generation==state_.prompt_bound_generation;}
+GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.message=message_.Snapshot();if(prompt_)out.prompt=prompt_->Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}return out;}
 }

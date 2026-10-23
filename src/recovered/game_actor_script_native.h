@@ -399,10 +399,15 @@ class GameActorScript final {
     bool option_right_armed_=false,option_write_pending_=false,option_pending_restore_=false,option_gain_pending_=false,option_tick_pending_=false;
     uint64_t option_right_sequence_=0,option_cancel_sequence_=0,option_input_sequence_=0;
     uint32_t option_tick_before_=0,option_tick_phase_=0;
+    uint64_t option_current_epoch_=0;
+    uint32_t option_boundary_issued_=0;
+    uint32_t option_prompt_stage_=0;
     GameSourceSoundSnapshot option_sound_expected_;
     const GameSystemOptionFrontier* option_gui_owner_=nullptr;
     GameSourceSoundGainReceipt option_gain_issued_;
     GameFsStatus CheckMenuOptionOwner(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,bool failed_prefix)const;
+    friend class GameContentBoot;
+    GameFsStatus AdvanceMenuOptionInputEpoch(const GameOwnerEventTarget&,GameSystemOptionFrontier&);
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
     GameActorRuntime* runtime_=nullptr;

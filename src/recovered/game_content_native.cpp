@@ -1163,7 +1163,8 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             // NativeSingleWorkerResource10BeforeRetire: original allocator vs
             // callback scheduling is unknown. The distinct153D4 owner must
             // return before474/Open and before this worker posts11 then18.
-            status=system_option_.Initialize(*this,font_,*this,scene_ui_.TitleTransitionOwner());state_.system_option=system_option_.Snapshot();
+            status=scene_ui_.PrepareOptionsPrompt();
+            if(status)status=system_option_.Initialize(*this,font_,*this,scene_ui_.TitleTransitionOwner(),&scene_ui_.OptionsPromptOwner());state_.system_option=system_option_.Snapshot();
             if(status)state_.main_menu_phase=4;break;
         case 7:
             // NativeMenuInventorySingleWorkerAfterCallbacks. Original relative
@@ -1176,14 +1177,14 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             if(!status)break;
             if(main_flow_.Snapshot().menu_result50==13){
                 status=actor_script_.PrepareMenuOptionTick(main_menu_target_,system_option_.Snapshot());
-                if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());const auto child=system_option_.Snapshot();
+                const auto before_boundary=system_option_.Snapshot().input_boundaries;
+                if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
                 if(status)status=actor_script_.CommitMenuOptionTick(main_menu_target_,child);
+                if(status&&child.input_boundaries!=before_boundary){status=actor_script_.AdvanceMenuOptionInputEpoch(main_menu_target_,system_option_);child=system_option_.Snapshot();state_.main_menu_input_epoch=child.input_epoch;}
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);
                 if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=10;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
-                if(child.phase!=3)state_.main_menu_child_ready=false;
-                if(status&&!state_.main_menu_child_ready&&child.phase==3){++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
-                    if(!system_option_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"Options ready input epoch refused"};}
+                state_.main_menu_child_ready=status&&child.phase==3&&(!child.substate48||child.prompt.state864==1);
                 if(status&&system_option_.ClosedAndRetired()){status=actor_script_.CompleteMenuOption(main_menu_target_,child);if(status)finish();}
                 break;
             }
