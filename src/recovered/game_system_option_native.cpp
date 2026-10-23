@@ -8,12 +8,12 @@ namespace dokodemo::recovered {
 namespace {
 void NeedOption(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 bool SameSettings(const GameOptionSettingsSnapshot& a,const GameOptionSettingsSnapshot& b){
-    return a.live&&b.live&&a.owner&&a.generation&&a.owner==b.owner&&a.generation==b.generation&&a.words==b.words&&a.writes==b.writes;
+    return a.live&&b.live&&a.owner&&a.generation&&a.owner==b.owner&&a.generation==b.generation&&a.words==b.words&&a.writes==b.writes&&a.protected_root==b.protected_root;
 }
 constexpr char help_text[]="\x82\xBD\x82\xBE\x82\xA2\x82\xDC\x83\x65\x83\x58\x83\x67\x92\x86\x81\x63\n";
 }
 bool GameOptionSnapshotExact(const GameOptionSettingsSnapshot& a,const GameOptionSettingsSnapshot& b)noexcept{
-    return a.live==b.live&&a.owner==b.owner&&a.generation==b.generation&&a.writes==b.writes&&a.words==b.words;
+    return a.live==b.live&&a.owner==b.owner&&a.generation==b.generation&&a.writes==b.writes&&a.words==b.words&&a.protected_root==b.protected_root;
 }
 bool GameOptionReceiptExact(const GameOptionWriteReceipt& a,const GameOptionWriteReceipt& b)noexcept{
     return a.gui_generation==b.gui_generation&&a.input_sequence==b.input_sequence&&a.input_epoch==b.input_epoch
@@ -287,6 +287,13 @@ bool GameSystemOptionFrontier::Input(const GameInputFrame& f){
         if(!prompt_->Input(f)){++state_.rejected;return false;}state_.last_sequence=f.sequence;return true;}
     state_.last_sequence=f.sequence;input_.Observe(f);return true;
 }
+bool GameSystemOptionFrontier::PublishFeedback(const GameSourceFeedbackRead& r){
+    if(state_.failed||state_.phase!=3||state_.row_writes!=4||state_.row_left_steps!=1||state_.row_feedback_attempts!=1
+       ||state_.source_consumer!=0x4AC84||!GameSourceFeedbackReachedValid(r)
+       ||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)||!settings_
+       ||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
+    state_.row_feedback=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
+}
 GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
     if(state_.failed)return state_.failure;
     if(!state_.live)return {}; // retired/current-generation callbacks cannot replay
@@ -351,7 +358,12 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
                    &&GameOptionSnapshotExact(receipt.write.after,settings_->OptionSettings()),"Options Left direct writer receipt/readback refused");
                 state_.row_receipts[3]=receipt;++state_.row_writes;state_.settings=receipt.write.after;
                 state_.source_consumer=0x4AC84;++state_.row_feedback_attempts;
-                const auto feedback=settings_->ReadOptionFeedback(state_.settings,state_.row_feedback);if(!feedback)return Refuse(feedback);
+                const auto feedback=settings_->ReadOptionFeedback(state_.settings,state_.row_feedback);
+                if(GameSourceFeedbackReachedValid(state_.row_feedback)){
+                    NeedOption(GameSourceSoundSnapshotExact(state_.row_feedback.after,settings_->OptionSoundOwner()),"Options reached feedback current owner readback");
+                    state_.sound_owner=state_.row_feedback.after;state_.source_consumer=state_.row_feedback.frontier;
+                }
+                if(!feedback)return Refuse(feedback);
                 return Refuse({GameFsCode::Unavailable,0,"Unsupported Options Left feedback return beyond4AC84"});
             } //source row1 <=0 is a no-op; no wrap, setter or feedback
         }

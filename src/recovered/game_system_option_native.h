@@ -7,6 +7,7 @@ struct GameOptionSettingsSnapshot {
     bool live=false;
     uint64_t owner=0,generation=0,writes=0;
     std::array<uint32_t,3> words{};
+    std::array<uint8_t,32> protected_root{}; // full native root except the three typed words
 };
 struct GameOptionWriteReceipt {
     uint64_t gui_generation=0,input_sequence=0,input_epoch=0;
@@ -147,6 +148,8 @@ class GameSystemOptionFrontier final {
     void SetChildLease(GameNotebookLease l){state_.child_lease=l;state_.input_epoch=l.input_epoch;}
     void Abort()noexcept;
   private:
+    friend class GameContentBoot;
+    bool PublishFeedback(const GameSourceFeedbackRead&);
     GameFsStatus Refuse(GameFsStatus);
     GameSystemOptionSnapshot state_;
     std::shared_ptr<GameUiResource> resource_;

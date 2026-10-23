@@ -656,6 +656,7 @@ GameFsStatus GameSoundBank::Request73(int32_t sound,int32_t channel,int32_t volu
     state_.last_playback_result=-1;return {};
 }
 GameFsStatus GameSoundBank::Register(PackageView image) {
+    if(registration_failed_)return registration_failure_;
     if (state_.metadata_ready)
         return {GameFsCode::Busy, 0, "sound bank already registered"};
     try {
@@ -680,20 +681,15 @@ GameFsStatus GameSoundBank::Register(PackageView image) {
             next.names |= tag == 0x454D414E;
             at += uint64_t(bytes) + 8;
         }
-        // 55250's actual default64/head insertion gives slot63 first. Native
-        // metadata slots are kept distinct from SGX mixer/channel acceptance.
-        int slot = -1;
-        for (int i = 63; i >= 0; --i)
-            if (!slots_[size_t(i)]) {
-                slot = i;
-                break;
-            }
-        if (slot < 0)
-            return {GameFsCode::Busy, 0, "native metadata bank pool exhausted"};
+        int32_t slot=-1;const auto allocated=registry_.Allocate(image,slot);if(!allocated)return allocated;
+        // Publish the actual allocated image/identity before the source field.
+        // A numeric metadata slot is only an output of this owning allocation.
+        slots_[size_t(slot)]=true;identity_=description;image_=image;
         if(source_control_.Snapshot().live){
-            const auto bound=source_control_.BindSe5(image);if(!bound)return bound;
+            auto bound=source_control_.BindSe5(image);
+            if(bound)bound=source_control_.StoreRegisteredSe5(registry_,slot);
+            if(!bound){registration_failed_=true;registration_failure_=bound;registry_.Close();return bound;}
         }
-        slots_[size_t(slot)] = true;
         next.native_metadata_slot = slot;
         next.metadata_ready = true;
         next.profile_gain=state_.profile_gain;next.finite_windows_output=sink_!=nullptr;

@@ -160,7 +160,7 @@ struct GameActorScriptSnapshot {
     bool option_prefix_verified=false;
     uint32_t option_right_writes=0;
     uint32_t option_row_writes=0,option_row_selection_receipt=0;
-    bool option_row_prefix_verified=false;
+    bool option_row_prefix_verified=false,option_feedback_prefix_verified=false;
     uint32_t option_right_after_key_before=0;
     uint32_t option_yes_writes=0,option_yes_publication_receipt=0,option_completion_kind=0;
     uint32_t option_restore_writes=0,option_gain_returns=0,option_tick_receipts=0,option_after_key_cursor=0,option_lifecycle_phase=0,option_poll_receipt=0,option_drain_receipt=0;
@@ -404,6 +404,11 @@ class GameActorScript final {
     GameOptionRowWriteReceipt option_row_pending_receipt_;
     bool option_row_pending_=false,option_down_armed_=false,option_left_armed_=false;
     uint64_t option_down_sequence_=0,option_left_sequence_=0;
+    bool option_feedback_pending_=false,option_feedback_committed_=false;
+    GameSourceFeedbackRead option_feedback_issued_;
+    GameFsStatus PrepareMenuOptionFeedback(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
+    GameFsStatus CommitMenuOptionFeedback(const GameOwnerEventTarget&,const GameSourceFeedbackRead&);
+    GameFsStatus VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     bool OptionRowCursor(const GameSystemOptionSnapshot&)const;
     std::array<GameOptionWriteReceipt,4> option_issued_{};
     std::array<GameOptionWriteReceipt,3> option_restore_issued_{};

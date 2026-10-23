@@ -1,5 +1,6 @@
 #include "game_content_native.h"
 #include <atomic>
+#include "../core_hash.h"
 #include "game_boot_native.h"
 #include "game_primitives.h"
 #include "model_formats.hpp"
@@ -266,12 +267,14 @@ uint32_t GameContentBoot::StateWord(uint32_t at) const {
     return word;
 }
 GameOptionSettingsSnapshot GameContentBoot::OptionSettings()const{
-    return {!state_.closed&&state_.loadman_owner&&state_.state_reset,diary_io_owner_,1,option_settings_writes_,
+    GameOptionSettingsSnapshot out{!state_.closed&&state_.loadman_owner&&state_.state_reset,diary_io_owner_,1,option_settings_writes_,
         {{StateWord(0x10),StateWord(0x14),StateWord(0x18)}}};
+    dokodemo::core::Sha256 hash;hash.update(reset_bytes_.data(),0x10);hash.update(reset_bytes_.data()+0x1C,reset_bytes_.size()-0x1C);
+    out.protected_root=hash.digest();return out;
 }
 GameFsStatus GameContentBoot::RestoreOptionSettings(const GameOptionSettingsSnapshot& expected,const std::array<uint32_t,3>& backup){
     const auto now=OptionSettings();
-    if(!now.live||now.owner!=expected.owner||now.generation!=expected.generation||now.words!=expected.words||now.writes!=expected.writes||backup!=expected.words)
+    if(!now.live||!GameOptionSnapshotExact(now,expected)||backup!=expected.words)
         return {GameFsCode::Unavailable,0,"Options readonly current-owner backup restoration refused"};
     for(uint32_t field=0;field<3;++field){for(uint32_t byte=0;byte<4;++byte)reset_bytes_[0x10+field*4+byte]=uint8_t(backup[field]>>(8*byte));++option_settings_writes_;}
     if(OptionSettings().words!=backup)return {GameFsCode::Unavailable,0,"Options three source setter readbacks disagree"};return {};
@@ -297,7 +300,13 @@ GameFsStatus GameContentBoot::ReadOptionFeedback(const GameOptionSettingsSnapsho
     if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options selected feedback owner unavailable"};
     const auto gui=system_option_.Snapshot();const auto checked=actor_script_.CheckMenuOption(main_menu_target_,gui);if(!checked)return checked;
     if(gui.source_consumer!=0x4AC84||gui.row_writes!=4||gui.row_left_steps!=1||gui.row_feedback_attempts!=1)return {GameFsCode::Unavailable,0,"Options selected feedback source cursor unavailable"};
-    return sound_bank_.ReadOptionsFeedback(gui.sound_owner,out);
+    if(!gui.sound_owner.registration.live)return sound_bank_.ReadOptionsFeedback(gui.sound_owner,out);
+    auto status=actor_script_.PrepareMenuOptionFeedback(main_menu_target_,gui);if(!status)return status;
+    const auto effect=sound_bank_.ReadOptionsFeedback(gui.sound_owner,OptionSettings().words[1],out);
+    if(!GameSourceFeedbackReachedValid(out))return effect;
+    if(!system_option_.PublishFeedback(out))return {GameFsCode::Unavailable,0,"Options actual feedback frontier publication refused"};
+    status=actor_script_.CommitMenuOptionFeedback(main_menu_target_,out);if(!status)return status;
+    return effect;
 }
 GameFsStatus GameContentBoot::QueryOptionGain(const GameOptionSettingsSnapshot& expected,int32_t value,GameOptionGainObservation& out){
     if(!GameOptionSnapshotExact(expected,OptionSettings())||value!=105||state_.main_menu_phase!=7)
@@ -1202,7 +1211,10 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                 const auto before_boundary=system_option_.Snapshot().input_boundaries;
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
-                if(!status&&child.failed&&child.row_writes)actor_script_.VerifyMenuOptionRowPrefix(main_menu_target_,child);
+                if(!status&&child.failed&&child.row_writes){
+                    if(child.row_feedback.issuer==0x56598)actor_script_.VerifyMenuOptionFeedbackPrefix(main_menu_target_,child);
+                    else actor_script_.VerifyMenuOptionRowPrefix(main_menu_target_,child);
+                }
                 if(status)status=actor_script_.CommitMenuOptionTick(main_menu_target_,child);
                 if(status&&child.input_boundaries!=before_boundary){status=actor_script_.AdvanceMenuOptionInputEpoch(main_menu_target_,system_option_);child=system_option_.Snapshot();state_.main_menu_input_epoch=child.input_epoch;}
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);

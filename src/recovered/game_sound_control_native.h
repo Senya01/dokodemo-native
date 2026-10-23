@@ -3,6 +3,36 @@
 #include <array>
 
 namespace dokodemo::recovered {
+class GameSoundBank;
+struct GameSourceBankRegistration {
+    bool live=false,attached=false,coherent=false;
+    uint64_t registry=0,generation=0,serial=0;
+    int32_t id=-1;
+    uint32_t active=0,mode=0,state=0,writer=0;
+    uint32_t word0C=0,word30=0,initial_zero24_mask=0;
+    std::array<int32_t,4> ids{{-1,-1,-1,-1}};
+    std::array<uint32_t,4> chunks{},sizes{};
+    std::array<uint8_t,32> digest{};
+    PackageViewDescription image,tail;
+};
+bool GameSourceBankRegistrationExact(const GameSourceBankRegistration&,const GameSourceBankRegistration&)noexcept;
+// NativeIndexedBankPool: owned Windows IDs, not PSP pool addresses. Only
+// GameSoundBank can allocate/publish entries or issue a source +5C store.
+class GameSourceBankRegistry final {
+  public:
+    GameSourceBankRegistry()=default;
+    GameSourceBankRegistry(const GameSourceBankRegistry&)=delete;
+    GameSourceBankRegistry& operator=(const GameSourceBankRegistry&)=delete;
+    void Close()noexcept;
+  private:
+    friend class GameSoundBank;
+    friend class GameSourceSoundControl;
+    GameFsStatus Allocate(PackageView,int32_t&);
+    bool Readback(int32_t,GameSourceBankRegistration&)const;
+    std::array<GameSourceBankRegistration,64> entries_{};
+    std::array<PackageView,64> images_{},tails_{};
+    uint64_t owner_=0,generation_=0,serial_=0;
+};
 // Typed fields actually initialized by17F0. PSP padding and the native audio
 // queue/metadata slot are separate domains; neither is a source playback ID.
 struct GameSourceSoundRecord {
@@ -12,6 +42,7 @@ struct GameSourceSoundRecord {
     uint32_t gain=128,state18=0,state1C=0,state20=0,step=4,position=0,request=0,flags=0;
     float rate=1.0f;
     bool bank_attached=false,bank_handle_known=true,name_known=true;
+    uint64_t context_owner=0,context_generation=0; // typed record+4 reference
 };
 struct GameSourceSoundSnapshot {
     bool live=false,cold_initialized=false,bank_live=false,failed=false;
@@ -20,6 +51,12 @@ struct GameSourceSoundSnapshot {
     int32_t current_id=0,previous_id=0,pending_id=0,last_query_gain=0;
     uint8_t automatic=0;
     PackageViewDescription bank;
+    GameSourceBankRegistration registration;
+    uint64_t feedback_attempts=0;
+    uint32_t feedback_writes=0,feedback_frontier=0;
+    int32_t feedback_gain=0;
+    bool feedback_failed=false;
+    GameSourceSoundRecord se5;
 };
 bool GameSourceSoundOwnerStable(const GameSourceSoundSnapshot&,const GameSourceSoundSnapshot&)noexcept;
 bool GameSourceSoundSnapshotExact(const GameSourceSoundSnapshot&,const GameSourceSoundSnapshot&)noexcept;
@@ -28,7 +65,15 @@ struct GameSourceFeedbackRead {
     GameSourceSoundSnapshot owner;
     uint32_t context_index=5,read_pc=0x4AC84;
     bool attempted=false,bank_attached=false,bank_handle_known=false,read_returned=false;
+    GameSourceSoundSnapshot after;
+    uint32_t frontier=0,selector=0,params_written=0,virtual_target=0,wrapper=0,issuer=0;
+    int32_t bank_handle=-1,gain=0,group=0,event=0,extra=0,mode=0;
+    float rate=0;
+    uint64_t context_owner=0,context_generation=0;
+    bool getter_returned=false,start_returned=false,handle_stored=false,feedback_returned=false;
 };
+bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
     uint32_t read_pc=0,return_pc=0;
@@ -49,10 +94,19 @@ class GameSourceSoundControl final {
     // is terminal before mutation, never permission to keep using cold ID.
     GameFsStatus RequestBgm(int32_t);
     GameFsStatus Feedback4AC38(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus Feedback4AC38(const GameSourceSoundSnapshot&,uint32_t root14,GameSourceFeedbackRead&);
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
     void Close()noexcept;
   private:
+    friend class GameSoundBank;
+    GameFsStatus StoreRegisteredSe5(GameSourceBankRegistry&,int32_t);
+    GameFsStatus Start4AF54(GameSourceFeedbackRead&);
+    GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);
+    GameFsStatus Issue56598(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t);
+    GameSourceBankRegistry* registry_=nullptr;
+    GameSourceFeedbackRead feedback_;
+    GameFsStatus feedback_failure_;
     GameSourceSoundSnapshot state_;
     std::array<GameSourceSoundRecord,31> records_{};
     PackageView bank_;

@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,6 +53,9 @@ public:
     uint8_t ReadU8(uint64_t offset) const;
     uint16_t ReadLE16(uint64_t offset) const;
     uint32_t ReadLE32(uint64_t offset) const;
+    // Hash the current initialized view through one validated lease borrow.
+    // No payload copy; detects writes through aliases and knowledge loss.
+    std::array<uint8_t,32> InitializedDigest() const;
     void WriteU8(uint64_t offset, uint8_t value) const;
     void WriteLE16(uint64_t offset, uint16_t value) const;
     void WriteLE32(uint64_t offset, uint32_t value) const;

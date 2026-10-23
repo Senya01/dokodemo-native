@@ -1,4 +1,5 @@
 #include "package_storage_native.h"
+#include "../core_hash.h"
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -124,6 +125,12 @@ void PackageView::WriteWord(uint64_t offset, uint32_t width, uint32_t value) con
 uint8_t PackageView::ReadU8(uint64_t offset) const { return static_cast<uint8_t>(ReadWord(offset, 1)); }
 uint16_t PackageView::ReadLE16(uint64_t offset) const { return static_cast<uint16_t>(ReadWord(offset, 2)); }
 uint32_t PackageView::ReadLE32(uint64_t offset) const { return ReadWord(offset, 4); }
+std::array<uint8_t,32> PackageView::InitializedDigest() const {
+    const auto span=Access();check(span.readable,PackageStorageCode::Unavailable,"BP digest needs readable backing");
+    const auto at=static_cast<std::size_t>(offset_),n=static_cast<std::size_t>(size_);
+    for(std::size_t i=0;i<n;++i)check(span.initialized[at+i]==1,PackageStorageCode::UnknownBytes,"BP digest unknown byte");
+    return dokodemo::core::sha256(span.bytes+at,n);
+}
 void PackageView::WriteU8(uint64_t offset, uint8_t value) const { WriteWord(offset, 1, value); }
 void PackageView::WriteLE16(uint64_t offset, uint16_t value) const { WriteWord(offset, 2, value); }
 void PackageView::WriteLE32(uint64_t offset, uint32_t value) const { WriteWord(offset, 4, value); }
