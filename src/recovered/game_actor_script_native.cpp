@@ -1272,7 +1272,7 @@ GameFsStatus GameActorScript::BindMenuOption(const GameOwnerEventTarget& expecte
         option_settings_=&settings;state_.option_before=current;state_.option_after={};state_.menu_option_generation=gui;state_.menu_option_parent=parent;
         option_expected_=current;option_issued_={};option_restore_issued_={};option_pending_={};option_write_pending_=option_right_armed_=false;
         option_feedback_pending_=option_feedback_committed_=false;option_feedback_issued_={};state_.option_feedback_prefix_verified=false;
-        option_voice_service_pending_=option_voice_service_committed_=false;option_voice_service_issued_={};state_.option_voice_prefix_verified=state_.option_sequence_prefix_verified=state_.option_port_prefix_verified=state_.option_processor_prefix_verified=state_.option_control_prefix_verified=state_.option_wave_prefix_verified=state_.option_port24_prefix_verified=false;
+        option_voice_service_pending_=option_voice_service_committed_=false;option_voice_service_issued_={};state_.option_voice_prefix_verified=state_.option_sequence_prefix_verified=state_.option_port_prefix_verified=state_.option_processor_prefix_verified=state_.option_control_prefix_verified=state_.option_wave_prefix_verified=state_.option_port24_prefix_verified=state_.option_child_prefix_verified=false;
         option_pending_restore_=option_gain_pending_=option_tick_pending_=false;option_gain_issued_={};option_sound_expected_=sound;
         state_.option_sound_before=sound;state_.option_sound_after={};
         option_right_sequence_=option_cancel_sequence_=option_input_sequence_=0;state_.option_right_writes=state_.option_right_after_key_before=0;
@@ -1364,7 +1364,7 @@ GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& e
         Need(gui.voice_service_attempts==actual.voice_service_attempts&&GameSourceFeedbackExact(gui.row_voice_service,actual.row_voice_service),"Options copied actual voice service changed");
         if(option_feedback_committed_)Need(GameSourceFeedbackExact(gui.row_feedback,option_feedback_issued_),"Options returned feedback receipt replaced");
         if(option_voice_service_committed_)Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_),"Options issued callback receipt replaced");
-        if(option_voice_service_pending_&&(GameSourceVoiceServiceValid(option_voice_service_issued_)||GameSourceSequencePrefixValid(option_voice_service_issued_)||GameSourcePortPrefixValid(option_voice_service_issued_)||GameSourceProcessorPrefixValid(option_voice_service_issued_)||GameSourceControlPrefixValid(option_voice_service_issued_)||GameSourceWavePrefixValid(option_voice_service_issued_)||GameSourcePort24PrefixValid(option_voice_service_issued_))){
+        if(option_voice_service_pending_&&(GameSourceVoiceServiceValid(option_voice_service_issued_)||GameSourceSequencePrefixValid(option_voice_service_issued_)||GameSourcePortPrefixValid(option_voice_service_issued_)||GameSourceProcessorPrefixValid(option_voice_service_issued_)||GameSourceControlPrefixValid(option_voice_service_issued_)||GameSourceWavePrefixValid(option_voice_service_issued_)||GameSourcePort24PrefixValid(option_voice_service_issued_)||GameSourceChildPrefixValid(option_voice_service_issued_))){
             Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)
                &&GameSourceSoundSnapshotExact(option_voice_service_issued_.owner,option_sound_expected_)
                &&GameSourceSoundSnapshotExact(gui.sound_owner,option_voice_service_issued_.after)
@@ -1519,8 +1519,14 @@ GameFsStatus GameActorScript::PrepareMenuOptionVoiceService(const GameOwnerEvent
     ||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)return {GameFsCode::Unavailable,0,"Options next actual voice service owner unavailable"};
  option_voice_service_pending_=true;return {};
 }
+GameFsStatus GameActorScript::PrepareMenuOptionChildService(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,GameOptionsChildCallScope& scope){
+ if(scope.active_)return {GameFsCode::Unavailable,0,"Options child scope already armed"};
+ const auto prepared=PrepareMenuOptionVoiceService(target,gui);if(!prepared)return prepared;
+ scope.gui_=option_gui_owner_;scope.expected_=option_sound_expected_;scope.gui_generation_=gui.generation;scope.input_epoch_=gui.input_epoch;
+ scope.serial_=++option_child_scope_serial_;scope.active_=scope.actor_prepared_=true;return {};
+}
 GameFsStatus GameActorScript::CommitMenuOptionVoiceService(const GameOwnerEventTarget& target,const GameSourceFeedbackRead& receipt){
- if(!option_voice_service_pending_||option_voice_service_committed_||(!GameSourceVoiceServiceValid(receipt)&&!GameSourceSequencePrefixValid(receipt)&&!GameSourcePortPrefixValid(receipt)&&!GameSourceProcessorPrefixValid(receipt)&&!GameSourceControlPrefixValid(receipt)&&!GameSourceWavePrefixValid(receipt)&&!GameSourcePort24PrefixValid(receipt))
+ if(!option_voice_service_pending_||option_voice_service_committed_||(!GameSourceVoiceServiceValid(receipt)&&!GameSourceSequencePrefixValid(receipt)&&!GameSourcePortPrefixValid(receipt)&&!GameSourceProcessorPrefixValid(receipt)&&!GameSourceControlPrefixValid(receipt)&&!GameSourceWavePrefixValid(receipt)&&!GameSourcePort24PrefixValid(receipt)&&!GameSourceChildPrefixValid(receipt))
     ||!GameSourceSoundSnapshotExact(receipt.owner,option_sound_expected_)||!GameSourceSoundSnapshotExact(receipt.after,option_settings_->OptionSoundOwner()))return {GameFsCode::Unavailable,0,"Options actual voice service receipt unavailable"};
  option_voice_service_issued_=receipt;const auto checked=CheckMenuOption(target,option_gui_owner_->Snapshot());if(!checked)return checked;
  option_sound_expected_=receipt.after;state_.option_sound_after=receipt.after;option_voice_service_pending_=false;option_voice_service_committed_=true;return {};
@@ -1587,6 +1593,15 @@ GameFsStatus GameActorScript::VerifyMenuOptionPort24Prefix(const GameOwnerEventT
     ||gui.after_key_updates!=option_tick_before_||gui.voice_service_attempts!=1||gui.source_ui_sound_intents!=3||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)
  return {GameFsCode::Unavailable,0,"Options selected selected WAVE returned unknown port-input failed-only prefix incomplete"};
  state_.option_port24_prefix_verified=true;state_.option_after=option_expected_;return {};
+}
+GameFsStatus GameActorScript::VerifyMenuOptionChildPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+ const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
+ if(!option_voice_service_committed_||!gui.failed||gui.failure.code!=GameFsCode::Unavailable||gui.source_consumer!=0x5C8F4||!option_tick_pending_
+    ||!GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)||!GameSourceChildPrefixValid(gui.row_voice_service)
+    ||gui.row_writes!=7||state_.option_row_writes!=7||gui.gain_queries!=2||state_.option_gain_returns!=2||gui.previous50!=1||gui.selection56!=1||gui.substate48
+    ||gui.after_key_updates!=option_tick_before_||gui.voice_service_attempts!=1||gui.source_ui_sound_intents!=3||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)
+ return {GameFsCode::Unavailable,0,"Options selected selected WAVE returned unknown port-input failed-only prefix incomplete"};
+ state_.option_child_prefix_verified=true;state_.option_after=option_expected_;return {};
 }
 GameFsStatus GameActorScript::VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
@@ -2079,7 +2094,7 @@ void GameActorScript::ObserveWordSelection(const script::FrameTransition& t)noex
     state_.word_accepted_row=ObserveWordRow(row);
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.list_call25=vm_->list_call25();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.wordmemo_import_records=dictionary_.ImportedRecordCount();
         if(const auto it=bindings_.find(10);it!=bindings_.end())out.wordmemo_import_rows=dictionary_.ImportedRecordsInRoot(*vm_,it->second);
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();

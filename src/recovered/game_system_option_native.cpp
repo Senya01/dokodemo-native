@@ -246,6 +246,7 @@ GameFsStatus GameSystemOptionFrontier::PrepareTemplate(GameResourceSource& sourc
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 void GameSystemOptionFrontier::Abort()noexcept{
+ child_issue_pending_=child_issue_committed_=false;child_issued_={};child_issued_serial_=child_issued_generation_=child_issued_epoch_=0;
     if(prompt_)prompt_->Abort(state_.generation);prompt_=nullptr;
     message_.Close();settings_=nullptr;font_=nullptr;input_.BeginContext();state_.live=state_.visible=state_.request10=state_.owner474=state_.retirement_pending=false;
     clone_.Close();resource_.reset();state_.template_owner=state_.clone_owner=false;
@@ -297,9 +298,26 @@ bool GameSystemOptionFrontier::PublishFeedback(const GameSourceFeedbackRead& r){
     state_.row_feedback=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
 }
 bool GameSystemOptionFrontier::PublishVoiceService(const GameSourceFeedbackRead& r){
- if(state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||(!GameSourceVoiceServiceValid(r)&&!GameSourceSequencePrefixValid(r)&&!GameSourcePortPrefixValid(r)&&!GameSourceProcessorPrefixValid(r)&&!GameSourceControlPrefixValid(r)&&!GameSourceWavePrefixValid(r)&&!GameSourcePort24PrefixValid(r))
+ if(r.outcome==9)return false;
+ if(state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||(!GameSourceVoiceServiceValid(r)&&!GameSourceSequencePrefixValid(r)&&!GameSourcePortPrefixValid(r)&&!GameSourceProcessorPrefixValid(r)&&!GameSourceControlPrefixValid(r)&&!GameSourceWavePrefixValid(r)&&!GameSourcePort24PrefixValid(r)&&!GameSourceChildPrefixValid(r))
     ||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
  state_.row_voice_service=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
+}
+bool GameSystemOptionFrontier::PublishChildVoiceService(const GameSourceFeedbackRead& r,GameOptionsChildCallScope& scope){
+ if(!scope.active_||!scope.actor_prepared_||scope.component_||scope.gui_!=this||!scope.source_||!scope.sealed_||scope.published_
+    ||!scope.serial_||scope.gui_generation_!=state_.generation||scope.input_epoch_!=state_.input_epoch||!GameSourceFeedbackExact(scope.issued_,r)
+    ||state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||!GameSourceChildPrefixValid(r)
+    ||!settings_||!GameSourceSoundSnapshotExact(scope.expected_,state_.sound_owner)||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)
+    ||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
+ child_issued_=r;child_issued_serial_=scope.serial_;child_issued_generation_=state_.generation;child_issued_epoch_=state_.input_epoch;
+ child_issue_pending_=true;child_issue_committed_=false;scope.published_=true;
+ state_.row_voice_service=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
+}
+bool GameSystemOptionFrontier::CommitChildVoiceScope(GameOptionsChildCallScope& scope){
+ if(!settings_||!scope.active_||!scope.actor_prepared_||scope.component_||!scope.sealed_||!scope.source_||!scope.published_||scope.gui_!=this
+    ||scope.gui_generation_!=state_.generation||scope.input_epoch_!=state_.input_epoch||scope.serial_!=child_issued_serial_||!child_issue_pending_||child_issue_committed_
+    ||!GameSourceFeedbackExact(scope.issued_,child_issued_)||!GameSourceSoundSnapshotExact(child_issued_.after,settings_->OptionSoundOwner()))return false;
+ scope.committed_=child_issue_committed_=true;return true;
 }
 GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
     if(state_.failed)return state_.failure;
@@ -322,7 +340,11 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             //invocation after the actual changed authored frame was drawn.
             if(state_.draw_frames<=state_.row_left_draw_frames_before)return {};
             ++state_.voice_service_attempts;const auto status=settings_->ServiceOptionVoice(state_.settings,state_.row_voice_service);
-            if(GameSourceVoiceServiceValid(state_.row_voice_service)||GameSourceSequencePrefixValid(state_.row_voice_service)||GameSourcePortPrefixValid(state_.row_voice_service)||GameSourceProcessorPrefixValid(state_.row_voice_service)||GameSourceControlPrefixValid(state_.row_voice_service)||GameSourceWavePrefixValid(state_.row_voice_service)||GameSourcePort24PrefixValid(state_.row_voice_service)){state_.sound_owner=state_.row_voice_service.after;state_.source_consumer=state_.row_voice_service.frontier;}
+            if(state_.row_voice_service.outcome==9&&(!child_issue_pending_||!child_issue_committed_||!child_issued_serial_
+               ||child_issued_generation_!=state_.generation||child_issued_epoch_!=state_.input_epoch||!GameSourceFeedbackExact(child_issued_,state_.row_voice_service)))
+                return Refuse({GameFsCode::Unavailable,0,"Options child service lacks actual private issued callscope"});
+            if(GameSourceVoiceServiceValid(state_.row_voice_service)||GameSourceSequencePrefixValid(state_.row_voice_service)||GameSourcePortPrefixValid(state_.row_voice_service)||GameSourceProcessorPrefixValid(state_.row_voice_service)||GameSourceControlPrefixValid(state_.row_voice_service)||GameSourceWavePrefixValid(state_.row_voice_service)||GameSourcePort24PrefixValid(state_.row_voice_service)||GameSourceChildPrefixValid(state_.row_voice_service)){state_.sound_owner=state_.row_voice_service.after;state_.source_consumer=state_.row_voice_service.frontier;}
+            if(state_.row_voice_service.outcome==9)child_issue_pending_=false;
             if(!status)return Refuse(status);
             return Refuse({GameFsCode::Unavailable,0,"Unsupported selected sequence callback continuation"});
         }
@@ -535,5 +557,5 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 bool GameSystemOptionFrontier::PromptOwnerLive()const{if(!prompt_)return !state_.prompt_bound_owner;const auto p=prompt_->Snapshot();return p.live&&!p.failed&&p.resource_live&&p.font_live&&p.owner==state_.prompt_bound_owner&&p.generation==state_.prompt_bound_generation;}
-GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.message=message_.Snapshot();if(prompt_)out.prompt=prompt_->Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}if(auto* c=clone_.Control(1))out.marker_frame=c->frame;return out;}
+GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.child_service_scope_serial=child_issued_serial_;out.child_service_sealed=child_issued_serial_&&child_issued_generation_==state_.generation&&child_issued_epoch_==state_.input_epoch;out.child_service_committed=out.child_service_sealed&&child_issue_committed_;out.child_service_consumed=out.child_service_committed&&!child_issue_pending_;out.message=message_.Snapshot();if(prompt_)out.prompt=prompt_->Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}if(auto* c=clone_.Control(1))out.marker_frame=c->frame;return out;}
 }

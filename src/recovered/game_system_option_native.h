@@ -117,6 +117,9 @@ struct GameSystemOptionSnapshot {
     std::array<GameOptionRowWriteReceipt,7> row_receipts{};
     GameSourceFeedbackRead row_feedback,row_voice_service;
     uint32_t voice_service_attempts=0;
+    // Readonly diagnostics derived from the private issued callscope cache.
+    uint64_t child_service_scope_serial=0;
+    bool child_service_sealed=false,child_service_committed=false,child_service_consumed=false;
     uint32_t right_message_updates_before=0,right_draw_frames_before=0;
     bool gain_returned=false,right_message_continued=false;
     GameOptionGainObservation gain;
@@ -153,6 +156,11 @@ class GameSystemOptionFrontier final {
     friend class GameContentBoot;
     bool PublishFeedback(const GameSourceFeedbackRead&);
     bool PublishVoiceService(const GameSourceFeedbackRead&);
+    bool PublishChildVoiceService(const GameSourceFeedbackRead&,GameOptionsChildCallScope&);
+    bool CommitChildVoiceScope(GameOptionsChildCallScope&);
+    GameSourceFeedbackRead child_issued_;
+    uint64_t child_issued_serial_=0,child_issued_generation_=0,child_issued_epoch_=0;
+    bool child_issue_pending_=false,child_issue_committed_=false;
     GameFsStatus Refuse(GameFsStatus);
     GameSystemOptionSnapshot state_;
     std::shared_ptr<GameUiResource> resource_;

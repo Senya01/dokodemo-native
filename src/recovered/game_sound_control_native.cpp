@@ -126,6 +126,8 @@ GameFsStatus GameSourceSoundControl::Initialize17F0(){
     if(state_.live)return {GameFsCode::Busy,0,"17F0 sound owner already initialized"};
     static std::atomic<uint64_t> next_owner{0};const auto generation=state_.generation+1;const auto owner=++next_owner;
     const auto port_init=voices_.sequences_.InitializeNativePortComponent(owner,generation);if(!port_init)return port_init;
+    const auto child_init=voices_.sequences_.InitializeNativeChildComponent(owner,generation);
+    if(!child_init){voices_.sequences_.Close();return child_init;}
     state_={};
     state_.live=state_.cold_initialized=true;state_.owner=owner;state_.generation=generation;
     state_.constructor=0x17F0;state_.cold_receipt=state_.id_writes=1;state_.last_id_writer=0x18E4;
@@ -456,6 +458,32 @@ GameFsStatus GameSourceSoundControl::ServicePort24(const GameSourceSoundSnapshot
  }
  r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
 }
+GameFsStatus GameSourceSoundControl::ServiceChild(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+ GameOptionsChildCallScope scope;scope.active_=scope.component_=true;scope.source_=this;scope.expected_=expected;
+ return ServiceChildScoped(expected,out,scope);
+}
+GameFsStatus GameSourceSoundControl::ServiceChildScoped(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out,GameOptionsChildCallScope& scope){
+ out={};const auto current=Snapshot();
+ if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!current.voice.returned||current.voice.services)
+  return {GameFsCode::Unavailable,0,"NativePort current service owner unavailable"};
+ if(active_child_scope_||!scope.active_||scope.sealed_||!GameSourceSoundSnapshotExact(scope.expected_,current)
+    ||(!scope.component_&&(!scope.actor_prepared_||!scope.gui_||!scope.serial_||!scope.gui_generation_))
+    ||(scope.component_&&scope.source_!=this))return {GameFsCode::Unavailable,0,"Options child private synchronous callscope unavailable"};
+ if(scope.component_)scope.serial_=++child_component_serial_;
+ scope.source_=this;active_child_scope_=&scope;
+ struct EndScope {GameOptionsChildCallScope*& current;~EndScope(){current=nullptr;}} end{active_child_scope_};
+ const auto tick_serial=worker_tick_serial_,previous_ns=worker_previous_ns_,current_ns=worker_current_ns_; //freeze f12 provenance before562D4 callback
+ auto r=feedback_;r.owner=current;r.outcome=9;
+ auto status=voices_.Service(true,[&]{return AdmitSequence58C04(true);});
+ if(status){auto& q=voices_.sequences_.state_;q.worker_tick_serial=tick_serial;q.worker_previous_ns=previous_ns;q.worker_current_ns=current_ns;
+  if(tick_serial<2||!previous_ns||current_ns<previous_ns){q.frontier=0x5A06C;status={GameFsCode::Unavailable,0,"5A06C missing actual consecutive worker timestamps"};}
+  else status=voices_.sequences_.Update5A06C(current_ns-previous_ns,[&](uint32_t at){return bank_.ReadU8(at);},[&]{return DispatchControl5B9E4(true,true,true);});
+  voices_.state_.frontier=q.frontier;
+ }
+ r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;
+ if(GameSourceChildPrefixValid(r)&&GameSourceSoundSnapshotExact(r.after,Snapshot())){scope.issued_=r;scope.sealed_=true;}
+ return status;
+}
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  if(r.outcome!=4||r.frontier!=0x59DD4||r.after.voice.frontier!=r.frontier||!r.after.voice.callback_returned)return false;
  auto legacy=r;legacy.outcome=3;legacy.frontier=0x5A5AC;
@@ -500,7 +528,7 @@ bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  e.bytes={0xD0,1,0x64,0,1,0x64,2,0x40,0x96};e.command={0,64,uint32_t(q.bank_ids[0]),0,64,4096};
  return q.track.cursor_offset==0xB45&&GameSourceProcessorExact(p,e);
 }
-GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(bool advance_wave,bool advance_port24){
+GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(bool advance_wave,bool advance_port24,bool advance_child){
  auto& pool=voices_.sequences_;auto& q=pool.state_;GameSourceBankRegistration entry;
  if(!registry_||!registry_->Readback(q.bank,entry)||entry.word30!=2||owned_bank_refs_!=2||q.current_refs!=2||!q.command_released)
   return {GameFsCode::Unavailable,0,"5B9E4 private current bank references unavailable"};
@@ -509,15 +537,31 @@ GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(bool advance_wave,bool
   if(q.control.bank!=q.bank||!registry_->Retain(q.control.bank,before,after)||!registry_->Readback(q.control.bank,actual)||before!=2||after!=3||actual.word30!=after)
    return GameFsStatus{GameFsCode::Unavailable,0,"5B344 actual D0 control retain/readback unavailable"};
   owned_bank_refs_=after;q.current_refs=after;auto& c=q.control;c.bank_retained=true;c.retain_pc=0x5B344;c.retain_writer=0x55A2C;c.refs_before=before;c.refs_after=after;return GameFsStatus{};
- },advance_wave?GameSourceSequencePool::WaveCall([&](int32_t bank,uint32_t wave,uintptr_t& output){return LookupWave557B8(bank,wave,output);}):GameSourceSequencePool::WaveCall{},advance_port24?GameSourceSequencePool::ControlCall([&]{return ReadProducedPort24();}):GameSourceSequencePool::ControlCall{});
+ },advance_wave?GameSourceSequencePool::WaveCall([&](int32_t bank,uint32_t wave,uintptr_t& output){return LookupWave557B8(bank,wave,output);}):GameSourceSequencePool::WaveCall{},advance_port24?GameSourceSequencePool::ControlCall([&]{return ReadProducedPort24(advance_child);}):GameSourceSequencePool::ControlCall{});
 }
-GameFsStatus GameSourceSoundControl::ReadProducedPort24(){
+GameFsStatus GameSourceSoundControl::ReadProducedPort24(bool advance_child){
  auto& pool=voices_.sequences_;GameSourceBankRegistration entry;auto expected=state_.registration;expected.word30=3;
  if(!registry_||owned_bank_refs_!=3||pool.state_.current_refs!=3||pool.port_sound_owner_!=state_.owner||pool.port_sound_generation_!=state_.generation
     ||!registry_->Readback(pool.state_.bank,entry)||!GameSourceBankRegistrationExact(entry,expected))
   return {GameFsCode::Unavailable,0,"5B1EC current issuing bank/sound owner unavailable"};
- const auto result=pool.ReadProducedPort24();GameSourceBankRegistration after;
+ const auto result=pool.ReadProducedPort24(advance_child?GameSourceSequencePool::ChildCall([&](const auto& packet){return BeginOwnedChild5ABF0(packet);}):GameSourceSequencePool::ChildCall{});GameSourceBankRegistration after;
  if(!registry_->Readback(pool.state_.bank,after)||!GameSourceBankRegistrationExact(after,expected))return {GameFsCode::Unavailable,0,"5B1EC current bank after-read changed"};
+ return result;
+}
+GameFsStatus GameSourceSoundControl::BeginOwnedChild5ABF0(const GameSourceSequencePool::ChildPacket& packet){
+ auto& pool=voices_.sequences_;GameSourceBankRegistration current;auto expected=state_.registration;expected.word30=3;
+ if(!active_child_scope_||!active_child_scope_->active_||active_child_scope_->source_!=this||active_child_scope_->expected_.owner!=state_.owner||active_child_scope_->expected_.generation!=state_.generation
+    ||&packet!=&pool.child_packet_||!registry_||owned_bank_refs_!=3||pool.state_.current_refs!=3||pool.child_sound_owner_!=state_.owner||pool.child_sound_generation_!=state_.generation
+    ||!registry_->Readback(pool.state_.bank,current)||!GameSourceBankRegistrationExact(current,expected))
+  return {GameFsCode::Unavailable,0,"5ABF0 actual child callscope/bank owner unavailable"};
+ const auto result=pool.BeginChild5ABF0(packet,[&](uintptr_t slot,uint32_t& value){
+  GameSourceBankRegistration before,after;
+  if(slot!=packet.mode_slot||slot!=pool.wave_output_||!registry_->Readback(pool.state_.bank,before)||!GameSourceBankRegistrationExact(before,expected)
+     ||!registry_->ReadModeSlot(pool.state_.bank,slot,value)||!registry_->Readback(pool.state_.bank,after)||!GameSourceBankRegistrationExact(after,expected))
+   return GameFsStatus{GameFsCode::Unavailable,0,"5F57C actual BANK mode-slot read/lease unavailable"};
+  return GameFsStatus{};
+ });
+ GameSourceBankRegistration after;if(!registry_->Readback(pool.state_.bank,after)||!GameSourceBankRegistrationExact(after,expected))return {GameFsCode::Unavailable,0,"5ABF0 current bank after child prefix changed"};
  return result;
 }
 GameFsStatus GameSourceSoundControl::LookupWave557B8(int32_t bank,uint32_t wave,uintptr_t& output){
@@ -603,10 +647,30 @@ bool GameSourcePort24PrefixValid(const GameSourceFeedbackRead& r)noexcept{
  e.store_index={7,8,9,11,10,14,13,12};e.store_pc={0x5B1F0,0x5B1F8,0x5B200,0x5B208,0x5B20C,0x5B218,0x5B21C,0x5B224};
  return GameSourcePortInputExact(a,e)&&q.wave.port_word24_known&&q.wave.port_word24_returned;
 }
+bool GameSourceChildPrefixValid(const GameSourceFeedbackRead& r)noexcept{
+ const auto& q=r.after.voice.sequence;const auto& a=q.child;
+ if(r.outcome!=9||r.frontier!=0x5C8F4||r.after.voice.frontier!=r.frontier||q.frontier!=r.frontier||q.wave.frontier!=r.frontier||q.control.frontier!=r.frontier)return false;
+ auto old=r;old.outcome=8;old.frontier=old.after.voice.frontier=old.after.voice.sequence.frontier=old.after.voice.sequence.wave.frontier=old.after.voice.sequence.control.frontier=0x5ABF0;old.after.voice.sequence.child={};
+ if(!GameSourcePort24PrefixValid(old)||!a.pool_owner||!a.pool_generation||!a.pool_serial||!a.config_owner||!a.config_generation||!a.pool_base||a.pool_base%4||a.pool_base>UINTPTR_MAX-2176||a.index>=16||!a.node_storage||!a.head_storage)return false;
+ const uintptr_t others[]={q.ids_storage,q.output_storage,q.track.storage,q.track.context_storage,q.port.storage,q.processor.command_storage,q.control.wave_output_storage,q.wave.control_slot_storage,q.wave.result_pointer,q.port_input.block_base,q.port_input.packet_storage};
+ const uintptr_t fresh[]={a.pool_base,a.node_storage,a.head_storage,a.config_storage,a.key_storage,a.default_storage,a.output_storage,a.g_storage};
+ for(size_t i=0;i<8;++i){if(!fresh[i])return false;for(auto p:others)if(fresh[i]==p)return false;for(size_t j=0;j<i;++j)if(fresh[i]==fresh[j])return false;}
+ if(a.pool_base<q.port_input.block_base+2048&&q.port_input.block_base<a.pool_base+2176)return false;
+ if(!a.candidate_links[1]||a.candidate_links[1]==a.node_storage)return false;
+ GameSourceChildSnapshot e;e.entered=e.live=e.reserved=e.source_free_linked=e.header_readback=e.channel_written=e.bank_mode_read=e.format_dispatched=e.g_read=e.slot_entered=e.config_null=e.config_copy_returned=e.config_written=e.config_readback=true;
+ e.pool_owner=a.pool_owner;e.pool_generation=a.pool_generation;e.pool_serial=a.pool_serial;e.sound_owner=r.after.owner;e.sound_generation=r.after.generation;e.config_owner=a.config_owner;e.config_generation=a.config_generation;
+ e.pool_base=a.pool_base;e.node_address=a.pool_base+136*a.index;e.node_storage=a.node_storage;e.head_storage=a.head_storage;e.port_storage=q.port.storage;e.packet_storage=q.port_input.packet_storage;e.bank_mode_slot=q.wave.control_slot_storage;
+ e.config_storage=a.config_storage;e.key_storage=a.key_storage;e.default_storage=a.default_storage;e.output_storage=a.output_storage;e.g_storage=a.g_storage;
+ e.candidate_id=int32_t(a.index);e.parent_port_id=q.port.id;e.note=64;e.channels=1;e.bank=r.bank_handle;e.bank_mode=1;e.format=3;e.allocator_kind=1;e.allocator_argument=10;
+ e.bytes=2176;e.count=16;e.stride=136;e.index=a.index;e.zero_writes=e.zero_readbacks=544;e.header_writes=32;e.channel_offset=136*a.index+0x2A;e.channel_after=255;e.channel_writes=1;e.channel_pc=0x5AC70;e.caller_pc=0x5AC80;e.mode_read_pc=0x5F57C;
+ e.format_table_word=0xDF520;e.format_target=0x5F5F4;e.g_read_pc=0x5F5F8;e.g_reference_segment=1;e.g_source_addend=0xE47F4;e.config_copy_writes=1;e.g_writes=2;e.g_writer_pc=0x54B74;e.config_call_pc=0x5CCCC;e.allocator_pc=0x5F5B8;e.slot_pc=0x5CA8C;e.slot_delay_pc=0x5CA90;e.frontier=0x5C8F4;
+ e.candidate_links={a.head_storage,a.candidate_links[1]};e.config_key={'s','g','x','-','p','s','p','-','s','s','e','-','u','s','e',0};
+ return GameSourceChildExact(a,e);
+}
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;
     ++state_.bgm_attempts;state_.failed=true;
     failure_={GameFsCode::Unavailable,0,"Unsupported source BGM request4AD4C before owner mutation"};return failure_;
 }
-void GameSourceSoundControl::Close()noexcept{voices_.Close();registry_=nullptr;bank_.Reset();state_.registration.live=false;records_[5].bank_handle_known=false;state_.live=state_.bank_live=false;}
+void GameSourceSoundControl::Close()noexcept{active_child_scope_=nullptr;voices_.Close();registry_=nullptr;bank_.Reset();state_.registration.live=false;records_[5].bank_handle_known=false;state_.live=state_.bank_live=false;}
 }

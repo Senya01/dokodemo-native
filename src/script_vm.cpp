@@ -556,7 +556,7 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     pending_callbacks_.clear();event_envelope_.reset();context_enabled_=true;event_override_=false;
     callbacks_posted_=callbacks_returned_=0;
     timestamp_writes_=deadline_writes_=0;
-    random_selections_=0;last_random_={};root_returns_=0;
+    random_selections_=0;last_random_={};root_returns_=0;list_call25_={};
     timer_base_ = clock_tick_; wait_until_ = 0;
     local_.clear(); global_.clear(); ctx28_.clear(); last_error_ = {};
     const auto* cmd = program_.command(pc_);
@@ -643,7 +643,7 @@ Event Vm::step() {
     Event event; event.status = Status::Running; event.pc = pc_; event.file_offset = pc_ + 28; event.opcode = cmd->opcode;
     uint32_t next = pc_ + cmd->size;
     size_t captured_normal_return=normal_returns_.size();
-    const bool observe_frame=bool(frame_observer_)&&((cmd->opcode>=0x20&&cmd->opcode<=0x23)
+    const bool observe_frame=bool(frame_observer_)&&((cmd->opcode>=0x20&&cmd->opcode<=0x23)||cmd->opcode==0x25
         ||cmd->opcode==0x31||cmd->opcode==0x32||cmd->opcode==0x1C);
     FrameTransition transition;
     if(observe_frame){transition.opcode=uint8_t(cmd->opcode);transition.before=current_witness();
@@ -707,6 +707,38 @@ Event Vm::step() {
                 for(size_t i=arguments;i<count;++i)(*frame_)[i].kind=Value::Kind::Scalar;
             }
             frame_reserved_ = true;
+        } else if(op==0x25) {
+            //6DEC0 ->6B7D0(argc0): current Ctx28 tag9 list, selected NULL
+            //history77404 path. No operand push, result write or forced callee.
+            const auto index=uint16_t(program_.operand(*cmd,1,2));
+            if(program_.operand(*cmd,3,1)!=0)return stop(cmd,"25 history-reference branch outside reached domain");
+            const auto header=read_slot(Table::Ctx28,index);
+            if(header.kind!=Value::Kind::ArrayHeader||header.word>>28!=9)
+                return stop(cmd,"25 requires current owned Ctx28 tag9 list");
+            const auto count=header.word&0xFFFu;
+            if(uint64_t(index)+count>=ctx28_.size())return stop(cmd,"25 live list exceeds owned Ctx28 backing");
+            if(!random_)return stop(cmd,"25 current shared RNG owner unavailable");
+            const auto random=random_(); //actual C3234 exactly once before div
+            if(random>uint32_t(INT32_MAX))return stop(cmd,"25 RNG outside nonnegative source C3234 domain");
+            if(!count)return stop(cmd,"25 source division break after actual RNG advance");
+            const auto selected=random%count;
+            const auto function=read_slot(Table::Ctx28,uint16_t(uint32_t(index)+1+selected));
+            if(function.kind!=Value::Kind::Code||function.word>>28!=7)
+                return stop(cmd,"25 selected live list element is not tag7 code");
+            const auto target=function.word&0x0FFFFFFF;const auto* callee=program_.command(target);
+            if(!callee||callee->opcode!=0x30||calls_.size()>=128)
+                return stop(cmd,"25 selected code/frame target outside owned program");
+            const auto caller=frame_id_;const auto begin=stack_.size();
+            auto arguments=std::make_shared<std::vector<Value>>();
+            calls_.push_back({next,begin,frame_reserved_,frame_,frame_id_,code_entry_,cmd->pc});
+            frame_=std::move(arguments);frame_id_=++next_frame_id_;code_entry_=target;frame_reserved_=false;
+            last_random_=function;++random_selections_;++list_call25_.calls;
+            list_call25_.caller_frame=caller;list_call25_.callee_frame=frame_id_;
+            list_call25_.opcode_pc=cmd->pc;list_call25_.ctx28_index=index;list_call25_.header_word=header.word;
+            list_call25_.count=count;list_call25_.random_value=random;list_call25_.selected_index=selected;
+            list_call25_.selected_word=function.word;list_call25_.target=target;list_call25_.return_pc=next;
+            list_call25_.operand_cells=uint32_t(begin);list_call25_.clock_tick=clock_tick_;list_call25_.deadline_tick=wait_until_;
+            next=target;
         } else if(op==0x20||op==0x21||op==0x22||op==0x23) {
             const auto argc=(op==0x20||op==0x22)?program_.operand(*cmd,1,1):0;
             uint32_t target=0;

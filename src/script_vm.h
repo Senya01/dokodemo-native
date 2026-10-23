@@ -145,6 +145,13 @@ struct NormalReturnWitness {
     uint32_t opcode_pc=0;
     VmStateWitness before,after;
 };
+// Readonly trace of an actual admitted zero-argument Ctx28 list call.
+struct ListCall25Witness {
+    uint64_t calls=0,caller_frame=0,callee_frame=0;
+    uint32_t opcode_pc=0,ctx28_index=0,header_word=0,count=0,random_value=0;
+    uint32_t selected_index=0,selected_word=0,target=0,return_pc=0,operand_cells=0;
+    uint64_t clock_tick=0,deadline_tick=0;
+};
 // Committed native frame transitions. No owning Value or frame lease escapes.
 // Domain consumers decide which source calls constitute an interaction.
 struct FrameTransition {
@@ -282,6 +289,7 @@ public:
     void clock_tick(uint64_t value) noexcept { clock_tick_ = value; }
     void random_source(std::function<uint32_t()> callback){random_=std::move(callback);}
     uint64_t random_selections() const noexcept{return random_selections_;}
+    const ListCall25Witness& list_call25() const noexcept{return list_call25_;}
     uint32_t root_functions_returned() const noexcept{return root_returns_;}
     const Value& last_random_value() const noexcept{return last_random_;}
     uint32_t control_blocks_entered() const noexcept { return blocks_entered_; }
@@ -351,6 +359,7 @@ private:
     uint64_t random_selections_=0;
     uint32_t root_returns_=0;
     Value last_random_;
+    ListCall25Witness list_call25_;
     Value result_;
     std::vector<Value> choice_arguments_;
     bool choice_waiting_=false,choice_arguments_taken_=false;

@@ -166,6 +166,7 @@ struct GameActorScriptSnapshot {
     bool option_control_prefix_verified=false;
     bool option_wave_prefix_verified=false;
     bool option_port24_prefix_verified=false;
+    bool option_child_prefix_verified=false;
     uint32_t option_right_after_key_before=0;
     uint32_t option_yes_writes=0,option_yes_publication_receipt=0,option_completion_kind=0;
     uint32_t option_restore_writes=0,option_gain_returns=0,option_tick_receipts=0,option_after_key_cursor=0,option_lifecycle_phase=0,option_poll_receipt=0,option_drain_receipt=0;
@@ -291,6 +292,7 @@ struct GameActorScriptSnapshot {
     uint32_t dictionary_game_reads=0,dictionary_game_writes=0;
     uint32_t array_query_calls=0,array_query_matches=0,array_actions=0;
     uint64_t random_selections=0;
+    script::ListCall25Witness list_call25;
     uint32_t selected_value_word=0;
     uint32_t root_functions_returned=0;
     uint32_t control_blocks_entered=0,control_blocks_closed=0,active_control_blocks=0,switches=0;
@@ -412,7 +414,9 @@ class GameActorScript final {
     bool option_feedback_pending_=false,option_feedback_committed_=false;
     GameSourceFeedbackRead option_feedback_issued_,option_voice_service_issued_;
     bool option_voice_service_pending_=false,option_voice_service_committed_=false;
+    uint64_t option_child_scope_serial_=0;
     GameFsStatus PrepareMenuOptionVoiceService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
+    GameFsStatus PrepareMenuOptionChildService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,GameOptionsChildCallScope&);
     GameFsStatus CommitMenuOptionVoiceService(const GameOwnerEventTarget&,const GameSourceFeedbackRead&);
     GameFsStatus VerifyMenuOptionVoiceServicePrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionSequencePrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
@@ -421,6 +425,7 @@ class GameActorScript final {
     GameFsStatus VerifyMenuOptionControlPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionWavePrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionPort24Prefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
+    GameFsStatus VerifyMenuOptionChildPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus PrepareMenuOptionFeedback(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus CommitMenuOptionFeedback(const GameOwnerEventTarget&,const GameSourceFeedbackRead&);
     GameFsStatus VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);

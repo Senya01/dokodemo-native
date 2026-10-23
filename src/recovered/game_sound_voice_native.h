@@ -80,6 +80,23 @@ struct GameSourcePortInputSnapshot {
  std::array<uint32_t,8> store_index{},store_pc{};
 };
 bool GameSourcePortInputExact(const GameSourcePortInputSnapshot&,const GameSourcePortInputSnapshot&)noexcept;
+struct GameSourceChildSnapshot {
+ bool entered=false,live=false,reserved=false,source_free_linked=false,header_readback=false,channel_written=false;
+ bool bank_mode_read=false,format_dispatched=false,g_read=false,slot_entered=false,slot_returned=false,child_returned=false;
+ bool config_null=false,config_copy_returned=false,config_written=false,config_readback=false;
+ uint64_t pool_owner=0,pool_generation=0,pool_serial=0,sound_owner=0,sound_generation=0,config_owner=0,config_generation=0;
+ uintptr_t pool_base=0,node_address=0,node_storage=0,head_storage=0,port_storage=0,packet_storage=0,bank_mode_slot=0;
+ uintptr_t config_storage=0,key_storage=0,default_storage=0,output_storage=0,g_storage=0;
+ int32_t candidate_id=-1,parent_port_id=-1,note=0,channels=0,bank=-1,bank_mode=0,format=0,sse_use=0,allocator_kind=0,allocator_argument=0,packed=0;
+ uint32_t bytes=0,count=0,stride=0,index=0,flags=0,zero_writes=0,zero_readbacks=0,header_writes=0;
+ uint32_t channel_offset=0,channel_before=0,channel_after=0,channel_writes=0,channel_pc=0,caller_pc=0,mode_read_pc=0;
+ uint32_t format_table_word=0,format_target=0,g_read_pc=0,g_reference_segment=0,g_source_addend=0;
+ uint32_t config_default=0,config_out_byte=0,config_copy_writes=0,g_writes=0,g_writer_pc=0,config_call_pc=0;
+ uint32_t allocator_pc=0,slot_pc=0,slot_delay_pc=0,frontier=0;
+ std::array<uintptr_t,2> candidate_links{};
+ std::array<uint8_t,16> config_key{};
+};
+bool GameSourceChildExact(const GameSourceChildSnapshot&,const GameSourceChildSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -107,6 +124,7 @@ struct GameSourceSequenceSnapshot {
  GameSourceControlSnapshot control;
  GameSourceWaveSnapshot wave;
  GameSourcePortInputSnapshot port_input;
+ GameSourceChildSnapshot child;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -131,9 +149,19 @@ class GameSourceSequencePool final {
  GameFsStatus Start580D4(uint32_t,uint16_t,uint16_t,uint32_t,bool=false,const std::function<GameFsStatus()>& retain={});
  GameFsStatus AllocatePort5A5AC();
  GameFsStatus InitializeNativePortComponent(uint64_t,uint64_t);
- GameFsStatus ReadProducedPort24();
  struct ChildPacket;
- GameFsStatus AllocateChild5ABF0(Port&,int32_t,int32_t,int32_t,const ChildPacket&);
+ using ChildCall=std::function<GameFsStatus(const ChildPacket&)>;
+ using BankModeRead=std::function<GameFsStatus(uintptr_t,uint32_t&)>;
+ GameFsStatus ReadProducedPort24(const ChildCall& child={});
+ GameFsStatus InitializeNativeChildComponent(uint64_t,uint64_t);
+ uint8_t* CopyEmptyConfigC39F4(uint8_t*,const uint8_t*);
+ uint8_t* LookupNullConfig54A60(const char*,const uint8_t*,uint8_t*);
+ GameFsStatus WriteNullConfig54B3C(uint32_t&,uint32_t);
+ GameFsStatus BeginChild5ABF0(const ChildPacket&,const BankModeRead&);
+ GameFsStatus DispatchChild5F568(const ChildPacket&,const BankModeRead&);
+ GameFsStatus AllocateSfxPort5CA60(int32_t,int32_t,int32_t,const ChildPacket&);
+ GameFsStatus SelectSfxSlot5C8F4(int32_t,int32_t,int32_t,const ChildPacket&);
+ GameFsStatus AllocateChild5ABF0(Port&,int32_t,int32_t,int32_t,const ChildPacket&,const ChildCall& child={});
  GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
  using ReadByte=std::function<uint8_t(uint32_t)>;
  using ControlCall=std::function<GameFsStatus()>;
@@ -161,6 +189,24 @@ class GameSourceSequencePool final {
  uint32_t port_binding_index_=0,port_zero_writes_=0,port_zero_readbacks_=0;
  struct ChildPacket {std::array<uint32_t,13> words{};uintptr_t mode_slot=0;uint32_t port_word24=0;};
  ChildPacket child_packet_;
+ //NativeIndexedOwnedChildPool16: physical link0/link4 and selected-byte
+ //witness. Native pointers are not truncated into PSP32 raw link fields.
+ struct ChildLink {ChildLink* link0=nullptr;ChildLink* link4=nullptr;int16_t id=-1;uint16_t flags=0;};
+ std::array<ChildLink,16> child_nodes_{};
+ ChildLink child_head_;
+ ChildLink* child_candidate_=nullptr;
+ std::unique_ptr<uint32_t[]> child_source_;
+ uint64_t child_source_owner_=0,child_source_generation_=0,child_source_serial_=0;
+ uint64_t child_sound_owner_=0,child_sound_generation_=0,child_config_owner_=0,child_config_generation_=0;
+ uint32_t child_zero_writes_=0,child_zero_readbacks_=0,child_header_writes_=0;
+ //Declared Windows NULL-config input, not an observation of PSP config.
+ const char* child_config_input_=nullptr;
+ const std::array<uint8_t,16> child_config_key_{{'s','g','x','-','p','s','p','-','s','s','e','-','u','s','e',0}};
+ const std::array<uint8_t,4> child_config_default_{{0,0,0,0}};
+ uint8_t child_config_output_=0xCD;
+ std::unique_ptr<uint32_t> child_config_value_;
+ uint32_t child_config_copy_writes_=0,child_config_g_writes_=0;
+ bool child_config_ready_=false;
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
  std::array<Port,16> ports_{};

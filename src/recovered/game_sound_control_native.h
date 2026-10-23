@@ -80,6 +80,27 @@ struct GameSourceFeedbackRead {
     uint32_t outcome=0; //0 historic56598 cut,1 actual returned voice/feedback,2 historic next-service57CF0 cut,3 returned sequence/context and selected5A5AC cut,4 actual port/track/callback return then59DD4 update cut
     bool getter_returned=false,start_returned=false,handle_stored=false,feedback_returned=false;
 };
+class GameSystemOptionFrontier;
+//Private synchronous C++ capability; it is neither a VM/input token nor a
+//public receipt. Only the guarded actor can bind it to an actual GUI.
+class GameOptionsChildCallScope final {
+ GameOptionsChildCallScope()=default;
+ ~GameOptionsChildCallScope(){active_=false;}
+ GameOptionsChildCallScope(const GameOptionsChildCallScope&)=delete;
+ GameOptionsChildCallScope& operator=(const GameOptionsChildCallScope&)=delete;
+ GameOptionsChildCallScope(GameOptionsChildCallScope&&)=delete;
+ GameOptionsChildCallScope& operator=(GameOptionsChildCallScope&&)=delete;
+ friend class GameActorScript;
+ friend class GameContentBoot;
+ friend class GameSystemOptionFrontier;
+ friend class GameSourceSoundControl;
+ const GameSystemOptionFrontier* gui_=nullptr;
+ GameSourceSoundControl* source_=nullptr;
+ GameSourceSoundSnapshot expected_;
+ GameSourceFeedbackRead issued_;
+ uint64_t serial_=0,gui_generation_=0,input_epoch_=0;
+ bool active_=false,actor_prepared_=false,component_=false,sealed_=false,published_=false,committed_=false;
+};
 bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceVoiceFeedbackValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceVoiceServiceValid(const GameSourceFeedbackRead&)noexcept;
@@ -89,6 +110,7 @@ bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceControlPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceWavePrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourcePort24PrefixValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourceChildPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
@@ -119,6 +141,7 @@ class GameSourceSoundControl final {
     GameFsStatus ServiceControl(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServiceWave(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServicePort24(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus ServiceChild(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     void ObserveWorkerTick()noexcept;
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
@@ -130,9 +153,13 @@ class GameSourceSoundControl final {
     GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);
     GameFsStatus Issue56598(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t);
     GameFsStatus AdmitSequence58C04(bool advance_port=false);
-    GameFsStatus DispatchControl5B9E4(bool advance_wave=false,bool advance_port24=false);
+    GameFsStatus DispatchControl5B9E4(bool advance_wave=false,bool advance_port24=false,bool advance_child=false);
     GameFsStatus LookupWave557B8(int32_t,uint32_t,uintptr_t&);
-    GameFsStatus ReadProducedPort24();
+    GameFsStatus ReadProducedPort24(bool advance_child=false);
+    GameFsStatus BeginOwnedChild5ABF0(const GameSourceSequencePool::ChildPacket&);
+    GameFsStatus ServiceChildScoped(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&,GameOptionsChildCallScope&);
+    GameOptionsChildCallScope* active_child_scope_=nullptr;
+    uint64_t child_component_serial_=0;
     GameSourceVoicePool voices_;
     bool voice_admission_=false;
     uint32_t owned_bank_refs_=0;
