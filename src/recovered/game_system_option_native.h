@@ -19,7 +19,7 @@ bool GameOptionReceiptExact(const GameOptionWriteReceipt&,const GameOptionWriteR
 bool GameOptionRightReceiptValid(const GameOptionWriteReceipt&)noexcept;
 bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt&)noexcept;
 bool GameOptionYesReceiptValid(const GameOptionWriteReceipt&)noexcept;
-enum class GameOptionRowCause:uint32_t {Down=1,Left=2};
+enum class GameOptionRowCause:uint32_t {Down=1,Left=2,LeftCommon=3};
 struct GameOptionRowWriteReceipt {
     GameOptionRowCause cause=GameOptionRowCause::Down;
     uint32_t selection_before=0,selection_after=1,row_count=3,level_count=5;
@@ -45,6 +45,7 @@ class GameOptionSettings {
     virtual bool OptionRowWritable()const{return false;}
     virtual GameFsStatus WriteOptionRow(const GameOptionSettingsSnapshot&,GameOptionRowCause,uint32_t,uint32_t,GameOptionRowWriteReceipt&){return {GameFsCode::Unavailable,0,"Options selected row writer unavailable"};}
     virtual GameFsStatus ReadOptionFeedback(const GameOptionSettingsSnapshot&,GameSourceFeedbackRead&){return {GameFsCode::Unavailable,0,"Unsupported source SE5 bank handle read4AC84"};}
+    virtual GameFsStatus ServiceOptionVoice(const GameOptionSettingsSnapshot&,GameSourceFeedbackRead&){return {GameFsCode::Unavailable,0,"NativeVoice service owner unavailable"};}
     virtual GameSourceSoundSnapshot OptionSoundOwner()const{return {};}
     virtual GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options Right writer owner unavailable"};}
     virtual GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options backup writer owner unavailable"};}
@@ -113,8 +114,9 @@ struct GameSystemOptionSnapshot {
     std::array<uint32_t,3> row_before{};
     GameOwnedMessageSnapshot row_message_before; //passive actual Down entry, before selection mutation
     uint32_t row_draw_frames_before=0,row_left_after_key_before=0,row_left_draw_frames_before=0;
-    std::array<GameOptionRowWriteReceipt,4> row_receipts{};
-    GameSourceFeedbackRead row_feedback;
+    std::array<GameOptionRowWriteReceipt,7> row_receipts{};
+    GameSourceFeedbackRead row_feedback,row_voice_service;
+    uint32_t voice_service_attempts=0;
     uint32_t right_message_updates_before=0,right_draw_frames_before=0;
     bool gain_returned=false,right_message_continued=false;
     GameOptionGainObservation gain;
@@ -150,6 +152,7 @@ class GameSystemOptionFrontier final {
   private:
     friend class GameContentBoot;
     bool PublishFeedback(const GameSourceFeedbackRead&);
+    bool PublishVoiceService(const GameSourceFeedbackRead&);
     GameFsStatus Refuse(GameFsStatus);
     GameSystemOptionSnapshot state_;
     std::shared_ptr<GameUiResource> resource_;

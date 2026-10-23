@@ -150,6 +150,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool OptionBackupWritable()const override{return true;}
     bool OptionRowWritable()const override{return true;}
     GameFsStatus WriteOptionRow(const GameOptionSettingsSnapshot&,GameOptionRowCause,uint32_t,uint32_t,GameOptionRowWriteReceipt&)override;
+    GameFsStatus ServiceOptionVoice(const GameOptionSettingsSnapshot&,GameSourceFeedbackRead&)override;
     GameFsStatus ReadOptionFeedback(const GameOptionSettingsSnapshot&,GameSourceFeedbackRead&)override;
     GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
     GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;

@@ -1272,6 +1272,7 @@ GameFsStatus GameActorScript::BindMenuOption(const GameOwnerEventTarget& expecte
         option_settings_=&settings;state_.option_before=current;state_.option_after={};state_.menu_option_generation=gui;state_.menu_option_parent=parent;
         option_expected_=current;option_issued_={};option_restore_issued_={};option_pending_={};option_write_pending_=option_right_armed_=false;
         option_feedback_pending_=option_feedback_committed_=false;option_feedback_issued_={};state_.option_feedback_prefix_verified=false;
+        option_voice_service_pending_=option_voice_service_committed_=false;option_voice_service_issued_={};state_.option_voice_prefix_verified=false;
         option_pending_restore_=option_gain_pending_=option_tick_pending_=false;option_gain_issued_={};option_sound_expected_=sound;
         state_.option_sound_before=sound;state_.option_sound_after={};
         option_right_sequence_=option_cancel_sequence_=option_input_sequence_=0;state_.option_right_writes=state_.option_right_after_key_before=0;
@@ -1286,13 +1287,17 @@ GameFsStatus GameActorScript::CheckMenuOption(const GameOwnerEventTarget& expect
 bool GameActorScript::OptionRowCursor(const GameSystemOptionSnapshot& gui)const{
     if(gui.phase!=3||gui.state44!=1||!gui.live||!gui.visible||!gui.owner474||!gui.request10||!gui.loader469
        ||!gui.template_owner||!gui.clone_owner||!gui.message.live||gui.message.references!=1
-       ||gui.row_selections!=1||gui.right_steps||gui.right_writes||gui.row_writes!=state_.option_row_writes||gui.row_writes>4
+       ||gui.row_selections!=1||gui.right_steps||gui.right_writes||gui.row_writes!=state_.option_row_writes||gui.row_writes>7
        ||gui.selection56!=1||gui.substate48||gui.row_before!=state_.option_before.words||gui.passive_settings!=state_.option_before.words)return false;
     if(!state_.option_row_selection_receipt&&(!option_tick_pending_||!option_down_sequence_||option_down_sequence_>option_input_sequence_))return false;
     if(!gui.row_left_steps)return gui.current_words==state_.option_before.words&&gui.previous50==1;
     auto words=state_.option_before.words;if(!words[1]||words[1]>INT32_MAX)return false;--words[1];
-    return gui.row_left_steps==1&&gui.row_writes>=3&&option_tick_pending_&&option_left_sequence_&&option_left_sequence_<=option_input_sequence_
-        &&gui.current_words==words&&gui.previous50==UINT32_MAX&&gui.after_key_updates==option_tick_before_;
+    if(gui.row_left_steps!=1||gui.row_writes<3||gui.current_words!=words)return false;
+    if(gui.row_writes<=4&&gui.previous50==UINT32_MAX)return option_tick_pending_&&option_left_sequence_&&option_left_sequence_<=option_input_sequence_&&gui.after_key_updates==option_tick_before_;
+    return option_feedback_committed_&&GameSourceVoiceFeedbackValid(option_feedback_issued_)&&gui.row_writes>=4&&gui.previous50==1
+        &&gui.source_ui_sound_intents==3&&gui.after_key_updates==(option_tick_pending_&&gui.row_writes<7?option_tick_before_+1:state_.option_after_key_cursor)
+        ||(option_feedback_committed_&&GameSourceVoiceFeedbackValid(option_feedback_issued_)&&option_tick_pending_&&gui.previous50==1&&gui.row_writes>=4
+            &&gui.source_ui_sound_intents==3&&gui.after_key_updates==option_tick_before_+1);
 }
 GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& expected,const GameSystemOptionSnapshot& gui,bool failed_prefix)const{
     try{
@@ -1354,7 +1359,17 @@ GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& e
         const bool row=OptionRowCursor(gui);
         Need(row||(!gui.row_selections&&!gui.row_writes&&!gui.row_left_steps&&!gui.selection56&&(!gui.substate48||nested||OptionYesReturnReady(gui))&&(!gui.previous50||early_right)),"Options finite selected/common cursor changed");
         for(uint32_t i=0;i<state_.option_row_writes;++i)Need(GameOptionRowReceiptExact(gui.row_receipts[i],option_row_issued_[i]),"Options selected source receipt replaced");
-        if(option_feedback_pending_&&GameSourceFeedbackReachedValid(option_feedback_issued_)){
+        Need(gui.draw_frames==actual.draw_frames&&gui.row_left_draw_frames_before==actual.row_left_draw_frames_before&&gui.bar_frames==actual.bar_frames,
+             "Options copied offered-frame proof differs from actual bound frontier");
+        Need(gui.voice_service_attempts==actual.voice_service_attempts&&GameSourceFeedbackExact(gui.row_voice_service,actual.row_voice_service),"Options copied actual voice service changed");
+        if(option_feedback_committed_)Need(GameSourceFeedbackExact(gui.row_feedback,option_feedback_issued_),"Options returned feedback receipt replaced");
+        if(option_voice_service_committed_)Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_),"Options issued callback receipt replaced");
+        if(option_voice_service_pending_&&GameSourceVoiceServiceValid(option_voice_service_issued_)){
+            Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)
+               &&GameSourceSoundSnapshotExact(option_voice_service_issued_.owner,option_sound_expected_)
+               &&GameSourceSoundSnapshotExact(gui.sound_owner,option_voice_service_issued_.after)
+               &&GameSourceSoundSnapshotExact(option_settings_->OptionSoundOwner(),option_voice_service_issued_.after),"Options actual issued voice service delta changed");
+        }else if(option_feedback_pending_&&(GameSourceFeedbackReachedValid(option_feedback_issued_)||GameSourceVoiceFeedbackValid(option_feedback_issued_))){
             Need(GameSourceFeedbackExact(gui.row_feedback,option_feedback_issued_)
                 &&GameSourceSoundSnapshotExact(option_feedback_issued_.owner,option_sound_expected_)
                 &&GameSourceSoundSnapshotExact(gui.sound_owner,option_feedback_issued_.after)
@@ -1382,7 +1397,7 @@ GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& e
         const bool cancel_close=gui.close_kind==1&&state_.option_restore_writes==3&&!state_.option_yes_writes&&!gui.substate48;
         const bool yes_close=gui.close_kind==2&&state_.option_yes_writes==3&&!state_.option_restore_writes&&gui.yes_consumed==1&&OptionYesReturnReady(gui);
         Need(!gui.close_requests||(cancel_close||yes_close),"Options Close lacks distinct typed writer chain");
-        if(state_.option_gain_returns)Need(gui.gain_returned&&gui.gain_queries==1&&GameSourceSoundGainExact(gui.gain.source,option_gain_issued_),"Options genuine gain return evidence changed");
+        if(state_.option_gain_returns)Need((gui.gain_returned||(gui.row_writes==7&&option_feedback_committed_&&gui.source_consumer==0x4AFC8))&&gui.gain_queries==state_.option_gain_returns+((gui.row_writes==7&&!gui.gain_returned&&gui.source_consumer==0x4AFC8)?1u:0u)&&((gui.row_writes==7&&!gui.gain_returned&&gui.source_consumer==0x4AFC8)||GameSourceSoundGainExact(gui.gain.source,option_gain_issued_)),"Options genuine gain return evidence changed");
         else Need(!gui.gain_returned,"Options unissued gain return");return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
@@ -1433,16 +1448,18 @@ GameFsStatus GameActorScript::ObserveMenuOptionInput(const GameOwnerEventTarget&
 GameFsStatus GameActorScript::PrepareMenuOptionRowWrite(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,GameOptionRowCause cause,uint32_t stage,uint32_t value,GameOptionRowWriteReceipt& out){
     const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
     try{
-        const bool down=cause==GameOptionRowCause::Down;
+        const bool down=cause==GameOptionRowCause::Down,common=cause==GameOptionRowCause::LeftCommon;
         Need(option_tick_pending_&&!option_write_pending_&&!option_row_pending_&&!option_gain_pending_&&gui.phase==3&&gui.state44==1&&!gui.close_requests
           &&gui.last_sequence==option_input_sequence_&&gui.input_epoch==option_current_epoch_&&OptionRowCursor(gui),"Options selected writer owner unavailable");
-        Need(down?(stage<3&&stage==state_.option_row_writes&&!gui.row_left_steps&&option_down_sequence_&&option_down_sequence_<=option_input_sequence_
+        Need(common?(stage<3&&state_.option_row_writes==4+stage&&option_feedback_committed_&&GameSourceVoiceFeedbackValid(option_feedback_issued_)
+              &&gui.previous50==1&&gui.source_ui_sound_intents==3&&gui.after_key_updates==option_tick_before_+1&&state_.option_gain_returns==1)
+          :down?(stage<3&&stage==state_.option_row_writes&&!gui.row_left_steps&&option_down_sequence_&&option_down_sequence_<=option_input_sequence_
               &&gui.source_ui_sound_intents==2&&gui.previous50==1&&gui.after_key_updates==option_tick_before_+1&&!state_.option_gain_returns)
           :(!stage&&state_.option_row_writes==3&&gui.row_left_steps==1&&option_left_sequence_&&option_left_sequence_<=option_input_sequence_
               &&gui.source_ui_sound_intents==2&&gui.previous50==UINT32_MAX&&gui.after_key_updates==option_tick_before_&&state_.option_gain_returns==1),"Options exact Down/Left source stage unavailable");
-        const uint32_t field=down?stage:1,pc=down?0x34CCC+stage*8:0x351CC;
+        const uint32_t field=down||common?stage:1,pc=down||common?0x34CCC+stage*8:0x351CC;
         Need(gui.source_consumer==pc&&value==gui.current_words[field],"Options selected source JAL/value changed");
-        out={};out.cause=cause;out.selection_before=down?0:1;out.local_before=state_.option_before.words;out.local_after=gui.current_words;
+        out={};out.cause=cause;out.selection_before=down?0:1;out.local_before=common?option_expected_.words:state_.option_before.words;out.local_after=gui.current_words;
         out.write={gui.generation,option_input_sequence_,gui.input_epoch,stage,field,pc,0x24B1C+field*0x18,value,option_expected_,option_expected_};
         Need(out.write.after.writes!=UINT64_MAX,"Options selected write ordinal exhausted");out.write.after.words[field]=value;++out.write.after.writes;
         Need(GameOptionRowReceiptValid(out),"Options selected source receipt shape refused");
@@ -1455,7 +1472,7 @@ GameFsStatus GameActorScript::CommitMenuOptionRowWrite(const GameOwnerEventTarge
         const auto& receipt=row.write;
         Need(state_.live&&!state_.blocked&&state_.menu_option_live&&vm_&&option_settings_&&option_tick_pending_&&option_row_pending_
           &&!option_write_pending_&&!option_gain_pending_&&GameOptionRowReceiptExact(row,option_row_pending_receipt_)
-          &&GameOptionRowReceiptValid(row)&&state_.option_row_writes<4&&GameOptionSnapshotExact(option_settings_->OptionSettings(),receipt.after),"Options selected full32 readback refused");
+          &&GameOptionRowReceiptValid(row)&&state_.option_row_writes<7&&GameOptionSnapshotExact(option_settings_->OptionSettings(),receipt.after),"Options selected full32 readback refused");
         const auto current=OwnerEventTarget();Need(target.generation==current.generation&&target.context.kind==current.context.kind&&target.context.word==current.context.word
              &&!target.context.context_owner.expired()&&target.context.context_owner.lock()==current.context.context_owner.lock()
              &&target.callback.kind==current.callback.kind&&target.callback.word==current.callback.word&&current.callback.word==0x7008DA28u
@@ -1485,13 +1502,37 @@ GameFsStatus GameActorScript::PrepareMenuOptionFeedback(const GameOwnerEventTarg
     option_feedback_pending_=true;return {};
 }
 GameFsStatus GameActorScript::CommitMenuOptionFeedback(const GameOwnerEventTarget& target,const GameSourceFeedbackRead& receipt){
-    if(!option_feedback_pending_||option_feedback_committed_||!option_gui_owner_||!GameSourceFeedbackReachedValid(receipt)
+    if(!option_feedback_pending_||option_feedback_committed_||!option_gui_owner_||(!GameSourceFeedbackReachedValid(receipt)&&!GameSourceVoiceFeedbackValid(receipt))
        ||!GameSourceSoundSnapshotExact(receipt.owner,option_sound_expected_)
        ||!GameSourceSoundSnapshotExact(receipt.after,option_settings_->OptionSoundOwner()))
         return {GameFsCode::Unavailable,0,"Options SE5 actual outcome/owner unavailable"};
     option_feedback_issued_=receipt;
     const auto checked=CheckMenuOption(target,option_gui_owner_->Snapshot());if(!checked)return checked;
     option_sound_expected_=receipt.after;state_.option_sound_after=receipt.after;option_feedback_pending_=false;option_feedback_committed_=true;return {};
+}
+GameFsStatus GameActorScript::PrepareMenuOptionVoiceService(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+ const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
+ if(!option_tick_pending_||option_voice_service_pending_||option_voice_service_committed_||!option_feedback_committed_||!GameSourceVoiceFeedbackValid(option_feedback_issued_)
+    ||gui.row_writes!=7||state_.option_row_writes!=7||gui.gain_queries!=2||state_.option_gain_returns!=2||gui.previous50!=1||gui.selection56!=1||gui.substate48
+    ||gui.after_key_updates!=option_tick_before_||gui.source_ui_sound_intents!=3||gui.voice_service_attempts!=1
+    ||gui.draw_frames<=gui.row_left_draw_frames_before||gui.bar_frames!=std::array<uint32_t,3>{{3,8,4}}||gui.sound_owner.voice.services
+    ||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)return {GameFsCode::Unavailable,0,"Options next actual voice service owner unavailable"};
+ option_voice_service_pending_=true;return {};
+}
+GameFsStatus GameActorScript::CommitMenuOptionVoiceService(const GameOwnerEventTarget& target,const GameSourceFeedbackRead& receipt){
+ if(!option_voice_service_pending_||option_voice_service_committed_||!GameSourceVoiceServiceValid(receipt)
+    ||!GameSourceSoundSnapshotExact(receipt.owner,option_sound_expected_)||!GameSourceSoundSnapshotExact(receipt.after,option_settings_->OptionSoundOwner()))return {GameFsCode::Unavailable,0,"Options actual voice service receipt unavailable"};
+ option_voice_service_issued_=receipt;const auto checked=CheckMenuOption(target,option_gui_owner_->Snapshot());if(!checked)return checked;
+ option_sound_expected_=receipt.after;state_.option_sound_after=receipt.after;option_voice_service_pending_=false;option_voice_service_committed_=true;return {};
+}
+GameFsStatus GameActorScript::VerifyMenuOptionVoiceServicePrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+ const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
+ if(!option_voice_service_committed_||!gui.failed||gui.failure.code!=GameFsCode::Unavailable||gui.source_consumer!=0x57CF0||!option_tick_pending_
+    ||!GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)||!GameSourceVoiceServiceValid(gui.row_voice_service)
+    ||gui.row_writes!=7||state_.option_row_writes!=7||gui.gain_queries!=2||state_.option_gain_returns!=2||gui.previous50!=1||gui.selection56!=1||gui.substate48
+    ||gui.after_key_updates!=option_tick_before_||gui.voice_service_attempts!=1||gui.source_ui_sound_intents!=3||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)
+ return {GameFsCode::Unavailable,0,"Options selected callback failed-only prefix incomplete"};
+ state_.option_voice_prefix_verified=true;state_.option_after=option_expected_;return {};
 }
 GameFsStatus GameActorScript::VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
@@ -1610,9 +1651,10 @@ GameFsStatus GameActorScript::PrepareMenuOptionYes(const GameOwnerEventTarget& t
 GameFsStatus GameActorScript::PrepareMenuOptionGain(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
     if(gui.row_selections){
-        if(!option_tick_pending_||option_write_pending_||option_row_pending_||option_gain_pending_||state_.option_gain_returns||state_.option_restore_writes
-          ||state_.option_row_writes!=3||gui.row_writes!=3||gui.row_left_steps||gui.gain_queries!=1||gui.gain_value!=105||gui.gain_returned
-          ||gui.source_consumer!=0x4AFC8||gui.previous50!=1||gui.selection56!=1||gui.substate48||gui.source_ui_sound_intents!=2
+        const bool left=option_feedback_committed_&&GameSourceVoiceFeedbackValid(option_feedback_issued_)&&state_.option_row_writes==7&&gui.row_writes==7&&gui.row_left_steps==1;
+        if(!option_tick_pending_||option_write_pending_||option_row_pending_||option_gain_pending_||state_.option_gain_returns!=(left?1u:0u)||state_.option_restore_writes
+          ||(!left&&(state_.option_row_writes!=3||gui.row_writes!=3||gui.row_left_steps))||gui.gain_queries!=(left?2u:1u)||gui.gain_value!=105||gui.gain_returned
+          ||gui.source_consumer!=0x4AFC8||gui.previous50!=1||gui.selection56!=1||gui.substate48||gui.source_ui_sound_intents!=(left?3u:2u)
           ||gui.after_key_updates!=option_tick_before_+1||!GameSourceSoundNegativeReady(option_sound_expected_))return {GameFsCode::Unavailable,0,"Options Down source gain owner unavailable"};
         option_gain_pending_=true;return {};
     }
@@ -1625,7 +1667,7 @@ GameFsStatus GameActorScript::PrepareMenuOptionGain(const GameOwnerEventTarget& 
 }
 GameFsStatus GameActorScript::CommitMenuOptionGain(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,const GameSourceSoundGainReceipt& receipt){
     const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
-    if(!option_gain_pending_||state_.option_gain_returns||!GameSourceSoundGainValid(receipt)||receipt.value!=105
+    if(!option_gain_pending_||state_.option_gain_returns>(gui.row_writes==7?1u:0u)||!GameSourceSoundGainValid(receipt)||receipt.value!=105
        ||!GameSourceSoundSnapshotExact(receipt.before,option_sound_expected_)
        ||!GameSourceSoundSnapshotExact(receipt.after,option_settings_->OptionSoundOwner()))
         return {GameFsCode::Unavailable,0,"Options actual source query return/readback refused"};
@@ -1640,7 +1682,7 @@ GameFsStatus GameActorScript::PrepareMenuOptionTick(const GameOwnerEventTarget& 
 }
 GameFsStatus GameActorScript::CommitMenuOptionTick(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
-    const auto delta=option_tick_phase_==3?1u:0u;
+    const auto delta=option_tick_phase_==3&&!(gui.row_writes==7&&option_feedback_committed_&&gui.after_key_updates==option_tick_before_)?1u:0u;
     if(!option_tick_pending_||option_write_pending_||option_gain_pending_||gui.failed||option_tick_before_>UINT32_MAX-delta
        ||gui.after_key_updates!=option_tick_before_+delta)
         return {GameFsCode::Unavailable,0,"Options actual worker source cursor refused"};

@@ -49,6 +49,8 @@ bool GameOptionRowReceiptValid(const GameOptionRowWriteReceipt& r)noexcept{
     }else if(r.cause==GameOptionRowCause::Left){
         if(r.selection_before!=1||w.stage||w.field!=1||w.call_pc!=0x351CC||!r.local_before[1]||r.local_before[1]>INT32_MAX)return false;
         auto expected=r.local_before;--expected[1];if(expected!=r.local_after)return false;
+    }else if(r.cause==GameOptionRowCause::LeftCommon){
+        if(r.selection_before!=1||r.local_before!=r.local_after||w.stage>=3||w.field!=w.stage||w.call_pc!=0x34CCC+8*w.stage)return false;
     }else return false;
     if(w.setter!=0x24B1C+0x18*w.field||w.value!=r.local_after[w.field])return false;
     auto after=w.before;after.words[w.field]=w.value;++after.writes;return GameOptionSnapshotExact(after,w.after);
@@ -289,10 +291,15 @@ bool GameSystemOptionFrontier::Input(const GameInputFrame& f){
 }
 bool GameSystemOptionFrontier::PublishFeedback(const GameSourceFeedbackRead& r){
     if(state_.failed||state_.phase!=3||state_.row_writes!=4||state_.row_left_steps!=1||state_.row_feedback_attempts!=1
-       ||state_.source_consumer!=0x4AC84||!GameSourceFeedbackReachedValid(r)
+       ||state_.source_consumer!=0x4AC84||(!GameSourceFeedbackReachedValid(r)&&!GameSourceVoiceFeedbackValid(r))
        ||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)||!settings_
        ||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
     state_.row_feedback=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
+}
+bool GameSystemOptionFrontier::PublishVoiceService(const GameSourceFeedbackRead& r){
+ if(state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||!GameSourceVoiceServiceValid(r)
+    ||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
+ state_.row_voice_service=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
 }
 GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
     if(state_.failed)return state_.failure;
@@ -310,6 +317,15 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             state_.state44=3;state_.visible=false;++state_.close_completions;state_.loader469=0;state_.request10=false;++state_.polls;state_.poll_completed=true;
             state_.retirement_pending=true;++state_.retirement_requests;state_.phase=6;}return {};}
         if(state_.phase!=3)return {};
+        if(state_.row_feedback.outcome==1&&state_.row_writes==7){
+            //NativeWorkerVoiceServiceAfterOfferedFrame: a separate worker
+            //invocation after the actual changed authored frame was drawn.
+            if(state_.draw_frames<=state_.row_left_draw_frames_before)return {};
+            ++state_.voice_service_attempts;const auto status=settings_->ServiceOptionVoice(state_.settings,state_.row_voice_service);
+            if(GameSourceVoiceServiceValid(state_.row_voice_service)){state_.sound_owner=state_.row_voice_service.after;state_.source_consumer=state_.row_voice_service.frontier;}
+            if(!status)return Refuse(status);
+            return Refuse({GameFsCode::Unavailable,0,"Unsupported selected sequence callback continuation"});
+        }
         bool nested_at_entry=state_.substate48!=0;
         if(prompt_){const auto before=prompt_->Snapshot();const auto status=prompt_->Tick();if(!status)return Refuse(status);
             if(nested_at_entry&&before.state864==0&&prompt_->Snapshot().state864==1){++state_.input_boundaries;state_.boundary_cause=3;}}
@@ -359,12 +375,27 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
                 state_.row_receipts[3]=receipt;++state_.row_writes;state_.settings=receipt.write.after;
                 state_.source_consumer=0x4AC84;++state_.row_feedback_attempts;
                 const auto feedback=settings_->ReadOptionFeedback(state_.settings,state_.row_feedback);
-                if(GameSourceFeedbackReachedValid(state_.row_feedback)){
+                if(GameSourceFeedbackReachedValid(state_.row_feedback)||GameSourceVoiceFeedbackValid(state_.row_feedback)){
                     NeedOption(GameSourceSoundSnapshotExact(state_.row_feedback.after,settings_->OptionSoundOwner()),"Options reached feedback current owner readback");
                     state_.sound_owner=state_.row_feedback.after;state_.source_consumer=state_.row_feedback.frontier;
                 }
                 if(!feedback)return Refuse(feedback);
-                return Refuse({GameFsCode::Unavailable,0,"Unsupported Options Left feedback return beyond4AC84"});
+                NeedOption(GameSourceVoiceFeedbackValid(state_.row_feedback),"Options returned voice outcome unavailable");
+                ++state_.source_ui_sound_intents; //actual feedback returned, then352E0/common
+                ++state_.after_key_updates;after_key_done=true;state_.previous50=state_.selection56;*clone_.Control(1)={2,1,2,1};
+                for(uint32_t stage=0;stage<3;++stage){GameOptionRowWriteReceipt common;state_.source_consumer=0x34CCC+stage*8;
+                    const auto written=settings_->WriteOptionRow(state_.settings,GameOptionRowCause::LeftCommon,stage,state_.current_words[stage],common);if(!written)return Refuse(written);
+                    NeedOption(GameOptionRowReceiptValid(common)&&common.cause==GameOptionRowCause::LeftCommon&&common.write.gui_generation==state_.generation
+                         &&common.write.input_sequence==state_.last_sequence&&common.write.input_epoch==state_.input_epoch&&common.local_after==state_.current_words
+                         &&GameOptionSnapshotExact(common.write.before,state_.settings)&&GameOptionSnapshotExact(common.write.after,settings_->OptionSettings()),"Options Left common receipt/readback");
+                    state_.row_receipts[4+stage]=common;++state_.row_writes;state_.settings=common.write.after;
+                }
+                state_.source_consumer=0x4AFC8;++state_.gain_queries;state_.gain_returned=false;state_.gain_value=105;
+                const auto queried=settings_->QueryOptionGain(state_.settings,105,state_.gain);if(!queried)return Refuse(queried);
+                NeedOption(state_.gain.source_id_known&&!state_.gain.source_dispatched&&GameSourceSoundGainValid(state_.gain.source)&&state_.gain.source.value==105
+                     &&GameSourceSoundSnapshotExact(state_.gain.source.before,state_.sound_owner)
+                     &&GameSourceSoundSnapshotExact(state_.gain.source.after,settings_->OptionSoundOwner()),"Options second actual gain return");
+                state_.sound_owner=state_.gain.source.after;state_.gain_returned=true;right_completed=true;
             } //source row1 <=0 is a no-op; no wrap, setter or feedback
         }
         if(right&&settings_->OptionRightWritable()){

@@ -302,11 +302,18 @@ GameFsStatus GameContentBoot::ReadOptionFeedback(const GameOptionSettingsSnapsho
     if(gui.source_consumer!=0x4AC84||gui.row_writes!=4||gui.row_left_steps!=1||gui.row_feedback_attempts!=1)return {GameFsCode::Unavailable,0,"Options selected feedback source cursor unavailable"};
     if(!gui.sound_owner.registration.live)return sound_bank_.ReadOptionsFeedback(gui.sound_owner,out);
     auto status=actor_script_.PrepareMenuOptionFeedback(main_menu_target_,gui);if(!status)return status;
-    const auto effect=sound_bank_.ReadOptionsFeedback(gui.sound_owner,OptionSettings().words[1],out);
-    if(!GameSourceFeedbackReachedValid(out))return effect;
+    const auto effect=sound_bank_.ReadOptionsVoiceFeedback(gui.sound_owner,OptionSettings().words[1],out);
+    if(!GameSourceFeedbackReachedValid(out)&&!GameSourceVoiceFeedbackValid(out))return effect;
     if(!system_option_.PublishFeedback(out))return {GameFsCode::Unavailable,0,"Options actual feedback frontier publication refused"};
     status=actor_script_.CommitMenuOptionFeedback(main_menu_target_,out);if(!status)return status;
     return effect;
+}
+GameFsStatus GameContentBoot::ServiceOptionVoice(const GameOptionSettingsSnapshot& expected,GameSourceFeedbackRead& out){
+ if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options voice service settings owner"};
+ const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionVoiceService(main_menu_target_,gui);if(!status)return status;
+ const auto effect=sound_bank_.ServiceOptionsVoice(gui.sound_owner,out);if(!GameSourceVoiceServiceValid(out))return effect;
+ if(!system_option_.PublishVoiceService(out))return {GameFsCode::Unavailable,0,"Options actual voice service publication"};
+ status=actor_script_.CommitMenuOptionVoiceService(main_menu_target_,out);if(!status)return status;return effect;
 }
 GameFsStatus GameContentBoot::QueryOptionGain(const GameOptionSettingsSnapshot& expected,int32_t value,GameOptionGainObservation& out){
     if(!GameOptionSnapshotExact(expected,OptionSettings())||value!=105||state_.main_menu_phase!=7)
@@ -1212,14 +1219,15 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
                 if(!status&&child.failed&&child.row_writes){
-                    if(child.row_feedback.issuer==0x56598)actor_script_.VerifyMenuOptionFeedbackPrefix(main_menu_target_,child);
+                    if(child.row_voice_service.outcome==2)actor_script_.VerifyMenuOptionVoiceServicePrefix(main_menu_target_,child);
+                    else if(child.row_feedback.issuer==0x56598)actor_script_.VerifyMenuOptionFeedbackPrefix(main_menu_target_,child);
                     else actor_script_.VerifyMenuOptionRowPrefix(main_menu_target_,child);
                 }
                 if(status)status=actor_script_.CommitMenuOptionTick(main_menu_target_,child);
                 if(status&&child.input_boundaries!=before_boundary){status=actor_script_.AdvanceMenuOptionInputEpoch(main_menu_target_,system_option_);child=system_option_.Snapshot();state_.main_menu_input_epoch=child.input_epoch;}
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);
                 if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=10;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
-                state_.main_menu_child_ready=status&&child.phase==3&&(!child.substate48||child.prompt.state864==1);
+                state_.main_menu_child_ready=status&&child.phase==3&&(!child.substate48||child.prompt.state864==1)&&child.row_feedback.outcome!=1;
                 if(status&&system_option_.ClosedAndRetired()){status=actor_script_.CompleteMenuOption(main_menu_target_,child);if(status)finish();}
                 break;
             }
