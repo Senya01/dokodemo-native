@@ -141,7 +141,7 @@ GameSourceSoundSnapshot GameSourceSoundControl::Snapshot()const{
     out.se5=records_[5];out.bank_live=false;
     if(out.live&&out.bank_bindings)try{out.bank_live=BankSame(bank_.Describe(),out.bank);}catch(const std::exception&){}
     if(registry_){GameSourceBankRegistration entry;if(!registry_->Readback(records_[5].bank_handle,entry)
-        ||([&]{auto expected=state_.registration;if(out.voice.live)expected.word30=out.voice.bank_refs_after;return !GameSourceBankRegistrationExact(entry,expected);}()))out.bank_live=false;}
+        ||([&]{auto expected=state_.registration;if(out.voice.live)expected.word30=out.voice.sequence.bank_retained?out.voice.sequence.refs_after:out.voice.bank_refs_after;return !GameSourceBankRegistrationExact(entry,expected);}()))out.bank_live=false;}
     return out;
 }
 GameFsStatus GameSourceSoundControl::StoreRegisteredSe5(GameSourceBankRegistry& registry,int32_t id){
@@ -307,6 +307,50 @@ GameFsStatus GameSourceSoundControl::ServiceVoice(const GameSourceSoundSnapshot&
  out={};const auto current=Snapshot();if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!voices_.Snapshot().returned||voices_.Snapshot().services)
  return {GameFsCode::Unavailable,0,"NativeVoice current service owner unavailable"};
  auto r=feedback_;r.owner=current;r.outcome=2;const auto status=voices_.Service();r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
+}
+bool GameSourceSequencePrefixValid(const GameSourceFeedbackRead& r)noexcept{
+ if(r.outcome!=3||r.frontier!=0x5A5AC)return false;
+ //Preserve the historical failed57CF0 validator unchanged. The same real
+ //port publication precedes this disjoint returned-context continuation.
+ auto legacy=r;legacy.outcome=2;legacy.frontier=0x57CF0;
+ legacy.after.voice.sequence={};legacy.after.voice.sequence_result_known=false;legacy.after.voice.sequence_slot=-1;
+ legacy.after.voice.words80[0]=UINT32_MAX;legacy.after.voice.frontier=0x57CF0;
+ if(!GameSourceVoiceServiceValid(legacy))return false;
+ const auto& v=r.after.voice;const auto& q=v.sequence;
+ if(v.callback_returned||!v.sequence_result_known||v.frontier!=r.frontier||v.sequence_slot!=q.id||v.words80[0]!=uint32_t(q.id)
+    ||!q.owner||!q.generation||q.id<0||q.id>=16||!q.ids_storage||!q.output_storage||q.ids_storage==q.output_storage)return false;
+ GameSourceSequenceSnapshot e;e.live=e.active=e.allocation_returned=e.lookup_returned=e.clear_returned=e.command_entered=true;
+ e.bank_retained=e.record_lookup_returned=e.track_reserved=e.port_attempted=true;
+ e.owner=q.owner;e.generation=q.generation;e.allocation=1;e.voice_owner=v.owner;e.voice_generation=v.generation;
+ e.ids_storage=q.ids_storage;e.output_storage=q.output_storage;e.id=q.id;e.bank=r.bank_handle;e.sentinel_id=-1;e.track_id=0;e.flags=1;
+ e.allocation_pc=0x57CF0;e.return_pc=0x57D80;e.result_store_pc=0x57908;e.lookup_pc=0x57A90;e.clear_pc=0x58540;
+ e.event=6;e.command_pc=0x58768;e.retain_writer=0x55A2C;e.refs_before=1;e.refs_after=2;
+ e.record_offset=0xB28;e.record_divisor=1000;e.record_bytes=23;e.port_call_pc=0x582D8;e.frontier=0x5A5AC;
+ e.initial_factor=1000.0f;e.selected_factor=1000.0f;e.sentinel_self=e.child_head_same=e.output_unchanged=true;e.bank_ids.fill(r.bank_handle);
+ return GameSourceSequenceExact(q,e)&&v.wordsA0==q.output_after;
+}
+GameFsStatus GameSourceSoundControl::AdmitSequence58C04(){
+ auto& pool=voices_.sequences_;auto& q=pool.state_;const auto voice=voices_.Snapshot();
+ //Actual command args[0..4]={0,0,bank,group,event}; lookup precedes command.
+ if(!voice.sequence_result_known||voice.sequence_slot!=q.id||!pool.Lookup(voice.sequence_slot))return {GameFsCode::Unavailable,0,"58C04 current context lookup57A90 failed"};
+ q.command_entered=true;q.command_pc=0x58768;q.command=q.subindex=q.group=0;q.event=6;q.bank=voice.bank;
+ if(!pool.Clear58540())return {GameFsCode::Unavailable,0,"58540 current context embedded sentinel unavailable"};
+ uint32_t before=0,after=0;GameSourceBankRegistration entry;
+ if(!registry_||!registry_->Retain(q.bank,before,after)||!registry_->Readback(q.bank,entry))return {GameFsCode::Unavailable,0,"587A4 actual command bank retain559E8"};
+ q.bank_retained=true;q.retain_writer=0x55A2C;q.refs_before=before;q.refs_after=after;
+ //No55A4C release is executed until580D4 genuinely returns.
+ try{const auto payload=entry.chunks[2];if(!payload||bank_.ReadLE32(payload+4)<=q.group)return {GameFsCode::Unavailable,0,"558E4 command group bounds"};
+ const auto group=bank_.ReadLE32(payload+8+4*q.group);if(!group||bank_.ReadLE32(group+4)<=q.event)return {GameFsCode::Unavailable,0,"558E4 command event bounds"};
+ const auto record=bank_.ReadLE32(group+8+4*q.event);if(!record)return {GameFsCode::Unavailable,0,"558E4 command record absent"};
+ const auto kind=bank_.ReadLE16(record+8),divisor=bank_.ReadLE16(record+10);const auto bytes=bank_.ReadLE32(record+16);
+ q.record_lookup_returned=true;return pool.Start580D4(record,kind,divisor,bytes);
+ }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameSourceSoundControl::ServiceSequence(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+ out={};const auto current=Snapshot();if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!current.voice.returned||current.voice.services)
+ return {GameFsCode::Unavailable,0,"NativeSequence current service owner unavailable"};
+ auto r=feedback_;r.owner=current;r.outcome=3;
+ const auto status=voices_.Service(true,[&]{return AdmitSequence58C04();});r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
 }
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;

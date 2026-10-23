@@ -189,6 +189,7 @@ class GameSoundBank final {
     GameFsStatus ReadOptionsFeedback(const GameSourceSoundSnapshot& expected,uint32_t root14,GameSourceFeedbackRead& out){return source_control_.Feedback4AC38(expected,root14,out);}
     GameFsStatus ReadOptionsVoiceFeedback(const GameSourceSoundSnapshot& expected,uint32_t root14,GameSourceFeedbackRead& out){return source_control_.VoiceFeedback4AC38(expected,root14,out);}
     GameFsStatus ServiceOptionsVoice(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceVoice(expected,out);}
+    GameFsStatus ServiceOptionsSequence(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceSequence(expected,out);}
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}
     void SetProfileGain(int32_t value) noexcept {state_.profile_gain=value;}
