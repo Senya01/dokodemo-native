@@ -56,6 +56,19 @@ struct GameSourceControlSnapshot {
  std::array<int32_t,7> child_args{};
 };
 bool GameSourceControlExact(const GameSourceControlSnapshot&,const GameSourceControlSnapshot&)noexcept;
+struct GameSourceWaveSnapshot {
+ bool entered=false,bank_lookup_returned=false,wave_chunk_known=false,count_read=false,mode_read=false,output_written=false,output_readback=false;
+ bool result_known=false,result_null=false,returned=false,borrow_live=false,child_continued=false,port_word24_attempted=false,port_word24_known=false,port_word24_returned=false;
+ uintptr_t output_storage=0,control_slot_storage=0,output_value=0,result_pointer=0,port_storage=0;
+ uint64_t registry=0,registry_generation=0,registry_serial=0,image_owner=0,image_generation=0,image_serial=0,image_offset=0,image_host_address=0;
+ int32_t bank=-1,wave=-1,port_id=-1,byte8=0,byte9=0,channels=0;
+ uint32_t lookup_pc=0,wave_load_pc=0,count_load_pc=0,mode_load_pc=0,output_store_pc=0,return_pc=0,return_delay_pc=0;
+ uint32_t wave_payload=0,wave_size=0,wave_count=0,stride=0,record_offset=0,control_mode=0,record_flags=0,record_read_mask=0;
+ uint32_t word10=0,word14=0,word1C=0,stack_known=0,stack_writes=0,port_read_pc=0,frontier=0;
+ std::array<int32_t,7> parameters{};
+ std::array<uint32_t,7> store_pc{},store_index{};
+};
+bool GameSourceWaveExact(const GameSourceWaveSnapshot&,const GameSourceWaveSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -81,6 +94,7 @@ struct GameSourceSequenceSnapshot {
  uintptr_t processor_context=0;
  GameSourceProcessorSnapshot processor;
  GameSourceControlSnapshot control;
+ GameSourceWaveSnapshot wave;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -107,17 +121,20 @@ class GameSourceSequencePool final {
  GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
  using ReadByte=std::function<uint8_t(uint32_t)>;
  using ControlCall=std::function<GameFsStatus()>;
+ using WaveCall=std::function<GameFsStatus(int32_t,uint32_t,uintptr_t&)>;
  GameFsStatus Update5A06C(uint64_t,const ReadByte& read={},const ControlCall& control={});
  GameFsStatus ProcessContext59DD4(Node&,int32_t,const ReadByte&,const ControlCall&);
  GameFsStatus ProcessKind59168(Node&,Track&,int32_t,const ReadByte&,const ControlCall&);
  GameFsStatus Control5900C(Node&,Track&,const ControlCall&);
  GameFsStatus Submit5B9E4(Port&,const std::array<uint32_t,6>&,const ControlCall&);
- GameFsStatus Dispatch5B9E4(uint32_t,uint32_t,const ReadByte&,const ControlCall&);
+ GameFsStatus Dispatch5B9E4(uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall& wave={});
  Port* LookupPort5A1B4(int32_t);
- GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&);
+ GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall&);
  GameFsStatus Prepare5B040(Port&,int32_t);
- GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t);
- GameFsStatus Wave557B8(int32_t,uint32_t,uintptr_t&);
+ GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t,const WaveCall&);
+ GameFsStatus Wave557B8(int32_t,uint32_t,uintptr_t&,const WaveCall&);
+ GameFsStatus ContinueChild5B180(Port&,int32_t,int32_t);
+ GameFsStatus ReadPortWord24(Port&);
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
  std::array<Port,16> ports_{};
@@ -126,7 +143,8 @@ class GameSourceSequencePool final {
  Track* current_track_=nullptr;
  Node* current_=nullptr;
  GameSourceSequenceSnapshot state_;
- uintptr_t wave_output_=0; //native backing initialized; source output is UNKNOWN before557B8 writes
+ uintptr_t wave_output_=0; //source-known only after actual55830 writer
+ PackageView wave_view_; //actual immutable owning borrow, retired before bank teardown
  std::array<uint32_t,6> command_{}; //actual stable native storage for source stack command
  uint64_t generation_=0; //survives retired observation reset between owning voices
 };

@@ -193,6 +193,7 @@ class GameSoundBank final {
     GameFsStatus ServiceOptionsPort(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServicePort(expected,out);}
     GameFsStatus ServiceOptionsProcessor(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceProcessor(expected,out);}
     GameFsStatus ServiceOptionsControl(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceControl(expected,out);}
+    GameFsStatus ServiceOptionsWave(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceWave(expected,out);}
     void ObserveOptionsWorkerTick()noexcept{source_control_.ObserveWorkerTick();}
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}

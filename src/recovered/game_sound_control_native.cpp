@@ -82,6 +82,14 @@ bool GameSourceBankRegistry::Release(int32_t id,uint32_t& before,uint32_t& after
  before=e.word30;after=before-1;entries_[size_t(id)].word30=after;references_[size_t(id)]=after;
  GameSourceBankRegistration read;return Readback(id,read)&&read.word30==after; //55A7C, actual owning decrement
 }
+bool GameSourceBankRegistry::BorrowWaveSource(int32_t id,PackageView& image,uintptr_t& slot)const{
+ GameSourceBankRegistration e;if(!Readback(id,e))return false;
+ image=images_[size_t(id)];slot=reinterpret_cast<uintptr_t>(&entries_[size_t(id)].mode);return true;
+}
+bool GameSourceBankRegistry::ReadModeSlot(int32_t id,uintptr_t slot,uint32_t& value)const{
+ GameSourceBankRegistration e;if(!Readback(id,e)||slot!=reinterpret_cast<uintptr_t>(&entries_[size_t(id)].mode))return false;
+ value=entries_[size_t(id)].mode;return true;
+}
 void GameSourceBankRegistry::Close()noexcept{
     references_.fill(0);
     for(size_t i=0;i<64;++i){entries_[i]={};tails_[i].Reset();images_[i].Reset();}++generation_;
@@ -418,6 +426,20 @@ GameFsStatus GameSourceSoundControl::ServiceControl(const GameSourceSoundSnapsho
  }
  r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
 }
+GameFsStatus GameSourceSoundControl::ServiceWave(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+ out={};const auto current=Snapshot();
+ if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!current.voice.returned||current.voice.services)
+  return {GameFsCode::Unavailable,0,"NativePort current service owner unavailable"};
+ const auto tick_serial=worker_tick_serial_,previous_ns=worker_previous_ns_,current_ns=worker_current_ns_; //freeze f12 provenance before562D4 callback
+ auto r=feedback_;r.owner=current;r.outcome=7;
+ auto status=voices_.Service(true,[&]{return AdmitSequence58C04(true);});
+ if(status){auto& q=voices_.sequences_.state_;q.worker_tick_serial=tick_serial;q.worker_previous_ns=previous_ns;q.worker_current_ns=current_ns;
+  if(tick_serial<2||!previous_ns||current_ns<previous_ns){q.frontier=0x5A06C;status={GameFsCode::Unavailable,0,"5A06C missing actual consecutive worker timestamps"};}
+  else status=voices_.sequences_.Update5A06C(current_ns-previous_ns,[&](uint32_t at){return bank_.ReadU8(at);},[&]{return DispatchControl5B9E4(true);});
+  voices_.state_.frontier=q.frontier;
+ }
+ r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;return status;
+}
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  if(r.outcome!=4||r.frontier!=0x59DD4||r.after.voice.frontier!=r.frontier||!r.after.voice.callback_returned)return false;
  auto legacy=r;legacy.outcome=3;legacy.frontier=0x5A5AC;
@@ -462,7 +484,7 @@ bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  e.bytes={0xD0,1,0x64,0,1,0x64,2,0x40,0x96};e.command={0,64,uint32_t(q.bank_ids[0]),0,64,4096};
  return q.track.cursor_offset==0xB45&&GameSourceProcessorExact(p,e);
 }
-GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(){
+GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(bool advance_wave){
  auto& pool=voices_.sequences_;auto& q=pool.state_;GameSourceBankRegistration entry;
  if(!registry_||!registry_->Readback(q.bank,entry)||entry.word30!=2||owned_bank_refs_!=2||q.current_refs!=2||!q.command_released)
   return {GameFsCode::Unavailable,0,"5B9E4 private current bank references unavailable"};
@@ -471,7 +493,39 @@ GameFsStatus GameSourceSoundControl::DispatchControl5B9E4(){
   if(q.control.bank!=q.bank||!registry_->Retain(q.control.bank,before,after)||!registry_->Readback(q.control.bank,actual)||before!=2||after!=3||actual.word30!=after)
    return GameFsStatus{GameFsCode::Unavailable,0,"5B344 actual D0 control retain/readback unavailable"};
   owned_bank_refs_=after;q.current_refs=after;auto& c=q.control;c.bank_retained=true;c.retain_pc=0x5B344;c.retain_writer=0x55A2C;c.refs_before=before;c.refs_after=after;return GameFsStatus{};
- });
+ },advance_wave?GameSourceSequencePool::WaveCall([&](int32_t bank,uint32_t wave,uintptr_t& output){return LookupWave557B8(bank,wave,output);}):GameSourceSequencePool::WaveCall{});
+}
+GameFsStatus GameSourceSoundControl::LookupWave557B8(int32_t bank,uint32_t wave,uintptr_t& output){
+ auto& pool=voices_.sequences_;auto& q=pool.state_;auto& w=q.wave;auto& c=q.control;w.entered=true;w.bank=bank;w.wave=int32_t(wave);w.output_storage=reinterpret_cast<uintptr_t>(&output);w.lookup_pc=0x55144;
+ if(&output!=&pool.wave_output_||bank!=q.bank||!registry_||owned_bank_refs_!=3||q.current_refs!=3)return {GameFsCode::Unavailable,0,"557B8 actual output/bank/ref owner changed"};
+ PackageView image;uintptr_t slot=0;GameSourceBankRegistration entry;
+ if(!registry_->BorrowWaveSource(bank,image,slot)||!registry_->Readback(bank,entry)||!BankSame(image.Describe(),bank_.Describe())||entry.word30!=3)
+  return {GameFsCode::Unavailable,0,"55144 current WAVE bank allocation unavailable"};
+ auto expected=state_.registration;expected.word30=owned_bank_refs_;
+ if(!GameSourceBankRegistrationExact(entry,expected))return {GameFsCode::Unavailable,0,"557B8 current issued registration lease changed"};
+ w.bank_lookup_returned=true;w.registry=entry.registry;w.registry_generation=entry.generation;w.registry_serial=entry.serial;
+ const auto desc=image.Describe();w.image_owner=desc.owner;w.image_generation=desc.generation;w.image_serial=desc.serial;w.image_host_address=desc.host_address;w.image_offset=desc.offset;
+ const auto returned=[&](bool is_null){w.result_known=true;w.result_null=is_null;w.returned=true;w.return_pc=0x55848;w.return_delay_pc=0x5584C;c.wave_result_known=c.wave_returned=true;return GameFsStatus{};};
+ try{
+  w.wave_load_pc=0x557E8;w.wave_payload=entry.chunks[1];w.wave_size=entry.sizes[1];
+  if(!w.wave_payload)return returned(true);w.wave_chunk_known=true;
+  if(w.wave<0)return returned(true);
+  if(w.wave_size<8)return {GameFsCode::Unavailable,0,"557B8 current WAVE count extent"};
+  w.wave_count=image.ReadLE32(w.wave_payload+4);w.count_read=true;w.count_load_pc=0x557FC;
+  if(int32_t(w.wave_count-1)<w.wave)return returned(true);
+  const uint64_t at=uint64_t(w.wave_payload)+8+uint64_t(uint32_t(w.wave))*56;w.stride=56;
+  if(at>UINT32_MAX||at+56>uint64_t(w.wave_payload)+w.wave_size)return {GameFsCode::Unavailable,0,"557B8 current selected WAVE record extent"};
+  w.record_offset=uint32_t(at);w.control_slot_storage=slot;w.mode_load_pc=0x55814;
+  if(!registry_->ReadModeSlot(bank,slot,w.control_mode))return {GameFsCode::Unavailable,0,"55814 actual BANK mode slot readback"};w.mode_read=true;
+  if(!w.control_mode)return returned(true);
+  auto borrow=image.Subview(at,56);const auto rd=borrow.Describe();
+  if(rd.host_address>UINTPTR_MAX-rd.offset)return {GameFsCode::Unavailable,0,"557B8 native WAVE address extent"};
+  output=slot;w.output_written=true;w.output_store_pc=0x55830;w.output_value=output;c.wave_output_known=true;
+  uint32_t mode=0;GameSourceBankRegistration after;w.output_readback=output==slot&&registry_->ReadModeSlot(bank,output,mode)&&mode==w.control_mode
+   &&registry_->Readback(bank,after)&&GameSourceBankRegistrationExact(after,expected);
+  if(!w.output_readback)return {GameFsCode::Unavailable,0,"55830 actual output/control slot readback"};
+  pool.wave_view_=std::move(borrow);w.result_pointer=uintptr_t(rd.host_address+rd.offset);w.borrow_live=true;return returned(false);
+ }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameSourceControlPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  const auto& q=r.after.voice.sequence;const auto& c=q.control;
@@ -486,6 +540,25 @@ bool GameSourceControlPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  e.retain_pc=0x5B344;e.retain_writer=0x55A2C;e.refs_before=2;e.refs_after=3;e.rgnd_base=24;e.group_count=1;e.region_count=41;e.region_first=40;e.region_offset=0x728;e.walk_count=33;e.stride_reads=32;e.selected_flags=9;e.selected_byteC=10;e.selected_byteD=0;e.selected_wave=30;e.child_call_pc=0x5B494;e.child_target=0x5B130;e.wave_call_pc=0x5B178;e.frontier=0x557B8;
  for(uint32_t i=0;i<33;++i){e.offsets[i]=40+56*i;e.lows[i]=e.highs[i]=32+int32_t(i);if(i<32)e.strides[i]=56;}
  e.child_args={q.port.id,64,r.bank_handle,30,10,0,-1};return GameSourceControlExact(c,e);
+}
+bool GameSourceWavePrefixValid(const GameSourceFeedbackRead& r)noexcept{
+ const auto& q=r.after.voice.sequence;const auto& w=q.wave;
+ if(!w.result_pointer||r.after.bank.offset>UINTPTR_MAX||r.after.bank.host_address>UINTPTR_MAX-r.after.bank.offset
+    ||r.after.bank.host_address+r.after.bank.offset>UINTPTR_MAX-6272)return false;
+ if(r.outcome!=7||r.frontier!=0x5B1EC||q.frontier!=r.frontier||r.after.voice.frontier!=r.frontier||q.control.frontier!=r.frontier)return false;
+ auto legacy=r;legacy.outcome=6;legacy.frontier=legacy.after.voice.frontier=legacy.after.voice.sequence.frontier=legacy.after.voice.sequence.control.frontier=0x557B8;
+ legacy.after.voice.sequence.wave={};legacy.after.voice.sequence.control.wave_output_known=legacy.after.voice.sequence.control.wave_result_known=legacy.after.voice.sequence.control.wave_returned=false;
+ if(!GameSourceControlPrefixValid(legacy)||!w.control_slot_storage)return false;
+ const uintptr_t aliases[]={q.ids_storage,q.output_storage,q.track.storage,q.track.context_storage,q.port.storage,q.processor.command_storage,q.control.wave_output_storage,w.result_pointer};
+ for(auto v:aliases)if(w.control_slot_storage==v)return false;
+ GameSourceWaveSnapshot e;e.entered=e.bank_lookup_returned=e.wave_chunk_known=e.count_read=e.mode_read=e.output_written=e.output_readback=e.result_known=e.returned=e.borrow_live=e.child_continued=e.port_word24_attempted=true;
+ e.output_storage=q.control.wave_output_storage;e.control_slot_storage=e.output_value=w.control_slot_storage;e.result_pointer=uintptr_t(r.after.bank.host_address+r.after.bank.offset+6272);e.port_storage=q.port.storage;
+ e.registry=r.after.registration.registry;e.registry_generation=r.after.registration.generation;e.registry_serial=r.after.registration.serial;
+ e.image_owner=r.after.bank.owner;e.image_generation=r.after.bank.generation;e.image_serial=r.after.bank.serial;e.image_offset=r.after.bank.offset;e.image_host_address=r.after.bank.host_address;
+ e.bank=r.bank_handle;e.wave=30;e.port_id=q.port.id;e.byte8=3;e.byte9=e.channels=1;e.lookup_pc=0x55144;e.wave_load_pc=0x557E8;e.count_load_pc=0x557FC;e.mode_load_pc=0x55814;e.output_store_pc=0x55830;e.return_pc=0x55848;e.return_delay_pc=0x5584C;
+ e.wave_payload=4584;e.wave_size=2136;e.wave_count=38;e.stride=56;e.record_offset=6272;e.control_mode=1;e.record_read_mask=63;e.stack_known=127;e.stack_writes=7;e.port_read_pc=e.frontier=0x5B1EC;
+ e.parameters={0,10,3,1,0,0,0};e.store_pc={0x5B1A4,0x5B1B0,0x5B1B8,0x5B1C0,0x5B1C4,0x5B1D4,0x5B1E0};e.store_index={1,0,2,3,4,6,5};
+ return GameSourceWaveExact(w,e)&&q.control.wave_output_known&&q.control.wave_result_known&&q.control.wave_returned;
 }
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;
