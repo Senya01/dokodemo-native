@@ -681,6 +681,9 @@ GameFsStatus GameSoundBank::Register(PackageView image) {
             }
         if (slot < 0)
             return {GameFsCode::Busy, 0, "native metadata bank pool exhausted"};
+        if(source_control_.Snapshot().live){
+            const auto bound=source_control_.BindSe5(image);if(!bound)return bound;
+        }
         slots_[size_t(slot)] = true;
         next.native_metadata_slot = slot;
         next.metadata_ready = true;

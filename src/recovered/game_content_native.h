@@ -144,9 +144,12 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool ConfigureImportCallback5334C(); // unavailable native interrupt/sound policy, no fake registration
     uint32_t StateWord(uint32_t byte_offset) const;
     GameOptionSettingsSnapshot OptionSettings()const override;
+    GameSourceSoundSnapshot OptionSoundOwner()const override{return sound_bank_.SourceControl();}
     GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)override;
     bool OptionRightWritable()const override{return true;}
+    bool OptionBackupWritable()const override{return true;}
     GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
+    GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
     GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&)override;
     int32_t ResetLookupWord(uint32_t index) const;
     // One native loading tick; false means a real I/O/format/lifetime failure.

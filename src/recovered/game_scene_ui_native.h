@@ -4,6 +4,7 @@
 #include "game_dictionary_native.h"
 #include "game_input_native.h"
 #include "game_text_native.h"
+#include "game_sound_control_native.h"
 #include <array>
 #include "../game73_audio_request.h"
 
@@ -176,6 +177,9 @@ struct GameSoundBankSnapshot {
 // image and a real bounded slot; it does not pretend to implement SGX playback.
 class GameSoundBank final {
   public:
+    GameFsStatus InitializeSource17F0(){return source_control_.Initialize17F0();}
+    GameSourceSoundSnapshot SourceControl()const{return source_control_.Snapshot();}
+    GameFsStatus QuerySourceGain(const GameSourceSoundSnapshot& expected,int32_t value,GameSourceSoundGainReceipt& out){return source_control_.Gain4AFBC(expected,value,out);}
     GameFsStatus Register(PackageView image);
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}
@@ -185,6 +189,7 @@ class GameSoundBank final {
         return state_;
     }
     void Close() {
+        source_control_.Close();
         image_.Reset();
         slots_.fill(false);
         state_ = {};
@@ -197,5 +202,6 @@ class GameSoundBank final {
     PackageViewDescription identity_;
     audio::Game73SelectedSink* sink_=nullptr;
     uint64_t next_request_=1;
+    GameSourceSoundControl source_control_;
 };
 } // namespace dokodemo::recovered

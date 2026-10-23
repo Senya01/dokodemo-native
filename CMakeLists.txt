@@ -59,6 +59,7 @@ add_library(dokodemo-core STATIC
     src/recovered/game_wordmemo_native.cpp
     src/recovered/game_diary_native.cpp
     src/recovered/game_system_option_native.cpp
+    src/recovered/game_sound_control_native.cpp
     src/recovered/game_returned_interaction_native.cpp
     src/recovered/game_conversation_activation_native.cpp
     src/recovered/game_owned_conversation_native.cpp

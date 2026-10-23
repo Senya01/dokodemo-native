@@ -95,6 +95,9 @@ class GameUiInstance final {
     // Cold96C48 base-pose subset. Full subtree reset/world traversal belongs to
     // the still unsupported general UI renderer. Fourth arg is a frame, not loop.
     bool Bind(uint32_t root, uint32_t clip, uint32_t initial_frame);
+    //9662C(flag0) then96730(mode2): sample a manual control into working
+    // poses, preserving constructor bases and unrelated/reference subtrees.
+    bool SampleControl(uint32_t root,const GameUiControl&,std::string& error);
     // 96514 creates a separate8-byte animation control, not a node record.
     GameUiControl *AddControl(uint32_t clip);
     GameUiControl *Control(uint32_t index);
@@ -104,7 +107,7 @@ class GameUiInstance final {
     // children inherit current parent world, not previous-frame cached state.
     bool Draw(GameGraphics &, GameUiDrawStats &, std::string &error, GameUiCallbacks *callbacks = nullptr,
               GameUiMatrix instance_base = {}, uint32_t first_group = 0,
-              uint32_t last_group = UINT32_MAX,int32_t explicit_root=-1) const;
+              uint32_t last_group = UINT32_MAX,int32_t explicit_root=-1,int32_t manual_only_root=-1) const;
     bool SetSourceCallback(uint32_t node, uint32_t source_pc);
     // Passive native Draw traversal transform; no callback, raster or mutation.
     bool WorldMatrix(uint32_t node,GameUiMatrix& out)const;

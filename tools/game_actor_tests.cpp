@@ -87,6 +87,8 @@
 #include "game_system_option_regressions.h"
 #include "game_options_open_regressions.h"
 #include "game_options_right_regressions.h"
+#include "game_options_edit_regressions.h"
+#include "game_options_edit_edges.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -498,6 +500,9 @@ GameFlow5RegressionChecks();
     ::GameSystemOptionRegressionChecks();
     ::GameOptionsOpenRegressionChecks();
     ::GameOptionsRightRegressionChecks();
+    ::GameOptionsEditRegressionChecks();
+    ::GameOptionsEditCompletionEdgeChecks();
+    ::GameOptionsManualBarWorkingPoseChecks();
     {
         GameFontResource font;GameFontBitmap bitmap;GameFontDrawRecord glyphs[2]{};
         Check(bool(font.Initialize(dokodemo::diary_tests::Font())),"Diary spacing fixture FONT");

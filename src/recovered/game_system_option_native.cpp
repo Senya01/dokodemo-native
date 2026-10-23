@@ -27,12 +27,22 @@ bool GameOptionRightReceiptValid(const GameOptionWriteReceipt& r)noexcept{
     auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
     return GameOptionSnapshotExact(expected,r.after);
 }
+bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt& r)noexcept{
+    if(r.stage>=3||!r.gui_generation||!r.input_sequence||!r.input_epoch||r.field!=r.stage
+       ||r.call_pc!=0x3526C+r.stage*8||r.setter!=0x24B1C+r.stage*0x18
+       ||!r.before.live||!r.before.owner||!r.before.generation||r.before.writes==UINT64_MAX)return false;
+    auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
+    return GameOptionSnapshotExact(expected,r.after);
+}
 struct GameOwnedMessageShared {
     std::shared_ptr<GameUiResource> resource;
     GameUiInstance clone;
     const GameFontResource* font=nullptr;
     std::vector<uint8_t> records;
     uint32_t references=0;
+    uint32_t rate_setting=2,rate_updates=0;
+    std::array<int16_t,5> rate_row{{4,10,14,30,24}};
+    float rate=0.75f;
 };
 GameFsStatus GameOwnedOptionMessage::Initialize(GameResourceSource& source,const GameFontResource& font,uint32_t setting,std::shared_ptr<GameOwnedMessageShared> shared){
     try{
@@ -54,10 +64,25 @@ GameFsStatus GameOwnedOptionMessage::Initialize(GameResourceSource& source,const
         NeedOption(shared_->font==&font&&shared_->records.size()==1024*44,"153D4 shared FONT identity replaced");
         ++shared_->references;state_.live=state_.template_owner=state_.clone_owner=state_.text_owner=true;
         state_.capacity=1024;state_.references=shared_->references;state_.state64=0;state_.appearance=0;state_.complete68=true;
+        const auto rate=SetRate(setting);if(!rate)return rate;
         //153D4 default config then Options1595C(9,2,4); mode4 uses root3,
         // before the normal-stack60 gate. No fabricated active stack flag.
         return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameOwnedOptionMessage::BindRateSource(GameOptionSettings& source){
+    const auto current=source.OptionSettings();
+    if(!state_.live||!current.live||!current.owner||!current.generation||rate_source_)
+        return {GameFsCode::Unavailable,0,"150B8 current root owner unavailable"};
+    rate_source_=&source;rate_owner_=current.owner;rate_generation_=current.generation;return {};
+}
+GameFsStatus GameOwnedOptionMessage::SetRate(uint32_t setting){
+    if(!state_.live||!shared_||!shared_->references||(setting!=2&&setting!=3))
+        return {GameFsCode::Unavailable,0,"Unsupported150B8 rate outside actual rows2/3"};
+    // PH1:4340/434A, shared4360 row and4364 factor. Existing queued delay is
+    // preserved; only the next source delay consumer reads the new row.
+    shared_->rate_setting=setting;shared_->rate_row=setting==2?std::array<int16_t,5>{{4,10,14,30,24}}:std::array<int16_t,5>{{3,7,10,22,20}};
+    shared_->rate=18.0f/float(shared_->rate_row[4]);++shared_->rate_updates;return {};
 }
 GameFsStatus GameOwnedOptionMessage::Text(const std::string& text){
     try{
@@ -94,7 +119,10 @@ GameFsStatus GameOwnedOptionMessage::Text(const std::string& text){
 GameFsStatus GameOwnedOptionMessage::Tick(bool){
     try{
         NeedOption(state_.live&&shared_&&shared_->font&&shared_->font->Snapshot().ready,"15E28 current FONT owner retired");++state_.updates;
-        if(state_.state64==1){state_.appearance=(std::min)(1.0f,state_.appearance+0.1f);if(state_.appearance>=1)state_.state64=2;return {};}
+        if(rate_source_){const auto root=rate_source_->OptionSettings();NeedOption(root.live&&root.owner==rate_owner_&&root.generation==rate_generation_,"150B8 bound current root owner retired");}
+        if(state_.state64==1){state_.appearance=(std::min)(1.0f,state_.appearance+0.1f);if(state_.appearance>=1){
+            if(rate_source_){const auto status=SetRate(rate_source_->OptionSettings().words[0]);NeedOption(bool(status),status.detail.c_str());}
+            state_.state64=2;}return {};}
         if(state_.state64==3){state_.appearance=(std::max)(0.0f,state_.appearance-0.1f);
             if(state_.appearance<=0){state_.appearance=0;state_.close69=false;lines_.clear();lines_.emplace_back();
                 if(unit_cursor_<glyph_ends_.size()){state_.state64=1;state_.registered=true;}
@@ -102,14 +130,14 @@ GameFsStatus GameOwnedOptionMessage::Tick(bool){
             return {};}
         if(state_.state64!=2)return {};
         if(state_.close69){state_.complete68=true;state_.state64=3;return {};}
-        // Native worker signed tick=1. Actual PH1 setting2 row is
-        // {4,10,14,30,24}, factor18/24=.75; other rate rows refuse.
+        // Native worker signed tick=1. Source-shared row2/3 supplies the real
+        // ordinary/LF delays. General classification/scroll stays NativeRing.
         if(state_.delay70>0){--state_.delay70;if(state_.delay70>0)return {};}
         if(unit_cursor_<glyph_ends_.size()){
             const auto begin=unit_cursor_?glyph_ends_[unit_cursor_-1]:0;const auto end=glyph_ends_[unit_cursor_];
             const auto kind=unit_kinds_[unit_cursor_++];
-            if(kind==10){lines_.emplace_back();if(lines_.size()>2)lines_.erase(lines_.begin());state_.delay70=10;}
-            else{lines_.back()+=state_.text.substr(begin,end-begin);++state_.shown;state_.delay70=4;}
+            if(kind==10){lines_.emplace_back();if(lines_.size()>2)lines_.erase(lines_.begin());state_.delay70=shared_->rate_row[1];}
+            else{lines_.back()+=state_.text.substr(begin,end-begin);++state_.shown;state_.delay70=shared_->rate_row[0];}
         }else {state_.complete68=true;if(state_.idle74>0){--state_.idle74;return {};}state_.close69=true;}
         return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
@@ -142,12 +170,12 @@ GameFsStatus GameOwnedOptionMessage::Draw(GameGraphics& graphics){
         NeedOption(shared_->clone.Draw(graphics,stats,error,this,{},0,UINT32_MAX,3),error.c_str());++state_.draws;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
-GameOwnedMessageSnapshot GameOwnedOptionMessage::Snapshot()const{auto s=state_;if(shared_){s.references=shared_->references;s.template_owner=bool(shared_->resource);s.clone_owner=shared_->clone.Node(0)!=nullptr;s.text_owner=shared_->records.size()==1024*44;}return s;}
+GameOwnedMessageSnapshot GameOwnedOptionMessage::Snapshot()const{auto s=state_;if(shared_){s.references=shared_->references;s.template_owner=bool(shared_->resource);s.clone_owner=shared_->clone.Node(0)!=nullptr;s.text_owner=shared_->records.size()==1024*44;s.rate=shared_->rate;s.rate_setting=shared_->rate_setting;s.rate_updates=shared_->rate_updates;}return s;}
 void GameOwnedOptionMessage::Close()noexcept{
     if(shared_){if(state_.live&&shared_->references)--shared_->references;
         if(!shared_->references){std::vector<uint8_t>().swap(shared_->records);shared_->font=nullptr;shared_->clone.Close();shared_->resource.reset();}
         shared_.reset();}
-    state_.live=state_.template_owner=state_.clone_owner=state_.text_owner=state_.registered=false;state_.references=state_.capacity=state_.used=0;lines_.clear();glyph_ends_.clear();unit_kinds_.clear();unit_cursor_=0;
+    state_.live=state_.template_owner=state_.clone_owner=state_.text_owner=state_.registered=false;state_.references=state_.capacity=state_.used=0;lines_.clear();glyph_ends_.clear();unit_kinds_.clear();unit_cursor_=0;rate_source_=nullptr;rate_owner_=rate_generation_=0;
 }
 GameFsStatus GameSystemOptionFrontier::Request(GameMainMenuLease lease,std::array<uint32_t,3> settings){
     if(state_.requested||state_.failed||!lease.script_generation||!lease.run_id||!lease.available_owner
@@ -205,8 +233,9 @@ GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,con
         return Refuse({GameFsCode::Unavailable,0,"Options current settings/transition owner unavailable"});
     auto status=PrepareTemplate(source);if(!status)return status;
     status=message_.Initialize(source,font,current.words[0]);if(!status)return Refuse(status);
+    status=message_.BindRateSource(settings);if(!status)return Refuse(status);
     //347C8 returned: only now1A3B0 can publish474 and invoke34F1C.
-    settings_=&settings;font_=&font;state_.settings=current;state_.current_words=current.words;state_.owner474=state_.live=state_.visible=state_.request10=true;
+    settings_=&settings;font_=&font;state_.settings=current;state_.sound_owner=settings.OptionSoundOwner();state_.current_words=current.words;state_.owner474=state_.live=state_.visible=state_.request10=true;
     state_.state44=0;state_.previous50=state_.selection56=state_.substate48=0;state_.loader469=1;
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return Refuse({GameFsCode::Unavailable,0,"34F1C Open root refused"});
     *clone_.Control(0)={0,0,1,1};
@@ -223,6 +252,7 @@ bool GameSystemOptionFrontier::Input(const GameInputFrame& f){
     if(!state_.live||state_.phase!=3||f.sequence<=state_.last_sequence||f.main_menu_epoch!=state_.input_epoch
        ||f.message_owner_generation!=l.script_generation||f.message_context!=l.context||f.returned_owner!=l.available_owner||f.returned_generation!=l.available_generation){++state_.rejected;return false;}
     if(!settings_||!SameSettings(state_.settings,settings_->OptionSettings())||!font_||!font_->Snapshot().ready){++state_.rejected;return false;}
+    if(state_.sound_owner.live&&!GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner())){++state_.rejected;return false;}
     state_.last_sequence=f.sequence;input_.Observe(f);return true;
 }
 GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
@@ -231,6 +261,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
     try{
         NeedOption(state_.live&&settings_&&SameSettings(state_.settings,settings_->OptionSettings())&&font_&&font_->Snapshot().ready,"Options bound settings/FONT owner replaced");
         NeedOption(fade.Snapshot().live,"Options transition owner retired");
+        NeedOption(!state_.sound_owner.live||GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner()),"Options bound source sound owner replaced");
         if(state_.phase==6){message_.Close();clone_.Close();resource_.reset();state_.live=state_.visible=state_.owner474=state_.retirement_pending=false;
             state_.template_owner=state_.clone_owner=state_.requested=false;state_.retired=true;state_.retired_generation=state_.generation;++state_.retirements;state_.phase=7;return {};}
         std::string error;NeedOption(clone_.Update(error),error.c_str());
@@ -240,6 +271,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             state_.retirement_pending=true;++state_.retirement_requests;state_.phase=6;}return {};}
         if(state_.phase!=3)return {};
         input_.Tick();
+        bool right_completed=false,after_key_done=false;
         // Query in source priority. Later counters are not sampled after an
         // earlier nonzero direction consumed this key invocation.
         const auto down=input_.Repeat(Down,10,2),up=down?0:input_.Repeat(Up,10,2),right=(down||up)?0:input_.Repeat(Right,10,2),left=(down||up||right)?0:input_.Repeat(Left,10,2);
@@ -263,32 +295,51 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             };
             auto direct=write(0);if(!direct)return Refuse(direct);++state_.source_ui_sound_intents; //direct root14, then event6
             ++state_.after_key_updates; //352E0 substate0 returns, then common gate
+            after_key_done=true;
             state_.previous50=state_.selection56;*clone_.Control(1)={1,1,2,1};
             for(uint32_t stage=1;stage<4;++stage){const auto status=write(stage);if(!status)return Refuse(status);}
-            //14834(1): actual root18=3 -> index8 -> exact retained105. The
-            // actual sound object's ID is a separate unresolved typed owner.
+            //14834(1): actual root18=3 -> index8 -> exact retained105.
             state_.source_consumer=0x4AFC8;++state_.gain_queries;state_.gain_value=105;
             const auto gain=settings_->QueryOptionGain(state_.settings,105,state_.gain);
             if(!gain)return Refuse(gain);
-            //No current provider may fabricate a return past the unproved ID.
-            return Refuse({GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"});
+            NeedOption(state_.gain.source_id_known&&!state_.gain.source_dispatched&&GameSourceSoundGainValid(state_.gain.source)
+                       &&state_.gain.source.value==105&&GameSourceSoundSnapshotExact(state_.sound_owner,state_.gain.source.before)
+                       &&GameSourceSoundSnapshotExact(state_.gain.source.after,settings_->OptionSoundOwner()),"Options genuine source gain return receipt refused");
+            state_.sound_owner=state_.gain.source.after;state_.gain_returned=true;right_completed=true;
         }
-        if(down||up||right||left||input_.First(Circle)){
+        if(!right_completed&&(down||up||right||left||input_.First(Circle))){
             ++state_.unsupported;state_.source_consumer=down?0x350B0:up?0x3512C:right?0x3516C:left?0x351EC:0x352BC;
             return Refuse({GameFsCode::Unavailable,0,"Unsupported Options readonly input consumer at "+std::to_string(state_.source_consumer)});
         }
-        else if(input_.First(Cross)){
-            auto status=settings_->RestoreOptionSettings(state_.settings,state_.passive_settings);NeedOption(bool(status),status.detail.c_str());
-            auto restored=state_.settings;restored.writes+=3;
+        else if(!right_completed&&input_.First(Cross)){
+            if(settings_->OptionBackupWritable()){
+                for(uint32_t stage=0;stage<3;++stage){GameOptionWriteReceipt receipt;state_.source_consumer=0x3526C+stage*8;
+                    const auto status=settings_->WriteOptionBackup(state_.settings,stage,state_.passive_settings[stage],receipt);if(!status)return Refuse(status);
+                    NeedOption(GameOptionBackupReceiptValid(receipt)&&receipt.stage==stage&&receipt.gui_generation==state_.generation
+                               &&receipt.input_sequence==state_.last_sequence&&receipt.input_epoch==state_.input_epoch&&receipt.value==state_.passive_settings[stage]
+                               &&GameOptionSnapshotExact(receipt.before,state_.settings)&&GameOptionSnapshotExact(receipt.after,settings_->OptionSettings()),"Options actual backup setter receipt/readback mismatch");
+                    state_.restore_receipts[stage]=receipt;++state_.restore_writes;state_.settings=receipt.after;
+                }
+            }else{
+                NeedOption(!state_.right_steps,"Options changed backup requires source writer receipts");
+                const auto status=settings_->RestoreOptionSettings(state_.settings,state_.passive_settings);if(!status)return Refuse(status);
+                state_.settings.words=state_.passive_settings;state_.settings.writes+=3;
+            }
+            auto restored=state_.settings;
             NeedOption(SameSettings(restored,settings_->OptionSettings()),"Options backup readback mismatch");
             state_.settings=restored;state_.state44=2;state_.phase=4;++state_.close_requests;
             state_.source_ui_sound_intents+=2;fade.CloseWipe(false);input_.BeginContext();
         }
         //35078 returns into34C54 even after Close:352E0 with48=0 and
         // unchanged50==56 skips gain, then still services the real message.
-        ++state_.after_key_updates;
-        if(message_.Snapshot().complete68){const auto status=message_.Text(help_text);NeedOption(bool(status),status.detail.c_str());}
-        const auto status=message_.Tick();NeedOption(bool(status),status.detail.c_str());return {};
+        if(!after_key_done)++state_.after_key_updates;
+        // The finite route keeps50==56 after Right and after distinct Cancel.
+        // Cancel never changes localC, and never returns before this tail.
+        NeedOption(state_.previous50==state_.selection56&&state_.substate48==0,"Unsupported Options dirty common update");
+        if(message_.Snapshot().complete68){auto status=message_.SetRate(settings_->OptionSettings().words[0]);NeedOption(bool(status),status.detail.c_str());
+            status=message_.Text(help_text);NeedOption(bool(status),status.detail.c_str());}
+        const auto status=message_.Tick();NeedOption(bool(status),status.detail.c_str());
+        if(state_.gain_returned)state_.right_message_continued=true;return {};
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFontResource& font){
@@ -296,20 +347,30 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
     if(!state_.live||!state_.visible||state_.state44==3)return {};
     try{
         NeedOption(font_==&font&&font.Snapshot().ready&&settings_&&SameSettings(state_.settings,settings_->OptionSettings()),"Options draw dependency retired");
-        GameUiDrawStats automatic;std::string error;NeedOption(clone_.Draw(graphics,automatic,error),error.c_str());uint32_t quads=automatic.quads;
+        NeedOption(!state_.sound_owner.live||GameSourceSoundSnapshotExact(state_.sound_owner,settings_->OptionSoundOwner()),"Options draw source sound owner retired");
+        // NativeJoinedManualRoots:34DC4 owns exactly three explicit root2
+        // samples. Exclude root2 and its references from the automatic pass.
+        // Original B8/global scheduler lifetime remains qualified; B0 is a
+        // render-state ID, not a proved visibility/frame suppression flag.
+        GameUiDrawStats automatic;std::string error;NeedOption(clone_.Draw(graphics,automatic,error,nullptr,{},0,UINT32_MAX,-1,2),error.c_str());uint32_t quads=automatic.quads;
         //34DC4 source manual root2 three bars; current readonly selection0.
         for(uint32_t row=0;row<3;++row){
             const auto frame=state_.current_words[row]+(row==state_.previous50?6:1);
             GameUiMatrix anchor;NeedOption(clone_.WorldMatrix(97+row,anchor),"Options bar anchor owner unavailable");
             // Named NativeUiViewspace source manual-root placement. Exact
             // source offsets DA520/DA524 are supplied in the integration pin.
-            NeedOption(clone_.Bind(2,2,frame),"Options bar authored frame refused");
+            auto* control=clone_.Control(2);NeedOption(control!=nullptr,"Options bar control owner retired");
+            control->frame=frame;
+            NeedOption(clone_.SampleControl(2,*control,error),error.c_str());
             auto* n=clone_.Node(2);n->position=n->base_position;n->scale=n->base_scale;n->angle=n->base_angle;n->color=n->base_color;
             //Source A0 is screen space; this native WorldMatrix is already
             // centered view space. Converting to source screen then subtracting
             // actual DA520=240/DA524=136 gives the same native anchor.
-            n->position={{(anchor.tx+240.0f)-240.0f,(anchor.ty+136.0f)-136.0f}};
-            GameUiDrawStats bar;NeedOption(clone_.Draw(graphics,bar,error,nullptr,{},0,UINT32_MAX,2),error.c_str());quads+=bar.quads;++state_.manual_bars;
+            //97B18 writes base+20, then97AE4 refreshes this root's working
+            // pose. Descendants retain the just-sampled control positions.
+            n->base_position={{(anchor.tx+240.0f)-240.0f,(anchor.ty+136.0f)-136.0f}};
+            n->position=n->base_position;
+            GameUiDrawStats bar;NeedOption(clone_.Draw(graphics,bar,error,nullptr,{},0,UINT32_MAX,2),error.c_str());quads+=bar.quads;++state_.manual_bars;state_.bar_frames[row]=frame;
         }
         auto status=message_.Draw(graphics);NeedOption(bool(status),status.detail.c_str());++state_.draw_frames;state_.quads=quads;return {};
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}

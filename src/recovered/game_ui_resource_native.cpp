@@ -287,6 +287,32 @@ bool GameUiInstance::Bind(uint32_t root, uint32_t clip, uint32_t frame) {
         return false;
     }
 }
+bool GameUiInstance::SampleControl(uint32_t root,const GameUiControl& control,std::string& error) {
+    if(!resource_||root>=nodes_.size()||control.clip>=resource_->Clips().size()||control.mode!=2||!control.active){
+        error="Manual UI mode2 control/owner unavailable";return false;
+    }
+    try {
+        auto previous=nodes_;
+        try {
+            std::vector<bool> path(nodes_.size(),false);uint32_t calls=0;
+            std::function<void(uint32_t)> reset=[&](uint32_t index){
+                Need(index<nodes_.size()&&!path[index]&&++calls<=32768,"UI working subtree cycle/extent");
+                path[index]=true;auto& n=nodes_[index];
+                //97AE4 copies base fields to the distinct working fields.
+                n.position=n.base_position;n.scale=n.base_scale;n.angle=n.base_angle;n.color=n.base_color;
+                if(n.encoded_initial[1])reset(n.encoded_initial[1]);
+                if(n.encoded_initial[0])reset(n.encoded_initial[0]);
+                path[index]=false;
+            };
+            reset(root);
+            Need(!resource_->Clips()[control.clip].channels[5].count,"Manual UI time mapping unsupported");
+            // Reuse the qualified NativeSampler used by Update. 96730 mode2
+            // selects the fixed control frame; it does not mutate base pose.
+            Apply(nodes_,*resource_,control.clip,control.frame,false);
+        } catch(...) {nodes_.swap(previous);throw;}
+        error.clear();return true;
+    } catch(const std::exception& e){error=e.what();return false;}
+}
 GameUiControl *GameUiInstance::AddControl(uint32_t clip) {
     if (!resource_ || clip >= resource_->Clips().size() || controls_.size() >= 256)
         return nullptr;
@@ -386,7 +412,7 @@ bool GameUiInstance::WorldMatrix(uint32_t target,GameUiMatrix& out)const{
 }
 bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::string &error,
                           GameUiCallbacks *callbacks, GameUiMatrix base, uint32_t first_group,
-                          uint32_t last_group,int32_t explicit_root) const {
+                          uint32_t last_group,int32_t explicit_root,int32_t manual_only_root) const {
     stats = {};
     try {
         Need(resource_ && resource_->Image().Describe().readable, "UI draw source lease retired");
@@ -409,6 +435,9 @@ bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::s
         std::function<void(uint32_t, const GameUiMatrix &, uint32_t, uint32_t)> draw;
         draw = [&](uint32_t index, const GameUiMatrix &parent, uint32_t parent_color,
                    uint32_t inherited_group) {
+            // A manual-owned root may also be referenced by another root's
+            // texture node. Exclude it throughout the automatic pass only.
+            if(explicit_root<0&&int32_t(index)==manual_only_root)return;
             Need(index < nodes_.size() && !path[index] && ++calls <= 32768,
                  "UI reference cycle/index/call cap");
             path[index] = true;
@@ -484,7 +513,7 @@ bool GameUiInstance::Draw(GameGraphics &graphics, GameUiDrawStats &stats, std::s
             Need(uint32_t(explicit_root)<resource_->RootCount(),"manual UI root outside resource");
             draw(uint32_t(explicit_root),base,0x80808080,0);
         }else for (uint32_t root = 0; root < resource_->RootCount(); ++root)
-                if (nodes_[root].visible)draw(root, base, 0x80808080, 0);
+                if (nodes_[root].visible&&int32_t(root)!=manual_only_root)draw(root, base, 0x80808080, 0);
         error.clear();
         return true;
     } catch (const std::exception &e) {

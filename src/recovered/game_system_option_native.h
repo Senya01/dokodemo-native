@@ -16,9 +16,11 @@ struct GameOptionWriteReceipt {
 bool GameOptionSnapshotExact(const GameOptionSettingsSnapshot&,const GameOptionSettingsSnapshot&)noexcept;
 bool GameOptionReceiptExact(const GameOptionWriteReceipt&,const GameOptionWriteReceipt&)noexcept;
 bool GameOptionRightReceiptValid(const GameOptionWriteReceipt&)noexcept;
+bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt&)noexcept;
 struct GameOptionGainObservation {
     bool metadata_ready=false,source_id_known=false,source_dispatched=false;
     int32_t native_metadata_slot=-1;
+    GameSourceSoundGainReceipt source;
 };
 class GameOptionSettings {
   public:
@@ -28,14 +30,17 @@ class GameOptionSettings {
     // Readonly providers retain their prior explicit direction refusal. Only
     // the current Content/actor owner may issue actual Right writer receipts.
     virtual bool OptionRightWritable()const{return false;}
+    virtual bool OptionBackupWritable()const{return false;}
+    virtual GameSourceSoundSnapshot OptionSoundOwner()const{return {};}
     virtual GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options Right writer owner unavailable"};}
+    virtual GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options backup writer owner unavailable"};}
     virtual GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&){return {GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"};}
 };
 struct GameOwnedMessageSnapshot {
     bool live=false,template_owner=false,clone_owner=false,text_owner=false,registered=false,complete68=true,close69=false;
     uint32_t references=0,state64=0,mode98C=4,columns=9,rows=2,width=144,height=36;
     uint32_t text_calls=0,updates=0,draws=0,callbacks=0,emissions=0,glyphs=0,shown=0,total=0;
-    uint32_t capacity=0,used=0,batch_stage=0,resets=0,flushes=0;
+    uint32_t capacity=0,used=0,batch_stage=0,resets=0,flushes=0,rate_setting=2,rate_updates=0;
     int32_t delay70=0,idle74=0,flush_selector=0;
     float appearance=0,rate=0.75f,scale_x=0,scale_y=0;
     std::string text;
@@ -52,6 +57,8 @@ class GameOwnedOptionMessage final:private GameUiCallbacks {
                             std::shared_ptr<GameOwnedMessageShared> shared={});
     GameFsStatus Text(const std::string&);
     GameFsStatus Tick(bool cross_held=false);
+    GameFsStatus SetRate(uint32_t setting);
+    GameFsStatus BindRateSource(GameOptionSettings&);
     GameFsStatus Draw(GameGraphics&);
     GameOwnedMessageSnapshot Snapshot()const;
     std::shared_ptr<GameOwnedMessageShared> Shared()const{return shared_;}
@@ -65,6 +72,8 @@ class GameOwnedOptionMessage final:private GameUiCallbacks {
     std::vector<uint8_t> unit_kinds_;
     size_t unit_cursor_=0;
     std::vector<std::string> lines_;
+    GameOptionSettings* rate_source_=nullptr;
+    uint64_t rate_owner_=0,rate_generation_=0;
 };
 struct GameSystemOptionSnapshot {
     bool requested=false,constructor_entered=false,template_owner=false,clone_owner=false,failed=false;
@@ -88,7 +97,11 @@ struct GameSystemOptionSnapshot {
     uint32_t right_message_updates_before=0,right_draw_frames_before=0;
     bool gain_returned=false,right_message_continued=false;
     GameOptionGainObservation gain;
+    GameSourceSoundSnapshot sound_owner;
     std::array<GameOptionWriteReceipt,4> right_receipts{};
+    std::array<uint32_t,3> bar_frames{}; // last successful authored Bind+Draw frames
+    uint32_t restore_writes=0;
+    std::array<GameOptionWriteReceipt,3> restore_receipts{};
     GameOwnedMessageSnapshot message;
 };
 // Finite readonly first-row Options owner; other input routes explicitly refuse.

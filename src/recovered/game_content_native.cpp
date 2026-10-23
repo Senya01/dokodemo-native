@@ -198,6 +198,9 @@ bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     arena_ = &arena;
     manager_ = &manager;
     state_ = {};
+    // Native lifecycle placement of17B0->15F8(1,FFFF)->17F0, once before SE5
+    // registration. This is a functional lifecycle adaptation, not PSP CRT.
+    state_.status=sound_bank_.InitializeSource17F0();if(!state_.status)return false;
     // Source request sizes40/1268 are metadata. Native typed layouts and task
     // records use their actual sizeof/alignment, not fake PSP object padding.
     if (void *memory = arena.Allocate(sizeof(Vsync), alignof(Vsync))) {
@@ -288,10 +291,18 @@ GameFsStatus GameContentBoot::QueryOptionGain(const GameOptionSettingsSnapshot& 
     if(!GameOptionSnapshotExact(expected,OptionSettings())||value!=105||state_.main_menu_phase!=7)
         return {GameFsCode::Unavailable,0,"Options exact selected gain query owner unavailable"};
     const auto metadata=sound_bank_.Snapshot();out.metadata_ready=metadata.metadata_ready;out.native_metadata_slot=metadata.native_metadata_slot;
-    // No native bank slot/playback return is the source object's signed11EC ID.
-    // Its producer is not established, so neither4B22C nor a negative-ID skip
-    // is fabricated. Four already executed source stores remain committed.
-    return {GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"};
+    const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionGain(main_menu_target_,gui);if(!status)return status;
+    const auto owner=sound_bank_.SourceControl();status=sound_bank_.QuerySourceGain(owner,value,out.source);if(!status)return status;
+    out.source_id_known=true;out.source_dispatched=out.source.dispatched;
+    return actor_script_.CommitMenuOptionGain(main_menu_target_,gui,out.source);
+}
+GameFsStatus GameContentBoot::WriteOptionBackup(const GameOptionSettingsSnapshot& expected,uint32_t stage,uint32_t value,GameOptionWriteReceipt& receipt){
+    if(state_.closed||state_.main_menu_phase!=7||!state_.main_menu_child_ready||!GameOptionSnapshotExact(expected,OptionSettings()))
+        return {GameFsCode::Unavailable,0,"Options backup current source owner unavailable"};
+    const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionBackup(main_menu_target_,gui,stage,value,receipt);if(!status)return status;
+    const auto at=0x10+receipt.field*4;
+    for(uint32_t byte=0;byte<4;++byte)reset_bytes_.at(at+byte)=uint8_t(value>>(8*byte));++option_settings_writes_;
+    return actor_script_.CommitMenuOptionWrite(main_menu_target_,gui,receipt);
 }
 int32_t GameContentBoot::ResetLookupWord(uint32_t index) const {
     return reset_lookup_.at(index);
@@ -1062,7 +1073,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                     status=system_option_.Request(main_menu_lease_,{{StateWord(0x10),StateWord(0x14),StateWord(0x18)}});
                     if(status){const auto actor=actor_script_.Snapshot();system_option_.SetChildLease({actor.generation,actor.vm_current.run_id,state_.actor_message_contexts,
                         main_menu_.Snapshot().generation,main_menu_lease_.available_owner,main_menu_lease_.available_generation,state_.main_menu_input_epoch+1});
-                        status=actor_script_.BindMenuOption(main_menu_target_,system_option_.Snapshot().generation,main_menu_.Snapshot().generation,*this,system_option_.Snapshot().child_lease);if(!status)system_option_.Abort();}
+                        status=actor_script_.BindMenuOption(main_menu_target_,system_option_.Snapshot().generation,main_menu_.Snapshot().generation,*this,system_option_.Snapshot().child_lease,system_option_);if(!status)system_option_.Abort();}
                     state_.system_option=system_option_.Snapshot();
                     if(status){++state_.main_menu_input_epoch;state_.main_menu_child_ready=false;state_.main_menu_phase=8;break;}
                 }
@@ -1164,9 +1175,10 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             status=main_menu_.RetireClosedRender();
             if(!status)break;
             if(main_flow_.Snapshot().menu_result50==13){
-                status=actor_script_.CheckMenuOption(main_menu_target_,system_option_.Snapshot());
+                status=actor_script_.PrepareMenuOptionTick(main_menu_target_,system_option_.Snapshot());
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());const auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
+                if(status)status=actor_script_.CommitMenuOptionTick(main_menu_target_,child);
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);
                 if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=10;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
                 if(child.phase!=3)state_.main_menu_child_ready=false;
