@@ -8,11 +8,28 @@ struct GameOptionSettingsSnapshot {
     uint64_t owner=0,generation=0,writes=0;
     std::array<uint32_t,3> words{};
 };
+struct GameOptionWriteReceipt {
+    uint64_t gui_generation=0,input_sequence=0,input_epoch=0;
+    uint32_t stage=0,field=0,call_pc=0,setter=0,value=0;
+    GameOptionSettingsSnapshot before,after;
+};
+bool GameOptionSnapshotExact(const GameOptionSettingsSnapshot&,const GameOptionSettingsSnapshot&)noexcept;
+bool GameOptionReceiptExact(const GameOptionWriteReceipt&,const GameOptionWriteReceipt&)noexcept;
+bool GameOptionRightReceiptValid(const GameOptionWriteReceipt&)noexcept;
+struct GameOptionGainObservation {
+    bool metadata_ready=false,source_id_known=false,source_dispatched=false;
+    int32_t native_metadata_slot=-1;
+};
 class GameOptionSettings {
   public:
     virtual ~GameOptionSettings()=default;
     virtual GameOptionSettingsSnapshot OptionSettings()const=0;
     virtual GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)=0;
+    // Readonly providers retain their prior explicit direction refusal. Only
+    // the current Content/actor owner may issue actual Right writer receipts.
+    virtual bool OptionRightWritable()const{return false;}
+    virtual GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options Right writer owner unavailable"};}
+    virtual GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&){return {GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"};}
 };
 struct GameOwnedMessageSnapshot {
     bool live=false,template_owner=false,clone_owner=false,text_owner=false,registered=false,complete68=true,close69=false;
@@ -66,6 +83,12 @@ struct GameSystemOptionSnapshot {
     uint32_t frame=0,clip=0,draw_frames=0,quads=0,manual_bars=0,source_ui_sound_intents=0,after_key_updates=0;
     GameNotebookLease child_lease;
     GameOptionSettingsSnapshot settings;
+    std::array<uint32_t,3> current_words{}; //source64/68/6C; backups remain passive_settings
+    uint32_t right_steps=0,right_writes=0,gain_queries=0,gain_value=0;
+    uint32_t right_message_updates_before=0,right_draw_frames_before=0;
+    bool gain_returned=false,right_message_continued=false;
+    GameOptionGainObservation gain;
+    std::array<GameOptionWriteReceipt,4> right_receipts{};
     GameOwnedMessageSnapshot message;
 };
 // Finite readonly first-row Options owner; other input routes explicitly refuse.

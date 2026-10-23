@@ -8,9 +8,24 @@ namespace dokodemo::recovered {
 namespace {
 void NeedOption(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 bool SameSettings(const GameOptionSettingsSnapshot& a,const GameOptionSettingsSnapshot& b){
-    return a.live&&b.live&&a.owner&&a.generation&&a.owner==b.owner&&a.generation==b.generation&&a.words==b.words;
+    return a.live&&b.live&&a.owner&&a.generation&&a.owner==b.owner&&a.generation==b.generation&&a.words==b.words&&a.writes==b.writes;
 }
 constexpr char help_text[]="\x82\xBD\x82\xBE\x82\xA2\x82\xDC\x83\x65\x83\x58\x83\x67\x92\x86\x81\x63\n";
+}
+bool GameOptionSnapshotExact(const GameOptionSettingsSnapshot& a,const GameOptionSettingsSnapshot& b)noexcept{
+    return a.live==b.live&&a.owner==b.owner&&a.generation==b.generation&&a.writes==b.writes&&a.words==b.words;
+}
+bool GameOptionReceiptExact(const GameOptionWriteReceipt& a,const GameOptionWriteReceipt& b)noexcept{
+    return a.gui_generation==b.gui_generation&&a.input_sequence==b.input_sequence&&a.input_epoch==b.input_epoch
+        &&a.stage==b.stage&&a.field==b.field&&a.call_pc==b.call_pc&&a.setter==b.setter&&a.value==b.value
+        &&GameOptionSnapshotExact(a.before,b.before)&&GameOptionSnapshotExact(a.after,b.after);
+}
+bool GameOptionRightReceiptValid(const GameOptionWriteReceipt& r)noexcept{
+    static constexpr uint32_t fields[]={1,0,1,2},calls[]={0x351CC,0x34CCC,0x34CD4,0x34CDC},setters[]={0x24B34,0x24B1C,0x24B34,0x24B4C};
+    if(r.stage>=4||!r.gui_generation||!r.input_sequence||!r.input_epoch||r.field!=fields[r.stage]||r.call_pc!=calls[r.stage]
+       ||r.setter!=setters[r.stage]||r.value!=3||!r.before.live||!r.before.owner||!r.before.generation||r.before.writes==UINT64_MAX)return false;
+    auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
+    return GameOptionSnapshotExact(expected,r.after);
 }
 struct GameOwnedMessageShared {
     std::shared_ptr<GameUiResource> resource;
@@ -191,7 +206,7 @@ GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,con
     auto status=PrepareTemplate(source);if(!status)return status;
     status=message_.Initialize(source,font,current.words[0]);if(!status)return Refuse(status);
     //347C8 returned: only now1A3B0 can publish474 and invoke34F1C.
-    settings_=&settings;font_=&font;state_.settings=current;state_.owner474=state_.live=state_.visible=state_.request10=true;
+    settings_=&settings;font_=&font;state_.settings=current;state_.current_words=current.words;state_.owner474=state_.live=state_.visible=state_.request10=true;
     state_.state44=0;state_.previous50=state_.selection56=state_.substate48=0;state_.loader469=1;
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return Refuse({GameFsCode::Unavailable,0,"34F1C Open root refused"});
     *clone_.Control(0)={0,0,1,1};
@@ -203,6 +218,7 @@ GameFsStatus GameSystemOptionFrontier::Initialize(GameResourceSource& source,con
 bool GameSystemOptionFrontier::SetInputEpoch(uint64_t epoch){if(!state_.live||state_.phase!=3||epoch<=state_.input_epoch)return false;state_.input_epoch=epoch;input_.BeginContext();return true;}
 bool GameSystemOptionFrontier::Input(const GameInputFrame& f){
     if(f.overflow_resync||!f.focused){input_.BeginContext();++state_.rejected;return false;}
+    if(state_.failed)return false;
     const auto& l=state_.child_lease;
     if(!state_.live||state_.phase!=3||f.sequence<=state_.last_sequence||f.main_menu_epoch!=state_.input_epoch
        ||f.message_owner_generation!=l.script_generation||f.message_context!=l.context||f.returned_owner!=l.available_owner||f.returned_generation!=l.available_generation){++state_.rejected;return false;}
@@ -224,17 +240,48 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             state_.retirement_pending=true;++state_.retirement_requests;state_.phase=6;}return {};}
         if(state_.phase!=3)return {};
         input_.Tick();
-        // NativeOptionsReadonlyFirstRow: consume directions/confirm as precise
-        // unsupported routes. No setting/gain/modal effect is silently applied.
-        const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2),right=input_.Repeat(Right,10,2),left=input_.Repeat(Left,10,2);
+        // Query in source priority. Later counters are not sampled after an
+        // earlier nonzero direction consumed this key invocation.
+        const auto down=input_.Repeat(Down,10,2),up=down?0:input_.Repeat(Up,10,2),right=(down||up)?0:input_.Repeat(Right,10,2),left=(down||up||right)?0:input_.Repeat(Left,10,2);
+        if(right&&settings_->OptionRightWritable()){
+            NeedOption(!state_.right_steps&&state_.selection56==0&&state_.previous50==0&&state_.substate48==0
+                       &&state_.current_words==std::array<uint32_t,3>{{2,3,3}}&&state_.passive_settings==state_.current_words,
+                       "Unsupported Options Right outside exact current2/limit5/row0 domain");
+            //351DC/351E8: signed2<4, local increment and previous invalidation.
+            state_.current_words[0]=3;state_.previous50=UINT32_MAX;++state_.right_steps;
+            state_.right_message_updates_before=message_.Snapshot().updates;state_.right_draw_frames_before=state_.draw_frames;
+            const auto write=[&](uint32_t stage)->GameFsStatus{
+                GameOptionWriteReceipt receipt;state_.source_consumer=stage?0x34CCC+(stage-1)*8:0x351CC;
+                const auto status=settings_->WriteOptionRight(state_.settings,stage,3,receipt);
+                if(!status)return status;
+                NeedOption(GameOptionRightReceiptValid(receipt)&&receipt.stage==stage&&receipt.gui_generation==state_.generation
+                           &&receipt.input_sequence==state_.last_sequence&&receipt.input_epoch==state_.input_epoch
+                           &&GameOptionSnapshotExact(receipt.before,state_.settings)&&GameOptionSnapshotExact(receipt.after,settings_->OptionSettings()),
+                           "Options actual source writer receipt/readback mismatch");
+                state_.right_receipts[stage]=receipt;++state_.right_writes;state_.settings=receipt.after;
+                return {};
+            };
+            auto direct=write(0);if(!direct)return Refuse(direct);++state_.source_ui_sound_intents; //direct root14, then event6
+            ++state_.after_key_updates; //352E0 substate0 returns, then common gate
+            state_.previous50=state_.selection56;*clone_.Control(1)={1,1,2,1};
+            for(uint32_t stage=1;stage<4;++stage){const auto status=write(stage);if(!status)return Refuse(status);}
+            //14834(1): actual root18=3 -> index8 -> exact retained105. The
+            // actual sound object's ID is a separate unresolved typed owner.
+            state_.source_consumer=0x4AFC8;++state_.gain_queries;state_.gain_value=105;
+            const auto gain=settings_->QueryOptionGain(state_.settings,105,state_.gain);
+            if(!gain)return Refuse(gain);
+            //No current provider may fabricate a return past the unproved ID.
+            return Refuse({GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"});
+        }
         if(down||up||right||left||input_.First(Circle)){
             ++state_.unsupported;state_.source_consumer=down?0x350B0:up?0x3512C:right?0x3516C:left?0x351EC:0x352BC;
             return Refuse({GameFsCode::Unavailable,0,"Unsupported Options readonly input consumer at "+std::to_string(state_.source_consumer)});
         }
         else if(input_.First(Cross)){
             auto status=settings_->RestoreOptionSettings(state_.settings,state_.passive_settings);NeedOption(bool(status),status.detail.c_str());
-            NeedOption(SameSettings(state_.settings,settings_->OptionSettings()),"Options backup readback mismatch");
-            state_.settings.writes=settings_->OptionSettings().writes;state_.state44=2;state_.phase=4;++state_.close_requests;
+            auto restored=state_.settings;restored.writes+=3;
+            NeedOption(SameSettings(restored,settings_->OptionSettings()),"Options backup readback mismatch");
+            state_.settings=restored;state_.state44=2;state_.phase=4;++state_.close_requests;
             state_.source_ui_sound_intents+=2;fade.CloseWipe(false);input_.BeginContext();
         }
         //35078 returns into34C54 even after Close:352E0 with48=0 and
@@ -252,7 +299,7 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
         GameUiDrawStats automatic;std::string error;NeedOption(clone_.Draw(graphics,automatic,error),error.c_str());uint32_t quads=automatic.quads;
         //34DC4 source manual root2 three bars; current readonly selection0.
         for(uint32_t row=0;row<3;++row){
-            const auto frame=state_.passive_settings[row]+(row==state_.previous50?6:1);
+            const auto frame=state_.current_words[row]+(row==state_.previous50?6:1);
             GameUiMatrix anchor;NeedOption(clone_.WorldMatrix(97+row,anchor),"Options bar anchor owner unavailable");
             // Named NativeUiViewspace source manual-root placement. Exact
             // source offsets DA520/DA524 are supplied in the integration pin.

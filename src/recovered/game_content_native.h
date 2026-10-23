@@ -145,6 +145,9 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     uint32_t StateWord(uint32_t byte_offset) const;
     GameOptionSettingsSnapshot OptionSettings()const override;
     GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)override;
+    bool OptionRightWritable()const override{return true;}
+    GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
+    GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&)override;
     int32_t ResetLookupWord(uint32_t index) const;
     // One native loading tick; false means a real I/O/format/lifetime failure.
     // A successful font consumer stops BEFORE the next source constructor.

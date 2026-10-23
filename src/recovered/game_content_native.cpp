@@ -273,6 +273,26 @@ GameFsStatus GameContentBoot::RestoreOptionSettings(const GameOptionSettingsSnap
     for(uint32_t field=0;field<3;++field){for(uint32_t byte=0;byte<4;++byte)reset_bytes_[0x10+field*4+byte]=uint8_t(backup[field]>>(8*byte));++option_settings_writes_;}
     if(OptionSettings().words!=backup)return {GameFsCode::Unavailable,0,"Options three source setter readbacks disagree"};return {};
 }
+GameFsStatus GameContentBoot::WriteOptionRight(const GameOptionSettingsSnapshot& expected,uint32_t stage,uint32_t value,GameOptionWriteReceipt& receipt){
+    if(state_.closed||state_.main_menu_phase!=7||!state_.main_menu_child_ready||!GameOptionSnapshotExact(expected,OptionSettings()))
+        return {GameFsCode::Unavailable,0,"Options current source writer owner unavailable"};
+    const auto gui=system_option_.Snapshot();
+    auto status=actor_script_.PrepareMenuOptionWrite(main_menu_target_,gui,stage,value,receipt);if(!status)return status;
+    const auto at=0x10+receipt.field*4;
+    for(uint32_t byte=0;byte<4;++byte)reset_bytes_.at(at+byte)=uint8_t(value>>(8*byte));++option_settings_writes_;
+    // The committed receipt is privately retained only after actual full-state
+    // readback. It does not accept an externally supplied expected RAM image.
+    status=actor_script_.CommitMenuOptionWrite(main_menu_target_,gui,receipt);return status;
+}
+GameFsStatus GameContentBoot::QueryOptionGain(const GameOptionSettingsSnapshot& expected,int32_t value,GameOptionGainObservation& out){
+    if(!GameOptionSnapshotExact(expected,OptionSettings())||value!=105||state_.main_menu_phase!=7)
+        return {GameFsCode::Unavailable,0,"Options exact selected gain query owner unavailable"};
+    const auto metadata=sound_bank_.Snapshot();out.metadata_ready=metadata.metadata_ready;out.native_metadata_slot=metadata.native_metadata_slot;
+    // No native bank slot/playback return is the source object's signed11EC ID.
+    // Its producer is not established, so neither4B22C nor a negative-ID skip
+    // is fabricated. Four already executed source stores remain committed.
+    return {GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"};
+}
 int32_t GameContentBoot::ResetLookupWord(uint32_t index) const {
     return reset_lookup_.at(index);
 }
@@ -571,7 +591,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             auto loss=frame;loss.overflow_resync=true;
             post_modal_.Input(loss);state_.post_modal=post_modal_.Snapshot();
             if(state_.main_menu_phase){
-                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);if(diary_.Modal())diary_.Input(loss);if(system_option_.Modal())system_option_.Input(loss);
+                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);if(diary_.Modal())diary_.Input(loss);if(system_option_.Modal()){system_option_.Input(loss);actor_script_.DisarmMenuOptionInput();}
             }
             else if(inventory_.Modal())inventory_.Input(loss);
             else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(loss);
@@ -589,7 +609,11 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             if(state_.main_menu_phase==7&&system_option_.Modal()){
                 if(!state_.main_menu_child_ready||system_option_.Snapshot().phase!=3)return false;
                 auto checked=CheckMainMenuLease();if(checked)checked=actor_script_.CheckMenuOption(main_menu_target_,system_option_.Snapshot());
-                if(!checked){state_.status=checked;state_.blocked=true;return false;}return system_option_.Input(frame);
+                if(!checked){state_.status=checked;state_.blocked=true;return false;}
+                const bool accepted=system_option_.Input(frame);
+                if(accepted){checked=actor_script_.ObserveMenuOptionInput(main_menu_target_,system_option_.Snapshot(),frame);
+                    if(!checked){state_.status=checked;state_.blocked=true;return false;}}
+                return accepted;
             }
             if(state_.main_menu_phase==7&&diary_.Modal()){
                 if(!state_.main_menu_child_ready||diary_.Snapshot().phase!=3)return false;
@@ -1142,6 +1166,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             if(main_flow_.Snapshot().menu_result50==13){
                 status=actor_script_.CheckMenuOption(main_menu_target_,system_option_.Snapshot());
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());const auto child=system_option_.Snapshot();
+                if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);
                 if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=10;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
                 if(child.phase!=3)state_.main_menu_child_ready=false;

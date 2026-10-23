@@ -1261,12 +1261,17 @@ GameFsStatus GameActorScript::BindMenuOption(const GameOwnerEventTarget& expecte
              &&lease.context&&lease.available_owner&&lease.available_generation&&lease.input_epoch,"Options sampled child lease unavailable");
         option_lease_=lease;
         option_settings_=&settings;state_.option_before=current;state_.option_after={};state_.menu_option_generation=gui;state_.menu_option_parent=parent;
+        option_expected_=current;option_issued_={};option_pending_={};option_write_pending_=option_right_armed_=false;
+        option_right_sequence_=option_input_sequence_=0;state_.option_right_writes=state_.option_right_after_key_before=0;state_.option_prefix_verified=false;
         state_.menu_option_live=true;++state_.menu_option_requests;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorScript::CheckMenuOption(const GameOwnerEventTarget& expected,const GameSystemOptionSnapshot& gui)const{
+    return CheckMenuOptionOwner(expected,gui,false);
+}
+GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& expected,const GameSystemOptionSnapshot& gui,bool failed_prefix)const{
     try{
-        Need(state_.live&&!state_.blocked&&vm_&&state_.menu_option_live&&option_settings_&&!gui.failed
+        Need(state_.live&&!state_.blocked&&vm_&&state_.menu_option_live&&option_settings_&&(!gui.failed||failed_prefix)
              &&gui.generation==state_.menu_option_generation&&gui.child_lease.parent_generation==state_.menu_option_parent
              &&gui.child_lease.script_generation==state_.generation&&gui.child_lease.run_id==vm_->current_witness().run_id,"Options GUI/parent/run owner changed");
         const auto& lease=gui.child_lease;Need(lease.context==option_lease_.context&&lease.available_owner==option_lease_.available_owner
@@ -1282,13 +1287,86 @@ GameFsStatus GameActorScript::CheckMenuOption(const GameOwnerEventTarget& expect
         Need(pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_option_parent&&!vm_->context_enabled()
              &&!vm_->callback_depth()&&!vm_->queued_callbacks()&&GameWordMemoPausedOwnerExact(pause.restored,vm_->current_witness()),"Options exact paused18 caller/frame/operands/deadline changed");
         const auto current=option_settings_->OptionSettings();const auto& before=state_.option_before;
-        Need(current.live&&current.owner==before.owner&&current.generation==before.generation&&current.words==before.words
-             &&current.writes==before.writes+(gui.close_requests?3u:0u)&&gui.passive_settings==before.words,"Options settings source owner/readback/writer ledger changed");return {};
+        Need(gui.passive_settings==before.words,"Options immutable backup changed");
+        if(state_.option_right_writes){
+            Need(!gui.close_requests&&gui.right_steps==1&&gui.right_writes==state_.option_right_writes
+                 &&GameOptionSnapshotExact(current,option_expected_)&&GameOptionSnapshotExact(gui.settings,option_expected_)
+                 &&gui.current_words==std::array<uint32_t,3>{{3,3,3}},"Options issued Right prefix/current words changed");
+            for(uint32_t i=0;i<state_.option_right_writes;++i)Need(GameOptionReceiptExact(gui.right_receipts[i],option_issued_[i]),"Options issued receipt replaced/reordered");
+        }else Need(current.live&&current.owner==before.owner&&current.generation==before.generation&&current.words==before.words
+             &&current.writes==before.writes+(gui.close_requests?3u:0u)&&!gui.right_writes,"Options settings source owner/readback/writer ledger changed");return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::ObserveMenuOptionInput(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,const GameInputFrame& f){
+    const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
+    if(!f.focused||f.overflow_resync){DisarmMenuOptionInput();return {};}
+    if(gui.phase!=3||gui.state44!=1||f.sequence<=option_input_sequence_||f.sequence!=gui.last_sequence
+       ||f.main_menu_epoch!=gui.input_epoch||f.main_menu_epoch!=option_lease_.input_epoch+1
+       ||f.message_owner_generation!=option_lease_.script_generation||f.message_context!=option_lease_.context
+       ||f.returned_owner!=option_lease_.available_owner||f.returned_generation!=option_lease_.available_generation)
+        return {GameFsCode::Unavailable,0,"Options writer sampled input identity unavailable"};
+    option_input_sequence_=f.sequence;
+    // Observe only the existing route's accepted samples. A valid pending
+    // Right edge survives later held/release samples until Tick consumes it,
+    // matching GameMenuInput's pending mask. Focus/overflow explicitly revoke.
+    if(!f.buttons)option_right_armed_=true;
+    else{if(option_right_armed_&&(f.buttons&Right)&&!(f.buttons&(Down|Up)))option_right_sequence_=f.sequence;
+         option_right_armed_=false;}
+    return {};
+}
+GameFsStatus GameActorScript::PrepareMenuOptionWrite(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,uint32_t stage,uint32_t value,GameOptionWriteReceipt& out){
+    const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
+    try{
+        static constexpr uint32_t fields[]={1,0,1,2},calls[]={0x351CC,0x34CCC,0x34CD4,0x34CDC},setters[]={0x24B34,0x24B1C,0x24B34,0x24B4C};
+        Need(!option_write_pending_&&stage<4&&stage==state_.option_right_writes&&value==3&&option_right_sequence_
+             &&gui.last_sequence==option_input_sequence_&&option_right_sequence_<=option_input_sequence_
+             &&gui.input_epoch==option_lease_.input_epoch+1&&gui.right_steps==1
+             &&gui.phase==3&&gui.state44==1&&!gui.close_requests&&gui.selection56==0&&gui.substate48==0
+             &&gui.previous50==(stage?0u:UINT32_MAX)&&gui.current_words==std::array<uint32_t,3>{{3,3,3}}
+             &&state_.option_before.words==std::array<uint32_t,3>{{2,3,3}}&&gui.passive_settings==state_.option_before.words,
+             "Options exact selected2-to3 source writer step unavailable");
+        Need(gui.source_ui_sound_intents==(stage?2u:1u),"Options direct setter/feedback source order changed");
+        if(!stage){Need(gui.after_key_updates!=UINT32_MAX,"Options source update ordinal exhausted");state_.option_right_after_key_before=gui.after_key_updates;}
+        else Need(gui.after_key_updates==state_.option_right_after_key_before+1,"Options common update cursor changed");
+        out={gui.generation,option_input_sequence_,gui.input_epoch,stage,fields[stage],calls[stage],setters[stage],value,option_expected_,option_expected_};
+        Need(out.after.writes!=UINT64_MAX,"Options writer ordinal exhausted");out.after.words[out.field]=value;++out.after.writes;
+        Need(GameOptionRightReceiptValid(out),"Options source writer receipt shape refused");
+        option_pending_=out;option_write_pending_=true;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::CommitMenuOptionWrite(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,const GameOptionWriteReceipt& receipt){
+    try{
+        Need(state_.live&&!state_.blocked&&state_.menu_option_live&&vm_&&option_settings_&&option_write_pending_
+             &&GameOptionReceiptExact(receipt,option_pending_)&&receipt.stage==state_.option_right_writes
+             &&GameOptionRightReceiptValid(receipt)&&GameOptionSnapshotExact(option_settings_->OptionSettings(),receipt.after),"Options actual full-word writer/readback refused");
+        // Validate the original exact paused18 owner independently of the new
+        // scalar value before advancing the privately issued prefix.
+        const auto current=OwnerEventTarget();Need(target.generation==current.generation&&target.context.kind==current.context.kind&&target.context.word==current.context.word
+             &&!target.context.context_owner.expired()&&target.context.context_owner.lock()==current.context.context_owner.lock()
+             &&target.callback.kind==current.callback.kind&&target.callback.word==current.callback.word&&current.callback.word==0x7008DA28u
+             &&gui.generation==state_.menu_option_generation&&gui.child_lease.parent_generation==state_.menu_option_parent
+             &&gui.child_lease.script_generation==state_.generation&&gui.child_lease.run_id==vm_->current_witness().run_id
+             &&gui.child_lease.context==option_lease_.context&&gui.child_lease.available_owner==option_lease_.available_owner
+             &&gui.child_lease.available_generation==option_lease_.available_generation&&gui.child_lease.input_epoch==option_lease_.input_epoch
+             &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks()&&state_.menu_pause_return.returned&&!state_.menu_pause_return.failed
+             &&GameWordMemoPausedOwnerExact(state_.menu_pause_return.restored,vm_->current_witness()),"Options paused writer owner changed");
+        option_expected_=receipt.after;option_issued_[receipt.stage]=receipt;++state_.option_right_writes;option_write_pending_=false;
+        if(state_.option_right_writes==4)option_right_sequence_=0;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::VerifyMenuOptionPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+    state_.option_prefix_verified=false;
+    if(!gui.failed||gui.source_consumer!=0x4AFC8||gui.phase!=3||gui.previous50||gui.selection56||gui.substate48
+       ||gui.source_ui_sound_intents!=2||gui.after_key_updates!=state_.option_right_after_key_before+1
+       ||gui.right_writes!=4||gui.gain_queries!=1||gui.gain_value!=105
+       ||gui.gain_returned||gui.right_message_continued||gui.close_requests||gui.polls||gui.retirements||gui.gain.source_id_known||gui.gain.source_dispatched)
+        return {GameFsCode::Unavailable,0,"Options stopped source prefix incomplete"};
+    const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
+    state_.option_prefix_verified=true;state_.option_after=option_expected_;return {};
 }
 GameFsStatus GameActorScript::CompleteMenuOption(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
-    if(gui.phase!=7||gui.retired_generation!=gui.generation||gui.live||gui.owner474||gui.request10||gui.retirement_pending||gui.template_owner||gui.clone_owner
+    if(state_.option_right_writes||gui.phase!=7||gui.retired_generation!=gui.generation||gui.live||gui.owner474||gui.request10||gui.retirement_pending||gui.template_owner||gui.clone_owner
        ||gui.message.live||gui.message.text_owner||gui.message.registered||gui.message.references||gui.state44!=3||gui.loader469
        ||gui.opens!=1||gui.close_requests!=1||gui.close_completions!=1||gui.polls!=1||gui.retirement_requests!=1||gui.retirements!=1)
         return {GameFsCode::Unavailable,0,"Options current source poll/deferred deleting owner incomplete"};
