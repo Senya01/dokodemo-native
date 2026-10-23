@@ -9,11 +9,15 @@ bool GameSourcePortExact(const GameSourcePortSnapshot& a,const GameSourcePortSna
  return std::tie(a.live,a.active,a.returned,a.free_unlinked,a.active_linked,a.owner,a.generation,a.allocation,a.known_halfwords,a.storage,a.id,a.flags,a.initialize_pc,a.return_pc,a.sentinel_ids,a.sentinel_flags,a.sentinel_self,a.parameters,a.zero70)==std::tie(b.live,b.active,b.returned,b.free_unlinked,b.active_linked,b.owner,b.generation,b.allocation,b.known_halfwords,b.storage,b.id,b.flags,b.initialize_pc,b.return_pc,b.sentinel_ids,b.sentinel_flags,b.sentinel_self,b.parameters,b.zero70);
 }
 bool GameSourceTrackExact(const GameSourceTrackSnapshot& a,const GameSourceTrackSnapshot& b)noexcept{
- return std::tie(a.live,a.initialized,a.free_unlinked,a.child_linked,a.lane_initialized,a.returned,a.storage,a.context_storage,a.allocation_index,a.subindex,a.bank,a.record_offset,a.body_offset,a.end_offset,a.word20,a.wordCC,a.wordE4,a.wordE6,a.byte28,a.byte29,a.allocated_ports,a.lanes,a.retain_pc,a.refs_before,a.refs_after,a.return_pc,a.factor,a.ports,a.lane_controls)==std::tie(b.live,b.initialized,b.free_unlinked,b.child_linked,b.lane_initialized,b.returned,b.storage,b.context_storage,b.allocation_index,b.subindex,b.bank,b.record_offset,b.body_offset,b.end_offset,b.word20,b.wordCC,b.wordE4,b.wordE6,b.byte28,b.byte29,b.allocated_ports,b.lanes,b.retain_pc,b.refs_before,b.refs_after,b.return_pc,b.factor,b.ports,b.lane_controls);
+ return std::tie(a.live,a.initialized,a.free_unlinked,a.child_linked,a.lane_initialized,a.returned,a.storage,a.context_storage,a.allocation_index,a.subindex,a.bank,a.record_offset,a.body_offset,a.end_offset,a.cursor_offset,a.word20,a.wordCC,a.wordE4,a.wordE6,a.byte28,a.byte29,a.allocated_ports,a.lanes,a.retain_pc,a.refs_before,a.refs_after,a.return_pc,a.factor,a.ports,a.lane_controls)==std::tie(b.live,b.initialized,b.free_unlinked,b.child_linked,b.lane_initialized,b.returned,b.storage,b.context_storage,b.allocation_index,b.subindex,b.bank,b.record_offset,b.body_offset,b.end_offset,b.cursor_offset,b.word20,b.wordCC,b.wordE4,b.wordE6,b.byte28,b.byte29,b.allocated_ports,b.lanes,b.retain_pc,b.refs_before,b.refs_after,b.return_pc,b.factor,b.ports,b.lane_controls);
+}
+bool GameSourceProcessorExact(const GameSourceProcessorSnapshot& a,const GameSourceProcessorSnapshot& b)noexcept{
+ return std::tie(a.entered,a.sentinel_terminated,a.controls_read,a.kind_dispatched,a.opcode_read,a.operands_returned,a.control_attempted,a.control_returned,a.kind_returned,a.context_returned,a.context_storage,a.track_storage,a.command_storage,a.sentinel_pc,a.dispatch_pc,a.kind_target,a.opcode_pc,a.opcode,a.cursor_before,a.cursor_after,a.body_end,a.effective_flags,a.context_word18,a.track_e4,a.track_e6,a.byte29,a.countdown,a.operand_count,a.control_pc,a.frontier,a.quantum,a.port_id,a.operands,a.operand_begin,a.operand_end,a.operand_call,a.bytes,a.command)
+ ==std::tie(b.entered,b.sentinel_terminated,b.controls_read,b.kind_dispatched,b.opcode_read,b.operands_returned,b.control_attempted,b.control_returned,b.kind_returned,b.context_returned,b.context_storage,b.track_storage,b.command_storage,b.sentinel_pc,b.dispatch_pc,b.kind_target,b.opcode_pc,b.opcode,b.cursor_before,b.cursor_after,b.body_end,b.effective_flags,b.context_word18,b.track_e4,b.track_e6,b.byte29,b.countdown,b.operand_count,b.control_pc,b.frontier,b.quantum,b.port_id,b.operands,b.operand_begin,b.operand_end,b.operand_call,b.bytes,b.command);
 }
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot& a,const GameSourceSequenceSnapshot& b)noexcept{
  return std::tie(a.live,a.active,a.allocation_returned,a.lookup_returned,a.clear_returned,a.command_entered,a.bank_retained,a.record_lookup_returned,a.track_reserved,a.track_source_initialized,a.track_activated,a.port_attempted,a.port_result_known,a.handler_returned,a.owner,a.generation,a.allocation,a.voice_owner,a.voice_generation,a.ids_storage,a.output_storage,a.id,a.bank,a.sentinel_id,a.track_id,a.port_id,a.flags,a.sentinel_flags,a.allocation_pc,a.return_pc,a.result_store_pc,a.lookup_pc,a.clear_pc,a.command,a.subindex,a.group,a.event,a.command_pc,a.retain_writer,a.refs_before,a.refs_after,a.record_offset,a.record_kind,a.record_divisor,a.record_bytes,a.track_pool_stride,a.port_call_pc,a.frontier,a.initial_factor,a.selected_factor,a.sentinel_self,a.child_head_same,a.output_unchanged,a.bank_ids,a.output_before,a.output_after,a.admission_returned,a.command_released,a.update_entered,a.processor_attempted,a.current_refs,a.release_pc,a.release_before,a.release_after,a.update_pc,a.processor_pc,a.native_elapsed_ns,a.worker_tick_serial,a.worker_previous_ns,a.worker_current_ns,a.native_delta_seconds,a.update_quantum,a.processor_quantum,a.processor_context)
- ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after,b.admission_returned,b.command_released,b.update_entered,b.processor_attempted,b.current_refs,b.release_pc,b.release_before,b.release_after,b.update_pc,b.processor_pc,b.native_elapsed_ns,b.worker_tick_serial,b.worker_previous_ns,b.worker_current_ns,b.native_delta_seconds,b.update_quantum,b.processor_quantum,b.processor_context)&&GameSourcePortExact(a.port,b.port)&&GameSourceTrackExact(a.track,b.track);
+ ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after,b.admission_returned,b.command_released,b.update_entered,b.processor_attempted,b.current_refs,b.release_pc,b.release_before,b.release_after,b.update_pc,b.processor_pc,b.native_elapsed_ns,b.worker_tick_serial,b.worker_previous_ns,b.worker_current_ns,b.native_delta_seconds,b.update_quantum,b.processor_quantum,b.processor_context)&&GameSourcePortExact(a.port,b.port)&&GameSourceTrackExact(a.track,b.track)&&GameSourceProcessorExact(a.processor,b.processor);
 }
 GameSourceSequencePool::GameSourceSequencePool(){Close();}
 void GameSourceSequencePool::Close()noexcept{
@@ -105,7 +109,7 @@ GameFsStatus GameSourceSequencePool::CompleteTrack580D4(const std::function<Game
  return {GameFsCode::Unavailable,0,"580D4 actual port/record domain unavailable"};
  auto& t=*current_track_;auto& r=t.state;r={};r.ports.fill(-1);
  r.live=r.initialized=true;r.allocation_index=t.allocation_index;t.link.id=int16_t(state_.subindex);r.subindex=t.link.id;r.bank=state_.bank;
- r.record_offset=state_.record_offset;r.body_offset=r.record_offset+20;r.end_offset=r.body_offset+state_.record_bytes;r.factor=state_.selected_factor;
+ r.record_offset=state_.record_offset;r.body_offset=r.record_offset+20;r.end_offset=r.body_offset+state_.record_bytes;r.cursor_offset=r.body_offset;r.factor=state_.selected_factor;
  r.word20=0;r.byte28=r.byte29=0;r.allocated_ports=r.lanes=1;r.ports[0]=int16_t(state_.port_id);r.wordCC=UINT32_MAX;r.wordE4=r.wordE6=0;
  //58060(track,lane0,0): no57EB8/57F58 path is selected.
  r.lane_controls={127,64,0,0,0,127,64};r.lane_initialized=true;
@@ -117,7 +121,7 @@ GameFsStatus GameSourceSequencePool::CompleteTrack580D4(const std::function<Game
  current_->link.flags|=2;r.free_unlinked=r.child_linked=true;r.returned=true;r.return_pc=0x58290;
  state_.track_activated=true;state_.frontier=0;return {};
 }
-GameFsStatus GameSourceSequencePool::Update5A06C(uint64_t elapsed){
+GameFsStatus GameSourceSequencePool::Update5A06C(uint64_t elapsed,const ReadByte& read){
  if(!current_||!state_.handler_returned||!state_.command_released||!current_track_||!current_track_->state.returned)
  return {GameFsCode::Unavailable,0,"5A06C actual returned context/track unavailable"};
  state_.update_entered=true;state_.update_pc=0x54FE8;state_.native_elapsed_ns=elapsed;
@@ -128,15 +132,65 @@ GameFsStatus GameSourceSequencePool::Update5A06C(uint64_t elapsed){
  if(!std::isfinite(scaled)||scaled<0||double(scaled)>double(INT32_MAX)){state_.frontier=0x5A06C;return {GameFsCode::Unavailable,0,"5A06C native delta outside finite trunc.w.s domain"};}
  state_.update_quantum=int32_t(scaled);
  if(current_->link.flags!=3||current_->word1A)return {GameFsCode::Unavailable,0,"5A06C selected current context flags changed"};
- state_.processor_pc=0x5A120;return ProcessContext59DD4(*current_,state_.update_quantum);
+ state_.processor_pc=0x5A120;return ProcessContext59DD4(*current_,state_.update_quantum,read);
 }
-GameFsStatus GameSourceSequencePool::ProcessContext59DD4(Node& context,int32_t quantum){
+GameFsStatus GameSourceSequencePool::ProcessContext59DD4(Node& context,int32_t quantum,const ReadByte& read){
  state_.processor_attempted=true;state_.frontier=0x59DD4;state_.processor_context=reinterpret_cast<uintptr_t>(&context);state_.processor_quantum=quantum;
  if(&context!=current_||quantum!=state_.update_quantum||!current_track_||context.child_head!=&current_track_->link||context.child.next!=&current_track_->link||context.child.previous!=&current_track_->link)
   return {GameFsCode::Unavailable,0,"59DD4 actual context/quantum/attached-child ABI unavailable"};
- //Genuine typed consumer entry. No grammar, source body result,5A128
- //context clear or later54FD4 update consumers are implemented here.
+ if(read)return ProcessKind59168(context,*current_track_,quantum,read);
+ //Historical59DD4 entry-only domain remains separate from processor advance.
  return {GameFsCode::Unavailable,0,"Unsupported selected59DD4(actual live context, actual worker delta quantum) before event6 grammar"};
+}
+GameFsStatus GameSourceSequencePool::ProcessKind59168(Node& context,Track& track,int32_t quantum,const ReadByte& read){
+ auto& p=state_.processor;auto& t=track.state;p.entered=true;p.context_storage=reinterpret_cast<uintptr_t>(&context);p.track_storage=reinterpret_cast<uintptr_t>(&track);p.quantum=quantum;
+ p.cursor_before=t.cursor_offset;p.cursor_after=t.cursor_offset;p.body_end=t.end_offset;
+ if(track.link.id<0||track.link.previous!=&context.child||track.link.next!=&context.child||context.child.id>=0||context.child.flags||context.child.previous!=&track.link)
+  return {GameFsCode::Unavailable,0,"59DD4 actual child/sentinel topology changed"};
+ p.sentinel_terminated=true;p.sentinel_pc=0x5A05C;
+ p.context_word18=context.word18;p.track_e4=t.wordE4;p.track_e6=t.wordE6;p.effective_flags=uint16_t(context.word18|t.wordE4);p.controls_read=true;
+ if(p.effective_flags||p.track_e6)return {GameFsCode::Unavailable,0,"59DD4 unimplemented current control flags"};
+ try{
+  const auto kind=int16_t(uint16_t(read(t.record_offset+8))|(uint16_t(read(t.record_offset+9))<<8));
+  if(kind!=0||uint16_t(kind)!=state_.record_kind||t.record_offset!=state_.record_offset)
+   return {GameFsCode::Unavailable,0,"59F38 current owning record kind changed"};
+ }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+ p.kind_dispatched=true;p.dispatch_pc=0x59F50;p.kind_target=0x59168;p.byte29=t.byte29;p.countdown=t.word20;
+ if(t.byte29||int32_t(t.word20)!=0)return {GameFsCode::Unavailable,0,"59168 selected first child branch changed"};
+ const auto byte=[&](uint32_t at){if(at<t.body_offset||at>=t.end_offset)throw std::runtime_error("59168 owning body bounds");return read(at);};
+ try{
+  //5923C/59250: the real command byte is consumed before its dispatch.
+  p.opcode=byte(t.cursor_offset);p.opcode_pc=0x5923C;p.opcode_read=true;p.bytes[0]=uint8_t(p.opcode);++t.cursor_offset;p.cursor_after=t.cursor_offset;
+  if(p.opcode!=0xD0)return {GameFsCode::Unavailable,0,"Unsupported selected59168 opcode before D0 effect"};
+  const uint32_t calls[]={0x5935C,0x5936C,0x5937C,0x5938C};
+  for(uint32_t i=0;i<4;++i){
+   p.operand_begin[i]=t.cursor_offset;p.operand_call[i]=calls[i];
+   const auto tag=byte(t.cursor_offset);if((tag&0xF0)!=0)return {GameFsCode::Unavailable,0,"Unsupported58DA4 operand encoding"};
+   const uint32_t count=tag&15u;if(count>4||t.cursor_offset-t.body_offset+1+count>p.bytes.size())return {GameFsCode::Unavailable,0,"58D4C selected operand extent"};
+   p.bytes[t.cursor_offset-t.body_offset]=tag;++t.cursor_offset;p.cursor_after=t.cursor_offset; //58DD8 tag store
+   //58D4C advances a LOCAL pointer; a failed payload read cannot publish it.
+   auto cursor=t.cursor_offset;uint32_t value=0;
+   for(uint32_t j=0;j<count;++j){const auto v=byte(cursor);p.bytes[cursor-t.body_offset]=v;value=value*100u+10u*(v>>4)+(v&15u);++cursor;}
+   t.cursor_offset=cursor;p.operands[i]=int32_t(value);p.operand_end[i]=cursor;p.cursor_after=cursor;++p.operand_count; //58E64 only after helper return
+  }
+  p.operands_returned=true;return Control5900C(context,track);
+ }catch(const std::exception& e){p.cursor_after=t.cursor_offset;return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameSourceSequencePool::Control5900C(Node& context,Track& track){
+ auto& p=state_.processor;
+ if(&context!=current_||&track!=current_track_||!context.ids)
+  return {GameFsCode::Unavailable,0,"5900C current context ID storage unavailable"};
+ command_={0,uint32_t(p.operands[0]),uint32_t((*context.ids)[0]),uint32_t(p.operands[1]),uint32_t(p.operands[2]),uint32_t(p.operands[3])};
+ p.command=command_;p.command_storage=reinterpret_cast<uintptr_t>(&command_);p.port_id=int16_t(track.state.ports[0]);p.control_pc=0x5903C;
+ if(!current_port_||p.port_id<0||size_t(p.port_id)>=ports_.size()||&ports_[size_t(p.port_id)]!=current_port_||current_port_->link.id!=p.port_id||!(current_port_->link.flags&1))
+  return {GameFsCode::Unavailable,0,"5900C actual signed port owner unavailable"};
+ return Submit5B9E4(*current_port_,command_);
+}
+GameFsStatus GameSourceSequencePool::Submit5B9E4(Port& port,const std::array<uint32_t,6>& command){
+ auto& p=state_.processor;p.control_attempted=true;p.frontier=state_.frontier=0x5B9E4;
+ if(&port!=current_port_||&command!=&command_||command!=p.command||p.command_storage!=reinterpret_cast<uintptr_t>(&command))
+  return {GameFsCode::Unavailable,0,"5B9E4 actual port/command ABI changed"};
+ return {GameFsCode::Unavailable,0,"Unsupported selected5B9E4(actual owned port, current D0 command) before control body"};
 }
 bool GameSourceVoiceExact(const GameSourceVoiceSnapshot& a,const GameSourceVoiceSnapshot& b)noexcept{
  return std::tie(a.live,a.active,a.returned,a.auxiliary_null,a.callback_entered,a.callback_returned,a.sequence_result_known,a.owner,a.generation,a.allocation,a.services,a.id,a.bank,a.sequence_slot,a.flags,a.mode,a.group,a.event,a.extra,a.descriptor,a.bank_refs_before,a.bank_refs_after,a.retain_writer,a.initial_left,a.initial_right,a.initial_dirty_mask,a.initial_port_writes,a.initialized_mask,a.port_writes,a.return_pc,a.callback_pc,a.frontier,a.initializer_store_pc,a.words74,a.words80,a.wordsA0,a.initial_lane_controls,a.initial_lane_flags,a.bank_ids,a.working,a.published,a.consumer,a.dirty,a.persistent,a.published_dirty,a.published_persistent,a.consumer_dirty,a.consumer_persistent,a.master_left,a.master_right)

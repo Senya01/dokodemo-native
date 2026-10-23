@@ -83,6 +83,7 @@ bool GameSourceVoiceFeedbackValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceVoiceServiceValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceSequencePrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourceProcessorPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
@@ -109,6 +110,7 @@ class GameSourceSoundControl final {
     GameFsStatus ServiceVoice(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServiceSequence(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServicePort(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus ServiceProcessor(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     void ObserveWorkerTick()noexcept;
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}

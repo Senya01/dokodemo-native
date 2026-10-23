@@ -21,13 +21,26 @@ struct GameSourceTrackSnapshot {
  bool live=false,initialized=false,free_unlinked=false,child_linked=false,lane_initialized=false,returned=false;
  uintptr_t storage=0,context_storage=0;
  int32_t allocation_index=-1,subindex=-1,bank=-1;
- uint32_t record_offset=0,body_offset=0,end_offset=0,word20=0,wordCC=0,wordE4=0,wordE6=0,byte28=0,byte29=0;
+ uint32_t record_offset=0,body_offset=0,end_offset=0,cursor_offset=0,word20=0,wordCC=0,wordE4=0,wordE6=0,byte28=0,byte29=0;
  uint32_t allocated_ports=0,lanes=0,retain_pc=0,refs_before=0,refs_after=0,return_pc=0;
  float factor=0;
  std::array<int16_t,16> ports{};
  std::array<uint8_t,7> lane_controls{}; //8C,AC,BC,6C,5C,7C,9C
 };
 bool GameSourceTrackExact(const GameSourceTrackSnapshot&,const GameSourceTrackSnapshot&)noexcept;
+struct GameSourceProcessorSnapshot {
+ bool entered=false,sentinel_terminated=false,controls_read=false,kind_dispatched=false,opcode_read=false,operands_returned=false,control_attempted=false;
+ bool control_returned=false,kind_returned=false,context_returned=false;
+ uintptr_t context_storage=0,track_storage=0,command_storage=0;
+ uint32_t sentinel_pc=0,dispatch_pc=0,kind_target=0,opcode_pc=0,opcode=0,cursor_before=0,cursor_after=0,body_end=0;
+ uint32_t effective_flags=0,context_word18=0,track_e4=0,track_e6=0,byte29=0,countdown=0,operand_count=0,control_pc=0,frontier=0;
+ int32_t quantum=0,port_id=-1;
+ std::array<int32_t,4> operands{};
+ std::array<uint32_t,4> operand_begin{},operand_end{},operand_call{};
+ std::array<uint8_t,9> bytes{};
+ std::array<uint32_t,6> command{};
+};
+bool GameSourceProcessorExact(const GameSourceProcessorSnapshot&,const GameSourceProcessorSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -51,6 +64,7 @@ struct GameSourceSequenceSnapshot {
  float native_delta_seconds=0;
  int32_t update_quantum=0,processor_quantum=0;
  uintptr_t processor_context=0;
+ GameSourceProcessorSnapshot processor;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -75,8 +89,12 @@ class GameSourceSequencePool final {
  GameFsStatus Start580D4(uint32_t,uint16_t,uint16_t,uint32_t,bool=false,const std::function<GameFsStatus()>& retain={});
  GameFsStatus AllocatePort5A5AC();
  GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
- GameFsStatus Update5A06C(uint64_t);
- GameFsStatus ProcessContext59DD4(Node&,int32_t);
+ using ReadByte=std::function<uint8_t(uint32_t)>;
+ GameFsStatus Update5A06C(uint64_t,const ReadByte& read={});
+ GameFsStatus ProcessContext59DD4(Node&,int32_t,const ReadByte&);
+ GameFsStatus ProcessKind59168(Node&,Track&,int32_t,const ReadByte&);
+ GameFsStatus Control5900C(Node&,Track&);
+ GameFsStatus Submit5B9E4(Port&,const std::array<uint32_t,6>&);
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
  std::array<Port,16> ports_{};
@@ -85,6 +103,7 @@ class GameSourceSequencePool final {
  Track* current_track_=nullptr;
  Node* current_=nullptr;
  GameSourceSequenceSnapshot state_;
+ std::array<uint32_t,6> command_{}; //actual stable native storage for source stack command
  uint64_t generation_=0; //survives retired observation reset between owning voices
 };
 struct GameSourceVoiceSnapshot {
