@@ -17,6 +17,7 @@ bool GameOptionSnapshotExact(const GameOptionSettingsSnapshot&,const GameOptionS
 bool GameOptionReceiptExact(const GameOptionWriteReceipt&,const GameOptionWriteReceipt&)noexcept;
 bool GameOptionRightReceiptValid(const GameOptionWriteReceipt&)noexcept;
 bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt&)noexcept;
+bool GameOptionYesReceiptValid(const GameOptionWriteReceipt&)noexcept;
 struct GameOptionGainObservation {
     bool metadata_ready=false,source_id_known=false,source_dispatched=false;
     int32_t native_metadata_slot=-1;
@@ -34,6 +35,7 @@ class GameOptionSettings {
     virtual GameSourceSoundSnapshot OptionSoundOwner()const{return {};}
     virtual GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options Right writer owner unavailable"};}
     virtual GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options backup writer owner unavailable"};}
+    virtual GameFsStatus WriteOptionYes(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options current Yes writer owner unavailable at3534C"};}
     virtual GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&){return {GameFsCode::Unavailable,0,"Unsupported Options source sound ID read4AFC8"};}
 };
 struct GameOwnedMessageSnapshot {
@@ -102,6 +104,8 @@ struct GameSystemOptionSnapshot {
     std::array<uint32_t,3> bar_frames{}; // last successful authored Bind+Draw frames
     uint32_t restore_writes=0;
     std::array<GameOptionWriteReceipt,3> restore_receipts{};
+    uint32_t yes_writes=0,yes_consumed=0,close_kind=0; //0none,1backupCancel,2currentYes
+    std::array<GameOptionWriteReceipt,3> yes_receipts{};
     GameOwnedMessageSnapshot message;
     GameTrcPromptSnapshot prompt;
     uint64_t prompt_bound_owner=0,prompt_bound_generation=0;

@@ -304,6 +304,16 @@ GameFsStatus GameContentBoot::WriteOptionBackup(const GameOptionSettingsSnapshot
     for(uint32_t byte=0;byte<4;++byte)reset_bytes_.at(at+byte)=uint8_t(value>>(8*byte));++option_settings_writes_;
     return actor_script_.CommitMenuOptionWrite(main_menu_target_,gui,receipt);
 }
+GameFsStatus GameContentBoot::WriteOptionYes(const GameOptionSettingsSnapshot& expected,uint32_t stage,uint32_t value,GameOptionWriteReceipt& receipt){
+    // Human-input ready is false during natural TRC contraction. Authority is
+    // the private prior publication + actual pending source tick, not ready.
+    if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))
+        return {GameFsCode::Unavailable,0,"Options Yes current source owner unavailable"};
+    const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionYes(main_menu_target_,gui,stage,value,receipt);if(!status)return status;
+    const auto at=0x10+receipt.field*4;
+    for(uint32_t byte=0;byte<4;++byte)reset_bytes_.at(at+byte)=uint8_t(value>>(8*byte));++option_settings_writes_;
+    return actor_script_.CommitMenuOptionWrite(main_menu_target_,gui,receipt);
+}
 int32_t GameContentBoot::ResetLookupWord(uint32_t index) const {
     return reset_lookup_.at(index);
 }

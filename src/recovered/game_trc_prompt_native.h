@@ -7,14 +7,17 @@ class GameFontResource;
 struct GameTrcPromptSnapshot {
     bool live=false,active=false,failed=false,cancel_enabled=false,resource_live=false,font_live=false;
     uint64_t owner=0,generation=0,parent=0,invocation=0,input_epoch=0,last_sequence=0;
+    uint64_t result_sequence=0,result_epoch=0,completed_invocation=0;
+    uint32_t publication=0,result_update=0;
     int32_t state864=3,result86C=0;
     uint32_t mode=0,selection=0,choices=2,columns=0,rows=0,shape_frame=1;
-    uint32_t opens=0,returns=0,no_choices=0,yes_refusals=0,disabled_cross=0,rejected=0,updates=0,draws=0,callbacks=0,glyphs=0,flushes=0,sound_intents=0;
+    uint32_t opens=0,returns=0,no_choices=0,yes_choices=0,yes_refusals=0,disabled_cross=0,rejected=0,updates=0,draws=0,callbacks=0,glyphs=0,flushes=0,sound_intents=0;
     float progress=0;
     GameFsStatus failure;
 };
 // Actual global47784/CB768 owner borrowed from Bootstrap, not a new dialog
-// clone. Only plain DA500/mode0 and the real row1 No result are admitted.
+// clone. Plain DA500/mode0 publishes real Yes1 or No2 before natural closing.
+// A result alone grants no Options writer/completion authority.
 class GameTrcPrompt final:private GameUiCallbacks {
   public:
     GameTrcPrompt()=default;

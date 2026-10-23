@@ -47,6 +47,7 @@ GameFsStatus GameTrcPrompt::Open(uint64_t parent,uint64_t epoch){
     for(uint32_t y=0;y<height_;++y)std::copy_n(bitmap.pixels.data()+size_t(y)*bitmap.width,width_,pixels_.data()+size_t(y)*width_);
     std::memcpy(records_,records.data(),bitmap.glyphs*sizeof(GameFontDrawRecord));
     state_.parent=parent;state_.input_epoch=epoch;++state_.invocation;++state_.opens;state_.last_sequence=0;state_.active=true;
+    state_.result_sequence=state_.result_epoch=0;state_.result_update=0;
     state_.state864=-1;state_.result86C=0;state_.mode=state_.selection=0;state_.choices=2;state_.cancel_enabled=false;state_.progress=0;
     state_.columns=10;state_.rows=2;state_.shape_frame=30;state_.glyphs=bitmap.glyphs;input_.BeginContext();return {};
 }
@@ -72,13 +73,16 @@ GameFsStatus GameTrcPrompt::Tick(){
         if(down){if(state_.selection+1<2)++state_.selection;else if(down==1)state_.selection=0;++state_.sound_intents;}
         else if(up){if(state_.selection) --state_.selection;else if(up==1)state_.selection=1;++state_.sound_intents;}
         else if(input_.First(Circle)){
-            if(!state_.selection){++state_.yes_refusals;return Refuse({GameFsCode::Unavailable,0,"Unsupported Options Yes result1 apply continuation at3534C"});}
-            state_.result86C=2;state_.state864=2;++state_.no_choices;++state_.sound_intents;input_.BeginContext();
+            state_.result86C=int32_t(state_.selection+1);state_.state864=2;
+            state_.result_sequence=state_.last_sequence;state_.result_epoch=state_.input_epoch;
+            state_.result_update=state_.updates;++state_.publication;
+            if(state_.selection)++state_.no_choices;else ++state_.yes_choices;
+            ++state_.sound_intents;input_.BeginContext();
         }else if(input_.First(Cross))++state_.disabled_cross; //source8D4==0: consume, never bubble to parent Cancel
         clone_->Control(1)->frame=state_.selection+1;
     }else if(state_.state864==2){
         state_.progress-=.1f;
-        if(state_.progress<=0){state_.progress=0;state_.state864=3;state_.active=false;++state_.returns;
+        if(state_.progress<=0){state_.progress=0;state_.state864=3;state_.active=false;++state_.returns;state_.completed_invocation=state_.invocation;
             clone_->ShowRoot(0,false);clone_->Control(0)->mode=clone_->Control(0)->active=0;input_.BeginContext();}
     }
     if(!clone_->Update(error))return Refuse({GameFsCode::Unavailable,0,error});return {};

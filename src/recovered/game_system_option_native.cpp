@@ -34,6 +34,13 @@ bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt& r)noexcept{
     auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
     return GameOptionSnapshotExact(expected,r.after);
 }
+bool GameOptionYesReceiptValid(const GameOptionWriteReceipt& r)noexcept{
+    if(r.stage>=3||!r.gui_generation||!r.input_sequence||!r.input_epoch||r.field!=r.stage
+       ||r.call_pc!=0x3534C+r.stage*8||r.setter!=0x24B1C+r.stage*0x18
+       ||!r.before.live||!r.before.owner||!r.before.generation||r.before.writes==UINT64_MAX)return false;
+    auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
+    return GameOptionSnapshotExact(expected,r.after);
+}
 struct GameOwnedMessageShared {
     std::shared_ptr<GameUiResource> resource;
     GameUiInstance clone;
@@ -346,7 +353,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             }
             auto restored=state_.settings;
             NeedOption(SameSettings(restored,settings_->OptionSettings()),"Options backup readback mismatch");
-            state_.settings=restored;state_.state44=2;state_.phase=4;++state_.close_requests;
+            state_.settings=restored;state_.close_kind=1;state_.state44=2;state_.phase=4;++state_.close_requests;
             state_.source_ui_sound_intents+=2;fade.CloseWipe(false);input_.BeginContext();
         }
         //35078 returns into34C54 even after Close:352E0 with48=0 and
@@ -355,8 +362,25 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             const auto status=prompt_->Open(state_.generation,state_.input_epoch);if(!status)return Refuse(status);
             state_.substate48=3;++state_.prompt_opens;++state_.input_boundaries;state_.boundary_cause=2;input_.BeginContext();
         }else if(state_.substate48==3&&prompt_->Snapshot().state864==3){
-            const auto p=prompt_->Snapshot();NeedOption(p.parent==state_.generation&&p.result86C==2&&p.no_choices==p.returns,"TRC No result/current owner unavailable");
-            state_.substate48=0;++state_.prompt_returns;++state_.input_boundaries;state_.boundary_cause=4;input_.BeginContext();
+            const auto p=prompt_->Snapshot();
+            NeedOption(p.parent==state_.generation&&p.completed_invocation==p.invocation&&!p.active
+                       &&p.result_sequence==state_.last_sequence&&p.result_epoch==state_.input_epoch,"TRC natural result/current owner unavailable");
+            if(p.result86C==2){
+                state_.substate48=0;++state_.prompt_returns;++state_.input_boundaries;state_.boundary_cause=4;input_.BeginContext();
+            }else if(p.result86C==1){
+                NeedOption(!p.selection&&!state_.yes_consumed&&!state_.yes_writes&&!state_.restore_writes&&!state_.close_requests,"Options Yes current chain already consumed");
+                for(uint32_t stage=0;stage<3;++stage){
+                    GameOptionWriteReceipt receipt;state_.source_consumer=0x3534C+stage*8;
+                    const auto status=settings_->WriteOptionYes(state_.settings,stage,state_.current_words[stage],receipt);if(!status)return Refuse(status);
+                    NeedOption(GameOptionYesReceiptValid(receipt)&&receipt.stage==stage&&receipt.gui_generation==state_.generation
+                               &&receipt.input_sequence==p.result_sequence&&receipt.input_epoch==p.result_epoch&&receipt.value==state_.current_words[stage]
+                               &&GameOptionSnapshotExact(receipt.before,state_.settings)&&GameOptionSnapshotExact(receipt.after,settings_->OptionSettings()),"Options actual current Yes setter receipt/readback mismatch");
+                    state_.yes_receipts[stage]=receipt;++state_.yes_writes;state_.settings=receipt.after;
+                }
+                ++state_.yes_consumed;state_.source_consumer=0x35364;state_.close_kind=2;state_.state44=2;state_.phase=4;++state_.close_requests;
+                //35364 calls35028 directly: Close event12, no Cancel event5.
+                ++state_.source_ui_sound_intents;fade.CloseWipe(false);input_.BeginContext();
+            }else return Refuse({GameFsCode::Unavailable,0,"Unsupported TRC result partition"});
         }
         if(!after_key_done)++state_.after_key_updates;
         // The finite route keeps50==56 after Right and after distinct Cancel.

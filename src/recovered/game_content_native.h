@@ -150,6 +150,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool OptionBackupWritable()const override{return true;}
     GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
     GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
+    GameFsStatus WriteOptionYes(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&)override;
     GameFsStatus QueryOptionGain(const GameOptionSettingsSnapshot&,int32_t,GameOptionGainObservation&)override;
     int32_t ResetLookupWord(uint32_t index) const;
     // One native loading tick; false means a real I/O/format/lifetime failure.

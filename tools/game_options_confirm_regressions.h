@@ -214,13 +214,12 @@ inline void PromptInput(){PromptRig r;r.Open();r.Active();r.Send(0);r.Send(Down|
 }
 inline void YesAndRetirement(){
   {PromptRig r;r.Open();r.Active();r.Send(0);C(r.prompt.Input(r.Frame(Circle)),"Y01");const auto before=r.prompt.Snapshot();
-      const auto failure=r.prompt.Tick();auto s=r.prompt.Snapshot();
-      C(!failure&&failure.code==GameFsCode::Unavailable&&failure.detail.find("3534C")!=std::string::npos,"Y02");
-      C(s.failed&&s.yes_refusals==1&&s.active&&s.state864==1&&s.result86C==0&&s.no_choices==0&&s.returns==0,"Y03");
+      Ok(r.prompt.Tick(),"Y02");auto s=r.prompt.Snapshot();
+      C(!s.failed&&s.yes_choices==1&&s.active&&s.state864==2&&s.result86C==1&&s.no_choices==0&&s.returns==0,"Y03");
       C(s.owner==before.owner&&s.generation==before.generation&&s.opens==before.opens,"Y04");
       GameGraphics g;C(g.Initialize({}),"Y05");const auto io=r.source.opens;
-      C(Eq(failure,r.prompt.Tick())&&Eq(failure,r.prompt.Draw(g))&&Eq(failure,r.prompt.Open(73,r.epoch)),"Y06");
-      C(!r.prompt.Input(r.Frame(Down))&&r.prompt.Snapshot().updates==s.updates&&r.prompt.Snapshot().yes_refusals==1&&r.source.opens==io,"Y07");}
+      C(bool(r.prompt.Draw(g))&&!r.prompt.Input(r.Frame(Down))&&bool(r.prompt.Tick())&&r.prompt.Snapshot().progress<s.progress,"Y06");
+      C(r.prompt.Snapshot().active&&!r.prompt.Snapshot().returns&&r.prompt.Snapshot().yes_choices==1&&r.source.opens==io,"Y07");}
   for(U cause=0;cause<6;++cause){PromptRig r;r.Open();r.Active();
       if(cause==0)r.source.backing->live=false;else if(cause==1)++r.source.backing->generation;else if(cause==2)r.font.Close();else if(cause==3)r.clone.Close();else if(cause==4)r.font_backing->live=false;else ++r.font_backing->generation;
       const auto failure=r.prompt.Tick();const auto s=r.prompt.Snapshot();
@@ -303,10 +302,11 @@ inline void ParentRefusals(){
       C(!s.substate48&&s.source_ui_sound_intents==old.source_ui_sound_intents&&s.after_key_updates==old.after_key_updates&&s.message.updates==old.message.updates,"N02");
       C(GameOptionSnapshotExact(s.settings,old.settings)&&r.settings.events.empty()&&!s.close_requests&&!s.polls,"N03");
       C(Eq(failure,r.front.Tick(r.fade))&&r.front.Snapshot().unsupported==s.unsupported,"N04");}
-  {ParentRig r;r.Enter();r.Send(0);const auto old=r.front.Snapshot();const auto failure=r.Try(Circle);const auto s=r.front.Snapshot();
-      C(!failure&&failure.code==GameFsCode::Unavailable&&s.failed&&s.prompt.failed&&s.prompt.yes_refusals==1&&s.prompt.result86C==0&&s.prompt.state864==1,"N05");
-      C(GameOptionSnapshotExact(s.settings,old.settings)&&r.settings.events.empty()&&s.close_requests==0&&s.polls==0&&s.after_key_updates==old.after_key_updates,"N06");
-      C(Eq(failure,r.front.Tick(r.fade))&&r.front.Snapshot().prompt.yes_refusals==1,"N07");}
+  {ParentRig r;r.Enter();r.Send(0);const auto old=r.front.Snapshot();r.Send(Circle);GameFsStatus failure;
+      for(U i=0;i<24;++i){r.fade.Update();failure=r.front.Tick(r.fade);if(!failure)break;r.Transport();}const auto s=r.front.Snapshot();
+      C(!failure&&failure.code==GameFsCode::Unavailable&&s.failed&&!s.prompt.failed&&s.prompt.yes_choices==1&&s.prompt.result86C==1&&s.prompt.state864==3&&s.source_consumer==0x3534C,"N05");
+      C(GameOptionSnapshotExact(s.settings,old.settings)&&r.settings.events.empty()&&s.close_requests==0&&s.polls==0&&s.after_key_updates>old.after_key_updates,"N06");
+      C(Eq(failure,r.front.Tick(r.fade))&&r.front.Snapshot().prompt.yes_choices==1,"N07");}
 }
 inline void ParentInputRevocation(){for(U loss=0;loss<2;++loss)for(U queued:{U(Circle),U(Down)}){
   ParentRig r;r.Enter();r.Send(0);auto pending=r.Frame(queued);C(r.front.Input(pending),"R01");
