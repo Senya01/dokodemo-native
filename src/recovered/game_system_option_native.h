@@ -18,6 +18,15 @@ bool GameOptionReceiptExact(const GameOptionWriteReceipt&,const GameOptionWriteR
 bool GameOptionRightReceiptValid(const GameOptionWriteReceipt&)noexcept;
 bool GameOptionBackupReceiptValid(const GameOptionWriteReceipt&)noexcept;
 bool GameOptionYesReceiptValid(const GameOptionWriteReceipt&)noexcept;
+enum class GameOptionRowCause:uint32_t {Down=1,Left=2};
+struct GameOptionRowWriteReceipt {
+    GameOptionRowCause cause=GameOptionRowCause::Down;
+    uint32_t selection_before=0,selection_after=1,row_count=3,level_count=5;
+    std::array<uint32_t,3> local_before{},local_after{};
+    GameOptionWriteReceipt write;
+};
+bool GameOptionRowReceiptValid(const GameOptionRowWriteReceipt&)noexcept;
+bool GameOptionRowReceiptExact(const GameOptionRowWriteReceipt&,const GameOptionRowWriteReceipt&)noexcept;
 struct GameOptionGainObservation {
     bool metadata_ready=false,source_id_known=false,source_dispatched=false;
     int32_t native_metadata_slot=-1;
@@ -32,6 +41,9 @@ class GameOptionSettings {
     // the current Content/actor owner may issue actual Right writer receipts.
     virtual bool OptionRightWritable()const{return false;}
     virtual bool OptionBackupWritable()const{return false;}
+    virtual bool OptionRowWritable()const{return false;}
+    virtual GameFsStatus WriteOptionRow(const GameOptionSettingsSnapshot&,GameOptionRowCause,uint32_t,uint32_t,GameOptionRowWriteReceipt&){return {GameFsCode::Unavailable,0,"Options selected row writer unavailable"};}
+    virtual GameFsStatus ReadOptionFeedback(const GameOptionSettingsSnapshot&,GameSourceFeedbackRead&){return {GameFsCode::Unavailable,0,"Unsupported source SE5 bank handle read4AC84"};}
     virtual GameSourceSoundSnapshot OptionSoundOwner()const{return {};}
     virtual GameFsStatus WriteOptionRight(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options Right writer owner unavailable"};}
     virtual GameFsStatus WriteOptionBackup(const GameOptionSettingsSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&){return {GameFsCode::Unavailable,0,"Options backup writer owner unavailable"};}
@@ -96,6 +108,12 @@ struct GameSystemOptionSnapshot {
     GameOptionSettingsSnapshot settings;
     std::array<uint32_t,3> current_words{}; //source64/68/6C; backups remain passive_settings
     uint32_t right_steps=0,right_writes=0,gain_queries=0,gain_value=0;
+    uint32_t row_selections=0,row_left_steps=0,row_writes=0,row_feedback_attempts=0,marker_frame=1;
+    std::array<uint32_t,3> row_before{};
+    GameOwnedMessageSnapshot row_message_before; //passive actual Down entry, before selection mutation
+    uint32_t row_draw_frames_before=0,row_left_after_key_before=0,row_left_draw_frames_before=0;
+    std::array<GameOptionRowWriteReceipt,4> row_receipts{};
+    GameSourceFeedbackRead row_feedback;
     uint32_t right_message_updates_before=0,right_draw_frames_before=0;
     bool gain_returned=false,right_message_continued=false;
     GameOptionGainObservation gain;

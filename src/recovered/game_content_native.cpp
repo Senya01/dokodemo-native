@@ -287,6 +287,18 @@ GameFsStatus GameContentBoot::WriteOptionRight(const GameOptionSettingsSnapshot&
     // readback. It does not accept an externally supplied expected RAM image.
     status=actor_script_.CommitMenuOptionWrite(main_menu_target_,gui,receipt);return status;
 }
+GameFsStatus GameContentBoot::WriteOptionRow(const GameOptionSettingsSnapshot& expected,GameOptionRowCause cause,uint32_t stage,uint32_t value,GameOptionRowWriteReceipt& receipt){
+    if(state_.closed||state_.main_menu_phase!=7||!state_.main_menu_child_ready||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options selected current owner unavailable"};
+    const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionRowWrite(main_menu_target_,gui,cause,stage,value,receipt);if(!status)return status;
+    const auto at=0x10+4*receipt.write.field;for(uint32_t byte=0;byte<4;++byte)reset_bytes_.at(at+byte)=uint8_t(value>>(8*byte));++option_settings_writes_;
+    return actor_script_.CommitMenuOptionRowWrite(main_menu_target_,gui,receipt);
+}
+GameFsStatus GameContentBoot::ReadOptionFeedback(const GameOptionSettingsSnapshot& expected,GameSourceFeedbackRead& out){
+    if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options selected feedback owner unavailable"};
+    const auto gui=system_option_.Snapshot();const auto checked=actor_script_.CheckMenuOption(main_menu_target_,gui);if(!checked)return checked;
+    if(gui.source_consumer!=0x4AC84||gui.row_writes!=4||gui.row_left_steps!=1||gui.row_feedback_attempts!=1)return {GameFsCode::Unavailable,0,"Options selected feedback source cursor unavailable"};
+    return sound_bank_.ReadOptionsFeedback(gui.sound_owner,out);
+}
 GameFsStatus GameContentBoot::QueryOptionGain(const GameOptionSettingsSnapshot& expected,int32_t value,GameOptionGainObservation& out){
     if(!GameOptionSnapshotExact(expected,OptionSettings())||value!=105||state_.main_menu_phase!=7)
         return {GameFsCode::Unavailable,0,"Options exact selected gain query owner unavailable"};
@@ -1190,6 +1202,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                 const auto before_boundary=system_option_.Snapshot().input_boundaries;
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
+                if(!status&&child.failed&&child.row_writes)actor_script_.VerifyMenuOptionRowPrefix(main_menu_target_,child);
                 if(status)status=actor_script_.CommitMenuOptionTick(main_menu_target_,child);
                 if(status&&child.input_boundaries!=before_boundary){status=actor_script_.AdvanceMenuOptionInputEpoch(main_menu_target_,system_option_);child=system_option_.Snapshot();state_.main_menu_input_epoch=child.input_epoch;}
                 if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);

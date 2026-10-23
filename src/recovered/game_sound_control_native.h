@@ -24,6 +24,11 @@ struct GameSourceSoundSnapshot {
 bool GameSourceSoundOwnerStable(const GameSourceSoundSnapshot&,const GameSourceSoundSnapshot&)noexcept;
 bool GameSourceSoundSnapshotExact(const GameSourceSoundSnapshot&,const GameSourceSoundSnapshot&)noexcept;
 bool GameSourceSoundNegativeReady(const GameSourceSoundSnapshot&)noexcept;
+struct GameSourceFeedbackRead {
+    GameSourceSoundSnapshot owner;
+    uint32_t context_index=5,read_pc=0x4AC84;
+    bool attempted=false,bank_attached=false,bank_handle_known=false,read_returned=false;
+};
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
     uint32_t read_pc=0,return_pc=0;
@@ -43,6 +48,7 @@ class GameSourceSoundControl final {
     // A BGM request/start/reset is outside this finite ported owner. Refusal
     // is terminal before mutation, never permission to keep using cold ID.
     GameFsStatus RequestBgm(int32_t);
+    GameFsStatus Feedback4AC38(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
     void Close()noexcept;

@@ -159,6 +159,8 @@ struct GameActorScriptSnapshot {
     GameOptionSettingsSnapshot option_before,option_after;
     bool option_prefix_verified=false;
     uint32_t option_right_writes=0;
+    uint32_t option_row_writes=0,option_row_selection_receipt=0;
+    bool option_row_prefix_verified=false;
     uint32_t option_right_after_key_before=0;
     uint32_t option_yes_writes=0,option_yes_publication_receipt=0,option_completion_kind=0;
     uint32_t option_restore_writes=0,option_gain_returns=0,option_tick_receipts=0,option_after_key_cursor=0,option_lifecycle_phase=0,option_poll_receipt=0,option_drain_receipt=0;
@@ -335,7 +337,10 @@ class GameActorScript final {
     GameFsStatus BindMenuOption(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameOptionSettings&,GameNotebookLease, const GameSystemOptionFrontier&);
     GameFsStatus CheckMenuOption(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&)const;
     GameFsStatus ObserveMenuOptionInput(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,const GameInputFrame&);
-    void DisarmMenuOptionInput()noexcept{option_right_armed_=option_yes_armed_=false;option_right_sequence_=option_cancel_sequence_=option_yes_sequence_=0;}
+    void DisarmMenuOptionInput()noexcept{option_right_armed_=option_yes_armed_=false;option_right_sequence_=option_cancel_sequence_=option_yes_sequence_=option_down_sequence_=option_left_sequence_=0;option_down_armed_=option_left_armed_=false;}
+    GameFsStatus PrepareMenuOptionRowWrite(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,GameOptionRowCause,uint32_t,uint32_t,GameOptionRowWriteReceipt&);
+    GameFsStatus CommitMenuOptionRowWrite(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,const GameOptionRowWriteReceipt&);
+    GameFsStatus VerifyMenuOptionRowPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus PrepareMenuOptionWrite(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&);
     GameFsStatus CommitMenuOptionWrite(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,const GameOptionWriteReceipt&);
     GameFsStatus PrepareMenuOptionBackup(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,uint32_t,uint32_t,GameOptionWriteReceipt&);
@@ -395,6 +400,11 @@ class GameActorScript final {
     GameOptionSettings* option_settings_=nullptr;
     GameNotebookLease option_lease_;
     GameOptionSettingsSnapshot option_expected_;
+    std::array<GameOptionRowWriteReceipt,4> option_row_issued_{};
+    GameOptionRowWriteReceipt option_row_pending_receipt_;
+    bool option_row_pending_=false,option_down_armed_=false,option_left_armed_=false;
+    uint64_t option_down_sequence_=0,option_left_sequence_=0;
+    bool OptionRowCursor(const GameSystemOptionSnapshot&)const;
     std::array<GameOptionWriteReceipt,4> option_issued_{};
     std::array<GameOptionWriteReceipt,3> option_restore_issued_{};
     GameOptionWriteReceipt option_pending_;

@@ -185,6 +185,7 @@ class GameSoundBank final {
     GameSourceSoundSnapshot SourceControl()const{return source_control_.Snapshot();}
     GameFsStatus QuerySourceGain(const GameSourceSoundSnapshot& expected,int32_t value,GameSourceSoundGainReceipt& out){return source_control_.Gain4AFBC(expected,value,out);}
     GameFsStatus Register(PackageView image);
+    GameFsStatus ReadOptionsFeedback(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.Feedback4AC38(expected,out);}
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}
     void SetProfileGain(int32_t value) noexcept {state_.profile_gain=value;}

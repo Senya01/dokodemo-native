@@ -41,6 +41,22 @@ bool GameOptionYesReceiptValid(const GameOptionWriteReceipt& r)noexcept{
     auto expected=r.before;expected.words[r.field]=r.value;++expected.writes;
     return GameOptionSnapshotExact(expected,r.after);
 }
+bool GameOptionRowReceiptValid(const GameOptionRowWriteReceipt& r)noexcept{
+    const auto& w=r.write;if(r.row_count!=3||r.level_count!=5||r.selection_after!=1||!w.gui_generation||!w.input_sequence||!w.input_epoch
+       ||!w.before.live||!w.before.owner||!w.before.generation||w.before.writes==UINT64_MAX||w.before.words!=r.local_before)return false;
+    if(r.cause==GameOptionRowCause::Down){
+        if(r.selection_before||r.local_before!=r.local_after||w.stage>=3||w.field!=w.stage||w.call_pc!=0x34CCC+8*w.stage)return false;
+    }else if(r.cause==GameOptionRowCause::Left){
+        if(r.selection_before!=1||w.stage||w.field!=1||w.call_pc!=0x351CC||!r.local_before[1]||r.local_before[1]>INT32_MAX)return false;
+        auto expected=r.local_before;--expected[1];if(expected!=r.local_after)return false;
+    }else return false;
+    if(w.setter!=0x24B1C+0x18*w.field||w.value!=r.local_after[w.field])return false;
+    auto after=w.before;after.words[w.field]=w.value;++after.writes;return GameOptionSnapshotExact(after,w.after);
+}
+bool GameOptionRowReceiptExact(const GameOptionRowWriteReceipt& a,const GameOptionRowWriteReceipt& b)noexcept{
+    return a.cause==b.cause&&a.selection_before==b.selection_before&&a.selection_after==b.selection_after&&a.row_count==b.row_count
+        &&a.level_count==b.level_count&&a.local_before==b.local_before&&a.local_after==b.local_after&&GameOptionReceiptExact(a.write,b.write);
+}
 struct GameOwnedMessageShared {
     std::shared_ptr<GameUiResource> resource;
     GameUiInstance clone;
@@ -295,6 +311,50 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
         // Query in source priority. Later counters are not sampled after an
         // earlier nonzero direction consumed this key invocation.
         const auto down=nested_at_entry?0:input_.Repeat(Down,10,2),up=(nested_at_entry||down)?0:input_.Repeat(Up,10,2),right=(nested_at_entry||down||up)?0:input_.Repeat(Right,10,2),left=(nested_at_entry||down||up||right)?0:input_.Repeat(Left,10,2);
+        if(down&&settings_->OptionRowWritable()){
+            state_.source_consumer=0x350B0;
+            NeedOption(!state_.row_selections&&!state_.right_steps&&!state_.selection56&&!state_.previous50&&!state_.substate48
+                &&state_.current_words==state_.passive_settings,"Unsupported Options Down outside fresh row0-to1 domain");
+            state_.row_message_before=message_.Snapshot();state_.row_draw_frames_before=state_.draw_frames;
+            state_.row_before=state_.current_words;state_.selection56=1;++state_.row_selections;
+            ++state_.source_ui_sound_intents; //35128 selection store then35114 event6, existing UI-intent policy
+            ++state_.after_key_updates;after_key_done=true;state_.previous50=1;*clone_.Control(1)={2,1,2,1};
+            for(uint32_t stage=0;stage<3;++stage){
+                GameOptionRowWriteReceipt receipt;state_.source_consumer=0x34CCC+8*stage;
+                const auto status=settings_->WriteOptionRow(state_.settings,GameOptionRowCause::Down,stage,state_.current_words[stage],receipt);if(!status)return Refuse(status);
+                NeedOption(GameOptionRowReceiptValid(receipt)&&receipt.cause==GameOptionRowCause::Down&&receipt.write.stage==stage
+                   &&receipt.write.gui_generation==state_.generation&&receipt.write.input_sequence==state_.last_sequence&&receipt.write.input_epoch==state_.input_epoch
+                   &&receipt.local_before==state_.row_before&&receipt.local_after==state_.current_words
+                   &&GameOptionSnapshotExact(receipt.write.before,state_.settings)&&GameOptionSnapshotExact(receipt.write.after,settings_->OptionSettings()),"Options Down common writer receipt/readback refused");
+                state_.row_receipts[stage]=receipt;++state_.row_writes;state_.settings=receipt.write.after;
+            }
+            NeedOption(state_.settings.words[2]==3,"Unsupported selected root18 gain index");
+            state_.source_consumer=0x4AFC8;++state_.gain_queries;state_.gain_value=105;
+            const auto status=settings_->QueryOptionGain(state_.settings,105,state_.gain);if(!status)return Refuse(status);
+            NeedOption(state_.gain.source_id_known&&!state_.gain.source_dispatched&&GameSourceSoundGainValid(state_.gain.source)
+                &&state_.gain.source.value==105&&GameSourceSoundSnapshotExact(state_.sound_owner,state_.gain.source.before)
+                &&GameSourceSoundSnapshotExact(state_.gain.source.after,settings_->OptionSoundOwner()),"Options Down genuine gain return refused");
+            state_.sound_owner=state_.gain.source.after;state_.gain_returned=true;right_completed=true;
+        }else if(left&&settings_->OptionRowWritable()){
+            state_.source_consumer=0x351EC;
+            NeedOption(state_.row_selections==1&&!state_.row_left_steps&&state_.row_writes==3&&state_.selection56==1&&state_.previous50==1&&!state_.substate48
+                &&state_.current_words==state_.row_before,"Unsupported Options Left outside selected row1 domain");
+            right_completed=true;state_.source_consumer=0x351EC;
+            if(state_.current_words[1]&&state_.current_words[1]<=INT32_MAX){
+                state_.row_left_after_key_before=state_.after_key_updates;state_.row_left_draw_frames_before=state_.draw_frames;
+                --state_.current_words[1];state_.previous50=UINT32_MAX;++state_.row_left_steps;
+                state_.source_consumer=0x351CC;GameOptionRowWriteReceipt receipt;
+                const auto status=settings_->WriteOptionRow(state_.settings,GameOptionRowCause::Left,0,state_.current_words[1],receipt);if(!status)return Refuse(status);
+                NeedOption(GameOptionRowReceiptValid(receipt)&&receipt.cause==GameOptionRowCause::Left&&receipt.write.gui_generation==state_.generation
+                   &&receipt.write.input_sequence==state_.last_sequence&&receipt.write.input_epoch==state_.input_epoch&&receipt.local_before==state_.row_before
+                   &&receipt.local_after==state_.current_words&&GameOptionSnapshotExact(receipt.write.before,state_.settings)
+                   &&GameOptionSnapshotExact(receipt.write.after,settings_->OptionSettings()),"Options Left direct writer receipt/readback refused");
+                state_.row_receipts[3]=receipt;++state_.row_writes;state_.settings=receipt.write.after;
+                state_.source_consumer=0x4AC84;++state_.row_feedback_attempts;
+                const auto feedback=settings_->ReadOptionFeedback(state_.settings,state_.row_feedback);if(!feedback)return Refuse(feedback);
+                return Refuse({GameFsCode::Unavailable,0,"Unsupported Options Left feedback return beyond4AC84"});
+            } //source row1 <=0 is a no-op; no wrap, setter or feedback
+        }
         if(right&&settings_->OptionRightWritable()){
             NeedOption(!state_.right_steps&&state_.selection56==0&&state_.previous50==0&&state_.substate48==0
                        &&state_.current_words==std::array<uint32_t,3>{{2,3,3}}&&state_.passive_settings==state_.current_words,
@@ -328,6 +388,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             state_.sound_owner=state_.gain.source.after;state_.gain_returned=true;right_completed=true;
         }
         if(!nested_at_entry&&!right_completed&&!down&&!up&&!right&&!left&&input_.First(Circle)){
+            if(state_.row_selections){++state_.unsupported;state_.source_consumer=0x352BC;return Refuse({GameFsCode::Unavailable,0,"Unsupported selected row1 prompt"});}
             if(!prompt_){++state_.unsupported;state_.source_consumer=0x352BC;
                 return Refuse({GameFsCode::Unavailable,0,"Unsupported Options actual global TRC owner unavailable at352BC"});}
             NeedOption(prompt_&&prompt_->Snapshot().live&&!prompt_->Snapshot().failed&&prompt_->Snapshot().state864==3,"Unsupported Options actual global TRC owner unavailable at352BC");
@@ -338,6 +399,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             return Refuse({GameFsCode::Unavailable,0,"Unsupported Options readonly input consumer at "+std::to_string(state_.source_consumer)});
         }
         else if(!nested_at_entry&&!right_completed&&!circle_completed&&input_.First(Cross)){
+            NeedOption(!state_.row_selections,"Unsupported selected row1 Cancel before feedback continuation");
             if(settings_->OptionBackupWritable()){
                 for(uint32_t stage=0;stage<3;++stage){GameOptionWriteReceipt receipt;state_.source_consumer=0x3526C+stage*8;
                     const auto status=settings_->WriteOptionBackup(state_.settings,stage,state_.passive_settings[stage],receipt);if(!status)return Refuse(status);
@@ -386,10 +448,12 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
         // The finite route keeps50==56 after Right and after distinct Cancel.
         // Cancel never changes localC, and never returns before this tail.
         NeedOption(state_.previous50==state_.selection56&&(state_.substate48==0||state_.substate48==3),"Unsupported Options dirty common update");
+        if(!state_.previous50){
         if(message_.Snapshot().complete68){auto status=message_.SetRate(settings_->OptionSettings().words[0]);NeedOption(bool(status),status.detail.c_str());
             status=message_.Text(help_text);NeedOption(bool(status),status.detail.c_str());}
         const auto status=message_.Tick();NeedOption(bool(status),status.detail.c_str());
-        if(state_.gain_returned)state_.right_message_continued=true;return {};
+        }
+        if(state_.gain_returned&&!state_.row_selections)state_.right_message_continued=true;return {};
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFontResource& font){
@@ -423,10 +487,10 @@ GameFsStatus GameSystemOptionFrontier::Draw(GameGraphics& graphics,const GameFon
             n->position=n->base_position;
             GameUiDrawStats bar;NeedOption(clone_.Draw(graphics,bar,error,nullptr,{},0,UINT32_MAX,2),error.c_str());quads+=bar.quads;++state_.manual_bars;state_.bar_frames[row]=frame;
         }
-        auto status=message_.Draw(graphics);NeedOption(bool(status),status.detail.c_str());if(prompt_&&state_.substate48){status=prompt_->Draw(graphics);if(!status)return Refuse(status);}
+        GameFsStatus status;if(!state_.selection56){status=message_.Draw(graphics);NeedOption(bool(status),status.detail.c_str());}if(prompt_&&state_.substate48){status=prompt_->Draw(graphics);if(!status)return Refuse(status);}
         ++state_.draw_frames;state_.quads=quads;return {};
     }catch(const std::exception& e){return Refuse({GameFsCode::Unavailable,0,e.what()});}
 }
 bool GameSystemOptionFrontier::PromptOwnerLive()const{if(!prompt_)return !state_.prompt_bound_owner;const auto p=prompt_->Snapshot();return p.live&&!p.failed&&p.resource_live&&p.font_live&&p.owner==state_.prompt_bound_owner&&p.generation==state_.prompt_bound_generation;}
-GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.message=message_.Snapshot();if(prompt_)out.prompt=prompt_->Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}return out;}
+GameSystemOptionSnapshot GameSystemOptionFrontier::Snapshot()const{auto out=state_;out.message=message_.Snapshot();if(prompt_)out.prompt=prompt_->Snapshot();if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;}if(auto* c=clone_.Control(1))out.marker_frame=c->frame;return out;}
 }

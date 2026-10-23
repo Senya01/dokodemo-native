@@ -86,6 +86,14 @@ GameFsStatus GameSourceSoundControl::Gain4AFBC(const GameSourceSoundSnapshot& ex
     if(!GameSourceSoundGainValid(r))return {GameFsCode::Unavailable,0,"4AFC8 negative ID producer receipt unavailable"};
     ++state_.queries;state_.last_query_gain=gain;out=r;return {};
 }
+GameFsStatus GameSourceSoundControl::Feedback4AC38(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+    const auto now=Snapshot();
+    if(!GameSourceSoundSnapshotExact(now,expected)||!now.live||!now.bank_live)
+        return {GameFsCode::Unavailable,0,"Options feedback source owner/SE5 lease changed"};
+    const auto& record=records_[5];out={now,5,0x4AC84,true,record.bank_attached,record.bank_handle_known,false};
+    if(!record.bank_handle_known)return {GameFsCode::Unavailable,0,"Unsupported source SE5 bank handle read4AC84: registered handle producer unknown"};
+    return {GameFsCode::Unavailable,0,record.bank_handle<0?"Unsupported feedback branch4AD08":"Unsupported feedback continuation4ACA0"};
+}
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;
     ++state_.bgm_attempts;state_.failed=true;
