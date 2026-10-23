@@ -31,6 +31,7 @@ class GameSourceBankRegistry final {
     GameFsStatus Allocate(PackageView,int32_t&);
     bool Readback(int32_t,GameSourceBankRegistration&)const;
     bool Retain(int32_t,uint32_t&,uint32_t&);
+    bool Release(int32_t,uint32_t&,uint32_t&);
     std::array<uint32_t,64> references_{};
     std::array<GameSourceBankRegistration,64> entries_{};
     std::array<PackageView,64> images_{},tails_{};
@@ -74,13 +75,14 @@ struct GameSourceFeedbackRead {
     int32_t bank_handle=-1,gain=0,group=0,event=0,extra=0,mode=0;
     float rate=0;
     uint64_t context_owner=0,context_generation=0;
-    uint32_t outcome=0; //0 historic56598 cut,1 actual returned voice/feedback,2 historic next-service57CF0 cut,3 returned sequence/context and selected5A5AC cut
+    uint32_t outcome=0; //0 historic56598 cut,1 actual returned voice/feedback,2 historic next-service57CF0 cut,3 returned sequence/context and selected5A5AC cut,4 actual port/track/callback return then59DD4 update cut
     bool getter_returned=false,start_returned=false,handle_stored=false,feedback_returned=false;
 };
 bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceVoiceFeedbackValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceVoiceServiceValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceSequencePrefixValid(const GameSourceFeedbackRead&)noexcept;
+bool GameSourcePortPrefixValid(const GameSourceFeedbackRead&)noexcept;
 bool GameSourceFeedbackExact(const GameSourceFeedbackRead&,const GameSourceFeedbackRead&)noexcept;
 struct GameSourceSoundGainReceipt {
     GameSourceSoundSnapshot before,after;
@@ -106,6 +108,8 @@ class GameSourceSoundControl final {
     GameFsStatus VoiceFeedback4AC38(const GameSourceSoundSnapshot&,uint32_t,GameSourceFeedbackRead&);
     GameFsStatus ServiceVoice(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
     GameFsStatus ServiceSequence(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    GameFsStatus ServicePort(const GameSourceSoundSnapshot&,GameSourceFeedbackRead&);
+    void ObserveWorkerTick()noexcept;
     GameSourceSoundSnapshot Snapshot()const;
     const GameSourceSoundRecord& Record(uint32_t index)const{return records_.at(index);}
     void Close()noexcept;
@@ -115,9 +119,11 @@ class GameSourceSoundControl final {
     GameFsStatus Start4AF54(GameSourceFeedbackRead&);
     GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);
     GameFsStatus Issue56598(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t,int32_t,int32_t);
-    GameFsStatus AdmitSequence58C04();
+    GameFsStatus AdmitSequence58C04(bool advance_port=false);
     GameSourceVoicePool voices_;
     bool voice_admission_=false;
+    uint32_t owned_bank_refs_=0;
+    uint64_t worker_tick_serial_=0,worker_previous_ns_=0,worker_current_ns_=0;
     GameSourceBankRegistry* registry_=nullptr;
     GameSourceFeedbackRead feedback_;
     GameFsStatus feedback_failure_;

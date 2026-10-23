@@ -4,6 +4,30 @@
 #include <functional>
 namespace dokodemo::recovered {
 class GameSourceSoundControl;
+struct GameSourcePortSnapshot {
+ bool live=false,active=false,returned=false,free_unlinked=false,active_linked=false;
+ uint64_t owner=0,generation=0,allocation=0,known_halfwords=0;
+ uintptr_t storage=0;
+ int32_t id=-1;
+ uint32_t flags=0,initialize_pc=0,return_pc=0;
+ std::array<int16_t,2> sentinel_ids{};
+ std::array<uint16_t,2> sentinel_flags{};
+ std::array<bool,2> sentinel_self{};
+ std::array<uint16_t,36> parameters{};
+ std::array<uint32_t,4> zero70{};
+};
+bool GameSourcePortExact(const GameSourcePortSnapshot&,const GameSourcePortSnapshot&)noexcept;
+struct GameSourceTrackSnapshot {
+ bool live=false,initialized=false,free_unlinked=false,child_linked=false,lane_initialized=false,returned=false;
+ uintptr_t storage=0,context_storage=0;
+ int32_t allocation_index=-1,subindex=-1,bank=-1;
+ uint32_t record_offset=0,body_offset=0,end_offset=0,word20=0,wordCC=0,wordE4=0,wordE6=0,byte28=0,byte29=0;
+ uint32_t allocated_ports=0,lanes=0,retain_pc=0,refs_before=0,refs_after=0,return_pc=0;
+ float factor=0;
+ std::array<int16_t,16> ports{};
+ std::array<uint8_t,7> lane_controls{}; //8C,AC,BC,6C,5C,7C,9C
+};
+bool GameSourceTrackExact(const GameSourceTrackSnapshot&,const GameSourceTrackSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -18,6 +42,15 @@ struct GameSourceSequenceSnapshot {
  bool sentinel_self=false,child_head_same=false,output_unchanged=false;
  std::array<int32_t,4> bank_ids{{-1,-1,-1,-1}};
  std::array<uint32_t,8> output_before{},output_after{};
+ GameSourcePortSnapshot port;
+ GameSourceTrackSnapshot track;
+ bool admission_returned=false,command_released=false,update_entered=false,processor_attempted=false;
+ uint32_t current_refs=0,release_pc=0,release_before=0,release_after=0,update_pc=0,processor_pc=0;
+ uint64_t native_elapsed_ns=0;
+ uint64_t worker_tick_serial=0,worker_previous_ns=0,worker_current_ns=0;
+ float native_delta_seconds=0;
+ int32_t update_quantum=0,processor_quantum=0;
+ uintptr_t processor_context=0;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -34,15 +67,22 @@ class GameSourceSequencePool final {
  friend class GameSourceSoundControl;
  struct Link { Link* next=nullptr;Link* previous=nullptr;int16_t id=-1;uint16_t flags=0; };
  struct Node { Link link,child;Link* child_head=nullptr;const std::array<int32_t,4>* ids=nullptr;std::array<uint32_t,8>* output=nullptr;uint16_t word18=0,word1A=0; };
- struct Track { int16_t id=-1;bool free=true,reserved=false; };
+ struct Track { Link link;int16_t allocation_index=-1;bool free=true,reserved=false;GameSourceTrackSnapshot state; };
+ struct Port { Link link,child0,child1;std::array<uint16_t,36> parameters{};std::array<uint32_t,4> zero70{};uint64_t known=0; };
  GameFsStatus Allocate(const std::array<int32_t,4>&,std::array<uint32_t,8>&,uint64_t,uint64_t);
  bool Lookup(int32_t);
  bool Clear58540();
- GameFsStatus Start580D4(uint32_t,uint16_t,uint16_t,uint32_t);
+ GameFsStatus Start580D4(uint32_t,uint16_t,uint16_t,uint32_t,bool=false,const std::function<GameFsStatus()>& retain={});
  GameFsStatus AllocatePort5A5AC();
+ GameFsStatus CompleteTrack580D4(const std::function<GameFsStatus()>&);
+ GameFsStatus Update5A06C(uint64_t);
+ GameFsStatus ProcessContext59DD4(Node&,int32_t);
  std::array<Node,16> nodes_{};
  std::array<Track,16> tracks_{};
- Link free_,active_;
+ std::array<Port,16> ports_{};
+ Link free_,active_,track_free_,port_free_,port_active_;
+ Port* current_port_=nullptr;
+ Track* current_track_=nullptr;
  Node* current_=nullptr;
  GameSourceSequenceSnapshot state_;
  uint64_t generation_=0; //survives retired observation reset between owning voices

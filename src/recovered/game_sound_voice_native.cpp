@@ -2,16 +2,28 @@
 #include <algorithm>
 #include <atomic>
 #include <tuple>
+#include <cmath>
+#include <limits>
 namespace dokodemo::recovered {
+bool GameSourcePortExact(const GameSourcePortSnapshot& a,const GameSourcePortSnapshot& b)noexcept{
+ return std::tie(a.live,a.active,a.returned,a.free_unlinked,a.active_linked,a.owner,a.generation,a.allocation,a.known_halfwords,a.storage,a.id,a.flags,a.initialize_pc,a.return_pc,a.sentinel_ids,a.sentinel_flags,a.sentinel_self,a.parameters,a.zero70)==std::tie(b.live,b.active,b.returned,b.free_unlinked,b.active_linked,b.owner,b.generation,b.allocation,b.known_halfwords,b.storage,b.id,b.flags,b.initialize_pc,b.return_pc,b.sentinel_ids,b.sentinel_flags,b.sentinel_self,b.parameters,b.zero70);
+}
+bool GameSourceTrackExact(const GameSourceTrackSnapshot& a,const GameSourceTrackSnapshot& b)noexcept{
+ return std::tie(a.live,a.initialized,a.free_unlinked,a.child_linked,a.lane_initialized,a.returned,a.storage,a.context_storage,a.allocation_index,a.subindex,a.bank,a.record_offset,a.body_offset,a.end_offset,a.word20,a.wordCC,a.wordE4,a.wordE6,a.byte28,a.byte29,a.allocated_ports,a.lanes,a.retain_pc,a.refs_before,a.refs_after,a.return_pc,a.factor,a.ports,a.lane_controls)==std::tie(b.live,b.initialized,b.free_unlinked,b.child_linked,b.lane_initialized,b.returned,b.storage,b.context_storage,b.allocation_index,b.subindex,b.bank,b.record_offset,b.body_offset,b.end_offset,b.word20,b.wordCC,b.wordE4,b.wordE6,b.byte28,b.byte29,b.allocated_ports,b.lanes,b.retain_pc,b.refs_before,b.refs_after,b.return_pc,b.factor,b.ports,b.lane_controls);
+}
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot& a,const GameSourceSequenceSnapshot& b)noexcept{
- return std::tie(a.live,a.active,a.allocation_returned,a.lookup_returned,a.clear_returned,a.command_entered,a.bank_retained,a.record_lookup_returned,a.track_reserved,a.track_source_initialized,a.track_activated,a.port_attempted,a.port_result_known,a.handler_returned,a.owner,a.generation,a.allocation,a.voice_owner,a.voice_generation,a.ids_storage,a.output_storage,a.id,a.bank,a.sentinel_id,a.track_id,a.port_id,a.flags,a.sentinel_flags,a.allocation_pc,a.return_pc,a.result_store_pc,a.lookup_pc,a.clear_pc,a.command,a.subindex,a.group,a.event,a.command_pc,a.retain_writer,a.refs_before,a.refs_after,a.record_offset,a.record_kind,a.record_divisor,a.record_bytes,a.track_pool_stride,a.port_call_pc,a.frontier,a.initial_factor,a.selected_factor,a.sentinel_self,a.child_head_same,a.output_unchanged,a.bank_ids,a.output_before,a.output_after)
- ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after);
+ return std::tie(a.live,a.active,a.allocation_returned,a.lookup_returned,a.clear_returned,a.command_entered,a.bank_retained,a.record_lookup_returned,a.track_reserved,a.track_source_initialized,a.track_activated,a.port_attempted,a.port_result_known,a.handler_returned,a.owner,a.generation,a.allocation,a.voice_owner,a.voice_generation,a.ids_storage,a.output_storage,a.id,a.bank,a.sentinel_id,a.track_id,a.port_id,a.flags,a.sentinel_flags,a.allocation_pc,a.return_pc,a.result_store_pc,a.lookup_pc,a.clear_pc,a.command,a.subindex,a.group,a.event,a.command_pc,a.retain_writer,a.refs_before,a.refs_after,a.record_offset,a.record_kind,a.record_divisor,a.record_bytes,a.track_pool_stride,a.port_call_pc,a.frontier,a.initial_factor,a.selected_factor,a.sentinel_self,a.child_head_same,a.output_unchanged,a.bank_ids,a.output_before,a.output_after,a.admission_returned,a.command_released,a.update_entered,a.processor_attempted,a.current_refs,a.release_pc,a.release_before,a.release_after,a.update_pc,a.processor_pc,a.native_elapsed_ns,a.worker_tick_serial,a.worker_previous_ns,a.worker_current_ns,a.native_delta_seconds,a.update_quantum,a.processor_quantum,a.processor_context)
+ ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after,b.admission_returned,b.command_released,b.update_entered,b.processor_attempted,b.current_refs,b.release_pc,b.release_before,b.release_after,b.update_pc,b.processor_pc,b.native_elapsed_ns,b.worker_tick_serial,b.worker_previous_ns,b.worker_current_ns,b.native_delta_seconds,b.update_quantum,b.processor_quantum,b.processor_context)&&GameSourcePortExact(a.port,b.port)&&GameSourceTrackExact(a.track,b.track);
 }
 GameSourceSequencePool::GameSourceSequencePool(){Close();}
 void GameSourceSequencePool::Close()noexcept{
- free_={};active_={};free_.next=free_.previous=&free_;active_.next=active_.previous=&active_;
- for(size_t i=nodes_.size();i-->0;){auto& n=nodes_[i];n={};n.link.id=int16_t(i);n.link.next=free_.next;n.link.previous=&free_;free_.next->previous=&n.link;free_.next=&n.link;tracks_[i]={int16_t(i),true,false};}
- current_=nullptr;state_.live=state_.active=false;
+ const auto head=[](Link& h){h={};h.next=h.previous=&h;};
+ head(free_);head(active_);head(track_free_);head(port_free_);head(port_active_);
+ const auto add=[](Link& h,Link& n){n.next=h.next;n.previous=&h;h.next->previous=&n;h.next=&n;};
+ for(size_t i=nodes_.size();i-->0;){auto& n=nodes_[i];n={};n.link.id=int16_t(i);add(free_,n.link);
+  auto& t=tracks_[i];t={};t.allocation_index=int16_t(i);t.link.id=int16_t(i);add(track_free_,t.link);
+  auto& p=ports_[i];p={};p.link.id=int16_t(i);add(port_free_,p.link);}
+ current_=nullptr;current_port_=nullptr;current_track_=nullptr;state_.live=state_.active=false;state_.port.live=state_.port.active=false;state_.track.live=false;
 }
 GameSourceSequenceSnapshot GameSourceSequencePool::Snapshot()const{
  auto out=state_;if(!current_)return out;
@@ -20,7 +32,14 @@ GameSourceSequenceSnapshot GameSourceSequencePool::Snapshot()const{
  out.sentinel_self=n.child.previous==&n.child&&n.child.next==&n.child;out.child_head_same=n.child_head==&n.child;
  out.ids_storage=reinterpret_cast<uintptr_t>(n.ids);out.output_storage=reinterpret_cast<uintptr_t>(n.output);
  if(n.ids)out.bank_ids=*n.ids;if(n.output)out.output_after=*n.output;
- out.output_unchanged=out.output_before==out.output_after;return out;
+ out.output_unchanged=out.output_before==out.output_after;
+ if(current_track_&&current_track_->state.initialized){out.track=current_track_->state;out.track.storage=reinterpret_cast<uintptr_t>(current_track_);out.track.context_storage=reinterpret_cast<uintptr_t>(current_);out.track.subindex=current_track_->link.id;
+  out.track.child_linked=n.child.next==&current_track_->link&&n.child.previous==&current_track_->link&&current_track_->link.next==&n.child&&current_track_->link.previous==&n.child;}
+ if(current_port_){const auto& p=*current_port_;out.port.storage=reinterpret_cast<uintptr_t>(&p);out.port.id=p.link.id;out.port.flags=p.link.flags;out.port.active=(p.link.flags&1)!=0;
+  out.port.parameters=p.parameters;out.port.known_halfwords=p.known;out.port.zero70=p.zero70;
+  out.port.sentinel_ids={p.child0.id,p.child1.id};out.port.sentinel_flags={p.child0.flags,p.child1.flags};
+  out.port.sentinel_self={p.child0.next==&p.child0&&p.child0.previous==&p.child0,p.child1.next==&p.child1&&p.child1.previous==&p.child1};}
+ return out;
 }
 GameFsStatus GameSourceSequencePool::Allocate(const std::array<int32_t,4>& ids,std::array<uint32_t,8>& output,uint64_t voice_owner,uint64_t voice_generation){
  if(current_||!voice_owner||!voice_generation)return {GameFsCode::Unavailable,0,"57CF0 current sequence owner unavailable"};
@@ -45,21 +64,79 @@ bool GameSourceSequencePool::Clear58540(){
  if(!current_||!state_.lookup_returned||current_->child_head!=&current_->child||current_->child.id>=0||current_->child.previous!=&current_->child)return false;
  state_.clear_returned=true;state_.clear_pc=0x58540;return true; //actual negative embedded sentinel, no5842C call
 }
-GameFsStatus GameSourceSequencePool::Start580D4(uint32_t offset,uint16_t kind,uint16_t divisor,uint32_t bytes){
+GameFsStatus GameSourceSequencePool::Start580D4(uint32_t offset,uint16_t kind,uint16_t divisor,uint32_t bytes,bool advance_port,const std::function<GameFsStatus()>& retain){
  if(!current_||!state_.record_lookup_returned||!state_.bank_retained||!state_.clear_returned||kind!=0||!divisor)
  return {GameFsCode::Unavailable,0,"580D4 selected live record unavailable"};
  Track* candidate=nullptr;for(auto& t:tracks_)if(t.free&&!t.reserved){candidate=&t;break;}
  if(!candidate)return {GameFsCode::Busy,0,"NativeIndexedSequenceTrackPool exhausted"};
  //Host reservation preserves the source free-list membership. All source
  //track stores58190+ and activation58220+ follow the authentic port result.
- candidate->reserved=true;state_.track_reserved=true;state_.track_id=candidate->id;state_.track_pool_stride=0; //original track stride not recovered
+ candidate->reserved=true;state_.track_reserved=true;state_.track_id=candidate->allocation_index;state_.track_pool_stride=0; //original track stride not recovered
  state_.record_offset=offset;state_.record_kind=kind;state_.record_divisor=divisor;state_.record_bytes=bytes;
  state_.initial_factor=1000.0f;state_.selected_factor=1000000.0f/float(divisor); //PH0:DEEB4/DEEB8
- return AllocatePort5A5AC();
+ current_track_=candidate;
+ if(!advance_port){state_.port_attempted=true;state_.port_call_pc=0x582D8;state_.frontier=0x5A5AC;
+  return {GameFsCode::Unavailable,0,"Unsupported selected sequence port allocator5A5AC before source track initialization"};}
+ const auto port=AllocatePort5A5AC();if(!port)return port;
+ return CompleteTrack580D4(retain);
 }
 GameFsStatus GameSourceSequencePool::AllocatePort5A5AC(){
  state_.port_attempted=true;state_.port_call_pc=0x582D8;state_.frontier=0x5A5AC;
- return {GameFsCode::Unavailable,0,"Unsupported selected sequence port allocator5A5AC before source track initialization"};
+ auto* chosen=port_free_.next;
+ if(chosen==&port_free_||chosen->id<0)return {GameFsCode::Busy,0,"NativeIndexedPortPool16 actual free-head empty"};
+ const auto id=chosen->id;if(size_t(id)>=ports_.size()||&ports_[size_t(id)].link!=chosen)return {GameFsCode::Unavailable,0,"5A5AC actual free node coherence"};
+ auto& p=ports_[size_t(id)];p.child0={};p.child1={};p.child0.id=p.child1.id=-1;
+ p.child0.next=p.child0.previous=&p.child0;p.child1.next=p.child1.previous=&p.child1;p.link.flags=1;
+ //5A490 initializes only these halfwords; the remaining words are UNKNOWN
+ //source values even though Windows-owned backing storage is initialized.
+ p.known=0;const auto write=[&](uint32_t index,uint16_t value){p.parameters[index]=value;p.known|=uint64_t(1)<<index;};
+ write(0,0);write(1,0);for(uint32_t i=12;i<36;++i)write(i,0);
+ for(uint32_t k=0;k<4;++k){write(16+6*k,4096);write(17+6*k,1000);}
+ p.zero70.fill(0); //actual aligned54878(node+70,16) four-word effect
+ chosen->next->previous=chosen->previous;chosen->previous->next=chosen->next;
+ chosen->next=port_active_.next;chosen->previous=&port_active_;port_active_.next->previous=chosen;port_active_.next=chosen;
+ static std::atomic<uint64_t> next{0};auto& r=state_.port;r={};r.owner=++next;r.generation=state_.generation;r.allocation=1;
+ current_port_=&p;r.live=r.active=r.free_unlinked=r.active_linked=true;r.initialize_pc=0x5A490;r.return_pc=0x5A660;
+ if(p.link.id!=id||p.link.flags!=1||p.link.previous!=&port_active_||port_active_.next!=&p.link)return {GameFsCode::Unavailable,0,"5A64C actual port ID readback"};
+ r.id=p.link.id;r.returned=true;state_.port_result_known=true;state_.port_id=r.id;return {};
+}
+GameFsStatus GameSourceSequencePool::CompleteTrack580D4(const std::function<GameFsStatus()>& retain){
+ if(!current_||!current_track_||!state_.port_result_known||!state_.port.returned||state_.record_bytes>UINT32_MAX-state_.record_offset-20)
+ return {GameFsCode::Unavailable,0,"580D4 actual port/record domain unavailable"};
+ auto& t=*current_track_;auto& r=t.state;r={};r.ports.fill(-1);
+ r.live=r.initialized=true;r.allocation_index=t.allocation_index;t.link.id=int16_t(state_.subindex);r.subindex=t.link.id;r.bank=state_.bank;
+ r.record_offset=state_.record_offset;r.body_offset=r.record_offset+20;r.end_offset=r.body_offset+state_.record_bytes;r.factor=state_.selected_factor;
+ r.word20=0;r.byte28=r.byte29=0;r.allocated_ports=r.lanes=1;r.ports[0]=int16_t(state_.port_id);r.wordCC=UINT32_MAX;r.wordE4=r.wordE6=0;
+ //58060(track,lane0,0): no57EB8/57F58 path is selected.
+ r.lane_controls={127,64,0,0,0,127,64};r.lane_initialized=true;
+ state_.track_source_initialized=true;
+ const auto status=retain();if(!status)return status;
+ r.retain_pc=0x55A2C;r.refs_before=2;r.refs_after=3;
+ auto* link=&t.link;link->next->previous=link->previous;link->previous->next=link->next;t.free=false;
+ link->next=current_->child.next;link->previous=&current_->child;current_->child.next->previous=link;current_->child.next=link;current_->child_head=link;
+ current_->link.flags|=2;r.free_unlinked=r.child_linked=true;r.returned=true;r.return_pc=0x58290;
+ state_.track_activated=true;state_.frontier=0;return {};
+}
+GameFsStatus GameSourceSequencePool::Update5A06C(uint64_t elapsed){
+ if(!current_||!state_.handler_returned||!state_.command_released||!current_track_||!current_track_->state.returned)
+ return {GameFsCode::Unavailable,0,"5A06C actual returned context/track unavailable"};
+ state_.update_entered=true;state_.update_pc=0x54FE8;state_.native_elapsed_ns=elapsed;
+ //NativeWorkerSequenceDeltaSeconds: real consecutive worker timestamps;
+ //this is a Windows timing adaptation, not a recovered PSP clock scale.
+ state_.native_delta_seconds=float(double(elapsed)/1000000000.0);
+ const float scaled=state_.native_delta_seconds*1000000.0f;
+ if(!std::isfinite(scaled)||scaled<0||double(scaled)>double(INT32_MAX)){state_.frontier=0x5A06C;return {GameFsCode::Unavailable,0,"5A06C native delta outside finite trunc.w.s domain"};}
+ state_.update_quantum=int32_t(scaled);
+ if(current_->link.flags!=3||current_->word1A)return {GameFsCode::Unavailable,0,"5A06C selected current context flags changed"};
+ state_.processor_pc=0x5A120;return ProcessContext59DD4(*current_,state_.update_quantum);
+}
+GameFsStatus GameSourceSequencePool::ProcessContext59DD4(Node& context,int32_t quantum){
+ state_.processor_attempted=true;state_.frontier=0x59DD4;state_.processor_context=reinterpret_cast<uintptr_t>(&context);state_.processor_quantum=quantum;
+ if(&context!=current_||quantum!=state_.update_quantum||!current_track_||context.child_head!=&current_track_->link||context.child.next!=&current_track_->link||context.child.previous!=&current_track_->link)
+  return {GameFsCode::Unavailable,0,"59DD4 actual context/quantum/attached-child ABI unavailable"};
+ //Genuine typed consumer entry. No grammar, source body result,5A128
+ //context clear or later54FD4 update consumers are implemented here.
+ return {GameFsCode::Unavailable,0,"Unsupported selected59DD4(actual live context, actual worker delta quantum) before event6 grammar"};
 }
 bool GameSourceVoiceExact(const GameSourceVoiceSnapshot& a,const GameSourceVoiceSnapshot& b)noexcept{
  return std::tie(a.live,a.active,a.returned,a.auxiliary_null,a.callback_entered,a.callback_returned,a.sequence_result_known,a.owner,a.generation,a.allocation,a.services,a.id,a.bank,a.sequence_slot,a.flags,a.mode,a.group,a.event,a.extra,a.descriptor,a.bank_refs_before,a.bank_refs_after,a.retain_writer,a.initial_left,a.initial_right,a.initial_dirty_mask,a.initial_port_writes,a.initialized_mask,a.port_writes,a.return_pc,a.callback_pc,a.frontier,a.initializer_store_pc,a.words74,a.words80,a.wordsA0,a.initial_lane_controls,a.initial_lane_flags,a.bank_ids,a.working,a.published,a.consumer,a.dirty,a.persistent,a.published_dirty,a.published_persistent,a.consumer_dirty,a.consumer_persistent,a.master_left,a.master_right)

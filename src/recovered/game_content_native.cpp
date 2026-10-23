@@ -311,7 +311,7 @@ GameFsStatus GameContentBoot::ReadOptionFeedback(const GameOptionSettingsSnapsho
 GameFsStatus GameContentBoot::ServiceOptionVoice(const GameOptionSettingsSnapshot& expected,GameSourceFeedbackRead& out){
  if(state_.closed||state_.main_menu_phase!=7||!GameOptionSnapshotExact(expected,OptionSettings()))return {GameFsCode::Unavailable,0,"Options voice service settings owner"};
  const auto gui=system_option_.Snapshot();auto status=actor_script_.PrepareMenuOptionVoiceService(main_menu_target_,gui);if(!status)return status;
- const auto effect=sound_bank_.ServiceOptionsSequence(gui.sound_owner,out);if(!GameSourceVoiceServiceValid(out)&&!GameSourceSequencePrefixValid(out))return effect;
+ const auto effect=sound_bank_.ServiceOptionsPort(gui.sound_owner,out);if(!GameSourceVoiceServiceValid(out)&&!GameSourceSequencePrefixValid(out)&&!GameSourcePortPrefixValid(out))return effect;
  if(!system_option_.PublishVoiceService(out))return {GameFsCode::Unavailable,0,"Options actual voice service publication"};
  status=actor_script_.CommitMenuOptionVoiceService(main_menu_target_,out);if(!status)return status;return effect;
 }
@@ -1083,6 +1083,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         // slice. Normal Close still aborts its partial native construction.
         state_.status=state_.system_option.failure;state_.blocked=true;return false;
     }
+    sound_bank_.ObserveOptionsWorkerTick(); //actual consecutive worker samples, no clock override
     auto status=CheckMainMenuLease();
     if(status)status=actor_script_.TickMenuOwner();
     const auto finish=[&]{
@@ -1219,7 +1220,8 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                 if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());auto child=system_option_.Snapshot();
                 if(!status&&child.failed&&child.right_writes)actor_script_.VerifyMenuOptionPrefix(main_menu_target_,child); //diagnostic proof; never success/wake
                 if(!status&&child.failed&&child.row_writes){
-                    if(child.row_voice_service.outcome==3)actor_script_.VerifyMenuOptionSequencePrefix(main_menu_target_,child);
+                    if(child.row_voice_service.outcome==4)actor_script_.VerifyMenuOptionPortPrefix(main_menu_target_,child);
+                    else if(child.row_voice_service.outcome==3)actor_script_.VerifyMenuOptionSequencePrefix(main_menu_target_,child);
                     else if(child.row_voice_service.outcome==2)actor_script_.VerifyMenuOptionVoiceServicePrefix(main_menu_target_,child);
                     else if(child.row_feedback.issuer==0x56598)actor_script_.VerifyMenuOptionFeedbackPrefix(main_menu_target_,child);
                     else actor_script_.VerifyMenuOptionRowPrefix(main_menu_target_,child);

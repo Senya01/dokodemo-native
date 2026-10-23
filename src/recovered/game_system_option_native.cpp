@@ -297,7 +297,7 @@ bool GameSystemOptionFrontier::PublishFeedback(const GameSourceFeedbackRead& r){
     state_.row_feedback=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
 }
 bool GameSystemOptionFrontier::PublishVoiceService(const GameSourceFeedbackRead& r){
- if(state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||(!GameSourceVoiceServiceValid(r)&&!GameSourceSequencePrefixValid(r))
+ if(state_.failed||state_.phase!=3||state_.row_writes!=7||state_.gain_queries!=2||state_.voice_service_attempts!=1||(!GameSourceVoiceServiceValid(r)&&!GameSourceSequencePrefixValid(r)&&!GameSourcePortPrefixValid(r))
     ||!GameSourceSoundSnapshotExact(r.owner,state_.sound_owner)||!GameSourceSoundSnapshotExact(r.after,settings_->OptionSoundOwner()))return false;
  state_.row_voice_service=r;state_.sound_owner=r.after;state_.source_consumer=r.frontier;return true;
 }
@@ -322,7 +322,7 @@ GameFsStatus GameSystemOptionFrontier::Tick(GameTransition& fade){
             //invocation after the actual changed authored frame was drawn.
             if(state_.draw_frames<=state_.row_left_draw_frames_before)return {};
             ++state_.voice_service_attempts;const auto status=settings_->ServiceOptionVoice(state_.settings,state_.row_voice_service);
-            if(GameSourceVoiceServiceValid(state_.row_voice_service)||GameSourceSequencePrefixValid(state_.row_voice_service)){state_.sound_owner=state_.row_voice_service.after;state_.source_consumer=state_.row_voice_service.frontier;}
+            if(GameSourceVoiceServiceValid(state_.row_voice_service)||GameSourceSequencePrefixValid(state_.row_voice_service)||GameSourcePortPrefixValid(state_.row_voice_service)){state_.sound_owner=state_.row_voice_service.after;state_.source_consumer=state_.row_voice_service.frontier;}
             if(!status)return Refuse(status);
             return Refuse({GameFsCode::Unavailable,0,"Unsupported selected sequence callback continuation"});
         }

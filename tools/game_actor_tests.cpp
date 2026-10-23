@@ -96,6 +96,7 @@
 #include "game_options_voice_regressions.h"
 #include "game_options_voice_edges.h"
 #include "game_options_sequence_regressions.h"
+#include "game_options_port_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -517,6 +518,7 @@ GameFlow5RegressionChecks();
     GameOptionsVoiceRegressionChecks();
     GameOptionsVoiceSecondQueryChecks();
     GameOptionsSequenceRegressionChecks();
+    GameOptionsPortRegressionChecks();
     {
         GameFontResource font;GameFontBitmap bitmap;GameFontDrawRecord glyphs[2]{};
         Check(bool(font.Initialize(dokodemo::diary_tests::Font())),"Diary spacing fixture FONT");
