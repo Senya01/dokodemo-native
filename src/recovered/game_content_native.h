@@ -133,7 +133,7 @@ struct GameContentSnapshot {
 // The finite fade/hidden-control/TRC text adapter is connected explicitly;
 // general CVSync rendering, PSP interrupt delivery and the full loop remain
 // unsupported. No source-PC descriptor is treated as a successful callback.
-class GameContentBoot final : public GameResourceSource, public GameDiaryIo {
+class GameContentBoot final : public GameResourceSource, public GameDiaryIo, public GameOptionSettings {
   public:
     GameContentBoot() = default;
     GameContentBoot(const GameContentBoot &) = delete;
@@ -143,6 +143,8 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo {
     bool Reset24994();
     bool ConfigureImportCallback5334C(); // unavailable native interrupt/sound policy, no fake registration
     uint32_t StateWord(uint32_t byte_offset) const;
+    GameOptionSettingsSnapshot OptionSettings()const override;
+    GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)override;
     int32_t ResetLookupWord(uint32_t index) const;
     // One native loading tick; false means a real I/O/format/lifetime failure.
     // A successful font consumer stops BEFORE the next source constructor.
@@ -189,6 +191,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo {
     LoadMan *loadman_ = nullptr;
     uint32_t vsync_task_ = UINT32_MAX, load_task_ = UINT32_MAX;
     std::array<uint8_t, 0x10B50> reset_bytes_{};
+    uint64_t option_settings_writes_=0;
     std::array<int32_t, 28> reset_lookup_{};
     PackageView package_;
     BpDirectory directory_;

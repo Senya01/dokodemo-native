@@ -5,6 +5,7 @@
 #include "game_notebook_native.h"
 #include "game_wordmemo_native.h"
 #include "game_diary_native.h"
+#include "game_system_option_native.h"
 #include "game_inventory_mark_native.h"
 #include "game_inventory_placement_native.h"
 #include "game_record_native.h"
@@ -152,6 +153,10 @@ struct GameActorScriptSnapshot {
     uint64_t menu_wordmemo_generation=0,menu_wordmemo_parent=0;
     uint32_t menu_wordmemo_requests=0,menu_wordmemo_completions=0;
     GameWordMemoRows wordmemo_before,wordmemo_after;
+    bool menu_option_live=false;
+    uint64_t menu_option_generation=0,menu_option_parent=0;
+    uint32_t menu_option_requests=0,menu_option_completions=0;
+    GameOptionSettingsSnapshot option_before,option_after;
     bool menu_diary_live=false;
     uint64_t menu_diary_generation=0,menu_diary_parent=0;
     uint32_t menu_diary_requests=0,menu_diary_completions=0;
@@ -321,6 +326,9 @@ class GameActorScript final {
     GameFsStatus CompleteMenuNotebook(const GameOwnerEventTarget&,const GameNotebookSnapshot&);
     GameFsStatus ReadMenuNotebookSelf(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameNotebookSelfImage&,bool for_preview=true)const;
     GameFsStatus ReadMenuDiary(const GameOwnerEventTarget&,int32_t actual_manager58,uint32_t actual_mode,GameRecordImage&,GameDiaryOpenInputs&)const;
+    GameFsStatus BindMenuOption(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,GameOptionSettings&,GameNotebookLease);
+    GameFsStatus CheckMenuOption(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&)const;
+    GameFsStatus CompleteMenuOption(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus PrepareMenuDiary(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameRecordImage&,const GameDiaryOpenInputs&)const;
     GameFsStatus BindMenuDiary(const GameOwnerEventTarget&,uint64_t gui,uint64_t parent,const GameRecordImage&,const GameDiaryOpenInputs&,GameDiaryIo&);
     GameFsStatus CheckMenuDiary(const GameOwnerEventTarget&,const GameDiarySnapshot&)const;
@@ -367,6 +375,8 @@ class GameActorScript final {
     GameDiaryOpenInputs diary_inputs_;
     GameDiaryIo* diary_io_=nullptr;
     GameDiaryIoSnapshot diary_io_at_bind_;
+    GameOptionSettings* option_settings_=nullptr;
+    GameNotebookLease option_lease_;
     ClockWord clock_;
     RngNativeOwner* rng_=nullptr;
     GameActorRuntime* runtime_=nullptr;

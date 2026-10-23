@@ -265,7 +265,23 @@ bool GameUiInstance::Bind(uint32_t root, uint32_t clip, uint32_t frame) {
     if (!resource_ || root >= nodes_.size() || clip >= resource_->Clips().size())
         return false;
     try {
-        Apply(nodes_, *resource_, clip, frame, true);
+        //96C48 first calls9662C(instance,root,1). Reset the encoded
+        // child/sibling subtree's base pose, even when the new sparse clip
+        // has no channel for a previously animated parent.97A9C leaves
+        // texture/reference and callback ownership alone.
+        auto previous = nodes_;
+        std::vector<bool> path(nodes_.size(),false);
+        uint32_t calls=0;
+        std::function<void(uint32_t)> reset=[&](uint32_t index){
+            Need(index<nodes_.size()&&!path[index]&&++calls<=32768,"UI bind reset subtree cycle/extent");
+            path[index]=true;auto& n=nodes_[index];
+            n.base_position={0,0};n.base_scale={1,1};n.base_angle=0;n.base_color=0x80808080;
+            if(n.encoded_initial[1])reset(n.encoded_initial[1]);
+            if(n.encoded_initial[0])reset(n.encoded_initial[0]);
+            path[index]=false;
+        };
+        try {reset(root);Apply(nodes_, *resource_, clip, frame, true);}
+        catch(...){nodes_.swap(previous);throw;}
         return true;
     } catch (const std::exception &) {
         return false;

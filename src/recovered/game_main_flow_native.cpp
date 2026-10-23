@@ -126,7 +126,7 @@ GameFsStatus GameMainFlow::RetireMenuCancel(){
     return RetireMenuResult();
 }
 GameFsStatus GameMainFlow::RetireMenuResult(){
-    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=5&&state_.menu_result54!=3&&state_.menu_result54!=4&&state_.menu_result54!=6)||state_.return20)
+    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=5&&state_.menu_result54!=3&&state_.menu_result54!=4&&state_.menu_result54!=6&&state_.menu_result54!=13)||state_.return20)
         return {GameFsCode::Unavailable,0,"Main menu Cancel retirement owner mismatch"};
     state_.menu_result50=state_.menu_result54;state_.menu_result54=-1;state_.menu58=0;
     state_.phase1C=state_.return20;state_.return20=0;state_.last_pc=0x238B0;input_.BeginContext();return {};

@@ -262,6 +262,17 @@ uint32_t GameContentBoot::StateWord(uint32_t at) const {
         word |= uint32_t(reset_bytes_[at + i]) << (8 * i);
     return word;
 }
+GameOptionSettingsSnapshot GameContentBoot::OptionSettings()const{
+    return {!state_.closed&&state_.loadman_owner&&state_.state_reset,diary_io_owner_,1,option_settings_writes_,
+        {{StateWord(0x10),StateWord(0x14),StateWord(0x18)}}};
+}
+GameFsStatus GameContentBoot::RestoreOptionSettings(const GameOptionSettingsSnapshot& expected,const std::array<uint32_t,3>& backup){
+    const auto now=OptionSettings();
+    if(!now.live||now.owner!=expected.owner||now.generation!=expected.generation||now.words!=expected.words||now.writes!=expected.writes||backup!=expected.words)
+        return {GameFsCode::Unavailable,0,"Options readonly current-owner backup restoration refused"};
+    for(uint32_t field=0;field<3;++field){for(uint32_t byte=0;byte<4;++byte)reset_bytes_[0x10+field*4+byte]=uint8_t(backup[field]>>(8*byte));++option_settings_writes_;}
+    if(OptionSettings().words!=backup)return {GameFsCode::Unavailable,0,"Options three source setter readbacks disagree"};return {};
+}
 int32_t GameContentBoot::ResetLookupWord(uint32_t index) const {
     return reset_lookup_.at(index);
 }
@@ -560,7 +571,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
             auto loss=frame;loss.overflow_resync=true;
             post_modal_.Input(loss);state_.post_modal=post_modal_.Snapshot();
             if(state_.main_menu_phase){
-                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);if(diary_.Modal())diary_.Input(loss);
+                main_menu_.Input(loss);if(inventory_.Modal())inventory_.Input(loss);if(notebook_.Modal())notebook_.Input(loss);if(wordmemo_.Modal())wordmemo_.Input(loss);if(diary_.Modal())diary_.Input(loss);if(system_option_.Modal())system_option_.Input(loss);
             }
             else if(inventory_.Modal())inventory_.Input(loss);
             else if(state_.actor_script.awaiting_choice)scene_ui_.HandleChoiceInput(loss);
@@ -575,6 +586,11 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
                ||frame.returned_owner!=lease.available_owner||frame.returned_generation!=lease.available_generation
                ||frame.sequence<=main_menu_last_sequence_)return false;
             main_menu_last_sequence_=frame.sequence;
+            if(state_.main_menu_phase==7&&system_option_.Modal()){
+                if(!state_.main_menu_child_ready||system_option_.Snapshot().phase!=3)return false;
+                auto checked=CheckMainMenuLease();if(checked)checked=actor_script_.CheckMenuOption(main_menu_target_,system_option_.Snapshot());
+                if(!checked){state_.status=checked;state_.blocked=true;return false;}return system_option_.Input(frame);
+            }
             if(state_.main_menu_phase==7&&diary_.Modal()){
                 if(!state_.main_menu_child_ready||diary_.Snapshot().phase!=3)return false;
                 auto checked=CheckMainMenuLease();if(checked)checked=actor_script_.CheckMenuDiary(main_menu_target_,diary_.Snapshot());
@@ -989,7 +1005,7 @@ GameFsStatus GameContentBoot::CheckMainMenuLease()const{
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
-    if(state_.main_menu_phase==8&&state_.system_option.failed){
+    if(state_.main_menu_phase&&state_.system_option.failed){
         // A stopped unsupported consumer gets no subsequent owner VM/service
         // slice. Normal Close still aborts its partial native construction.
         state_.status=state_.system_option.failure;state_.blocked=true;return false;
@@ -1020,8 +1036,11 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                     // Source23844 direct24FF4(10,1). The source initializer
                     // precedes publication474/Open; it may genuinely refuse.
                     status=system_option_.Request(main_menu_lease_,{{StateWord(0x10),StateWord(0x14),StateWord(0x18)}});
+                    if(status){const auto actor=actor_script_.Snapshot();system_option_.SetChildLease({actor.generation,actor.vm_current.run_id,state_.actor_message_contexts,
+                        main_menu_.Snapshot().generation,main_menu_lease_.available_owner,main_menu_lease_.available_generation,state_.main_menu_input_epoch+1});
+                        status=actor_script_.BindMenuOption(main_menu_target_,system_option_.Snapshot().generation,main_menu_.Snapshot().generation,*this,system_option_.Snapshot().child_lease);if(!status)system_option_.Abort();}
                     state_.system_option=system_option_.Snapshot();
-                    if(status){state_.main_menu_phase=8;break;}
+                    if(status){++state_.main_menu_input_epoch;state_.main_menu_child_ready=false;state_.main_menu_phase=8;break;}
                 }
                 if(status&&result==6){
                     GameRecordImage image;GameDiaryOpenInputs inputs;
@@ -1092,7 +1111,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 5:
             if(actor_script_.Snapshot().menu_close_return.returned
                &&actor_script_.Snapshot().menu_close_return.menu_generation==main_menu_.Snapshot().generation){
-                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3||main_flow_.Snapshot().menu_result50==4||main_flow_.Snapshot().menu_result50==6){
+                if(main_flow_.Snapshot().menu_result50==5||main_flow_.Snapshot().menu_result50==3||main_flow_.Snapshot().menu_result50==4||main_flow_.Snapshot().menu_result50==6||main_flow_.Snapshot().menu_result50==13){
                     int32_t queue=-1;status=actor_script_.PostMenuEvent(main_menu_target_,18,main_menu_.Snapshot().generation,queue);
                     if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event18 queue refused"};
                     if(status)state_.main_menu_phase=6;
@@ -1107,9 +1126,10 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         }
         case 8:
             // NativeSingleWorkerResource10BeforeRetire: original allocator vs
-            // callback scheduling is unknown. Stop once, before11/18, when the
-            // actual owned constructor has no native consumer.
-            status=system_option_.Advance(*this);state_.system_option=system_option_.Snapshot();break;
+            // callback scheduling is unknown. The distinct153D4 owner must
+            // return before474/Open and before this worker posts11 then18.
+            status=system_option_.Initialize(*this,font_,*this,scene_ui_.TitleTransitionOwner());state_.system_option=system_option_.Snapshot();
+            if(status)state_.main_menu_phase=4;break;
         case 7:
             // NativeMenuInventorySingleWorkerAfterCallbacks. Original relative
             // allocator-vs11/18 phase order is unknown; request-before-retire is proved.
@@ -1119,6 +1139,17 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
             // callbacks; only subsequent cache pressure can evict those images.
             status=main_menu_.RetireClosedRender();
             if(!status)break;
+            if(main_flow_.Snapshot().menu_result50==13){
+                status=actor_script_.CheckMenuOption(main_menu_target_,system_option_.Snapshot());
+                if(status)status=system_option_.Tick(scene_ui_.TitleTransitionOwner());const auto child=system_option_.Snapshot();
+                if(status)status=actor_script_.CheckMenuOption(main_menu_target_,child);
+                if(status&&child.polls&&!child.loader469){state_.source_loader469=false;state_.source469_resource=10;state_.source469_generation=child.generation;state_.source469_poll=child.polls;}
+                if(child.phase!=3)state_.main_menu_child_ready=false;
+                if(status&&!state_.main_menu_child_ready&&child.phase==3){++state_.main_menu_input_epoch;state_.main_menu_child_ready=true;
+                    if(!system_option_.SetInputEpoch(state_.main_menu_input_epoch))status={GameFsCode::Unavailable,0,"Options ready input epoch refused"};}
+                if(status&&system_option_.ClosedAndRetired()){status=actor_script_.CompleteMenuOption(main_menu_target_,child);if(status)finish();}
+                break;
+            }
             if(main_flow_.Snapshot().menu_result50==6){
                 const auto before=diary_.Snapshot();status=actor_script_.CheckMenuDiary(main_menu_target_,before);
                 if(status)status=diary_.Tick(*this,*this,records_,scene_ui_.TitleTransitionOwner());const auto child=diary_.Snapshot();
@@ -1206,7 +1237,9 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.inventory=inventory_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
     state_.notebook=notebook_.Snapshot();
     state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
+    state_.system_option=system_option_.Snapshot();state_.system_option.woken=actor_script_.Snapshot().menu_option_completions!=0;
     if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+        if(system_option_.Modal())return system_option_.Draw(surface,font_);
         if(diary_.Modal())return diary_.Draw(surface,font_);
         if(wordmemo_.Modal())return wordmemo_.Draw(surface,font_);
         if(notebook_.Modal())return notebook_.Draw(surface,font_);
@@ -1215,6 +1248,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.main_menu=main_menu_.Snapshot();
     state_.notebook=notebook_.Snapshot(); // publish actual post-draw empty batch/lease observations
     state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
+    state_.system_option=system_option_.Snapshot();state_.system_option.woken=actor_script_.Snapshot().menu_option_completions!=0;
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
         returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();

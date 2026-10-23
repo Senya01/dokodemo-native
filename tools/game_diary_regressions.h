@@ -107,6 +107,12 @@ for(U i=0;i<4;++i){const U c=clips+i*52,k=keys+i*16,v=values+i*32;Put(b,c+48,8);
 Put(b,c,1);Put(b,c+4,k);Put(b,k,i,2);Put(b,k+2,1,2);Put(b,k+4,v);Put(b,v,i==0?1:0);
 Put(b,c+24,1);Put(b,c+28,k+8);Put(b,k+8,i==0?92:i==1?93:i==2?94:78,2);Put(b,k+10,1,2);Put(b,k+12,v+12);
 Float(b,v+12,i==3?40.0f:-80.0f);Float(b,v+16,i==0?-60.0f:i==1?-24.0f:i==2?14.0f:40.0f);}
+//Open rebinds root0: source96C48 resets its entire encoded subtree. Keep
+//all three root0 callback anchors in clip0 rather than relying on another
+//root's old sparse-channel state surviving that reset.
+Put(b,clips+24,3);Put(b,clips+28,1088);
+for(U i=0;i<3;++i){Put(b,1088+i*8,92+i,2);Put(b,1090+i*8,1,2);Put(b,1092+i*8,1408+i*16);
+Float(b,1408+i*16,-80);Float(b,1412+i*16,i==0?-60.0f:i==1?-24.0f:14.0f);}
 return View(std::move(b));}
 inline PackageView Font(){constexpr U count=16384,pixels=60+count,palette=pixels+8192;Bytes b(palette+64);
 Put(b,0,0x31544658);Put(b,4,1,2);Put(b,6,1,2);Put(b,8,count);b[12]=1;Put(b,16,60);
@@ -269,7 +275,7 @@ inline void RenderCases(){GameGraphics g;GameFontResource font;C(g.Initialize({}
 {FakeResourceSource source;source.Seed();auto resource=std::make_shared<GameUiResource>();
 C(bool(resource->Load(source,"enikki\\gui\\enikki\\ENIKKI.CB2A","enikki\\gui\\enikki\\")),"R.fixture-load");
 C(resource->RootCount()==4&&resource->InitialNodes().size()==96&&resource->Clips().size()==4,"R.fixture-shape");GameUiInstance clone;C(clone.Clone(resource),"R.fixture-clone");
-for(U i=0;i<4;++i){C(resource->Clips()[i].channels[0].count==1&&resource->Clips()[i].channels[3].count==1&&clone.Bind(i,i,0),"R.all-frame0-binds");
+for(U i=0;i<4;++i){C(resource->Clips()[i].channels[0].count==1&&resource->Clips()[i].channels[3].count==(i?1u:3u)&&clone.Bind(i,i,0),"R.all-frame0-binds");
 auto* ctl=clone.AddControl(i);C(ctl!=nullptr,"R.four-controls");*ctl={i?1u:0u,i,uint8_t(i?2:1),1};}
 for(U i=0;i<4;++i)C(clone.SetSourceCallback(i==0?92:i==1?93:i==2?94:78,i==0?0x393A4:i==1?0x3953C:i==2?0x39684:0x3973C),"R.actual-callback-bind");
 C(clone.ShowRoot(0),"R.root");std::string error;C(clone.Update(error),"R.fixture-update");

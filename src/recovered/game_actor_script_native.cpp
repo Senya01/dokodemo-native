@@ -1244,6 +1244,56 @@ GameFsStatus GameActorScript::CompleteMenuNotebook(const GameOwnerEventTarget& t
         vm_->resume_modal_context();notebook_self_before_={};state_.menu_notebook_live=false;++state_.menu_notebook_completions;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorScript::BindMenuOption(const GameOwnerEventTarget& expected,uint64_t gui,uint64_t parent,GameOptionSettings& settings,GameNotebookLease lease){
+    try{
+        Need(state_.live&&!state_.blocked&&vm_&&vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks()
+             &&gui&&gui>state_.menu_option_generation&&parent&&!state_.menu_option_live&&!state_.menu_diary_live&&!state_.menu_wordmemo_live&&!state_.menu_notebook_live&&!state_.menu_inventory_live,
+             "Options request current owner/generation unavailable");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
+             "Options current registered context/Local0 changed");
+        Need(state_.menu_open_return.returned&&!state_.menu_open_return.failed&&state_.menu_open_return.event==10&&state_.menu_open_return.menu_generation==parent,
+             "Options genuine opening10 return missing");
+        const auto current=settings.OptionSettings();Need(current.live&&current.owner&&current.generation&&current.words[0]==2,"Options current source settings owner unavailable");
+        Need(lease.script_generation==state_.generation&&lease.run_id==vm_->current_witness().run_id&&lease.parent_generation==parent
+             &&lease.context&&lease.available_owner&&lease.available_generation&&lease.input_epoch,"Options sampled child lease unavailable");
+        option_lease_=lease;
+        option_settings_=&settings;state_.option_before=current;state_.option_after={};state_.menu_option_generation=gui;state_.menu_option_parent=parent;
+        state_.menu_option_live=true;++state_.menu_option_requests;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::CheckMenuOption(const GameOwnerEventTarget& expected,const GameSystemOptionSnapshot& gui)const{
+    try{
+        Need(state_.live&&!state_.blocked&&vm_&&state_.menu_option_live&&option_settings_&&!gui.failed
+             &&gui.generation==state_.menu_option_generation&&gui.child_lease.parent_generation==state_.menu_option_parent
+             &&gui.child_lease.script_generation==state_.generation&&gui.child_lease.run_id==vm_->current_witness().run_id,"Options GUI/parent/run owner changed");
+        const auto& lease=gui.child_lease;Need(lease.context==option_lease_.context&&lease.available_owner==option_lease_.available_owner
+             &&lease.available_generation==option_lease_.available_generation&&lease.input_epoch==option_lease_.input_epoch
+             &&gui.lease.script_generation==lease.script_generation&&gui.lease.run_id==lease.run_id&&gui.lease.available_owner==lease.available_owner
+             &&gui.lease.available_generation==lease.available_generation&&gui.lease.message_context==lease.context&&gui.lease.input_epoch+1==lease.input_epoch,
+             "Options child sampled context/available/opening epoch replaced");
+        const auto target=OwnerEventTarget();
+        Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
+             &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,"Options registered context/Local0 changed");
+        const auto& pause=state_.menu_pause_return;
+        Need(pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==state_.menu_option_parent&&!vm_->context_enabled()
+             &&!vm_->callback_depth()&&!vm_->queued_callbacks()&&GameWordMemoPausedOwnerExact(pause.restored,vm_->current_witness()),"Options exact paused18 caller/frame/operands/deadline changed");
+        const auto current=option_settings_->OptionSettings();const auto& before=state_.option_before;
+        Need(current.live&&current.owner==before.owner&&current.generation==before.generation&&current.words==before.words
+             &&current.writes==before.writes+(gui.close_requests?3u:0u)&&gui.passive_settings==before.words,"Options settings source owner/readback/writer ledger changed");return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::CompleteMenuOption(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+    const auto checked=CheckMenuOption(target,gui);if(!checked)return checked;
+    if(gui.phase!=7||gui.retired_generation!=gui.generation||gui.live||gui.owner474||gui.request10||gui.retirement_pending||gui.template_owner||gui.clone_owner
+       ||gui.message.live||gui.message.text_owner||gui.message.registered||gui.message.references||gui.state44!=3||gui.loader469
+       ||gui.opens!=1||gui.close_requests!=1||gui.close_completions!=1||gui.polls!=1||gui.retirement_requests!=1||gui.retirements!=1)
+        return {GameFsCode::Unavailable,0,"Options current source poll/deferred deleting owner incomplete"};
+    state_.option_after=option_settings_->OptionSettings();vm_->resume_modal_context();state_.menu_option_live=false;++state_.menu_option_completions;return {};
+}
 GameFsStatus GameActorScript::ReadMenuDiary(const GameOwnerEventTarget& expected,int32_t manager58,uint32_t mode,GameRecordImage& image,GameDiaryOpenInputs& in)const{
     try{
         Need(state_.live&&vm_&&!state_.blocked&&records_&&records_->Live()&&clock_&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Diary requires current GAME71 bank/context owner");

@@ -154,7 +154,7 @@ GameMainMenuSnapshot GameMainMenu::Snapshot()const{
 }
 GameFsStatus GameMainMenu::RetireClosedRender(){
     const auto s=Snapshot();
-    if(!s.live||s.state78!=3||(s.result!=5&&s.result!=3&&s.result!=4&&s.result!=6))return {GameFsCode::Unavailable,0,"Only resolved finite child menu render may retire"};
+    if(!s.live||s.state78!=3||(s.result!=5&&s.result!=3&&s.result!=4&&s.result!=6&&s.result!=13))return {GameFsCode::Unavailable,0,"Only resolved finite child menu render may retire"};
     if(!resource_)return {};
     last_frame_=s.frame;last_clip_=s.clip;last_mode_=s.mode;
     clone_.Close();resource_.reset();++render_retirements_;return {};
