@@ -34,7 +34,23 @@ scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoo
 
 The user-table root contains `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`; alternatively generate them at the ignored default locations. Public `game-*` tests exercise authored synthetic data. Seventeen original-byte fixture groups/dependent headers are excluded from publication and explicitly omitted by the default actor runner. Their absence is not reported as original-script equivalence. A developer's own local fixture package may be enabled with `-PrivateSourceFixturesDirectory`; it is optional and is never distributed. See [development and publication](docs/DEVELOPMENT.md).
 
-Run `dokodemo-native.exe --assets <prepared-native-assets> --startup-media-root <extracted-PSP-root> --native-title-layout characters --native-save-root <local-save-root>`. Follow onboarding with arrows, X (Circle), Z (Cross), text/Enter. F12 captures the live window and a clean native framebuffer; Esc exits. `--keep-scene-open` keeps an existing observation window open; it does not advance scripts or alter game readiness. The ordinary introduction uses live local time and can take five real minutes.
+## Run the native game window
+
+Use your own prepared native assets and extracted media directory (not an ISO filename). Example paths below are placeholders:
+
+```powershell
+.\build\functional\dokodemo-native.exe --game-window `
+  --assets "C:\DokoData\native" `
+  --startup-media-root "C:\DokoData\iso" `
+  --native-save-root ".\private\user-save" `
+  --evidence ".\private\captures"
+```
+
+This is normal startup: no `--visual-capture` or automatic fixture confirmations. Follow the title/profile prompts with arrows, X (Circle), Z (Cross), text and Enter. Text must round-trip through CP932; comprehensive IME/prediction support remains incomplete. F12 saves the actual window and native framebuffer plus local diagnostics. Esc cancels an active text entry; outside text entry it closes the window. The close button also uses normal joined shutdown. The presentation preserves 480:272 aspect, prefers integer scaling and letterboxes on resize. Omit `--game-window` for the diagnostic shell.
+
+The developer's local capture launcher is different: `--visual-capture room --keep-scene-open` performs the existing bounded onboarding inputs for a screenshot observation. It is not normal play or a full-game pass, and the launcher/game data is not bundled. The normal window already stays open without that flag. Live calendar/time-dependent waiting is not accelerated by `--game-window`.
+
+Verification is bounded: normal title confirmation and character selection have been observed; a complete ordinary profile-to-room session remains under verification. Capture fixtures and focused synthetic tests are separate evidence, not a full-game pass.
 
 ## History and license
 
