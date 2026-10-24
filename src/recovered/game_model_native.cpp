@@ -339,6 +339,128 @@ GameVector4 GameModelClone::SkinNormal(const model::Geometry &g,uint32_t vertex,
     Need(index(0)>=0,"skin normal first palette index");
     return UnitNormal(out);
 }
+GameModelClone::GeometrySpace GameModelClone::GeometryTransforms(uint32_t node) const {
+    Need(asset_&&asset_->Live()&&node<pose_.size(),"world geometry source lease/index");
+    const auto &n=asset_->Data().nodes.at(node);const auto &g=n.geometry;
+    GeometrySpace space{pose_[node].world,{}};
+    for(const auto &b:g.bones){const auto bone=b.idWord&65535;
+        Need(bone<pose_.size()&&bone<inverse_bind_.size(),"world geometry palette index");
+        space.palette.push_back(ModelMultiply(pose_[bone].world,inverse_bind_[bone]));}
+    if(n.optionalMatrix.size()==16){GameMatrix optional{};
+        std::copy(n.optionalMatrix.begin(),n.optionalMatrix.end(),optional.begin());
+        space.rigid=ModelMultiply(space.rigid,optional);}
+    return space;
+}
+std::vector<GameVector4> GameModelClone::WorldVertices(uint32_t node) const {
+    const auto space=GeometryTransforms(node);const auto &g=asset_->Data().nodes.at(node).geometry;
+    Need(g.positions.size()==g.vertexCount,"world geometry positions extent");
+    std::vector<GameVector4> result;result.reserve(g.vertexCount);
+    for(uint32_t i=0;i<g.vertexCount;++i){const auto &p=g.positions[i];
+        auto world=g.weightRecords.empty()?ModelTransform(space.rigid,{{p.x,p.y,p.z,1}}):Skin(g,i,space.palette);
+        for(float v:world)Need(std::isfinite(v)&&std::abs(v)<1e12f,"invalid world geometry position");
+        Need(world[3]>1e-8f,"world geometry homogeneous position");
+        for(unsigned j=0;j<3;++j)world[j]/=world[3];world[3]=1;
+        result.push_back(world);}
+    return result;
+}
+GameFsStatus GameModelClone::ContactFootprint(GameContactFootprint &out) const {
+    out={};
+    if(!asset_||!asset_->Live())return {GameFsCode::Unavailable,0,"contact source lease retired"};
+    try{
+        struct Triangle {std::array<GameVector4,3> p;float opacity;};std::vector<Triangle> triangles;
+        float low=1e30f,high=-1e30f;
+        for(uint32_t node=0;node<pose_.size();++node){const auto &g=asset_->Data().nodes[node].geometry;
+            Need(std::isfinite(pose_[node].world_opacity)&&pose_[node].world_opacity>=0,"contact opacity domain");
+            if(!g.vertexCount||pose_[node].world_opacity<=0)continue;
+            const auto material=pose_[node].material;
+            Need(material>=-1&&material<int32_t(asset_->Materials().size()),"contact material index");
+            if(material>=0)if(const auto &image=asset_->Materials()[size_t(material)].texture){
+                Need(image->Width()&&image->Height()&&image->Pixels().size()==size_t(image->Width())*image->Height(),"contact texture extent");
+                // Conservative caster scope: no textured cutout/translucent
+                // mesh contributes bounds. Current Toro diffuse maps are opaque.
+                if(!std::all_of(image->Pixels().begin(),image->Pixels().end(),[](uint32_t pixel){return (pixel>>24)==255;}))continue;
+            }
+            const auto points=WorldVertices(node);
+            for(const auto &t:model::triangles(g)){
+                float alpha=0;
+                for(auto index:t){const auto a=g.rgba.empty()?255u:(std::min)(255u,2u*g.rgba.at(g.rgba.size()==1?0:index)[3]);
+                    alpha=(std::max)(alpha,float(a)/255*(std::min)(1.0f,pose_[node].world_opacity));}
+                if(alpha<=0)continue;
+                Triangle tri{{{points.at(t[0]),points.at(t[1]),points.at(t[2])}},alpha};
+                for(const auto &p:tri.p){low=(std::min)(low,p[2]);high=(std::max)(high,p[2]);}
+                triangles.push_back(tri);
+            }
+        }
+        if(triangles.empty()||high-low<=1e-4f)return {};
+        const auto body_height=high-low,cut=low+body_height*.035f;
+        float min_x=1e30f,max_x=-1e30f,min_y=1e30f,max_y=-1e30f,opacity=0;
+        const auto include=[&](const GameVector4 &p,float alpha){min_x=(std::min)(min_x,p[0]);max_x=(std::max)(max_x,p[0]);
+            min_y=(std::min)(min_y,p[1]);max_y=(std::max)(max_y,p[1]);opacity=(std::max)(opacity,alpha);};
+        for(const auto &t:triangles)for(unsigned i=0;i<3;++i){const auto &a=t.p[i],&b=t.p[(i+1)%3];
+            if(a[2]<=cut)include(a,t.opacity);
+            if((a[2]<cut)!=(b[2]<cut)){const auto f=(cut-a[2])/(b[2]-a[2]);
+                include({{a[0]+f*(b[0]-a[0]),a[1]+f*(b[1]-a[1]),cut,1}},t.opacity);}}
+        if(max_x-min_x<=1e-6f||max_y-min_y<=1e-6f)return {};
+        const auto pad=body_height*.02f;
+        out={true,(min_x+max_x)*.5f,(min_y+max_y)*.5f,low,
+            (std::min)((max_x-min_x)*.5f+pad,body_height*.2f),
+            (std::min)((max_y-min_y)*.5f+pad,body_height*.2f),body_height,opacity};
+        return {};
+    }catch(const std::exception &e){return Error(e);}
+}
+GameFsStatus GameModelClone::HorizontalSurfaceBelow(float x,float y,float ceiling,float max_drop,
+                                                   bool &found,float &height) const {
+    found=false;height=0;
+    if(!asset_||!asset_->Live())return {GameFsCode::Unavailable,0,"support source lease retired"};
+    try{
+        Need(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(ceiling)&&std::isfinite(max_drop)&&max_drop>0,"support query domain");
+        for(uint32_t node=0;node<pose_.size();++node){const auto &g=asset_->Data().nodes[node].geometry;
+            Need(std::isfinite(pose_[node].world_opacity)&&pose_[node].world_opacity>=0,"support opacity domain");
+            if(!g.vertexCount||pose_[node].world_opacity<.999f)continue;
+            const auto points=WorldVertices(node);
+            const auto *material=pose_[node].material<0?nullptr:&asset_->Materials().at(size_t(pose_[node].material));
+            for(const auto &t:model::triangles(g)){
+                bool opaque=true;for(auto i:t)if(!g.rgba.empty()&&g.rgba.at(g.rgba.size()==1?0:i)[3]<128)opaque=false;
+                if(!opaque)continue;
+                const auto &a=points.at(t[0]),&b=points.at(t[1]),&c=points.at(t[2]);
+                const double ax=double(b[0])-a[0],ay=double(b[1])-a[1],bx=double(c[0])-a[0],by=double(c[1])-a[1];
+                const auto area=ax*by-ay*bx,span=(std::max)({std::abs(ax),std::abs(ay),std::abs(bx),std::abs(by),1e-6});
+                if(std::abs(area)<span*span*1e-10)continue;
+                const auto vertical=(std::max)({std::abs(double(a[2])-b[2]),std::abs(double(a[2])-c[2])});
+                if(vertical>(std::max)(1e-5,span*.001))continue; // horizontal-only native contact policy
+                const auto u=((double(x)-a[0])*by-(double(y)-a[1])*bx)/area;
+                const auto v=(ax*(double(y)-a[1])-ay*(double(x)-a[0]))/area,w=1-u-v;
+                if(u<-1e-6||v<-1e-6||w<-1e-6)continue;
+                const auto z=float(w*a[2]+u*b[2]+v*c[2]);
+                if(z>ceiling||z<ceiling-max_drop||(found&&z<=height))continue;
+                if(material&&material->texture){
+                    Need(g.uv.size()==g.vertexCount,"support UV extent");
+                    auto tx=w*g.uv[t[0]].x+u*g.uv[t[1]].x+v*g.uv[t[2]].x;
+                    auto ty=w*g.uv[t[0]].y+u*g.uv[t[1]].y+v*g.uv[t[2]].y;
+                    tx-=std::floor(tx);ty-=std::floor(ty);
+                    const auto &image=*material->texture;
+                    Need(image.Width()&&image.Height()&&image.Pixels().size()==size_t(image.Width())*image.Height(),"support texture extent");
+                    const auto col=(std::min)(image.Width()-1,uint32_t(tx*image.Width()));
+                    const auto row=(std::min)(image.Height()-1,uint32_t(ty*image.Height()));
+                    if((image.Pixels().at(size_t(row)*image.Width()+col)>>24)!=255)continue;
+                }
+                found=true;height=z;
+            }
+        }
+        return {};
+    }catch(const std::exception &e){return Error(e);}
+}
+GameFsStatus DrawWindowsContactShadow(GameGraphics &graphics,const GameMatrix &camera,
+                                      const GameContactFootprint &footprint,float height) {
+    if(!footprint.valid)return {};
+    const auto max_drop=footprint.body_height*.25f;
+    if(!std::isfinite(height)||max_drop<=0)return {GameFsCode::Unavailable,0,"contact height domain"};
+    const auto separation=(std::max)(0.0f,footprint.foot_z-height);
+    const auto fade=(std::clamp)(1-separation/max_drop,0.0f,1.0f);
+    if(!graphics.DrawContactEllipse(camera,footprint.x,footprint.y,height,footprint.radius_x,
+        footprint.radius_y,.28f*footprint.opacity*fade*fade))return {GameFsCode::Unavailable,0,"native contact decal rejected"};
+    return {};
+}
 GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view_projection,
                                  GameModelColorPolicy color_policy,GameModelLightingPolicy lighting_policy) const {
     if (!asset_ || !asset_->Live())
@@ -358,17 +480,9 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
                 texture = {m->texture->Pixels().data(), m->texture->Width(), m->texture->Height(),
                            m->texture->Pixels().size()};
             }
-            std::vector<GameMatrix> palette;
-            // 8A660 uses cached per-node inverse bind, NOT file bone.matrix.
-            for (const auto &b : g.bones)
-                palette.push_back(
-                    ModelMultiply(pose_[b.idWord & 65535].world, inverse_bind_[b.idWord & 65535]));
-            auto rigid = pose_[node].world;
-            if (n.optionalMatrix.size() == 16) {
-                GameMatrix optional{};
-                std::copy(n.optionalMatrix.begin(), n.optionalMatrix.end(), optional.begin());
-                rigid = ModelMultiply(rigid, optional);
-            }
+            const auto space=GeometryTransforms(uint32_t(node));
+            const auto &palette=space.palette;
+            const auto &rigid=space.rigid;
             std::vector<GameMeshVertex> vertices;
             vertices.reserve(g.vertexCount);
             for (uint32_t i = 0; i < g.vertexCount; ++i) {

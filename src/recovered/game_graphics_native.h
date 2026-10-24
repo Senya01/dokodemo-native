@@ -65,6 +65,8 @@ struct GameRasterPolicy {
     bool blend=true,repeat=true;
     // Explicit Windows DVS approximation; callers opt in. UI/raw raster stays1x.
     bool windows_dvs_textured_modulation2x=false;
+    // Native soft decals may blend only onto an already rendered depth.
+    bool match_existing_depth=false;
 };
 using GameMatrix = std::array<float, 16>; // native column-major math
 class GameGraphics final {
@@ -80,6 +82,10 @@ public:
     //Texture storage is borrowed only for this call; the model owns its image.
     bool DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices,GameTextureSpan texture={},
                           GameRasterPolicy policy={});
+    // Procedural world-plane decal, evaluated once per pixel and restricted
+    // to the current rendered depth. Not a texture or recovered PSP shadow.
+    bool DrawContactEllipse(const GameMatrix &camera,float x,float y,float z,
+                            float radius_x,float radius_y,float opacity);
     // Native radial alpha coverage for the source CF04 two-ring fade. Host
     // per-pixel math replaces its60-segment geometry, not a PSP GE interpreter.
     bool DrawRadialFade(float center_x, float center_y, float inner_radius, float outer_radius);

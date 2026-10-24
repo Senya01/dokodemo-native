@@ -37,11 +37,18 @@ void Bounds(std::vector<uint8_t> &b) {
     for (unsigned i = 0; i < 4; ++i)
         F(b, 0);
 }
-std::vector<uint8_t> Fixture(bool normals=false) {
+std::vector<uint8_t> Fixture(bool normals=false,const std::vector<std::array<int16_t,3>>* custom=nullptr,bool textured=false) {
+    const std::vector<std::array<int16_t,3>> regular{{{-25000,-25000,0}},{{25000,-25000,0}},{{0,25000,0}}};
+    const auto &positions=custom?*custom:regular;
     std::vector<uint8_t> b{'D', 'V', 'S', 0};
     b.resize(16);
-    W(b, 6);
-    W(b, 0);
+    W(b, textured?24:6);
+    W(b, textured?1:0);
+    if(textured){
+        const auto common=b.size();b.resize(common+36);b[common]=1;
+        W(b,0);const auto name=b.size();b.resize(name+32);
+        const std::string stem="CONTACT_TEST";std::copy(stem.begin(),stem.end(),b.begin()+name);
+    }
     Bounds(b);
     H(b, 1);
     H(b, 0);
@@ -59,19 +66,19 @@ std::vector<uint8_t> Fixture(bool normals=false) {
     b.push_back(3);
     b.push_back(0);
     H(b, normals?0x4009:9);
-    b.push_back(255);
+    b.push_back(textured?0:255);
     b.push_back(0);
-    H(b, 3);
+    H(b, int32_t(positions.size()));
     F(b, 1);
-    for (auto v : {-25000, -25000, 0, 25000, -25000, 0, 0, 25000, 0})
-        H(b, v);
+    for(const auto &p:positions)for(auto v:p)H(b,v);
     while (b.size() % 4)
         b.push_back(0);
     if(normals){
-        for(unsigned i=0;i<3;++i)b.insert(b.end(),{0,0,126});
+        for(size_t i=0;i<positions.size();++i)b.insert(b.end(),{0,0,126});
         while(b.size()%4)b.push_back(0);
     }
     b.insert(b.end(), {255, 255, 255, 128});
+    if(textured)for(size_t i=0;i<positions.size();++i){F(b,.5f);F(b,.5f);}
     Bounds(b);
     W(b, 0);
     H(b, 0);
@@ -102,6 +109,22 @@ struct Lease : PackageStorageLease {
         s.generation = s.serial = 1;
         s.readable = s.writable = true;
         return true;
+    }
+};
+struct ContactTextureSource final:GameResourceSource {
+    uint8_t alpha=0;
+    GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
+        if(path!="CONTACT_TEST.GIM")return {GameFsCode::NotFound,0,"synthetic contact texture path"};
+        // Tiny synthetic 2x2 white RGBA image; no original texture pixels.
+        std::vector<uint8_t> b(144,0);const char magic[]="MIG.00.1PSP";
+        std::copy(std::begin(magic),std::end(magic),b.begin());
+        const auto half=[&](size_t at,uint16_t v){b.at(at)=uint8_t(v);b.at(at+1)=uint8_t(v>>8);};
+        for(size_t at:{16u,32u}){half(at,at==16?2:3);half(at+2,16);Word(b,at+4,uint32_t(b.size()-at));Word(b,at+8,16);Word(b,at+12,16);}
+        half(48,4);half(50,16);Word(b,52,96);Word(b,56,96);Word(b,60,16);
+        half(64,48);half(68,3);half(72,2);half(74,2);half(76,32);half(78,4);half(80,1);
+        Word(b,88,48);Word(b,92,64);Word(b,96,80);half(104,1);half(106,1);half(108,3);half(110,1);Word(b,112,64);
+        for(size_t at=128;at<144;at+=4)Word(b,at,0x00FFFFFFu|uint32_t(alpha)<<24);
+        auto lease=std::make_shared<Lease>(std::move(b));out=PackageStorage::Attach(lease,lease->b.size());return {};
     }
 };
 bool Near(float a, float b) { return std::abs(a - b) < .0001f; }
@@ -279,6 +302,61 @@ void NormalLighting(){
         GameModelLightingPolicy::WindowsActorSoftDiffuse))&&graphics.SwapBuffers(),"normal-free actor policy draw");
     GameGraphicsFrame unchanged;Check(graphics.CopyFront(unchanged)&&original.pixels==unchanged.pixels,
         "absent source normals stay original without fabricated replacement normals");
+}
+void ContactQueriesAndDecal(){
+    auto floor_lease=std::make_shared<Lease>(Fixture());auto floor_asset=std::make_shared<GameModelAsset>();
+    Check(bool(floor_asset->Decode(PackageStorage::Attach(floor_lease,floor_lease->b.size()))),"contact floor fixture admitted");
+    GameModelClone floor;Check(bool(floor.Initialize(floor_asset)),"contact floor clone");
+    auto root=ModelIdentity();root[14]=2.5f;Check(bool(floor.Update(root)),"floor has actual nonzero support height");
+    bool found=false;float height=0;
+    Check(bool(floor.HorizontalSurfaceBelow(0,0,3,2,found,height))&&found&&Near(height,2.5f),"find actual posed floor rather than assume Z0");
+    Check(bool(floor.HorizontalSurfaceBelow(3,0,3,2,found,height))&&!found,"outside floor has no support");
+    Check(bool(floor.HorizontalSurfaceBelow(0,0,2,2,found,height))&&!found,"ceiling rejects surface above actor");
+    floor.Pose()[0].opacity=.5f;Check(bool(floor.Update(root)),"translucent floor pose");
+    Check(bool(floor.HorizontalSurfaceBelow(0,0,3,2,found,height))&&!found,"translucent receiver is not opaque ground");
+    floor.Pose()[0].opacity=1;root=ModelIdentity();root[5]=root[10]=0;root[6]=1;root[9]=-1;
+    Check(bool(floor.Update(root))&&bool(floor.HorizontalSurfaceBelow(0,0,3,4,found,height))&&!found,"vertical wall is not horizontal support");
+    const std::vector<std::array<int16_t,3>> body{{{-20000,-20000,0}},{{20000,-20000,0}},{{0,20000,30000}},{{0,0,-32000}}};
+    auto actor_lease=std::make_shared<Lease>(Fixture(false,&body));auto actor_asset=std::make_shared<GameModelAsset>();
+    Check(bool(actor_asset->Decode(PackageStorage::Attach(actor_lease,actor_lease->b.size()))),"posed contact fixture includes unused low vertex");
+    GameModelClone actor;Check(bool(actor.Initialize(actor_asset)),"contact actor clone");root=ModelIdentity();root[12]=4;root[13]=5;root[14]=6;
+    Check(bool(actor.Update(root)),"contact actor translated pose");GameContactFootprint footprint;
+    Check(bool(actor.ContactFootprint(footprint))&&footprint.valid&&Near(footprint.foot_z,6)&&Near(footprint.body_height,30000.f/32767),
+          "bottom uses referenced posed triangles, ignores unused low vertex and works without normals");
+    Check(Near(footprint.x,4)&&footprint.y<5&&footprint.radius_x>0&&footprint.radius_y>0,"footprint follows actual lower-envelope XY");
+    for(uint8_t alpha:{uint8_t(0),uint8_t(128),uint8_t(255)}){
+        ContactTextureSource source;source.alpha=alpha;
+        auto image=std::make_shared<Lease>(Fixture(false,&body,true));auto textured=std::make_shared<GameModelAsset>();
+        Check(bool(textured->Decode(PackageStorage::Attach(image,image->b.size()),&source)),"synthetic alpha-bound contact model");
+        GameModelClone caster;Check(bool(caster.Initialize(textured)),"textured caster clone");GameContactFootprint patch;
+        Check(bool(caster.ContactFootprint(patch))&&patch.valid==(alpha==255),"only fully opaque diffuse texture is eligible as contact caster");
+        GameGraphics raster;GameGraphicsConfig c;c.width=c.height=c.stride=16;c.scissor_right=c.scissor_bottom=16;c.cull_face=false;
+        Check(raster.Initialize(c)&&raster.Clear(0)&&bool(caster.Draw(raster,ModelIdentity())),"alpha caster actual model draw");
+        Check((raster.Snapshot().mesh_pixels>0)==(alpha!=0),"zero-alpha diffuse texture draws no pixels and casts no contact");
+    }
+    actor_lease->live=false;Check(!actor.ContactFootprint(footprint),"retired actor cannot produce contact");
+    floor_lease->live=false;Check(!floor.HorizontalSurfaceBelow(0,0,3,4,found,height),"retired floor cannot produce support");
+    GameGraphics graphics;GameGraphicsConfig config;config.width=config.height=config.stride=16;
+    config.scissor_right=config.scissor_bottom=16;config.cull_face=false;
+    Check(graphics.Initialize(config)&&graphics.Clear(0xFF808080),"contact raster surface");
+    const auto camera=ModelIdentity();
+    Check(graphics.DrawContactEllipse(camera,0,0,0,.8f,.8f,.5f)&&graphics.SwapBuffers(),"empty-depth decal call");
+    GameGraphicsFrame frame;Check(graphics.CopyFront(frame)&&frame.pixels[7*16+7]==0xFF808080,"no rendered receiver means no shadow");
+    const auto triangle=[&](std::array<GameVector4,3> p,uint32_t color){std::array<GameMeshVertex,3> v{};
+        for(unsigned i=0;i<3;++i){v[i].clip=p[i];v[i].color=color;}GameRasterPolicy policy;policy.two_sided=true;
+        Check(graphics.DrawMeshTriangle(v,{},policy),"contact receiver/occluder triangle");};
+    Check(graphics.Clear(0xFF000000),"contact receiver clear");
+    triangle({{{{-1,-1,0,1}},{{1,-1,0,1}},{{1,1,0,1}}}},0xFF808080);
+    triangle({{{{-1,-1,0,1}},{{1,1,0,1}},{{-1,1,0,1}}}},0xFF808080);
+    triangle({{{{.1f,-.4f,-.5f,1}},{{.9f,-.4f,-.5f,1}},{{.5f,.5f,-.5f,1}}}},0xFFFF0000);
+    Check(graphics.DrawContactEllipse(camera,0,0,.00002f,.8f,.8f,.5f),"single-coverage depth-matched procedural decal");
+    triangle({{{{-1,-1,.00002f,1}},{{1,-1,.00002f,1}},{{0,1,.00002f,1}}}},0xFF00FF00);
+    Check(graphics.SwapBuffers()&&graphics.CopyFront(frame),"contact raster actual readback");
+    const auto centre=frame.pixels[7*16+7];
+    Check((centre&255)<128&&(centre&255)>50,"soft contact darkens rendered floor exactly once");
+    Check(frame.pixels[8*16+12]==0xFFFF0000,"nearer occluder is untouched by floor decal");
+    Check(frame.pixels[8*16+7]!=0xFF00FF00,"contact did not overwrite receiver depth with slightly farther plane");
+    Check(!graphics.DrawContactEllipse(camera,0,0,0,-1,1,.5f),"invalid contact extent refused");
 }
 void Type12RegionDescriptor(){
     auto bytes=Fixture();Word(bytes,92,2);const auto node=bytes.size();W(bytes,0);H(bytes,12);
@@ -924,6 +1002,7 @@ int main() {
         GeometryAndRaster();
         TexturedColorApproximation();
         NormalLighting();
+        ContactQueriesAndDecal();
         RoomAnchorLocalX();RoomModelLifecycle();
         Type12RegionDescriptor();
         Motion();

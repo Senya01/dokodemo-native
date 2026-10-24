@@ -1062,6 +1062,27 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
     ++state_.scene_frames;
   }
   if (channels_[0].motion >= 0) {
+    GameContactFootprint contact;
+    auto contact_status=actor_clone_.ContactFootprint(contact);
+    if(!contact_status)return contact_status;
+    bool supported=false;float floor_height=0;
+    if(contact.valid){
+      // Native visual receiver policy: only actually published Carpet assets,
+      // not arbitrary object tops, decorative shadow meshes or a guessed Z0.
+      const auto penetration=(std::max)(5.0f,contact.body_height*.005f);
+      for(size_t i=0;i<models_.size();++i){const auto &slot=models_[i];const auto &owner=state_.room_models[i];
+        if(!slot.active||owner.retirement>=2||owner.resource<0||size_t(owner.resource)>=GameModelResources.size())continue;
+        const std::string name=GameModelResources[size_t(owner.resource)].name;
+        if(name.rfind("Carpet",0)!=0)continue;
+        bool found=false;float height=0;
+        contact_status=slot.clone.HorizontalSurfaceBelow(contact.x,contact.y,contact.foot_z+penetration,
+                                                        contact.body_height*.25f+penetration,found,height);
+        if(!contact_status)return contact_status;
+        if(found&&(!supported||height>floor_height)){supported=true;floor_height=height;}
+      }
+      if(supported){contact_status=DrawWindowsContactShadow(graphics,camera,contact,floor_height);
+        if(!contact_status)return contact_status;}
+    }
     const auto before = graphics.Snapshot().mesh_pixels;
     // Bounded Toro color-continuity approximation: source textured RGB is
     // near128, untextured body near255. PSP combiner semantics are unrecovered.

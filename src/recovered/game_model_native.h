@@ -81,6 +81,10 @@ enum class GameModelLightingPolicy {
     Unlit,
     WindowsActorSoftDiffuse // fixed native key, not recovered PSP room lighting
 };
+struct GameContactFootprint {
+    bool valid=false;
+    float x=0,y=0,foot_z=0,radius_x=0,radius_y=0,body_height=0,opacity=0;
+};
 class GameModelClone final {
   public:
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
@@ -115,13 +119,22 @@ class GameModelClone final {
                             const std::vector<GameMatrix> &palette);
     static GameVector4 SkinNormal(const model::Geometry &geometry, uint32_t vertex,
                                   const std::vector<GameMatrix> &palette);
+    // Render-only native queries, from the current owned pose/source lease.
+    std::vector<GameVector4> WorldVertices(uint32_t node) const;
+    GameFsStatus ContactFootprint(GameContactFootprint &out) const;
+    GameFsStatus HorizontalSurfaceBelow(float x,float y,float ceiling,float max_drop,
+                                        bool &found,float &height) const;
 
   private:
+    struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
+    GeometrySpace GeometryTransforms(uint32_t node) const;
     std::shared_ptr<const GameModelAsset> asset_;
     std::vector<GameModelPose> pose_;
     LightSelection lights_;
     std::vector<GameMatrix> inverse_bind_;
 };
+GameFsStatus DrawWindowsContactShadow(GameGraphics &graphics,const GameMatrix &camera,
+                                      const GameContactFootprint &footprint,float height);
 struct GameMotionStatistics {
     uint32_t tracks = 0, keys = 0, duration = 0, approximate_curves = 0, null_callback_tracks = 0;
     bool loop = false;

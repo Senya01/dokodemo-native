@@ -140,7 +140,10 @@ bool GameGraphics::MeshPixel(uint32_t x,uint32_t y,uint32_t color,uint16_t depth
                              const GameRasterPolicy& policy) noexcept {
     const auto at=size_t(y)*state_.config.stride+x;
     const auto alpha=color>>24;
-    if(!alpha || (policy.depth_test && depth<depth_[at]))return false;
+    if(!alpha)return false;
+    if(policy.match_existing_depth){
+        if(!depth_[at]||std::abs(int(depth)-int(depth_[at]))>4)return false;
+    }else if(policy.depth_test&&depth<depth_[at])return false;
     if(policy.blend && alpha<255) {
         const auto dest=color_[back_][at];uint32_t mixed=0xFF000000;
         for(unsigned shift=0;shift<24;shift+=8)
@@ -153,6 +156,7 @@ bool GameGraphics::MeshPixel(uint32_t x,uint32_t y,uint32_t color,uint16_t depth
 }
 bool GameGraphics::DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices,GameTextureSpan texture,
                                     GameRasterPolicy policy) {
+    if(policy.match_existing_depth&&(!policy.depth_test||policy.depth_write))return false;
     std::lock_guard<std::mutex> lock(mutex_);
     if(!state_.live || (texture.pixels && (!texture.width||!texture.height||texture.width>4096||texture.height>4096
         ||uint64_t(texture.width)*texture.height!=texture.count))
@@ -241,6 +245,53 @@ bool GameGraphics::DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices
         }
         ++state_.draw_calls;
     }
+    return true;
+}
+bool GameGraphics::DrawContactEllipse(const GameMatrix &m,float cx,float cy,float z,
+                                      float rx,float ry,float opacity) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(!state_.live||!std::isfinite(cx)||!std::isfinite(cy)||!std::isfinite(z)||
+       !std::isfinite(rx)||!std::isfinite(ry)||!std::isfinite(opacity)||rx<=0||ry<=0||
+       rx>1e6f||ry>1e6f||opacity<0||opacity>1)return false;
+    for(float v:m)if(!std::isfinite(v)||std::abs(v)>1e12f)return false;
+    if(opacity==0)return true;
+    double min_x=1e30,max_x=-1e30,min_y=1e30,max_y=-1e30;
+    for(int sx:{-1,1})for(int sy:{-1,1}){
+        const double x=double(cx)+sx*rx,y=double(cy)+sy*ry;
+        const double w=m[3]*x+m[7]*y+double(m[11])*z+m[15];
+        if(w<=1e-5)return true; // conservative omission at/behind the eye plane
+        const double nx=(m[0]*x+m[4]*y+double(m[8])*z+m[12])/w;
+        const double ny=(m[1]*x+m[5]*y+double(m[9])*z+m[13])/w;
+        min_x=(std::min)(min_x,nx);max_x=(std::max)(max_x,nx);
+        min_y=(std::min)(min_y,ny);max_y=(std::max)(max_y,ny);
+    }
+    if(max_x<-1||min_x>1||max_y<-1||min_y>1)return true;
+    const auto left=int(std::floor(((std::clamp)(min_x,-1.0,1.0)+1)*.5*state_.config.width));
+    const auto right=(std::min)(int(state_.config.width),int(std::ceil(((std::clamp)(max_x,-1.0,1.0)+1)*.5*state_.config.width)));
+    const auto top=int(std::floor((1-(std::clamp)(max_y,-1.0,1.0))*.5*state_.config.height));
+    const auto bottom=(std::min)(int(state_.config.height),int(std::ceil((1-(std::clamp)(min_y,-1.0,1.0))*.5*state_.config.height)));
+    GameRasterPolicy policy;policy.depth_write=false;policy.match_existing_depth=true;
+    // Invert the current horizontal-plane homography at pixel centres. Each
+    // pixel is blended once: no triangulation/shared-edge alpha seams.
+    for(int py=top;py<bottom;++py)for(int px=left;px<right;++px){
+        if(!Inside(px,py))continue;
+        const double nx=2*(double(px)+.5)/state_.config.width-1;
+        const double ny=1-2*(double(py)+.5)/state_.config.height;
+        const double a=m[0]-nx*m[3],b=m[4]-nx*m[7],c=nx*(double(m[11])*z+m[15])-(double(m[8])*z+m[12]);
+        const double d=m[1]-ny*m[3],e=m[5]-ny*m[7],f=ny*(double(m[11])*z+m[15])-(double(m[9])*z+m[13]);
+        const auto determinant=a*e-b*d,scale=(std::max)({std::abs(a),std::abs(b),std::abs(d),std::abs(e),1e-30});
+        if(std::abs(determinant)<=scale*scale*1e-12)continue;
+        const double x=(c*e-b*f)/determinant,y=(a*f-c*d)/determinant;
+        const double ux=(x-cx)/rx,uy=(y-cy)/ry,r2=ux*ux+uy*uy;
+        if(!std::isfinite(r2)||r2>=1)continue;
+        const double w=m[3]*x+m[7]*y+double(m[11])*z+m[15];
+        const double clip_z=m[2]*x+m[6]*y+double(m[10])*z+m[14];
+        if(w<=1e-5||clip_z<-w||clip_z>w)continue;
+        const auto depth=uint16_t(std::lround((1-clip_z/w)*.5*65535));
+        const auto alpha=uint32_t(std::lround(opacity*(1-r2)*(1-r2)*255));
+        if(MeshPixel(uint32_t(px),uint32_t(py),alpha<<24,depth,policy))++state_.mesh_pixels;
+    }
+    ++state_.draw_calls;
     return true;
 }
 bool GameGraphics::DrawRadialFade(float x, float y, float inner, float outer) {
