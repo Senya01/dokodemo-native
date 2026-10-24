@@ -1,38 +1,41 @@
 # dokodemo-native
 
-An in-progress native Windows source port of **Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). The game runs reconstructed C++ and its own KSC game scripting interpreter, without a PSP CPU emulator.
+An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Linux and a matching PSP rebuild are unverified.
 
-The verified route currently covers title/new-game menus, profile entry, room and actor rendering/animation, introductory dialogue, mode0 inventory browsing, action cancellation and close, and an owned in-memory diary entry followed by goodbye/camera-out. The later main-flow transition is still incomplete. Full gameplay, item actions, original save import, audio mixing and the complete text engine remain unfinished. Linux is not verified. This is not a complete game or a matching PSP rebuild.
+The current source includes title/new-game/profile entry, room and actor rendering, repeated owned conversations, choices and finite Latin/kana word input. Implemented finite operations include inventory marking, decoration, putaway and confirmed discard; main-menu inventory; empty friend/word notebooks, self-details, the current diary record; and selected Options edit/No/Yes RAM paths. Coverage is bounded by each supported operation, data shape and lifecycle. Original save import, durable state, networking, full text/IME and broad scene progression remain open.
 
-This source export retains the full sequence of 104 development commits. See [HISTORY.md](HISTORY.md) for the preserved metadata and deliberately excluded private artifacts.
+Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
+
+<!-- source-status:start -->
+Current source snapshot includes the October24 Toro color-continuity and normal-based volume improvements (`d448387b`). Full game remains incomplete.
+<!-- source-status:end -->
+
+Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
 
 ## Your game data
 
-No ISO, PSP executable, PRX, decoded module, artwork, fonts, models, scripts, sound, save files or research dumps are distributed. Use your own copy. Do not commit extracted or generated data. Local assets go under ignored `assets/`; local inputs under ignored `private/`.
+No ISO/CSO, PSP executable, PRX, artwork, fonts, models, original scripts, sound, saves or raw research dumps are distributed. Use your own copy. Keep local game data under ignored `assets/` or `private/`, or outside this checkout.
 
-Two diagnostic/generated headers are deliberately excluded: `src/recovered/ksc_dispatch_addresses.h` and `src/audio_catalog.h`. Generate them from your local BOOT and existing audio metadata:
+Two game-derived headers are intentionally external: `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`. Generate them locally:
 
 ```powershell
 python tools/generate-user-headers.py --boot private/BOOT.BIN --audio-manifest private/audio-manifest.json
 ```
 
-This reads your files locally and does not download game data. The audio metadata must come from your own preparation with the included `tools/audio_prepare.py`. Full first-time extraction/preparation and the offline PRX preparation recipe still require publication packaging; the private research paths are not part of this source export. Without prepared local game inputs the complete runtime cannot yet be reproduced from this candidate alone.
+The audio manifest comes from your own preparation with `tools/audio_prepare.py`. Full first-time asset/offline-PRX preparation still requires work; this source snapshot does not promise an end-to-end clean import of an arbitrary ISO. Prepared game inputs remain local.
 
 ## Build
 
-Windows x64, Visual Studio 2022 C++ tools and its CMake/Ninja integration are required. Python 3 is used for local data tools. The optional codec owner backend expects a separately supplied FFmpeg 7.1.1 Windows shared development package; no third-party DLLs are bundled here.
+Windows x64, Visual Studio 2022 C++ tools and its CMake/Ninja integration are required. Python3 supports local data tools. The optional codec backend uses a separately supplied FFmpeg7.1.1 Windows shared development package; vendor binaries are not bundled.
 
 ```powershell
-scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoot <your-ffmpeg-root> -Test
+scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoot <ffmpeg-root> -UserTablesDirectory <generated-header-root> -Test
 ```
 
-The focused `game-*` tests use small synthetic fixtures unless explicit user game data is selected. No private Git/research history is required to compile the exported C++ after user-generated headers are available. A separate `DOKODEMO_USER_TABLES_DIR` CMake option can point to an ignored directory containing those two headers, with the dispatch header under `recovered/`.
+The user-table root contains `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`; alternatively generate them at the ignored default locations. Public `game-*` tests exercise authored synthetic data. Seventeen original-byte fixture groups/dependent headers are excluded from publication and explicitly omitted by the default actor runner. Their absence is not reported as original-script equivalence. A developer's own local fixture package may be enabled with `-PrivateSourceFixturesDirectory`; it is optional and is never distributed. See [development and publication](docs/DEVELOPMENT.md).
 
-Run the resulting executable with `--assets <your-prepared-native-assets>` and `--startup-media-root <your-extracted-PSP-root>`. The original game files and prepared data remain your local inputs.
+Run `dokodemo-native.exe --assets <prepared-native-assets> --startup-media-root <extracted-PSP-root> --native-title-layout characters --native-save-root <local-save-root>`. Follow onboarding with arrows, X (Circle), Z (Cross), text/Enter. F12 captures the live window and a clean native framebuffer; Esc exits. `--keep-scene-open` keeps an existing observation window open; it does not advance scripts or alter game readiness. The ordinary introduction uses live local time and can take five real minutes.
 
-## License
+## History and license
 
-New original project code is available under the [MIT License](LICENSE).
-Existing component copyright and license notices under `LICENSES/` remain in effect. Third-party dependencies, including FFmpeg, retain their own licenses and distribution requirements.
-
-This license grants no rights to the original game, its data, assets or trademarks. Original game material is not relicensed. The source export does not claim legal clearance or a completed third-party provenance review.
+[HISTORY.md](HISTORY.md) explains the source-only development history, preserved metadata and excluded inputs. New original project code is [MIT](LICENSE); existing notices in `LICENSES/` and external dependency licenses remain in force. Original game data/trademarks are not relicensed. Publication does not claim complete game, SDK, audio or third-party equivalence.

@@ -61,7 +61,8 @@ int main() {
         GameArena arena; Check(arena.Initialize(backing.data(), uint32_t(backing.size())), "native arena");
         GameVmBoot vm; Check(vm.Initialize74EF4(arena) && vm.InitializeManager93404(), "native task manager");
         const auto baseline = arena.Used();
-        GameContentBoot boot;
+        auto boot_owner = std::make_unique<GameContentBoot>();
+        auto& boot = *boot_owner;
         Check(boot.InitializeBB8(arena, vm) && boot.Snapshot().registered_records == 6, "two actual typed owners/six records");
         Check(!vm.Close(), "VM cannot retire live loading tasks");
         Check(boot.Reset24994() && boot.ConfigureImportCallback5334C(), "reset and explicit unavailable interrupt policy");

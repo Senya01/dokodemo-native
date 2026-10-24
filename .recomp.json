@@ -14,5 +14,5 @@
     "Windows"
   ],
   "approach": "C++ reconstruction from the original PSP program with source-linked verification and a native Windows backend.",
-  "notes": "Native Windows source port in progress. A verified new-game route includes profile entry, room/actor animation, introductory dialogue and inventory browsing/cancellation. Full gameplay, audio mixing and original save import are incomplete. Original game files must be supplied by the user; none are distributed. Linux is unverified."
+  "notes": "Native Windows source port in progress: conversations/choices, finite kana input, inventory operations, notebooks/diary and Options RAM paths. Actor visual fidelity is the current priority. Full game, save import/persistence, broad audio and Linux remain unfinished. Original game data and exact-source fixture bytes are not distributed."
 }
