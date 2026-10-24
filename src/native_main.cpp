@@ -50,7 +50,7 @@ struct Options {
     bool selfTest = false, smoke = false, constructionSmoke = false;
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
-    bool nativeTitleMenu=false,testRngSeedReplay=false;
+    bool nativeTitleMenu=false,testRngSeedReplay=false,keepSceneOpen=false;
     uint32_t testRngSeedWord=0;
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
@@ -86,6 +86,7 @@ Options ParseOptions() {
             if(used!=raw.size()||raw.empty()||raw.front()==L'-'||word>UINT32_MAX)throw std::runtime_error("Fixture RNG seed must be uint32 decimal");
             options.testRngSeedReplay=true;options.testRngSeedWord=uint32_t(word);
         }
+        else if(arg==L"--keep-scene-open")options.keepSceneOpen=true;
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
@@ -98,6 +99,7 @@ Options ParseOptions() {
     }
     LocalFree(args);
     if(options.testRngSeedReplay&&!options.post21WindowFixture)throw std::runtime_error("Captured RNG seed replay requires explicit post21 window fixture");
+    if(options.keepSceneOpen&&!options.actorChannelWindowTest)throw std::runtime_error("Keep-scene-open requires an actor scene window fixture");
     if(!options.fixtureChoiceHistory.empty()&&!options.continuationWindowFixture)throw std::runtime_error("Choice history requires explicit continuation fixture");
     options.assets = ResolveAssets(options.assets);
     if (options.startupMedia.empty()) options.startupMedia = options.assets.parent_path() / L"iso";
@@ -5220,6 +5222,20 @@ struct Application {
         GdiFlush(); //complete GDI writes to the DIB before CPU BMP serialization
         if (WriteBmp(options.evidence / L"native-window.bmp", width,height,pixels,error)) status = L"Снимок записан в " + options.evidence.wstring();
         else status = error;
+        // Actual front buffer, without the recovery window chrome. Remove
+        // stride padding only; do not redraw, crop the scene or alter pixels.
+        dokodemo::recovered::GameGraphicsFrame frame;
+        const auto framebuffer_path=options.evidence/L"native-framebuffer.bmp";
+        std::error_code remove_error;std::filesystem::remove(framebuffer_path,remove_error);
+        if(nativeStartup&&nativeStartup->CopyGameFrame(frame)) {
+            std::vector<uint32_t> packed(size_t(frame.width)*frame.height);
+            for(uint32_t y=0;y<frame.height;++y)
+                std::copy_n(frame.pixels.data()+size_t(y)*frame.stride,frame.width,
+                            packed.data()+size_t(y)*frame.width);
+            if(!WriteBmp(framebuffer_path,frame.width,frame.height,packed.data(),error))status=error;
+        } else {
+            status=L"Снимок окна сохранён; игровой framebuffer недоступен.";
+        }
     }
     void Audio() {
         if(player.IsPlaying()) {player.Stop();status=L"Нативное воспроизведение остановлено.";return;}
@@ -7795,7 +7811,7 @@ struct Application {
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-boundary.json", startupObservation);
             Capture();
-            PostMessageW(window, WM_CLOSE, 0, 0); // actual app shutdown route, no old F-key sequence
+            if(!options.keepSceneOpen)PostMessageW(window, WM_CLOSE, 0, 0); // actual app shutdown route
         }
         if(options.soundWindowFixture&&playPassed&&!SelectedGameSoundDrained(startupObservation)&&!startupWindowCloseSent){
             startupWindowCloseSent=true;WriteStartupObservation(options.evidence/L"sound-route-not-passed.json",startupObservation);
@@ -7805,7 +7821,8 @@ struct Application {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-unexpected.json", startupObservation);
-            PostMessageW(window, WM_CLOSE, 0, 0);
+            Capture(); // preserve the actual reached scene on a literal timeout too
+            if(!options.keepSceneOpen)PostMessageW(window, WM_CLOSE, 0, 0);
         }
         if (options.smoke && frames >= 30 && !smokeInputSent) {
             smokeInputSent=true;

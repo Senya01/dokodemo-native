@@ -63,6 +63,8 @@ struct GameTextureSpan {
 struct GameRasterPolicy {
     bool two_sided=false,depth_test=true,depth_write=true;
     bool blend=true,repeat=true;
+    // Explicit Windows DVS approximation; callers opt in. UI/raw raster stays1x.
+    bool windows_dvs_textured_modulation2x=false;
 };
 using GameMatrix = std::array<float, 16>; // native column-major math
 class GameGraphics final {

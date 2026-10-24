@@ -69,11 +69,16 @@ struct GameModelPose {
     bool source210_written=false,source230_written=false;
     model::ParticleEmitterParameters emitter;
 };
+enum class GameModelColorPolicy {
+    SourceRgb,
+    WindowsDvsTexturedModulation2x // functional approximation, PSP combiner unknown
+};
 class GameModelClone final {
   public:
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
     GameFsStatus Update(const GameMatrix &root);
-    GameFsStatus Draw(GameGraphics &graphics, const GameMatrix &view_projection) const;
+    GameFsStatus Draw(GameGraphics &graphics, const GameMatrix &view_projection,
+                      GameModelColorPolicy color_policy=GameModelColorPolicy::SourceRgb) const;
     std::vector<GameModelPose> &Pose() noexcept {
         return pose_;
     }

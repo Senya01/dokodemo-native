@@ -189,6 +189,30 @@ void GeometryAndRaster() {
     Check(!badasset.Decode(PackageStorage::Attach(badlease, badlease->b.size())) && !badasset.Live(),
           "malformed source never publishes a live model");
 }
+void TexturedColorApproximation(){
+    GameGraphics graphics;GameGraphicsConfig config;
+    config.width=config.height=config.stride=16;
+    config.scissor_right=config.scissor_bottom=16;
+    config.cull_face=false;
+    Check(graphics.Initialize(config),"color adapter raster initializes");
+    const auto sample=[&](uint32_t vertex,uint32_t texel,int scale,bool textured=true){
+        Check(graphics.Clear(0),"color adapter clear");
+        std::array<GameMeshVertex,3> vertices{{
+            {{{-1,-1,0,1}},0,0,vertex},{{{1,-1,0,1}},0,0,vertex},{{{0,1,0,1}},0,0,vertex}}};
+        GameRasterPolicy policy;policy.two_sided=true;policy.blend=false;
+        if(scale>=0)policy.windows_dvs_textured_modulation2x=scale!=0;
+        const GameTextureSpan texture=textured?GameTextureSpan{&texel,1,1,1}:GameTextureSpan{};
+        Check(graphics.DrawMeshTriangle(vertices,texture,policy)&&graphics.SwapBuffers(),"color adapter actual draw");
+        GameGraphicsFrame frame;Check(graphics.CopyFront(frame),"color adapter actual readback");
+        return frame.pixels[8*frame.stride+8];
+    };
+    Check(sample(0xFF7F7C6D,0xFFFDFDFD,false)==0xFF7E7B6C,"default/UI path retains1x modulation");
+    Check(sample(0xFF808080,0xFFE0D9C9,-1)==0xFF706D65,"untouched default room/UI policy remains1x");
+    Check(sample(0xFF7F7C6D,0xFFFDFDFD,true)==0xFFFCF6D8,"Toro real neutral texel reaches body within1 RGB");
+    Check(sample(0xFFFDF7D9,0xFFFFFFFF,true,false)==0xFFFDF7D9,"untextured body stays source RGB");
+    Check(sample(0x80C8C8C8,0x80404040,true)==0x40646464,"post-product2x preserves dark texels and alpha product");
+    Check(sample(0xFFC8C8C8,0xFFFFFFFF,true)==0xFFFFFFFF,"post-product saturation clamps RGB");
+}
 void Type12RegionDescriptor(){
     auto bytes=Fixture();Word(bytes,92,2);const auto node=bytes.size();W(bytes,0);H(bytes,12);
     for(auto v:{0,0,-1,255,0})H(bytes,v);
@@ -831,6 +855,7 @@ int main() {
     try {
         MathAndSkin();
         GeometryAndRaster();
+        TexturedColorApproximation();
         RoomAnchorLocalX();RoomModelLifecycle();
         Type12RegionDescriptor();
         Motion();

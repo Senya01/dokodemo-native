@@ -230,7 +230,10 @@ bool GameGraphics::DrawMeshTriangle(const std::array<GameMeshVertex,3>& vertices
             for(unsigned j=0;j<4;++j) {
                 const auto channel=(a*p[0].color[j]+b*p[1].color[j]+c*p[2].color[j])/denominator;
                 const auto value=uint32_t(std::lround((std::clamp)(channel,0.0f,255.0f)));
-                color|=((value*((texel>>(8*j))&255)+127)/255)<<(8*j);
+                const auto scale=policy.windows_dvs_textured_modulation2x&&texture.pixels&&j<3?2u:1u;
+                // Scale the product, not the vertex channel: preserve dark
+                // texels and saturate only after modulation. Alpha stays1x.
+                color|=(std::min)(255u,(scale*value*((texel>>(8*j))&255)+127)/255)<<(8*j);
             }
             const auto z=(std::clamp)(a*p[0].z+b*p[1].z+c*p[2].z,-1.0f,1.0f);
             const auto depth=uint16_t(std::lround((1-z)*.5f*65535));

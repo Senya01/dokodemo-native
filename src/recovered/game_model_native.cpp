@@ -286,7 +286,8 @@ GameVector4 GameModelClone::Skin(const model::Geometry &g, uint32_t vertex,
     out[3] = 1;
     return out;
 }
-GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view_projection) const {
+GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view_projection,
+                                 GameModelColorPolicy color_policy) const {
     if (!asset_ || !asset_->Live())
         return {GameFsCode::Unavailable, 0, "draw source lease retired"};
     try {
@@ -340,6 +341,8 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
             }
             GameRasterPolicy policy;
             policy.two_sided = m && (m->flags & 128);
+            policy.windows_dvs_textured_modulation2x = texture.pixels && !g.rgba.empty() &&
+                color_policy==GameModelColorPolicy::WindowsDvsTexturedModulation2x;
             for (const auto &t : model::triangles(g))
                 Need(graphics.DrawMeshTriangle({{vertices[t[0]], vertices[t[1]], vertices[t[2]]}}, texture,
                                                policy),
