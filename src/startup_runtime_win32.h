@@ -161,6 +161,9 @@ public:
     // Real keyboard polling for the native game input adapter. An unfocused
     // window releases buttons; no synthetic key events are sent to Windows.
     recovered::ControllerSample PollControllerInput(bool window_focused);
+    // Actual window key/focus events use the same current-owner queue as
+    // normal polling. This path is unavailable in the explicit test domain.
+    StartupRuntimeStatus SubmitWindowControllerInput(uint32_t buttons,bool focused);
     StartupRuntimeStatus InjectTestControllerInput(uint32_t buttons,bool focused);
     StartupRuntimeStatus PostGameText(const recovered::GameTextEvent& event);
     bool CopyGameFrame(recovered::GameGraphicsFrame& out) const;

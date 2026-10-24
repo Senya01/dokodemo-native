@@ -101,16 +101,22 @@ class GameTextKeyGate final {
     void Focus(bool focused) noexcept;
     bool KeyDown(uint32_t key, bool repeat) noexcept;
     void KeyUp(uint32_t key) noexcept {
+        ++epoch_;
         if (key < keys_.size())
             keys_[key] = false;
     }
     bool Character(uint32_t key) const noexcept {
         return focused_ && context_ && key < keys_.size() && keys_[key];
     }
+    bool TranslatedCharacter(uint32_t key,uint64_t key_context,uint64_t key_epoch) const noexcept {
+        return key_context && key_context==context_ && key_epoch==epoch_ && Character(key);
+    }
     uint64_t Id() const noexcept { return context_; }
+    uint64_t Epoch() const noexcept { return epoch_; }
 
   private:
     uint64_t context_ = 0;
+    uint64_t epoch_ = 0; // Windows key association lifetime,not a game permission
     bool focused_ = false;
     std::array<bool, 256> keys_{};
 };

@@ -14,6 +14,7 @@
 #include "game_font.h"
 #include "game_text_win32.h"
 #include "game_window_presentation.h"
+#include "game_window_input.h"
 #include <imm.h>
 #include "model_formats.hpp"
 #include "startup_probe.h"
@@ -4879,6 +4880,13 @@ struct Application {
     std::array<uint64_t,8> observationSampleScope{};
     uint64_t capturedGeneration=0,capturedSequence=0;
     std::wstring captureError; // user-visible operation failure in clean presentation
+    struct TextInputObservation {uint32_t value=0,key=0;uint64_t key_context=0,editor_context=0,key_epoch=0,editor_epoch=0;bool admitted=false,posted=false;uint32_t scan=0,mapped_key=0;bool mapped_admitted=false,repeated=false;};
+    std::array<TextInputObservation,32> textInputObservations{};
+    uint64_t textInputObservationCount=0;
+    native_port::GameWindowButtons normalWindowKeys;
+    uint32_t normalWindowLastKey=0;
+    uint64_t normalWindowEvents=0;
+    dokodemo::StartupRuntimeCode normalWindowStatus=dokodemo::StartupRuntimeCode::NotStarted;
     uint64_t visualGeneration=0,visualSequence=0;
     bool capturedDiagnostic=false;
     uint32_t visualMessages=0,visualGlyphs=0,visualInk=0;
@@ -5140,7 +5148,14 @@ struct Application {
         return bool(closed);
     }
     void RequestWindowClose() {
-        if (CloseNativeStartup()) {if(!options.visualCapture.empty())visualClosed=true;DestroyWindow(window);}
+        if (CloseNativeStartup()) {
+            if(!options.visualCapture.empty())visualClosed=true;
+            if(nativeStartup&&!options.connectedStartupWindowTest){
+                try {std::filesystem::create_directories(options.evidence);WriteStartupObservation(options.evidence/L"native-closed.json",startupObservation);}
+                catch(const std::exception&){std::cerr<<"Normal-close observation could not be written\n";}
+            }
+            DestroyWindow(window);
+        }
         else {
             if(!options.visualCapture.empty()){
                 visualClosePending=true;
@@ -5325,6 +5340,26 @@ struct Application {
             status=L"Снимок окна сохранён; игровой framebuffer недоступен.";
             captureError=L"Игровой кадр для снимка недоступен.";
         }
+        if(nativeStartup&&!options.connectedStartupWindowTest){
+            // Passive diagnostics for an ordinary user capture,not test input.
+            try {
+                WriteStartupObservation(options.evidence/L"native-observation.json",startupObservation);
+                std::ofstream out(options.evidence/L"native-text-input.json",std::ios::binary);
+                const auto& editor=startupObservation.game_boot.content.scene_ui.editor;
+                out<<"{\"kind\":\"PassiveWindowsTextObservation\",\"editor_context\":"<<editor.context
+                    <<",\"editor_state\":"<<editor.source_state<<",\"editor_focused\":"<<(editor.focused?"true":"false")
+                    <<",\"editor_units\":"<<editor.units<<",\"window_key_events\":"<<normalWindowEvents
+                    <<",\"window_last_key\":"<<normalWindowLastKey<<",\"window_buttons\":"<<normalWindowKeys.Mask()
+                    <<",\"window_status\":"<<int(normalWindowStatus)<<",\"events\":[";
+                const auto count=(std::min)(uint64_t(textInputObservations.size()),textInputObservationCount);
+                for(uint64_t i=0;i<count;++i){const auto& e=textInputObservations[(textInputObservationCount-count+i)%textInputObservations.size()];
+                    if(i)out<<',';out<<"{\"value\":"<<e.value<<",\"key\":"<<e.key<<",\"key_context\":"<<e.key_context
+                        <<",\"editor_context\":"<<e.editor_context<<",\"key_epoch\":"<<e.key_epoch<<",\"editor_epoch\":"<<e.editor_epoch<<",\"admitted\":"<<(e.admitted?"true":"false")
+                        <<",\"posted\":"<<(e.posted?"true":"false")<<",\"scan\":"<<e.scan<<",\"mapped_key\":"<<e.mapped_key
+                        <<",\"mapped_admitted\":"<<(e.mapped_admitted?"true":"false")<<",\"repeated\":"<<(e.repeated?"true":"false")<<'}';}
+                out<<"]}\n";out.flush();if(!out)throw std::runtime_error("Text diagnostic write failed");
+            }catch(const std::exception&){captureError=L"Images saved; the diagnostic journal could not be written.";}
+        }
         return window_saved&&frame_saved;
     }
     bool VisualCaptureTick() {
@@ -5417,14 +5452,28 @@ struct Application {
         }
         return PostText(dokodemo::recovered::GameTextKind::Commit,context,encoded);
     }
-    void Character(wchar_t value,LPARAM info){
-        if(!textGate.Id()||imeComposing)return;
-        const auto key=MapVirtualKeyW(uint32_t((uint64_t(info)>>16)&255),MAPVK_VSC_TO_VK);
-        if(!textGate.Character(key)||value<32||value==127)return;
+    void DiscardCharacter(wchar_t value){
+        highSurrogate=0;
+        textInputObservations[textInputObservationCount++%textInputObservations.size()]={uint32_t(value),UINT32_MAX,0,textGate.Id(),0,textGate.Epoch(),false,false};
+    }
+    void Character(wchar_t value,LPARAM info,uint32_t translated_key=UINT32_MAX,uint64_t key_context=0,uint64_t key_epoch=0){
+        const bool translated=translated_key!=UINT32_MAX;
+        const auto key=translated?translated_key:MapVirtualKeyW(uint32_t((uint64_t(info)>>16)&255),MAPVK_VSC_TO_VK);
+        const auto context=translated?key_context:(options.softkeyWindowTest?textGate.Id():0);
+        const bool admitted=!imeComposing&&value>=32&&value!=127&&
+            (translated?(GetForegroundWindow()==window&&textGate.TranslatedCharacter(key,context,key_epoch))
+                :(options.softkeyWindowTest&&textGate.Character(key)));
+        auto& observation=textInputObservations[textInputObservationCount++%textInputObservations.size()];
+        observation={uint32_t(value),key,context,textGate.Id(),key_epoch,textGate.Epoch(),admitted,false};
+        observation.scan=uint32_t((uint64_t(info)>>16)&255);
+        observation.mapped_key=MapVirtualKeyW(observation.scan,MAPVK_VSC_TO_VK);
+        observation.mapped_admitted=textGate.Character(observation.mapped_key);
+        observation.repeated=(uint64_t(info)&(1ull<<30))!=0;
+        if(!admitted)return;
         if(value>=0xD800&&value<=0xDBFF){highSurrogate=value;return;}
         std::wstring text;
         if(highSurrogate){text.push_back(highSurrogate);highSurrogate=0;}
-        text.push_back(value);CommitUnicode(text);
+        text.push_back(value);observation.posted=CommitUnicode(text,context);
     }
     void ImeStart(){
         if(!textGate.Id())return;
@@ -5454,6 +5503,23 @@ struct Application {
         return nativeStartup&&options.keepSceneOpen&&
             ((!options.visualCapture.empty()&&visualCaptured&&visualFinished)||startupWindowCloseSent);
     }
+    void NormalWindowKey(WPARAM key,bool down,bool repeat=false) {
+        if(!nativeStartup||options.storageWindowTest)return;
+        if(GetForegroundWindow()!=window){NormalWindowFocusLost();return;}
+        using namespace dokodemo::recovered;
+        uint32_t bit=0;
+        switch(key){case VK_UP:bit=Up;break;case VK_DOWN:bit=Down;break;case VK_LEFT:bit=Left;break;case VK_RIGHT:bit=Right;break;
+            case 'X':bit=Circle;break;case 'Z':bit=Cross;break;case 'A':bit=Square;break;case 'S':bit=Triangle;break;
+            case 'Q':bit=LTrigger;break;case 'E':bit=RTrigger;break;case VK_RETURN:bit=dokodemo::recovered::Start;break;case VK_BACK:bit=Select;break;}
+        if(!normalWindowKeys.Update(bit,down,repeat,true,textGate.Id()!=0))return;
+        normalWindowLastKey=uint32_t(key);++normalWindowEvents;
+        normalWindowStatus=nativeStartup->SubmitWindowControllerInput(normalWindowKeys.Mask(),true).code;
+    }
+    void NormalWindowFocusLost() {
+        normalWindowKeys.FocusLost();
+        if(nativeStartup&&!options.storageWindowTest){++normalWindowEvents;normalWindowLastKey=0;
+            normalWindowStatus=nativeStartup->SubmitWindowControllerInput(0,false).code;}
+    }
     void ObservationFocusLost() {
         observationKeys=0;
         if(ObservationInputReady())(void)nativeStartup->InjectTestControllerInput(0,false);
@@ -5478,6 +5544,7 @@ struct Application {
     void Key(WPARAM key,LPARAM info=0) {
         ++inputEvents;
         ObservationKey(key,true);
+        NormalWindowKey(key,true,(uint64_t(info)&(1ull<<30))!=0);
         if(textGate.Id()){
             using dokodemo::recovered::GameTextKind;
             const bool repeat=(uint64_t(info)&(1ull<<30))!=0;
@@ -8058,10 +8125,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case WM_PAINT: app->Paint(); return 0;
         case WM_ERASEBKGND: return 1;
         case WM_KEYDOWN: app->Key(wParam,lParam); return 0;
-        case WM_KEYUP: app->ObservationKey(wParam,false);app->textGate.KeyUp(uint32_t(wParam));return 0;
+        case WM_KEYUP: app->ObservationKey(wParam,false);app->NormalWindowKey(wParam,false);app->textGate.KeyUp(uint32_t(wParam));return 0;
         case WM_CHAR: app->Character(wchar_t(wParam),lParam);return 0;
         case WM_SETFOCUS:app->TextFocus(true);break;
-        case WM_KILLFOCUS:app->ObservationFocusLost();app->TextFocus(false);break;
+        case WM_KILLFOCUS:app->ObservationFocusLost();app->NormalWindowFocusLost();app->TextFocus(false);break;
         case WM_IME_STARTCOMPOSITION:app->ImeStart();break;
         case WM_IME_COMPOSITION:if(app->ImeComposition(lParam))return 0;break;
         case WM_IME_ENDCOMPOSITION:app->ImeEnd();break;
@@ -8097,7 +8164,26 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         while (running) {
             while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
                 if (message.message == WM_QUIT) { running = false; break; }
-                TranslateMessage(&message); DispatchMessageW(&message);
+                if(message.hwnd==window&&message.message==WM_KEYDOWN&&app.textGate.Id()){
+                    // Do not attribute previously queued characters to this key.
+                    MSG prior{};
+                    constexpr unsigned max_characters=128;
+                    for(unsigned i=0;i<max_characters&&PeekMessageW(&prior,window,WM_CHAR,WM_CHAR,PM_REMOVE);++i)
+                        app.DiscardCharacter(wchar_t(prior.wParam));
+                    const bool empty=!PeekMessageW(&prior,window,WM_CHAR,WM_CHAR,PM_NOREMOVE);
+                    const auto context=app.textGate.Id();
+                    const auto before_epoch=app.textGate.Epoch();
+                    // Register the actual admitted key before Windows posts its
+                    // UTF16 characters. Deliver them before a queued key-up.
+                    DispatchMessageW(&message);TranslateMessage(&message);
+                    const auto epoch=app.textGate.Epoch();
+                    const bool owned=empty&&epoch==before_epoch+1&&app.textGate.Id()==context;
+                    MSG character{};
+                    for(unsigned i=0;i<max_characters&&PeekMessageW(&character,window,WM_CHAR,WM_CHAR,PM_REMOVE);++i){
+                        if(owned)app.Character(wchar_t(character.wParam),character.lParam,uint32_t(message.wParam),context,epoch);
+                        else app.DiscardCharacter(wchar_t(character.wParam));
+                    }
+                }else {TranslateMessage(&message);DispatchMessageW(&message);}
             }
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }
         }

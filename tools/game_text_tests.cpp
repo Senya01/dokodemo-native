@@ -1,5 +1,6 @@
 #include "recovered/game_profile_native.h"
 #include "recovered/game_text_native.h"
+#include "game_window_input.h"
 #include <algorithm>
 #ifdef _WIN32
 #include "game_text_win32.h"
@@ -11,6 +12,19 @@ namespace {
 void Check(bool value, const char *what) {
     if (!value)
         throw std::runtime_error(what);
+}
+void WindowButtonsTests() {
+    native_port::GameWindowButtons keys;
+    constexpr uint32_t circle=1,down=2;
+    Check(keys.Update(circle,true,false,true,false)&&keys.Mask()==circle,"focused fresh key");
+    keys.FocusLost();
+    Check(!keys.Update(circle,true,false,false,false)&&keys.Mask()==0,"queued down after focus loss refused");
+    Check(!keys.Update(circle,true,true,true,false)&&keys.Mask()==0,"held refocus repeat does not rearm");
+    Check(keys.Update(down,true,false,true,false)&&keys.Mask()==down,"fresh Down cannot revive old Circle");
+    Check(keys.Update(circle,true,false,true,false)&&keys.Mask()==(down|circle),"complete aggregate mask");
+    Check(keys.Update(circle,false,false,true,true)&&keys.Mask()==down,"editor still releases old key");
+    Check(!keys.Update(circle,true,false,true,true)&&keys.Mask()==down,"editor key does not enter game");
+    Check(keys.Update(0,false,false,false,false)&&keys.Mask()==0,"unfocused event clears all keys");
 }
 void ProfileTests() {
     GameProfile p;
@@ -109,6 +123,20 @@ void InputTests() {
     Check(!gate.KeyDown('X', true), "refocus does not restore held key admission");
     gate.Context(0, true);
     Check(!gate.KeyDown(13, false), "retired/no editor context cannot confirm");
+    gate.Context(3,true);
+    Check(gate.KeyDown(0xE7,false),"fresh owned VK_PACKET key");const auto packet_epoch=gate.Epoch();
+    Check(gate.TranslatedCharacter(0xE7,3,packet_epoch),"owned VK_PACKET translation uses the actual key,not a guessed scan mapping");
+    Check(!gate.TranslatedCharacter(0xE7,0,packet_epoch)&&!gate.TranslatedCharacter(0xE7,2,packet_epoch),"unowned/old translated character cannot adopt current editor");
+    gate.KeyUp(0xE7);Check(!gate.TranslatedCharacter(0xE7,3,packet_epoch),"translation must be delivered within its admitted key transaction");
+    gate.Context(4,true);Check(!gate.KeyDown(0xE7,true)&&!gate.TranslatedCharacter(0xE7,3,packet_epoch),"new editor refuses old packet/repeat");
+    Check(gate.KeyDown('A',false),"fresh ordinary letter key");const auto letter_epoch=gate.Epoch();
+    Check(gate.TranslatedCharacter('A',4,letter_epoch),"ordinary translated key keeps the same ownership guard");
+    gate.KeyDown('B',false);Check(!gate.TranslatedCharacter('A',4,letter_epoch),"a nested key admission invalidates an earlier association");
+    gate.Focus(false);Check(!gate.TranslatedCharacter('A',4,letter_epoch),"focus loss retires translated input admission");
+    gate.Focus(true);Check(gate.KeyDown('A',false)&&!gate.TranslatedCharacter('A',4,letter_epoch),"a new key after refocus cannot revive the old association");
+    gate.Context(5,true);gate.Context(4,true);gate.KeyDown('A',false);
+    Check(!gate.TranslatedCharacter('A',4,letter_epoch),"context ABA cannot revive an old association");
+    gate.Context(0,true);Check(!gate.TranslatedCharacter('A',4,letter_epoch),"retired editor rejects pending text");
     GameTextMailbox mailbox;
     GameTextEvent event;
     event.context = 7;
@@ -218,6 +246,7 @@ void EncodingTests() {
 } // namespace
 int main() {
     try {
+        WindowButtonsTests();
         BufferTests();
         InputTests();
         LifecycleTests();

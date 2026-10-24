@@ -114,6 +114,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameTextMailbox game_text;
     uint64_t game_input_sequence=0;
     bool game_input_live=false;
+    uint32_t window_buttons=0;
     std::array<StartupNativeBlock, 3> game_blocks{};
     std::array<StartupAllocationBorrow, 3> game_borrows{};
     std::array<recovered::GameArena, 3> game_arenas{};
@@ -1128,9 +1129,9 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             "7CE28 setter stores the PPK controller;native typed reference,not a numeric PSP pointer");
         return {true, 0}; // setter result unused by1234
     }
-    recovered::ControllerSample PollGameController(bool focused) {
-        std::lock_guard<std::mutex> lock(metadata);
+    recovered::ControllerSample UpdateGameControllerLocked(bool focused) {
         if (!state.game_boot.controller_setup_returned || state.closing || state.resources_closed) return {};
+        if(!focused)window_buttons=0;
         const auto down = [focused](int key) { return focused && (GetAsyncKeyState(key) & 0x8000) != 0; };
         using namespace recovered;
         uint32_t buttons = 0;
@@ -1140,6 +1141,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             {'Z', Cross}, {'X', Circle}, {'A', Square}, {'S', Triangle}
         };
         for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
+        if(focused)buttons|=window_buttons;
         const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
         const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
         const auto& editor=state.game_boot.content.scene_ui.editor;
@@ -1148,6 +1150,24 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         if(game_input_live && !options.test_controller_input)
             game_inputs.Push({sample.buttons,focused,false,++game_input_sequence,state.game_boot.content.post_modal.generation,state.game_boot.content.actor_message_contexts,state.game_boot.content.actor_script.generation,false,state.game_boot.content.returned_interaction.owner,state.game_boot.content.returned_interaction.generation,state.game_boot.content.main_menu_input_epoch});
         return sample;
+    }
+    recovered::ControllerSample PollGameController(bool focused) {
+        std::lock_guard<std::mutex> lock(metadata);
+        return UpdateGameControllerLocked(focused);
+    }
+    StartupRuntimeStatus WindowGameInput(uint32_t buttons,bool focused) {
+        std::lock_guard<std::mutex> lock(metadata);
+        if(state.closing||state.resources_closed)return Failure(StartupRuntimeCode::Closed);
+        if(options.test_controller_input)return Failure(StartupRuntimeCode::Busy);
+        if(!game_input_live||!state.game_boot.controller_setup_returned)return Failure(StartupRuntimeCode::NotStarted);
+        using namespace recovered;
+        constexpr uint32_t known=Up|Right|Down|Left|recovered::Start|Select|LTrigger|RTrigger|Cross|Circle|Square|Triangle;
+        if(buttons&~known)return Failure(StartupRuntimeCode::Busy,ERROR_INVALID_PARAMETER);
+        DWORD process=0;GetWindowThreadProcessId(GetForegroundWindow(),&process);
+        focused=focused&&process==GetCurrentProcessId();
+        window_buttons=focused?buttons:0;
+        (void)UpdateGameControllerLocked(focused);
+        return {};
     }
     StartupRuntimeStatus InjectGameInput(uint32_t buttons,bool focused) {
         std::lock_guard<std::mutex> lock(metadata);
@@ -2085,6 +2105,9 @@ StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
 }
 recovered::ControllerSample StartupCoordinator::PollControllerInput(bool window_focused) {
     return impl_->PollGameController(window_focused);
+}
+StartupRuntimeStatus StartupCoordinator::SubmitWindowControllerInput(uint32_t buttons,bool focused) {
+    return impl_->WindowGameInput(buttons,focused);
 }
 StartupRuntimeStatus StartupCoordinator::InjectTestControllerInput(uint32_t buttons,bool focused) {
     return impl_->InjectGameInput(buttons,focused);

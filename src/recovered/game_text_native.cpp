@@ -139,13 +139,16 @@ void GameTextKeyGate::Context(uint64_t id, bool focused) noexcept {
         context_ = id;
         focused_ = focused;
         keys_.fill(false);
+        ++epoch_;
     }
 }
 void GameTextKeyGate::Focus(bool focused) noexcept {
     focused_ = focused;
     keys_.fill(false);
+    ++epoch_;
 }
 bool GameTextKeyGate::KeyDown(uint32_t key, bool repeat) noexcept {
+    ++epoch_;
     if (!context_ || !focused_ || key >= keys_.size() || (repeat && !keys_[key]))
         return false;
     keys_[key] = true;
