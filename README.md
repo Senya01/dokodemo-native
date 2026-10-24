@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Ordinary native dialogue now omits an extra empty terminal row while preserving source text and glyph pixels. Added a separate VISUAL_CAPTURE room/dialogue mode with owned-frame and normal cleanup checks. Natural-clock before/after frames and scoped tests were checked locally. Windows UI layout remains nonmatching; the full game is incomplete.
+Restore authored SELECT frame/cursor beside original text, with coherent keep-open keyboard input. Windows layout remains an approximation; full game incomplete.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
