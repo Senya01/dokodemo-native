@@ -211,7 +211,10 @@ void TexturedColorApproximation(){
         return frame.pixels[8*frame.stride+8];
     };
     Check(sample(0xFF7F7C6D,0xFFFDFDFD,false)==0xFF7E7B6C,"default/UI path retains1x modulation");
-    Check(sample(0xFF808080,0xFFE0D9C9,-1)==0xFF706D65,"untouched default room/UI policy remains1x");
+    Check(sample(0xFF808080,0xFFE0D9C9,-1)==0xFF706D65,"untouched default raster/UI policy remains1x");
+    Check(sample(0xFF808080,0xFFE0D9C9,true)==0xFFE1DACA,"room neutral128 preserves actual fridge texture tone");
+    Check(sample(0xFF808080,0xFF463329,true)==0xFF463329,"room neutral128 preserves actual floor texture tone");
+    Check(sample(0xFF565656,0xFFE0D9C9,true)==0xFF979288,"room baked darker vertex colour remains darker under2x");
     Check(sample(0xFF7F7C6D,0xFFFDFDFD,true)==0xFFFCF6D8,"Toro real neutral texel reaches body within1 RGB");
     Check(sample(0xFFFDF7D9,0xFFFFFFFF,true,false)==0xFFFDF7D9,"untextured body stays source RGB");
     Check(sample(0x80C8C8C8,0x80404040,true)==0x40646464,"post-product2x preserves dark texels and alpha product");

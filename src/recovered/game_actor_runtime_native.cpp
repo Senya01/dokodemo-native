@@ -1044,14 +1044,19 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   for (size_t i=0;i<models_.size();++i)
     if (const auto& slot=models_[i];slot.active&&state_.room_models[i].retirement<2) {
       const auto pixels=graphics.Snapshot().mesh_pixels;
-      const auto status = slot.clone.Draw(graphics, camera);
+      // Same named Windows DVS colour convention as the actor: neutral128
+      // diffuse vertex colours should not halve the owned texture. This is
+      // not recovered PSP combiner or time-of-day lighting semantics.
+      const auto status = slot.clone.Draw(graphics, camera,
+          GameModelColorPolicy::WindowsDvsTexturedModulation2x);
       if (!status)
         return status;
       ++state_.room_models[i].draw_frames;
       state_.room_models[i].draw_pixel_writes+=graphics.Snapshot().mesh_pixels-pixels;
     }
   if (state_.scene_model_live) {
-    const auto status = scene_clone_.Draw(graphics, camera);
+    const auto status = scene_clone_.Draw(graphics, camera,
+        GameModelColorPolicy::WindowsDvsTexturedModulation2x);
     if (!status)
       return status;
     ++state_.scene_frames;
@@ -1060,7 +1065,8 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
     const auto before = graphics.Snapshot().mesh_pixels;
     // Bounded Toro color-continuity approximation: source textured RGB is
     // near128, untextured body near255. PSP combiner semantics are unrecovered.
-    // Room/scene/UI keep their existing color path; no source asset is changed.
+    // World models opt into the same colour policy above; UI remains1x.
+    // No source asset is changed.
     auto status = actor_clone_.Draw(graphics, camera,
         GameModelColorPolicy::WindowsDvsTexturedModulation2x,
         GameModelLightingPolicy::WindowsActorSoftDiffuse);
