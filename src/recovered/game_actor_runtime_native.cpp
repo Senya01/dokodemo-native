@@ -1062,7 +1062,8 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
     // near128, untextured body near255. PSP combiner semantics are unrecovered.
     // Room/scene/UI keep their existing color path; no source asset is changed.
     auto status = actor_clone_.Draw(graphics, camera,
-        GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+        GameModelColorPolicy::WindowsDvsTexturedModulation2x,
+        GameModelLightingPolicy::WindowsActorSoftDiffuse);
     if (!status)
       return status;
     const auto pixels = graphics.Snapshot().mesh_pixels - before;

@@ -37,7 +37,7 @@ void Bounds(std::vector<uint8_t> &b) {
     for (unsigned i = 0; i < 4; ++i)
         F(b, 0);
 }
-std::vector<uint8_t> Fixture() {
+std::vector<uint8_t> Fixture(bool normals=false) {
     std::vector<uint8_t> b{'D', 'V', 'S', 0};
     b.resize(16);
     W(b, 6);
@@ -58,7 +58,7 @@ std::vector<uint8_t> Fixture() {
             F(b, v);
     b.push_back(3);
     b.push_back(0);
-    H(b, 9);
+    H(b, normals?0x4009:9);
     b.push_back(255);
     b.push_back(0);
     H(b, 3);
@@ -67,6 +67,10 @@ std::vector<uint8_t> Fixture() {
         H(b, v);
     while (b.size() % 4)
         b.push_back(0);
+    if(normals){
+        for(unsigned i=0;i<3;++i)b.insert(b.end(),{0,0,126});
+        while(b.size()%4)b.push_back(0);
+    }
     b.insert(b.end(), {255, 255, 255, 128});
     Bounds(b);
     W(b, 0);
@@ -212,6 +216,66 @@ void TexturedColorApproximation(){
     Check(sample(0xFFFDF7D9,0xFFFFFFFF,true,false)==0xFFFDF7D9,"untextured body stays source RGB");
     Check(sample(0x80C8C8C8,0x80404040,true)==0x40646464,"post-product2x preserves dark texels and alpha product");
     Check(sample(0xFFC8C8C8,0xFFFFFFFF,true)==0xFFFFFFFF,"post-product saturation clamps RGB");
+}
+void NormalLighting(){
+    auto scale=ModelIdentity();scale[0]=2;scale[10]=3;
+    scale[12]=99;scale[13]=-71;
+    const auto normal=ModelTransformNormal(scale,{{1,1,0,0}});
+    Check(Near(normal[0],.5f)&&Near(normal[1],1)&&normal[3]==0,"normal inverse transpose ignores translation");
+    const auto tangent=ModelTransform(scale,{{1,-1,0,0}});
+    Check(Near(normal[0]*tangent[0]+normal[1]*tangent[1],0),"nonuniform normal stays perpendicular to transformed tangent");
+    auto rotate=ModelIdentity();rotate[0]=rotate[5]=0;rotate[1]=1;rotate[4]=-1;
+    const auto turned=ModelTransformNormal(rotate,{{1,0,0,0}});
+    Check(Near(turned[0],0)&&Near(turned[1],1),"normal follows bone rotation");
+    auto shear=ModelIdentity();shear[4]=2;
+    const auto sheared=ModelTransformNormal(shear,{{1,0,0,0}});
+    Check(Near(sheared[0],1)&&Near(sheared[1],-2),"normal cofactor orientation handles shear");
+    auto reflection=ModelIdentity();reflection[0]=-1;
+    const auto reflected=ModelTransformNormal(reflection,{{1,0,0,0}});
+    Check(Near(reflected[0],-1),"normal reflection preserves negative determinant sign");
+    auto singular=ModelIdentity();singular[0]=0;bool refused=false;
+    try{(void)ModelTransformNormal(singular,{{1,0,0,0}});}catch(const std::exception&){refused=true;}
+    Check(refused,"singular normal matrix refuses");
+    dokodemo::model::Geometry g;g.positions.push_back({0,0,0});g.normals.push_back({126,126,0});
+    g.weightRecords.assign(24,0);Word(g.weightRecords,0,0x00010000);Word(g.weightRecords,4,0xFFFFFFFF);
+    Word(g.weightRecords,8,0x3F000000);Word(g.weightRecords,12,0x3F000000);
+    std::vector<GameMatrix> palette{scale,ModelIdentity()};
+    const auto blended=GameModelClone::SkinNormal(g,0,palette);
+    Check(Near(blended[0],.6f)&&Near(blended[1],.8f),"skin blends unnormalized contributions before final normalization");
+    Word(g.weightRecords,0,0xFFFF0001);Word(g.weightRecords,8,0x7FC00000);
+    const auto rigid=GameModelClone::SkinNormal(g,0,palette);
+    Check(Near(rigid[0],.70710678f)&&Near(rigid[1],.70710678f),"rigid skin normal ignores unused NaN weights");
+    Word(g.weightRecords,0,0xFFFF0002);refused=false;
+    try{(void)GameModelClone::SkinNormal(g,0,palette);}catch(const std::exception&){refused=true;}
+    Check(refused,"normal palette bounds refuse");
+    const GameVector4 key{{-.3f,-.7f,.65f,0}},away{{.3f,.7f,-.65f,0}};
+    Check(ModelWindowsActorSoftDiffuse(0x80FFFFFF,key)==0x80FFFFFF&&
+          ModelWindowsActorSoftDiffuse(0x80FFFFFF,away)==0x80B8B8B8,"soft key/ambient preserve alpha without overbrightening");
+    auto lease=std::make_shared<Lease>(Fixture(true));auto asset=std::make_shared<GameModelAsset>();
+    Check(bool(asset->Decode(PackageStorage::Attach(lease,lease->b.size()))),"actual normal-bearing DVS admitted");
+    GameModelClone clone;Check(bool(clone.Initialize(asset)),"normal-bearing clone initialized");
+    GameGraphics graphics;GameGraphicsConfig config;config.width=config.height=config.stride=32;
+    config.scissor_right=config.scissor_bottom=32;config.cull_face=false;
+    Check(graphics.Initialize(config),"normal draw surface initialized");
+    const auto sample=[&](GameModelLightingPolicy policy){
+        Check(graphics.Clear(0)&&bool(clone.Draw(graphics,ModelIdentity(),GameModelColorPolicy::SourceRgb,policy))&&graphics.SwapBuffers(),"normal policy actual model draw");
+        GameGraphicsFrame frame;Check(graphics.CopyFront(frame),"normal actual framebuffer readback");
+        return frame.pixels[16*frame.stride+16];
+    };
+    Check(sample(GameModelLightingPolicy::Unlit)==0xFFFFFFFF,"normal-bearing default model stays unlit");
+    const auto lit=sample(GameModelLightingPolicy::WindowsActorSoftDiffuse);
+    Check((lit>>24)==255&&(lit&255)>184&&(lit&255)<255,"actor opt-in shades actual source-normal triangle");
+    lease->live=false;
+    Check(!clone.Draw(graphics,ModelIdentity(),GameModelColorPolicy::SourceRgb,GameModelLightingPolicy::WindowsActorSoftDiffuse),"lighting cannot draw a retired source lease");
+    auto plain_lease=std::make_shared<Lease>(Fixture());auto plain_asset=std::make_shared<GameModelAsset>();
+    Check(bool(plain_asset->Decode(PackageStorage::Attach(plain_lease,plain_lease->b.size()))),"normal-free fixture admitted");
+    GameModelClone plain;Check(bool(plain.Initialize(plain_asset)),"normal-free clone initialized");
+    Check(graphics.Clear(0)&&bool(plain.Draw(graphics,ModelIdentity()))&&graphics.SwapBuffers(),"actual default lighting argument");
+    GameGraphicsFrame original;Check(graphics.CopyFront(original),"default model frame readback");
+    Check(graphics.Clear(0)&&bool(plain.Draw(graphics,ModelIdentity(),GameModelColorPolicy::SourceRgb,
+        GameModelLightingPolicy::WindowsActorSoftDiffuse))&&graphics.SwapBuffers(),"normal-free actor policy draw");
+    GameGraphicsFrame unchanged;Check(graphics.CopyFront(unchanged)&&original.pixels==unchanged.pixels,
+        "absent source normals stay original without fabricated replacement normals");
 }
 void Type12RegionDescriptor(){
     auto bytes=Fixture();Word(bytes,92,2);const auto node=bytes.size();W(bytes,0);H(bytes,12);
@@ -856,6 +920,7 @@ int main() {
         MathAndSkin();
         GeometryAndRaster();
         TexturedColorApproximation();
+        NormalLighting();
         RoomAnchorLocalX();RoomModelLifecycle();
         Type12RegionDescriptor();
         Motion();

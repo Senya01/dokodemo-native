@@ -13,6 +13,10 @@ GameMatrix ModelQuaternion(GameVector4 quaternion);
 GameMatrix ModelTRS(GameVector4 position, GameVector4 base_rotation, GameVector4 rotation, GameVector4 scale);
 GameMatrix ModelPerspective(float field_of_view, float aspect, float near_plane, float far_plane);
 GameMatrix ModelInverseRigid(const GameMatrix &matrix);
+// Inverse transpose of the linear3x3; translation is ignored. Not normalized,
+// so weighted normal contributions can be blended before normalization.
+GameVector4 ModelTransformNormal(const GameMatrix &matrix, const GameVector4 &normal);
+uint32_t ModelWindowsActorSoftDiffuse(uint32_t color, const GameVector4 &world_normal);
 
 struct GameModelMaterial {
     uint16_t flags = 0;
@@ -73,12 +77,17 @@ enum class GameModelColorPolicy {
     SourceRgb,
     WindowsDvsTexturedModulation2x // functional approximation, PSP combiner unknown
 };
+enum class GameModelLightingPolicy {
+    Unlit,
+    WindowsActorSoftDiffuse // fixed native key, not recovered PSP room lighting
+};
 class GameModelClone final {
   public:
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
     GameFsStatus Update(const GameMatrix &root);
     GameFsStatus Draw(GameGraphics &graphics, const GameMatrix &view_projection,
-                      GameModelColorPolicy color_policy=GameModelColorPolicy::SourceRgb) const;
+                      GameModelColorPolicy color_policy=GameModelColorPolicy::SourceRgb,
+                      GameModelLightingPolicy lighting_policy=GameModelLightingPolicy::Unlit) const;
     std::vector<GameModelPose> &Pose() noexcept {
         return pose_;
     }
@@ -104,6 +113,8 @@ class GameModelClone final {
     // The same reached4palette consumer is used by weighted draw and tests.
     static GameVector4 Skin(const model::Geometry &geometry, uint32_t vertex,
                             const std::vector<GameMatrix> &palette);
+    static GameVector4 SkinNormal(const model::Geometry &geometry, uint32_t vertex,
+                                  const std::vector<GameMatrix> &palette);
 
   private:
     std::shared_ptr<const GameModelAsset> asset_;

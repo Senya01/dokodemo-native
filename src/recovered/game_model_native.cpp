@@ -30,6 +30,14 @@ uint32_t Word(const model::Bytes &bytes, size_t at) {
         v |= uint32_t(bytes[at + i]) << (8 * i);
     return v;
 }
+GameVector4 UnitNormal(GameVector4 normal) {
+    const auto length2=normal[0]*normal[0]+normal[1]*normal[1]+normal[2]*normal[2];
+    Need(std::isfinite(length2)&&length2>1e-12f,"invalid model normal");
+    const auto scale=1/std::sqrt(length2);
+    for(unsigned i=0;i<3;++i)normal[i]*=scale;
+    normal[3]=0;
+    return normal;
+}
 } // namespace
 GameMatrix ModelIdentity() noexcept {
     GameMatrix m{};
@@ -104,6 +112,29 @@ GameMatrix ModelInverseRigid(const GameMatrix &m) {
     out[12] = t[0];
     out[13] = t[1];
     out[14] = t[2];
+    return out;
+}
+GameVector4 ModelTransformNormal(const GameMatrix &m,const GameVector4 &n) {
+    const auto a=m[0],b=m[4],c=m[8],d=m[1],e=m[5],f=m[9],g=m[2],h=m[6],i=m[10];
+    const auto c00=e*i-f*h,c01=f*g-d*i,c02=d*h-e*g;
+    const auto determinant=a*c00+b*c01+c*c02;
+    Need(std::isfinite(determinant)&&std::abs(determinant)>1e-12f,"singular model normal transform");
+    const GameVector4 out{{(c00*n[0]+c01*n[1]+c02*n[2])/determinant,
+        ((c*h-b*i)*n[0]+(a*i-c*g)*n[1]+(b*g-a*h)*n[2])/determinant,
+        ((b*f-c*e)*n[0]+(c*d-a*f)*n[1]+(a*e-b*d)*n[2])/determinant,0}};
+    Need(std::isfinite(out[0])&&std::isfinite(out[1])&&std::isfinite(out[2]),"nonfinite model normal transform");
+    return out;
+}
+uint32_t ModelWindowsActorSoftDiffuse(uint32_t color,const GameVector4 &world_normal) {
+    const auto n=UnitNormal(world_normal);
+    // Explicit functional Windows approximation, Z-up world, front/left/up
+    // key and soft ambient. Source type5 light semantics are not inferred.
+    const auto key=UnitNormal({{-.3f,-.7f,.65f,0}});
+    const auto cosine=(std::clamp)(n[0]*key[0]+n[1]*key[1]+n[2]*key[2],0.0f,1.0f);
+    const auto shade=.72f+.28f*cosine;
+    uint32_t out=color&0xFF000000;
+    for(unsigned shift=0;shift<24;shift+=8)
+        out|=uint32_t(std::lround(float((color>>shift)&255)*shade))<<shift;
     return out;
 }
 GameFsStatus GameModelAsset::Load(GameResourceSource &source, const std::string &path,
@@ -286,8 +317,30 @@ GameVector4 GameModelClone::Skin(const model::Geometry &g, uint32_t vertex,
     out[3] = 1;
     return out;
 }
+GameVector4 GameModelClone::SkinNormal(const model::Geometry &g,uint32_t vertex,
+                                      const std::vector<GameMatrix> &palette) {
+    Need(vertex<g.normals.size()&&g.normals.size()==g.positions.size()&&
+         g.weightRecords.size()==g.positions.size()*24,"skin normal bounds");
+    const auto at=size_t(vertex)*24;
+    const auto index=[&](unsigned slot){const auto p=at+slot*2;
+        return int16_t(uint16_t(g.weightRecords[p])|uint16_t(g.weightRecords[p+1])<<8);};
+    const auto &raw=g.normals[vertex];
+    const GameVector4 normal{{float(raw[0]),float(raw[1]),float(raw[2]),0}};
+    const auto rigid=index(1)<0;
+    GameVector4 out{};
+    for(unsigned slot=0;slot<(rigid?1u:4u);++slot){
+        const auto bone=index(slot);if(bone<0)break;
+        Need(size_t(bone)<palette.size(),"skin normal palette index");
+        const auto weight=rigid?1.0f:FloatWord(Word(g.weightRecords,at+8+slot*4));
+        Need(weight>=0&&weight<=1.0001f,"skin normal weight domain");
+        const auto value=ModelTransformNormal(palette[size_t(bone)],normal);
+        for(unsigned j=0;j<3;++j)out[j]+=value[j]*weight;
+    }
+    Need(index(0)>=0,"skin normal first palette index");
+    return UnitNormal(out);
+}
 GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view_projection,
-                                 GameModelColorPolicy color_policy) const {
+                                 GameModelColorPolicy color_policy,GameModelLightingPolicy lighting_policy) const {
     if (!asset_ || !asset_->Live())
         return {GameFsCode::Unavailable, 0, "draw source lease retired"};
     try {
@@ -336,6 +389,14 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
                     v.color = uint32_t(c[0]) | uint32_t(c[1]) << 8 | uint32_t(c[2]) << 16 |
                               uint32_t(float((std::min)(255u,uint32_t(c[3])*2))*(std::min)(1.0f,pose_[node].world_opacity)) << 24;
                     v.color = NativeColorFromPspAbgr(v.color);
+                }
+                if(lighting_policy==GameModelLightingPolicy::WindowsActorSoftDiffuse&&!g.normals.empty()) {
+                    Need(g.normals.size()==g.vertexCount,"model normal extent");
+                    const auto &raw=g.normals[i];
+                    const auto normal=g.weightRecords.empty()?
+                        ModelTransformNormal(rigid,{{float(raw[0]),float(raw[1]),float(raw[2]),0}}):
+                        SkinNormal(g,i,palette);
+                    v.color=ModelWindowsActorSoftDiffuse(v.color,normal);
                 }
                 vertices.push_back(v);
             }
