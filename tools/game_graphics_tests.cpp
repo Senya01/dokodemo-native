@@ -1,6 +1,7 @@
 #include "recovered/game_graphics_native.h"
 #include "recovered/game_boot_native.h"
 #include "recovered/rng_native.h"
+#include "game_window_presentation.h"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -8,6 +9,18 @@
 using namespace dokodemo::recovered;
 namespace {
 void Check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+void WindowPresentationTests() {
+    using native_port::FitGameWindow;
+    const auto exact=FitGameWindow(960,544);Check(exact.x==0&&exact.y==0&&exact.width==960&&exact.height==544,"game window2x whole frame");
+    const auto wide=FitGameWindow(1200,600);Check(wide.x==120&&wide.y==28&&wide.width==960&&wide.height==544,"wide resize integer letterbox");
+    const auto tall=FitGameWindow(800,900);Check(tall.x==160&&tall.y==314&&tall.width==480&&tall.height==272,"tall resize no stretching/cropping");
+    const auto small=FitGameWindow(320,200);Check(small.width==300&&small.height==170&&small.x==10&&small.y==15,"subnative resize exact reduced aspect");
+    Check(FitGameWindow(1920,1080,480,272,2).width==960,"initial presentation limited to preferred2x");
+    for(const auto wh:{std::pair<int,int>{0,200},{100,0},{-1,400},{1,1}}){const auto v=FitGameWindow(wh.first,wh.second);Check(!v.width&&!v.height,"empty/minimized viewport never overflows");}
+    for(int w=240;w<1600;w+=83)for(int h=136;h<1000;h+=71){
+        const auto v=FitGameWindow(w,h);Check(v.width<=w&&v.height<=h&&v.x>=0&&v.y>=0&&v.width*17==v.height*30,"resize rectangle stays inside client with exact480:272 aspect");
+    }
+}
 uint32_t At(const GameGraphicsFrame& frame, uint32_t x, uint32_t y) { return frame.pixels.at(y * frame.stride + x); }
 void SurfaceTests() {
     GameGraphics graphics;
@@ -122,7 +135,7 @@ void RuntimeResetTests() {
 }
 }
 int main() {
-    try { SurfaceTests(); TriangleTests(); ViewportTests(); MatrixTests(); StartupTimeTests(); RuntimeResetTests();
+    try { WindowPresentationTests(); SurfaceTests(); TriangleTests(); ViewportTests(); MatrixTests(); StartupTimeTests(); RuntimeResetTests();
         std::cout << "game graphics: surfaces, state, raster, ownership, startup time and reset PASS\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

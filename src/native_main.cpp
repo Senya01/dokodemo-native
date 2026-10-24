@@ -13,6 +13,7 @@
 #include "audio_native.h"
 #include "game_font.h"
 #include "game_text_win32.h"
+#include "game_window_presentation.h"
 #include <imm.h>
 #include "model_formats.hpp"
 #include "startup_probe.h"
@@ -32,6 +33,7 @@
 #include <mmsystem.h>
 #include <algorithm>
 #include <cstddef>
+#include <climits>
 #include <fstream>
 #include <sstream>
 #include <string_view>
@@ -51,6 +53,7 @@ struct Options {
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false,testRngSeedReplay=false,keepSceneOpen=false;
+    bool gameWindow=false; // presentation only; never an input/boot policy
     std::wstring visualCapture; // separate observation purpose, never gameplay completion
     uint32_t testRngSeedWord=0;
     bool titleMenuWindowTest=false;
@@ -88,6 +91,7 @@ Options ParseOptions() {
             options.testRngSeedReplay=true;options.testRngSeedWord=uint32_t(word);
         }
         else if(arg==L"--keep-scene-open")options.keepSceneOpen=true;
+        else if(arg==L"--game-window")options.gameWindow=true;
         else if(arg==L"--visual-capture"&&i+1<count){
             options.visualCapture=args[++i];
             if(options.visualCapture!=L"room"&&options.visualCapture!=L"dialogue")
@@ -4874,6 +4878,7 @@ struct Application {
     bool observationSampleFocused=false,observationSampleValid=false;
     std::array<uint64_t,8> observationSampleScope{};
     uint64_t capturedGeneration=0,capturedSequence=0;
+    std::wstring captureError; // user-visible operation failure in clean presentation
     uint64_t visualGeneration=0,visualSequence=0;
     bool capturedDiagnostic=false;
     uint32_t visualMessages=0,visualGlyphs=0,visualInk=0;
@@ -5171,8 +5176,43 @@ struct Application {
         SetTextColor(dc, color); SetBkMode(dc, TRANSPARENT); DrawTextW(dc, text.c_str(), -1, &rect, flags);
     }
     void Fill(HDC dc, RECT rect, COLORREF color) { auto brush = CreateSolidBrush(color); FillRect(dc, &rect, brush); DeleteObject(brush); }
+    void RenderGameWindow(HDC dc) {
+        Fill(dc,{0,0,width,height},RGB(0,0,0));SelectObject(dc,font);
+        const auto& content=startupObservation.game_boot.content;
+        std::wstring error;
+        if(!nativeStartup)error=startupStatus;
+        else if(!startupObservation.status)error=L"Ошибка загрузки или Windows-сервиса ("+std::to_wstring(startupObservation.status.win32_error)+L").";
+        else if(content.blocked||content.actor_script.blocked||!content.status){
+            error=L"Выполнение игры остановлено. "+Utf8(content.status.detail);
+        }
+        dokodemo::recovered::GameGraphicsFrame frame;
+        const bool ready=nativeStartup&&nativeStartup->CopyGameFrame(frame);
+        bool shown=false;
+        if(ready&&!frame.diagnostic&&frame.width&&frame.height&&frame.stride>=frame.width
+           &&frame.width<=INT_MAX&&frame.height<=INT_MAX&&frame.stride<=INT_MAX
+           &&frame.height<=frame.pixels.size()/frame.stride){
+            const auto view=FitGameWindow(width,height,int(frame.width),int(frame.height));
+            if(view.width&&view.height){
+                BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+                info.bmiHeader.biWidth=LONG(frame.stride);info.bmiHeader.biHeight=-LONG(frame.height);
+                info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+                SetStretchBltMode(dc,COLORONCOLOR);
+                const auto result=StretchDIBits(dc,view.x,view.y,view.width,view.height,0,0,
+                    int(frame.width),int(frame.height),frame.pixels.data(),&info,DIB_RGB_COLORS,SRCCOPY);
+                shown=result&&result!=int(GDI_ERROR);
+                if(shown){renderedFrameGeneration=frame.generation;renderedFrameSequence=frame.sequence;}
+                else error=L"Не удалось показать игровой кадр.";
+            }
+        }else if(ready)error=frame.diagnostic?L"Получен диагностический кадр вместо игрового.":L"Некорректный игровой кадр.";
+        if(error.empty())error=captureError;
+        if(!error.empty()){
+            const RECT panel{16,16,(std::max)(17,width-16),(std::min)(height,128)};
+            Fill(dc,panel,RGB(50,15,15));Text(dc,error,{24,24,width-24,(std::min)(height-8,120)},RGB(255,225,215));
+        }else if(!shown)Text(dc,L"Загрузка…",{24,24,width-24,height-24},RGB(235,235,235));
+    }
     void Render(HDC dc) {
         renderedFrameGeneration = renderedFrameSequence = 0;
+        if(options.gameWindow){RenderGameWindow(dc);return;}
         Fill(dc, {0,0,width,height}, RGB(18,23,30));
         SelectObject(dc, titleFont);
         Text(dc, L"Doko Demo Issyo · native recovery", {24,18,width-24,58}, RGB(241,244,246));
@@ -5253,7 +5293,8 @@ struct Application {
     bool Capture() {
         capturedGeneration=capturedSequence=0;
         capturedDiagnostic=false;
-        if(options.post17WindowFixture&&(IsIconic(window)||width<480||height<272)){
+        captureError.clear();
+        if(!options.gameWindow&&options.post17WindowFixture&&(IsIconic(window)||width<480||height<272)){
             ShowWindow(window,SW_RESTORE);
             SetWindowPos(window,nullptr,0,0,1100,800,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_SHOWWINDOW);
             RECT client{};GetClientRect(window,&client);width=client.right-client.left;height=client.bottom-client.top;ReleaseBuffer();
@@ -5264,7 +5305,7 @@ struct Application {
         std::error_code window_remove_error;std::filesystem::remove(window_path,window_remove_error);
         const bool window_saved=WriteBmp(window_path,width,height,pixels,error);
         if (window_saved) status = L"Снимок записан в " + options.evidence.wstring();
-        else status = error;
+        else {status = error;captureError=L"Не удалось сохранить снимок окна. "+error;}
         // Actual front buffer, without the recovery window chrome. Remove
         // stride padding only; do not redraw, crop the scene or alter pixels.
         dokodemo::recovered::GameGraphicsFrame frame;
@@ -5278,10 +5319,11 @@ struct Application {
                 std::copy_n(frame.pixels.data()+size_t(y)*frame.stride,frame.width,
                             packed.data()+size_t(y)*frame.width);
             frame_saved=WriteBmp(framebuffer_path,frame.width,frame.height,packed.data(),error);
-            if(!frame_saved)status=error;
+            if(!frame_saved){status=error;captureError=L"Не удалось сохранить игровой кадр. "+error;}
             else {capturedGeneration=frame.generation;capturedSequence=frame.sequence;capturedDiagnostic=frame.diagnostic;}
         } else {
             status=L"Снимок окна сохранён; игровой framebuffer недоступен.";
+            captureError=L"Игровой кадр для снимка недоступен.";
         }
         return window_saved&&frame_saved;
     }
@@ -8007,7 +8049,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     if (message == WM_NCCREATE) { app = reinterpret_cast<Application*>(reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams); app->window = window; SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(app)); }
     if (!app) return DefWindowProcW(window,message,wParam,lParam);
     switch (message) {
-        case WM_GETMINMAXINFO: reinterpret_cast<MINMAXINFO*>(lParam)->ptMinTrackSize = {640,480}; return 0;
+        case WM_GETMINMAXINFO: {
+            auto& minimum=reinterpret_cast<MINMAXINFO*>(lParam)->ptMinTrackSize;
+            if(app->options.gameWindow){RECT r{0,0,240,136};AdjustWindowRect(&r,WS_OVERLAPPEDWINDOW,FALSE);minimum={r.right-r.left,r.bottom-r.top};}
+            else minimum={640,480};return 0;
+        }
         case WM_SIZE: app->width = std::max(1,int(LOWORD(lParam))); app->height = std::max(1,int(HIWORD(lParam))); app->ReleaseBuffer(); return 0;
         case WM_PAINT: app->Paint(); return 0;
         case WM_ERASEBKGND: return 1;
@@ -8034,7 +8080,16 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         auto application=std::make_unique<Application>(options);auto& app=*application;
         WNDCLASSW wc{}; wc.lpfnWndProc = WindowProc; wc.hInstance = instance; wc.lpszClassName = L"DokodemoNativeRecovery"; wc.hCursor = LoadCursorW(nullptr,IDC_ARROW);
         if (!RegisterClassW(&wc)) throw std::runtime_error("Cannot register Win32 window");
-        auto window = CreateWindowExW(0,wc.lpszClassName,L"Doko Demo Issyo — native recovery (incomplete)",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,1100,800,nullptr,nullptr,instance,&app);
+        int initial_width=1100,initial_height=800;
+        if(options.gameWindow){
+            RECT border{0,0,960,544};AdjustWindowRect(&border,WS_OVERLAPPEDWINDOW,FALSE);
+            RECT work{};if(!SystemParametersInfoW(SPI_GETWORKAREA,0,&work,0))work={0,0,960,720};
+            const auto view=FitGameWindow((std::max)(1,int(work.right-work.left-(border.right-border.left-960)-32)),
+                (std::max)(1,int(work.bottom-work.top-(border.bottom-border.top-544)-32)),480,272,2);
+            border={0,0,view.width,view.height};AdjustWindowRect(&border,WS_OVERLAPPEDWINDOW,FALSE);
+            initial_width=border.right-border.left;initial_height=border.bottom-border.top;
+        }
+        auto window = CreateWindowExW(0,wc.lpszClassName,options.gameWindow?L"Doko Demo Issyo":L"Doko Demo Issyo — native recovery (incomplete)",WS_OVERLAPPEDWINDOW,CW_USEDEFAULT,CW_USEDEFAULT,initial_width,initial_height,nullptr,nullptr,instance,&app);
         if (!window) throw std::runtime_error("Cannot create Win32 window");
         app.BeginNativeStartup();
         ShowWindow(window, options.post17WindowFixture?SW_SHOWNORMAL:show); UpdateWindow(window);
