@@ -4869,6 +4869,10 @@ struct Application {
     bool startupWindowBoundaryReached=false;
     bool visualCaptured=false,visualFinished=false,visualWmCloseReceived=false,visualClosed=false;
     bool visualClosePending=false;
+    uint32_t observationKeys=0;
+    uint32_t observationSampleButtons=0;
+    bool observationSampleFocused=false,observationSampleValid=false;
+    std::array<uint64_t,8> observationSampleScope{};
     uint64_t capturedGeneration=0,capturedSequence=0;
     uint64_t visualGeneration=0,visualSequence=0;
     bool capturedDiagnostic=false;
@@ -5404,8 +5408,34 @@ struct Application {
         if(imeContext&&imeContext==textGate.Id())PostText(dokodemo::recovered::GameTextKind::CompositionEnd,imeContext);
         imeComposing=false;imeContext=0;textGate.Focus(GetForegroundWindow()==window);
     }
+    bool ObservationInputReady() const {
+        return nativeStartup&&options.keepSceneOpen&&
+            ((!options.visualCapture.empty()&&visualCaptured&&visualFinished)||startupWindowCloseSent);
+    }
+    void ObservationFocusLost() {
+        observationKeys=0;
+        if(ObservationInputReady())(void)nativeStartup->InjectTestControllerInput(0,false);
+    }
+    void ObservationKey(WPARAM key,bool down) {
+        if(!ObservationInputReady())return;
+        using namespace dokodemo::recovered;
+        uint32_t bit=0;
+        switch(key){case VK_UP:bit=Up;break;case VK_DOWN:bit=Down;break;case VK_LEFT:bit=Left;break;case VK_RIGHT:bit=Right;break;
+            case 'X':bit=Circle;break;case 'Z':bit=Cross;break;case 'A':bit=Square;break;case 'S':bit=Triangle;break;
+            case 'Q':bit=LTrigger;break;case 'E':bit=RTrigger;break;case VK_RETURN:bit=dokodemo::recovered::Start;break;case VK_BACK:bit=Select;break;}
+        if(!bit)return;
+        const auto next=down?(observationKeys|bit):(observationKeys&~bit);
+        if(next==observationKeys)return; // WM autorepeat is not a fresh edge
+        observationKeys=next;
+        const bool focused=GetForegroundWindow()==window;
+        controllerInput=nativeStartup->PollControllerInput(focused);
+        // Use the same complete physical+window mask as Tick. A window-key
+        // event must never release a button still held on another device.
+        (void)nativeStartup->InjectTestControllerInput(controllerInput.buttons|observationKeys,focused);
+    }
     void Key(WPARAM key,LPARAM info=0) {
         ++inputEvents;
+        ObservationKey(key,true);
         if(textGate.Id()){
             using dokodemo::recovered::GameTextKind;
             const bool repeat=(uint64_t(info)&(1ull<<30))!=0;
@@ -7772,7 +7802,28 @@ struct Application {
     }
     void Tick() {
         RefreshNativeStartup();
-        if (nativeStartup) controllerInput = nativeStartup->PollControllerInput(GetForegroundWindow() == window);
+        if (nativeStartup) {
+            const bool focused=GetForegroundWindow()==window;
+            controllerInput = nativeStartup->PollControllerInput(focused);
+            // Onboarding deliberately uses the test mailbox. Once the visual
+            // target is captured, forward actual window keyboard samples to
+            // that SAME mailbox for release/fresh input, with test provenance.
+            // No production input permission, VM state or owner gate is changed.
+            if(ObservationInputReady()){
+                const auto& content=startupObservation.game_boot.content;
+                const std::array<uint64_t,8> scope{{content.actor_script.generation,content.actor_message_contexts,
+                    content.post_modal.generation,content.returned_interaction.owner,content.returned_interaction.generation,
+                    content.main_menu_input_epoch,content.actor_choice.context,content.actor_choice.state}};
+                const auto buttons=controllerInput.buttons|observationKeys;
+                // Publish real state changes/new owned input contexts, not a
+                // flood of identical idle packets. Counters advance in Tick.
+                if(!observationSampleValid||buttons!=observationSampleButtons||focused!=observationSampleFocused||scope!=observationSampleScope){
+                    const auto sent=nativeStartup->InjectTestControllerInput(buttons,focused);
+                    observationSampleValid=bool(sent);
+                    if(sent){observationSampleButtons=buttons;observationSampleFocused=focused;observationSampleScope=scope;}
+                }
+            }
+        }
         if (options.graphicsSmoke && !graphicsPatternDrawn && AtGameBootBoundary(startupObservation)) {
             graphicsPatternDrawn = nativeStartup->DrawGraphicsDiagnosticFrame();
             InvalidateRect(window, nullptr, FALSE);
@@ -7961,10 +8012,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case WM_PAINT: app->Paint(); return 0;
         case WM_ERASEBKGND: return 1;
         case WM_KEYDOWN: app->Key(wParam,lParam); return 0;
-        case WM_KEYUP: app->textGate.KeyUp(uint32_t(wParam));return 0;
+        case WM_KEYUP: app->ObservationKey(wParam,false);app->textGate.KeyUp(uint32_t(wParam));return 0;
         case WM_CHAR: app->Character(wchar_t(wParam),lParam);return 0;
         case WM_SETFOCUS:app->TextFocus(true);break;
-        case WM_KILLFOCUS:app->TextFocus(false);break;
+        case WM_KILLFOCUS:app->ObservationFocusLost();app->TextFocus(false);break;
         case WM_IME_STARTCOMPOSITION:app->ImeStart();break;
         case WM_IME_COMPOSITION:if(app->ImeComposition(lParam))return 0;break;
         case WM_IME_ENDCOMPOSITION:app->ImeEnd();break;

@@ -1,5 +1,6 @@
 #include "recovered/game_boot_native.h"
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -33,6 +34,14 @@ void ChoiceTests(){
     choice.Input({0,true,true,++sequence,0,21,4});choice.Input({Circle,true,true,++sequence,0,21,4});choice.Tick(2);
     Check(choice.Snapshot().state==2&&choice.Snapshot().result==0&&choice.Snapshot().timed_out&&choice.Snapshot().confirmations==0,"expiry wins simultaneous confirm and returns zero");
     choice.Retire();Check(!choice.Input({0,true,true,++sequence,0,21,4}),"retired SELECT rejects queued input");
+    GameChoiceController mixed;Check(mixed.Begin({"a","b"},22,4),"separate mixed-input request");mixed.Tick(2);
+    for(const auto mask:{uint32_t(Circle),uint32_t(Circle|Down),uint32_t(Circle|Down),uint32_t(Circle)}){
+        Check(mixed.Input({mask,true,true,++sequence,0,22,4}),"complete aggregate input sample");mixed.Tick(2);
+        Check(mixed.Snapshot().state==1&&mixed.Snapshot().confirmations==0,"another input source cannot rearm an independently held Circle");
+    }
+    mixed.Input({0,true,true,++sequence,0,22,4});mixed.Tick(2);
+    mixed.Input({Circle,true,true,++sequence,0,22,4});mixed.Tick(2);
+    Check(mixed.Snapshot().state==2&&mixed.Snapshot().confirmations==1,"actual aggregate release then press confirms once");mixed.Retire();
 }
 void W(std::vector<uint8_t> &b, size_t at, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i)
@@ -104,7 +113,7 @@ std::vector<uint8_t> Gim() {
     W(b, 140, 0xFFFFFFFF);
     return b;
 }
-std::vector<uint8_t> Ui() {
+std::vector<uint8_t> Ui(bool select_transform=false) {
     std::vector<uint8_t> b(32 + 200 * 8 + 26 * 52, 0);
     W(b, 0, 0x30413242);
     W(b, 4, 0);
@@ -114,6 +123,26 @@ std::vector<uint8_t> Ui() {
     W(b, 20, uint32_t(-26));
     W(b, 24, 32 + 200 * 8);
     W(b, 28, 10);
+    if(select_transform){
+        // Invented7,-9 offset, not game geometry. Exercise the referenced
+        // frame origin rather than an all-zero UI tree that hides that bug.
+        for(uint32_t node:{0u,2u,43u})H(b,32+node*8+4,14);
+        H(b,32+2*8+2,43);
+        const auto position=uint32_t(b.size());b.resize(b.size()+40,0);
+        W(b,32+200*8+24,1);W(b,32+200*8+28,position);
+        H(b,position,0);H(b,position+2,2);W(b,position+4,position+8);
+        float x=7,y=-9;std::memcpy(b.data()+position+8,&x,4);std::memcpy(b.data()+position+12,&y,4);
+        W(b,position+32,1);W(b,position+36,1);
+        const auto sprite=uint32_t(b.size());b.resize(b.size()+32,0);
+        W(b,32+200*8+13*52,1);W(b,32+200*8+13*52+4,sprite);
+        H(b,sprite,43);H(b,sprite+2,2);W(b,sprite+4,sprite+8);
+        W(b,sprite+8,uint32_t(-1));W(b,sprite+20,uint32_t(-1));W(b,sprite+24,1);W(b,sprite+28,1);
+        const auto ancestor=uint32_t(b.size());b.resize(b.size()+40,0);
+        W(b,32+200*8+13*52+24,1);W(b,32+200*8+13*52+28,ancestor);
+        H(b,ancestor,2);H(b,ancestor+2,2);W(b,ancestor+4,ancestor+8);
+        x=11;y=5;std::memcpy(b.data()+ancestor+8,&x,4);std::memcpy(b.data()+ancestor+12,&y,4);
+        W(b,ancestor+32,1);W(b,ancestor+36,1);W(b,32+200*8+13*52+48,1);
+    }
     return b;
 }
 std::vector<uint8_t> Nj() {
@@ -175,7 +204,7 @@ struct Resources : GameResourceSource {
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
         ++requests;
         if (path.find(".CB2A") != std::string::npos)
-            out = View(Ui());
+            out = View(Ui(path.find("SELECT")!=std::string::npos));
         else if (path.find(".GIM") != std::string::npos)
             out = View(Gim());
         else if (path.find(".A") != std::string::npos) {
@@ -376,6 +405,25 @@ void ChoiceDrawTests() {
             else Check(frame.pixels==plain,"highlight projection reaches the same actual glyph raster");
         }
         Check(scene.Close(),"SELECT draw owners retire");
+    }
+    {
+        GameSceneUiBootstrap layout;Check(bool(layout.Initialize(source,arena,vm,font)),"SELECT layout owners");
+        const std::vector<std::string> rows{std::string(41,'A'),"A"};
+        Check(bool(layout.BeginChoice(rows,90,4))&&bool(layout.TickChoice())&&graphics.Clear(0xFF000000),"SELECT wrapped row setup");
+        const auto before=layout.Choice();
+        Check(layout.DrawChoice(graphics),"SELECT text uses the authored root coordinate frame");
+        GameGraphicsFrame frame;Check(graphics.SwapBuffers()&&graphics.CopyFront(frame),"SELECT layout publication");
+        const auto pixel=[&](uint32_t x,uint32_t y){return frame.pixels[size_t(y)*frame.stride+x];};
+        Check(pixel(258,132)==0xFF552F0D&&pixel(258,153)==0xFF552F0D&&pixel(258,174)==0xFF552F0D,
+              "160px wrapping retains both first-option lines and the complete next option at21px advance");
+        Check(pixel(20,128)==0xFF000000,"native full-width replacement bars are absent");
+        Check(layout.Choice().options==rows&&layout.Choice().row==before.row&&layout.Choice().state==before.state,
+              "drawing cannot select,complete or rewrite owning SELECT options");
+        Check(layout.Close(),"SELECT layout retires");
+        GameSceneUiBootstrap oversized;Check(bool(oversized.Initialize(source,arena,vm,font)),"SELECT long-list owners");
+        Check(bool(oversized.BeginChoice(std::vector<std::string>(32,"A"),91,4))&& !oversized.DrawChoice(graphics)
+              &&oversized.Choice().state==0,"unimplemented scrolling cannot silently publish clipped choices or complete a result");
+        Check(oversized.Close(),"SELECT long-list retires");
     }
     Check(vm.Close()&&!arena.Used(),"SELECT draw registry and buffers retired");
 }
