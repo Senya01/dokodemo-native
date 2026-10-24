@@ -197,6 +197,7 @@ class GameSoundBank final {
     GameFsStatus ServiceOptionsPort24(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServicePort24(expected,out);}
     GameFsStatus ServiceOptionsChild(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceChild(expected,out);}
     GameFsStatus ServiceOptionsSlot(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceSlot(expected,out);}
+    GameFsStatus ServiceOptionsSfx(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){return source_control_.ServiceSfx(expected,out);}
     void ObserveOptionsWorkerTick()noexcept{source_control_.ObserveWorkerTick();}
     GameFsStatus Request73(int32_t sound,int32_t channel,int32_t volume);
     void SetSink(audio::Game73SelectedSink* sink) noexcept {sink_=sink;state_.finite_windows_output=sink!=nullptr;}
@@ -224,6 +225,7 @@ class GameSoundBank final {
     friend class GameContentBoot;
     GameFsStatus ServiceOptionsChildScoped(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out,GameOptionsChildCallScope& scope){return source_control_.ServiceChildScoped(expected,out,scope);}
     GameFsStatus ServiceOptionsSlotScoped(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out,GameOptionsChildCallScope& scope){return source_control_.ServiceSlotScoped(expected,out,scope);}
+    GameFsStatus ServiceOptionsSfxScoped(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out,GameOptionsChildCallScope& scope){return source_control_.ServiceSfxScoped(expected,out,scope);}
     GameSourceSoundControl source_control_;
     GameSourceBankRegistry registry_;
     bool registration_failed_=false;

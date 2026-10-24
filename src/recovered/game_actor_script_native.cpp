@@ -1364,7 +1364,7 @@ GameFsStatus GameActorScript::CheckMenuOptionOwner(const GameOwnerEventTarget& e
         Need(gui.voice_service_attempts==actual.voice_service_attempts&&GameSourceFeedbackExact(gui.row_voice_service,actual.row_voice_service),"Options copied actual voice service changed");
         if(option_feedback_committed_)Need(GameSourceFeedbackExact(gui.row_feedback,option_feedback_issued_),"Options returned feedback receipt replaced");
         if(option_voice_service_committed_)Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_),"Options issued callback receipt replaced");
-        if(option_voice_service_pending_&&(GameSourceVoiceServiceValid(option_voice_service_issued_)||GameSourceSequencePrefixValid(option_voice_service_issued_)||GameSourcePortPrefixValid(option_voice_service_issued_)||GameSourceProcessorPrefixValid(option_voice_service_issued_)||GameSourceControlPrefixValid(option_voice_service_issued_)||GameSourceWavePrefixValid(option_voice_service_issued_)||GameSourcePort24PrefixValid(option_voice_service_issued_)||GameSourceChildPrefixValid(option_voice_service_issued_)||GameSourceSlotPrefixValid(option_voice_service_issued_))){
+        if(option_voice_service_pending_&&(GameSourceVoiceServiceValid(option_voice_service_issued_)||GameSourceSequencePrefixValid(option_voice_service_issued_)||GameSourcePortPrefixValid(option_voice_service_issued_)||GameSourceProcessorPrefixValid(option_voice_service_issued_)||GameSourceControlPrefixValid(option_voice_service_issued_)||GameSourceWavePrefixValid(option_voice_service_issued_)||GameSourcePort24PrefixValid(option_voice_service_issued_)||GameSourceChildPrefixValid(option_voice_service_issued_)||GameSourceSlotPrefixValid(option_voice_service_issued_)||GameSourceSfxPrefixValid(option_voice_service_issued_))){
             Need(GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)
                &&GameSourceSoundSnapshotExact(option_voice_service_issued_.owner,option_sound_expected_)
                &&GameSourceSoundSnapshotExact(gui.sound_owner,option_voice_service_issued_.after)
@@ -1528,8 +1528,11 @@ GameFsStatus GameActorScript::PrepareMenuOptionChildService(const GameOwnerEvent
 GameFsStatus GameActorScript::PrepareMenuOptionSlotService(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,GameOptionsChildCallScope& scope){
  const auto status=PrepareMenuOptionChildService(target,gui,scope);if(status)scope.slot_=true;return status;
 }
+GameFsStatus GameActorScript::PrepareMenuOptionSfxService(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui,GameOptionsChildCallScope& scope){
+ const auto status=PrepareMenuOptionChildService(target,gui,scope);if(status)scope.slot_=scope.sfx_=true;return status;
+}
 GameFsStatus GameActorScript::CommitMenuOptionVoiceService(const GameOwnerEventTarget& target,const GameSourceFeedbackRead& receipt){
- if(!option_voice_service_pending_||option_voice_service_committed_||(!GameSourceVoiceServiceValid(receipt)&&!GameSourceSequencePrefixValid(receipt)&&!GameSourcePortPrefixValid(receipt)&&!GameSourceProcessorPrefixValid(receipt)&&!GameSourceControlPrefixValid(receipt)&&!GameSourceWavePrefixValid(receipt)&&!GameSourcePort24PrefixValid(receipt)&&!GameSourceChildPrefixValid(receipt)&&!GameSourceSlotPrefixValid(receipt))
+ if(!option_voice_service_pending_||option_voice_service_committed_||(!GameSourceVoiceServiceValid(receipt)&&!GameSourceSequencePrefixValid(receipt)&&!GameSourcePortPrefixValid(receipt)&&!GameSourceProcessorPrefixValid(receipt)&&!GameSourceControlPrefixValid(receipt)&&!GameSourceWavePrefixValid(receipt)&&!GameSourcePort24PrefixValid(receipt)&&!GameSourceChildPrefixValid(receipt)&&!GameSourceSlotPrefixValid(receipt)&&!GameSourceSfxPrefixValid(receipt))
     ||!GameSourceSoundSnapshotExact(receipt.owner,option_sound_expected_)||!GameSourceSoundSnapshotExact(receipt.after,option_settings_->OptionSoundOwner()))return {GameFsCode::Unavailable,0,"Options actual voice service receipt unavailable"};
  option_voice_service_issued_=receipt;const auto checked=CheckMenuOption(target,option_gui_owner_->Snapshot());if(!checked)return checked;
  option_sound_expected_=receipt.after;state_.option_sound_after=receipt.after;option_voice_service_pending_=false;option_voice_service_committed_=true;return {};
@@ -1614,6 +1617,15 @@ GameFsStatus GameActorScript::VerifyMenuOptionSlotPrefix(const GameOwnerEventTar
     ||gui.after_key_updates!=option_tick_before_||gui.voice_service_attempts!=1||gui.source_ui_sound_intents!=3||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)
  return {GameFsCode::Unavailable,0,"Options selected selected WAVE returned unknown port-input failed-only prefix incomplete"};
  state_.option_slot_prefix_verified=true;state_.option_after=option_expected_;return {};
+}
+GameFsStatus GameActorScript::VerifyMenuOptionSfxPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
+ const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;
+ if(!option_voice_service_committed_||!gui.failed||gui.failure.code!=GameFsCode::Unavailable||gui.source_consumer!=0x5B4C8||!option_tick_pending_
+    ||!GameSourceFeedbackExact(gui.row_voice_service,option_voice_service_issued_)||!GameSourceSfxPrefixValid(gui.row_voice_service)
+    ||gui.row_writes!=7||state_.option_row_writes!=7||gui.gain_queries!=2||state_.option_gain_returns!=2||gui.previous50!=1||gui.selection56!=1||gui.substate48
+    ||gui.after_key_updates!=option_tick_before_||gui.voice_service_attempts!=1||gui.source_ui_sound_intents!=3||gui.close_requests||gui.polls||gui.retirements||gui.restore_writes||gui.yes_writes)
+ return {GameFsCode::Unavailable,0,"Options selected selected WAVE returned unknown port-input failed-only prefix incomplete"};
+ state_.option_sfx_prefix_verified=true;state_.option_after=option_expected_;return {};
 }
 GameFsStatus GameActorScript::VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget& target,const GameSystemOptionSnapshot& gui){
     const auto checked=CheckMenuOptionOwner(target,gui,true);if(!checked)return checked;

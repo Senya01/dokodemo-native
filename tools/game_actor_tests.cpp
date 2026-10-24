@@ -107,6 +107,8 @@
 #include "game_options_slot_regressions.h"
 #include "game_options_slot_scope_regressions.h"
 #include "game_options_slot_word_regressions.h"
+#include "game_options_sfx_regressions.h"
+#include "game_options_sfx_scope_regressions.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -539,6 +541,8 @@ GameFlow5RegressionChecks();
     GameOptionsSlotRegressionChecks();
     GameOptionsSlotScopeRegressionChecks();
     GameOptionsSlotWordRegressionChecks();
+    GameOptionsSfxRegressionChecks();
+    GameOptionsSfxScopeRegressionChecks();
     {
         GameFontResource font;GameFontBitmap bitmap;GameFontDrawRecord glyphs[2]{};
         Check(bool(font.Initialize(dokodemo::diary_tests::Font())),"Diary spacing fixture FONT");

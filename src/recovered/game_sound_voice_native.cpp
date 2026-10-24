@@ -32,12 +32,16 @@ bool GameSourceChildExact(const GameSourceChildSnapshot& a,const GameSourceChild
 bool GameSourceSlotExact(const GameSourceSlotSnapshot& a,const GameSourceSlotSnapshot& b)noexcept{
  return std::tie(a.entered,a.live,a.header_read,a.selector_returned,a.allocator_returned,a.dispatcher_returned,a.channel_returned,a.first_registered,a.second_registered,a.constructed,a.parameters_initialized,a.scratch_zeroed,a.retain_attempted,a.retained,a.free_unlinked,a.parent_linked,a.child_returned,a.packet_written,a.consumer_entered,a.consumer_returned,a.current_readback,a.owner,a.generation,a.serial,a.sound_owner,a.sound_generation,a.base,a.storage,a.child_pointer,a.parent_storage,a.packet_storage,a.mode_slot,a.child_parent,a.child_sentinel_storage,a.kind,a.argument,a.packed,a.low,a.high,a.cursor_before,a.cursor_after,a.selector_result,a.selected_position,a.allocator_result,a.stored_channel,a.callback_id,a.current_note,a.current_flags,a.retain_result,a.count,a.bytes,a.zero_writes,a.zero_readbacks,a.id_writes,a.header_zero_writes,a.range_writes,a.free_reads,a.fallback_reads,a.allocation_flags,a.slot_half6,a.slot_word8,a.slot_wordC,a.slot_kind,a.current_parent_flags,a.phase,a.retain_before,a.retain_after,a.retain_pc,a.return_pc,a.return_delay_pc,a.wave_word30,a.packet_word6,a.consumer_pc,a.consumer_delay_pc,a.frontier,a.scratch_writes,a.parameter_writes,a.known_halfwords,a.child_links,a.callback_contexts,a.child_sentinel_links,a.callback_codes,a.callback_context_pc,a.callback_code_pc,a.child_sentinel_ids,a.parameters,a.scratch78)==std::tie(b.entered,b.live,b.header_read,b.selector_returned,b.allocator_returned,b.dispatcher_returned,b.channel_returned,b.first_registered,b.second_registered,b.constructed,b.parameters_initialized,b.scratch_zeroed,b.retain_attempted,b.retained,b.free_unlinked,b.parent_linked,b.child_returned,b.packet_written,b.consumer_entered,b.consumer_returned,b.current_readback,b.owner,b.generation,b.serial,b.sound_owner,b.sound_generation,b.base,b.storage,b.child_pointer,b.parent_storage,b.packet_storage,b.mode_slot,b.child_parent,b.child_sentinel_storage,b.kind,b.argument,b.packed,b.low,b.high,b.cursor_before,b.cursor_after,b.selector_result,b.selected_position,b.allocator_result,b.stored_channel,b.callback_id,b.current_note,b.current_flags,b.retain_result,b.count,b.bytes,b.zero_writes,b.zero_readbacks,b.id_writes,b.header_zero_writes,b.range_writes,b.free_reads,b.fallback_reads,b.allocation_flags,b.slot_half6,b.slot_word8,b.slot_wordC,b.slot_kind,b.current_parent_flags,b.phase,b.retain_before,b.retain_after,b.retain_pc,b.return_pc,b.return_delay_pc,b.wave_word30,b.packet_word6,b.consumer_pc,b.consumer_delay_pc,b.frontier,b.scratch_writes,b.parameter_writes,b.known_halfwords,b.child_links,b.callback_contexts,b.child_sentinel_links,b.callback_codes,b.callback_context_pc,b.callback_code_pc,b.child_sentinel_ids,b.parameters,b.scratch78);
 }
+bool GameSourceSfxExact(const GameSourceSfxSnapshot& a,const GameSourceSfxSnapshot& b)noexcept{
+ return std::tie(a.entered,a.live,a.platform_live,a.alias_read,a.index_read,a.tail_read,a.dirty_written,a.handler_returned,a.consumer_returned,a.parent_returned,a.port28_read,a.port2C_attempted,a.port2C_known,a.current_readback,a.owner,a.generation,a.sound_owner,a.sound_generation,a.tail_owner,a.tail_generation,a.tail_serial,a.tail_offset,a.tail_bytes,a.base,a.core,a.slot_base,a.slot_storage,a.record_storage,a.packet_storage,a.mode_slot,a.tail_base,a.data_pointer,a.child_wave,a.parent_result,a.count,a.bytes,a.zero_writes,a.zero_readbacks,a.grain,a.voices,a.output,a.rate,a.dry,a.wet,a.left,a.right,a.runtime_index,a.dirty_flags,a.dirty_word8,a.dirty_word10,a.dirty_word2C,a.dirty_word30,a.slot_flags_before,a.slot_flags_after,a.slot_byte5,a.wave_wordC,a.port_word28,a.writes,a.handler_pc,a.handler_return_pc,a.handler_return_delay_pc,a.consumer_return_pc,a.parent_return_pc,a.port_read_pc,a.frontier,a.slot_id,a.handler_result,a.pitch_before,a.pitch_product,a.pitch_result,a.pitch_after,a.write_pc,a.write_value)==std::tie(b.entered,b.live,b.platform_live,b.alias_read,b.index_read,b.tail_read,b.dirty_written,b.handler_returned,b.consumer_returned,b.parent_returned,b.port28_read,b.port2C_attempted,b.port2C_known,b.current_readback,b.owner,b.generation,b.sound_owner,b.sound_generation,b.tail_owner,b.tail_generation,b.tail_serial,b.tail_offset,b.tail_bytes,b.base,b.core,b.slot_base,b.slot_storage,b.record_storage,b.packet_storage,b.mode_slot,b.tail_base,b.data_pointer,b.child_wave,b.parent_result,b.count,b.bytes,b.zero_writes,b.zero_readbacks,b.grain,b.voices,b.output,b.rate,b.dry,b.wet,b.left,b.right,b.runtime_index,b.dirty_flags,b.dirty_word8,b.dirty_word10,b.dirty_word2C,b.dirty_word30,b.slot_flags_before,b.slot_flags_after,b.slot_byte5,b.wave_wordC,b.port_word28,b.writes,b.handler_pc,b.handler_return_pc,b.handler_return_delay_pc,b.consumer_return_pc,b.parent_return_pc,b.port_read_pc,b.frontier,b.slot_id,b.handler_result,b.pitch_before,b.pitch_product,b.pitch_result,b.pitch_after,b.write_pc,b.write_value);
+}
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot& a,const GameSourceSequenceSnapshot& b)noexcept{
  return std::tie(a.live,a.active,a.allocation_returned,a.lookup_returned,a.clear_returned,a.command_entered,a.bank_retained,a.record_lookup_returned,a.track_reserved,a.track_source_initialized,a.track_activated,a.port_attempted,a.port_result_known,a.handler_returned,a.owner,a.generation,a.allocation,a.voice_owner,a.voice_generation,a.ids_storage,a.output_storage,a.id,a.bank,a.sentinel_id,a.track_id,a.port_id,a.flags,a.sentinel_flags,a.allocation_pc,a.return_pc,a.result_store_pc,a.lookup_pc,a.clear_pc,a.command,a.subindex,a.group,a.event,a.command_pc,a.retain_writer,a.refs_before,a.refs_after,a.record_offset,a.record_kind,a.record_divisor,a.record_bytes,a.track_pool_stride,a.port_call_pc,a.frontier,a.initial_factor,a.selected_factor,a.sentinel_self,a.child_head_same,a.output_unchanged,a.bank_ids,a.output_before,a.output_after,a.admission_returned,a.command_released,a.update_entered,a.processor_attempted,a.current_refs,a.release_pc,a.release_before,a.release_after,a.update_pc,a.processor_pc,a.native_elapsed_ns,a.worker_tick_serial,a.worker_previous_ns,a.worker_current_ns,a.native_delta_seconds,a.update_quantum,a.processor_quantum,a.processor_context)
- ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after,b.admission_returned,b.command_released,b.update_entered,b.processor_attempted,b.current_refs,b.release_pc,b.release_before,b.release_after,b.update_pc,b.processor_pc,b.native_elapsed_ns,b.worker_tick_serial,b.worker_previous_ns,b.worker_current_ns,b.native_delta_seconds,b.update_quantum,b.processor_quantum,b.processor_context)&&GameSourcePortExact(a.port,b.port)&&GameSourceTrackExact(a.track,b.track)&&GameSourceProcessorExact(a.processor,b.processor)&&GameSourceControlExact(a.control,b.control)&&GameSourceWaveExact(a.wave,b.wave)&&GameSourcePortInputExact(a.port_input,b.port_input)&&GameSourceChildExact(a.child,b.child)&&GameSourceSlotExact(a.slot,b.slot);
+ ==std::tie(b.live,b.active,b.allocation_returned,b.lookup_returned,b.clear_returned,b.command_entered,b.bank_retained,b.record_lookup_returned,b.track_reserved,b.track_source_initialized,b.track_activated,b.port_attempted,b.port_result_known,b.handler_returned,b.owner,b.generation,b.allocation,b.voice_owner,b.voice_generation,b.ids_storage,b.output_storage,b.id,b.bank,b.sentinel_id,b.track_id,b.port_id,b.flags,b.sentinel_flags,b.allocation_pc,b.return_pc,b.result_store_pc,b.lookup_pc,b.clear_pc,b.command,b.subindex,b.group,b.event,b.command_pc,b.retain_writer,b.refs_before,b.refs_after,b.record_offset,b.record_kind,b.record_divisor,b.record_bytes,b.track_pool_stride,b.port_call_pc,b.frontier,b.initial_factor,b.selected_factor,b.sentinel_self,b.child_head_same,b.output_unchanged,b.bank_ids,b.output_before,b.output_after,b.admission_returned,b.command_released,b.update_entered,b.processor_attempted,b.current_refs,b.release_pc,b.release_before,b.release_after,b.update_pc,b.processor_pc,b.native_elapsed_ns,b.worker_tick_serial,b.worker_previous_ns,b.worker_current_ns,b.native_delta_seconds,b.update_quantum,b.processor_quantum,b.processor_context)&&GameSourcePortExact(a.port,b.port)&&GameSourceTrackExact(a.track,b.track)&&GameSourceProcessorExact(a.processor,b.processor)&&GameSourceControlExact(a.control,b.control)&&GameSourceWaveExact(a.wave,b.wave)&&GameSourcePortInputExact(a.port_input,b.port_input)&&GameSourceChildExact(a.child,b.child)&&GameSourceSlotExact(a.slot,b.slot)&&GameSourceSfxExact(a.sfx,b.sfx);
 }
 GameSourceSequencePool::GameSourceSequencePool(){Close();}
 void GameSourceSequencePool::Close()noexcept{
+ parent_return_node_=nullptr;advance_sfx_=false;control_tail_call_={};control_tail_.Reset();child_wave_pointer_=0;controls_.Close();state_.sfx.live=state_.sfx.platform_live=state_.sfx.current_readback=false;
  advance_slot_=false;slots_.Close();child_parent_=nullptr;state_.slot.live=state_.slot.current_readback=false;
  child_candidate_=nullptr;child_source_owner_=child_sound_owner_=child_sound_generation_=child_config_owner_=0;
  child_config_ready_=false;child_source_.reset();child_config_value_.reset();
@@ -220,7 +224,9 @@ GameFsStatus GameSourceSequencePool::InitializeNativeSlotComponent(uint64_t owne
  //config/s4/capacity and the complete SGX bootstrap are not established.
  int32_t returned=0;const auto range=slots_.SetRange(1,0,16,returned);
  if(!range||returned!=16){slots_.Close();return {GameFsCode::Unavailable,0,"Native SFX kind1 range publication failed"};}
- return {};
+ const auto runtime=slots_.PublishRuntimeKind1();if(!runtime){slots_.Close();return runtime;}
+ const auto controls=controls_.Initialize(owner,generation,slots_.Snapshot().base,16);
+ if(!controls){slots_.Close();controls_.Close();return controls;}return {};
 }
 GameFsStatus GameSourceSequencePool::ContinueSlotChild(const std::function<GameFsStatus()>& retain,uint8_t*& returned_node){
  returned_node=nullptr;auto& s=state_.slot;const auto& entry=state_.child;
@@ -268,14 +274,65 @@ GameFsStatus GameSourceSequencePool::ParentAfterChild5B228(uint8_t* returned_nod
    return {GameFsCode::Unavailable,0,"5B244 current WAVE/child return pointer lease changed"};
   s.wave_word30=wave_view_.ReadLE32(0x30);child_packet_.words[6]=s.wave_word30;s.packet_word6=child_packet_.words[6];s.packet_written=true;
  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
- return Enter6016C(int8_t(returned_node[0x2A]),0,child_packet_,0);
+ const auto effect=Enter6016C(int8_t(returned_node[0x2A]),0,child_packet_,0);
+ if(!effect||!advance_sfx_)return effect;return ContinueParentSfx(returned_node,parent_return_node_);
 }
 GameFsStatus GameSourceSequencePool::Enter6016C(int32_t id,int32_t zero1,const ChildPacket& packet,int32_t zero3){
  auto& s=state_.slot;
  if(!s.child_returned||!s.packet_written||&packet!=&child_packet_||packet.mode_slot!=wave_output_||id!=s.callback_id||zero1||zero3)
   return {GameFsCode::Unavailable,0,"6016C actual child/slot/packet arguments changed"};
  s.consumer_entered=true;s.consumer_pc=0x5B264;s.consumer_delay_pc=0x5B268;s.frontier=state_.wave.frontier=state_.control.frontier=state_.frontier=0x6016C;s.phase=9;
- return {GameFsCode::Unavailable,0,"Unsupported actual6016C(signed SFX id,0,same owned packet,0) before body/result"};
+ if(!advance_sfx_)return {GameFsCode::Unavailable,0,"Unsupported actual6016C(signed SFX id,0,same owned packet,0) before body/result"};
+ auto& a=state_.sfx;a.entered=true;a.slot_id=id;a.packet_storage=reinterpret_cast<uintptr_t>(&packet);a.mode_slot=packet.mode_slot;
+ const auto h=slots_.Snapshot();const auto d=controls_.Snapshot();const auto record=slots_.Read(uint32_t(id));
+ a.live=d.live;a.platform_live=d.platform_live;a.owner=d.owner;a.generation=d.generation;a.sound_owner=d.sound_owner;a.sound_generation=d.sound_generation;
+ a.base=d.base;a.core=d.core;a.slot_base=d.slot_base;a.slot_storage=h.base+uint32_t(id)*32;a.count=d.count;a.bytes=d.bytes;a.zero_writes=d.zero_writes;a.zero_readbacks=d.zero_readbacks;
+ a.grain=d.grain;a.voices=d.voices;a.output=d.output;a.rate=d.rate;a.dry=d.dry;a.wet=d.wet;a.left=d.left;a.right=d.right;
+ if(!d.live||d.slot_base!=h.base||d.sound_owner!=state_.child.sound_owner||d.sound_generation!=state_.child.sound_generation||id<0||uint32_t(id)>=h.count||record.id!=id||record.kind!=1)
+  return {GameFsCode::Unavailable,0,"6016C current G4C alias/SFX ID/kind owner unavailable"};
+ a.alias_read=true;a.runtime_index=record.word1C;a.index_read=true;a.slot_flags_before=record.flags;
+ if(a.runtime_index>=d.count||packet.words[2]!=3||!control_tail_call_)return {GameFsCode::Unavailable,0,"5FD78 current normal command/index/tail reader unavailable"};
+ const auto tail=control_tail_call_(packet.mode_slot,control_tail_);if(!tail)return tail;
+ try{const auto t=control_tail_.Describe();a.tail_owner=t.owner;a.tail_generation=t.generation;a.tail_serial=t.serial;a.tail_offset=t.offset;a.tail_bytes=t.size;
+  if(t.host_address>UINTPTR_MAX-t.offset||packet.words[6]>=t.size)return {GameFsCode::Unavailable,0,"5FDDC actual BANK tail/offset extent"};
+  a.tail_base=uintptr_t(t.host_address+t.offset);if(a.tail_base>UINTPTR_MAX-packet.words[6])return {GameFsCode::Unavailable,0,"5FDE4 native data address overflow"};
+  a.data_pointer=a.tail_base+packet.words[6];a.tail_read=true;
+ }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+ a.record_storage=a.base+100*a.runtime_index;
+ auto written=controls_.Command0(a.runtime_index,a.data_pointer,packet.words[12],a.write_value);if(!written)return written;
+ a.write_pc={0x5FDE8,0x5FDEC,0x5FE00,0x5FE08,0x5FE18,0x5FE20,0x5FE30,0x5FE38,0x5FE48,0x5FE50,0x5FE5C,0x5FE6C};
+ const auto finished=slots_.FinishCommand0(uint32_t(id),a.handler_result);if(!finished)return finished;
+ const auto current=slots_.Read(uint32_t(id));a.slot_flags_after=current.flags;a.slot_byte5=current.byte5;a.write_value[10]=current.byte5;a.write_value[11]=current.flags;
+ a.dirty_written=true;a.writes=12;a.handler_pc=0x5FDA8;a.handler_return_pc=0x5FE68;a.handler_return_delay_pc=0x5FE6C;a.handler_returned=true;
+ a.consumer_returned=true;a.consumer_return_pc=0x601AC;
+ GameNativeSfxControl16::Record dirty;if(!controls_.Read(a.runtime_index,dirty))return {GameFsCode::Unavailable,0,"5FD78 current dirty readback unavailable"};
+ a.dirty_flags=dirty.flags;a.dirty_word8=dirty.word8;a.dirty_word10=dirty.word10;a.dirty_word2C=dirty.word2C;a.dirty_word30=dirty.word30;return {};
+}
+GameFsStatus GameSourceSequencePool::ContinueParentSfx(uint8_t* node,uint8_t*& returned_node){
+ returned_node=nullptr;auto& a=state_.sfx;
+ if(!a.consumer_returned||!node||reinterpret_cast<uintptr_t>(node)!=state_.slot.child_pointer||!current_port_)return {GameFsCode::Unavailable,0,"5B274 actual child/WAVE owner unavailable"};
+ try{a.wave_wordC=wave_view_.ReadLE32(0x0C);}catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+ a.pitch_before=int16_t(uint16_t(node[0x2E])|(uint16_t(node[0x2F])<<8));
+ a.pitch_product=int32_t(uint32_t(a.pitch_before)*a.wave_wordC);
+ child_wave_pointer_=state_.wave.result_pointer;a.child_wave=child_wave_pointer_; //5B288 full host adaptation of source Child+20
+ const int64_t product=int64_t(a.pitch_product)*INT64_C(0x2F8DF18F);const int32_t hi=int32_t(uint64_t(product)>>32);
+ const int32_t shifted=hi>=0?hi/8192:-int32_t((uint32_t(-int64_t(hi))+8191)/8192);
+ a.pitch_result=int32_t(uint32_t(shifted)-uint32_t(a.pitch_product<0?-1:0));a.pitch_after=int16_t(uint16_t(a.pitch_result));
+ node[0x2E]=uint8_t(a.pitch_after);node[0x2F]=uint8_t(uint32_t(a.pitch_after)>>8);
+ returned_node=node;return {}; //typed source5B130 v0, not its passive audit
+}
+GameFsStatus GameSourceSequencePool::CommandAfterParent5B49C(Port& port,uint8_t* node){
+ auto& a=state_.sfx;
+ if(!node)return {GameFsCode::Unavailable,0,"Unsupported actual5B49C null Child return branch"};
+ if(&port!=current_port_||!child_source_||node!=reinterpret_cast<uint8_t*>(child_source_.get())+state_.child.index*136)
+  return {GameFsCode::Unavailable,0,"5B49C returned Child pointer current owner changed"};
+ //The caller received/tested the actual typed result before its source reads.
+ //Port+28 uses initialized parameter halfwords0/1; +2C uses UNKNOWN2/3.
+ if(node[0x28]!=1||!(current_port_->known&1)||!(current_port_->known&2))return {GameFsCode::Unavailable,0,"5B4C4 selected channel/known Port+28 unavailable"};
+ a.port_word28=uint32_t(current_port_->parameters[0])|(uint32_t(current_port_->parameters[1])<<16);a.port28_read=true;
+ a.port2C_attempted=true;a.port_read_pc=a.frontier=0x5B4C8;
+ state_.slot.frontier=state_.wave.frontier=state_.control.frontier=state_.frontier=a.frontier;
+ return {GameFsCode::Unavailable,0,"Unsupported actual5B4C8 Port+0x2C read before unknown parameter halfwords2/3"};
 }
 GameSourceSequenceSnapshot GameSourceSequencePool::Snapshot()const{
  auto out=state_;
@@ -308,8 +365,18 @@ GameSourceSequenceSnapshot GameSourceSequencePool::Snapshot()const{
    const auto word=[&](size_t at){return uint32_t(raw[at])|(uint32_t(raw[at+1])<<8)|(uint32_t(raw[at+2])<<16)|(uint32_t(raw[at+3])<<24);};
    s.current_readback=current.callback_readback&&packet_readback&&current.id==s.callback_id&&current.flags==s.allocation_flags&&current.half6==int16_t(s.argument)&&current.callback_code==s.callback_codes[1]&&current.callback_context==s.callback_contexts[1]
     &&s.low==0&&s.high==15&&s.cursor_after==1&&current.word8==uint32_t(s.packed)&&current.wordC==0&&current.kind==uint32_t(s.kind)&&child_candidate_->id==s.current_note&&child_candidate_->flags==s.current_flags
-    &&half(0x18)==uint16_t(inner.id)&&half(0x1A)==inner.flags&&half(0x24)==uint16_t(out.child.bank)&&raw[0x28]==uint8_t(out.child.channels)&&half(0x2C)==4096&&half(0x2E)==4096&&word(0x1C)==0&&word(0x20)==0;
+    &&half(0x18)==uint16_t(inner.id)&&half(0x1A)==inner.flags&&half(0x24)==uint16_t(out.child.bank)&&raw[0x28]==uint8_t(out.child.channels)&&half(0x2C)==4096&&half(0x2E)==uint16_t(out.sfx.parent_returned?out.sfx.pitch_after:4096)&&word(0x1C)==0&&word(0x20)==0;
   }
+ }
+ if(out.sfx.entered){auto& a=out.sfx;const auto d=controls_.Snapshot();const auto h=slots_.Snapshot();GameNativeSfxControl16::Record record;
+  const auto slot=slots_.Read(uint32_t(a.slot_id));a.live=d.live;a.platform_live=d.platform_live;
+  a.current_readback=out.slot.current_readback&&d.live&&d.platform_live&&d.owner==a.owner&&d.generation==a.generation&&d.base==a.base&&d.core==a.core&&d.slot_base==h.base&&h.base==a.slot_base
+   &&d.sound_owner==a.sound_owner&&d.sound_generation==a.sound_generation&&controls_.Read(a.runtime_index,record)&&a.runtime_index==slot.word1C&&slot.id==a.slot_id&&slot.kind==1
+   &&record.flags==a.dirty_flags&&record.data==a.data_pointer&&record.word8==a.dirty_word8&&record.word10==a.dirty_word10&&record.word2C==a.dirty_word2C&&record.word30==a.dirty_word30
+   &&slot.flags==a.slot_flags_after&&slot.byte5==a.slot_byte5&&child_wave_pointer_==a.child_wave&&a.parent_result==out.slot.child_pointer
+   &&a.packet_storage==reinterpret_cast<uintptr_t>(&child_packet_)&&a.mode_slot==wave_output_&&current_port_&&a.port_word28==(uint32_t(current_port_->parameters[0])|(uint32_t(current_port_->parameters[1])<<16));
+  try{const auto t=control_tail_.Describe();a.current_readback=a.current_readback&&t.owner==a.tail_owner&&t.generation==a.tail_generation&&t.serial==a.tail_serial&&t.offset==a.tail_offset&&t.size==a.tail_bytes&&t.host_address+t.offset==a.tail_base&&a.data_pointer==a.tail_base+child_packet_.words[6]&&wave_view_.ReadLE32(0x0C)==a.wave_wordC;}
+  catch(const std::exception&){a.current_readback=false;}
  }
  if(out.wave.entered){out.wave.borrow_live=false;try{const auto d=wave_view_.Describe();out.wave.borrow_live=d.owner==out.wave.image_owner&&d.generation==out.wave.image_generation&&d.serial==out.wave.image_serial&&d.host_address+d.offset==out.wave.result_pointer;}catch(const std::exception&){} }
  if(!current_)return out;
@@ -524,6 +591,10 @@ GameFsStatus GameSourceSequencePool::Command5B2F4(Port& port,uint32_t rgnd,uint3
     r.region_selected=true;r.region_offset=at;r.selected_byteD=u8(at+13);r.selected_flags=u32(at);r.selected_byteC=u8(at+12);r.selected_wave=u32(at+52);
     if(int8_t(r.selected_byteD)>0||(r.selected_flags&4))return {GameFsCode::Unavailable,0,"5B2F4 unimplemented selected packed/override field"};
     r.child_call_pc=0x5B494;r.child_target=0x5B130;
+    if(advance_sfx_){uint8_t* returned_node=nullptr;
+     const auto result=Child5B130(port,r.note,r.bank,r.selected_wave,int8_t(r.selected_byteC),0,-1,wave,port_input,returned_node);
+     if(!result)return result;return CommandAfterParent5B49C(port,returned_node);
+    }
     return Child5B130(port,r.note,r.bank,r.selected_wave,int8_t(r.selected_byteC),0,-1,wave,port_input);
    }
    const auto stride=u32(at+8);r.strides[i]=stride;++r.stride_reads;
@@ -537,6 +608,15 @@ GameFsStatus GameSourceSequencePool::Child5B130(Port& port,int32_t note,int32_t 
  if(&port!=current_port_||bank!=state_.bank)return {GameFsCode::Unavailable,0,"5B130 actual port/bank argument owner changed"};
  r.wave_call_pc=0x5B178;const auto status=Wave557B8(bank,wave,wave_output_,lookup);
  if(!status)return status;return ContinueChild5B180(port,byteC,extra,port_input);
+}
+GameFsStatus GameSourceSequencePool::Child5B130(Port& port,int32_t note,int32_t bank,uint32_t wave,int32_t byteC,int32_t packed,int32_t extra,const WaveCall& lookup,const ControlCall& port_input,uint8_t*& returned_node){
+ returned_node=nullptr;parent_return_node_=nullptr;
+ const auto effect=Child5B130(port,note,bank,wave,byteC,packed,extra,lookup,port_input);
+ if(!effect){parent_return_node_=nullptr;return effect;}
+ returned_node=parent_return_node_;parent_return_node_=nullptr;
+ //Only this callee's genuine typed return supplies the command caller.
+ auto& a=state_.sfx;a.parent_result=reinterpret_cast<uintptr_t>(returned_node);a.parent_return_pc=0x5B2D4;a.parent_returned=true;state_.control.child_returned=true;
+ return {};
 }
 GameFsStatus GameSourceSequencePool::Wave557B8(int32_t bank,uint32_t wave,uintptr_t& output,const WaveCall& lookup){
  auto& r=state_.control;r.wave_attempted=true;r.wave_output_storage=reinterpret_cast<uintptr_t>(&output);r.frontier=state_.frontier=0x557B8;

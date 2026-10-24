@@ -1,5 +1,6 @@
 #pragma once
 #include "game_sfx_slot_native.h"
+#include "game_sfx_control_native.h"
 #include "game_filesystem_native.h"
 #include <array>
 #include <functional>
@@ -112,6 +113,16 @@ struct GameSourceSlotSnapshot {
  std::array<uint32_t,4> scratch78{};
 };
 bool GameSourceSlotExact(const GameSourceSlotSnapshot&,const GameSourceSlotSnapshot&)noexcept;
+struct GameSourceSfxSnapshot {
+ bool entered=false,live=false,platform_live=false,alias_read=false,index_read=false,tail_read=false,dirty_written=false,handler_returned=false,consumer_returned=false,parent_returned=false,port28_read=false,port2C_attempted=false,port2C_known=false,current_readback=false;
+ uint64_t owner=0,generation=0,sound_owner=0,sound_generation=0,tail_owner=0,tail_generation=0,tail_serial=0,tail_offset=0,tail_bytes=0;
+ uintptr_t base=0,core=0,slot_base=0,slot_storage=0,record_storage=0,packet_storage=0,mode_slot=0,tail_base=0,data_pointer=0,child_wave=0,parent_result=0;
+ uint32_t count=0,bytes=0,zero_writes=0,zero_readbacks=0,grain=0,voices=0,output=0,rate=0,dry=0,wet=0,left=0,right=0,runtime_index=0,dirty_flags=0,dirty_word8=0,dirty_word10=0,dirty_word2C=0,dirty_word30=0,slot_flags_before=0,slot_flags_after=0,slot_byte5=0,wave_wordC=0,port_word28=0,writes=0,handler_pc=0,handler_return_pc=0,handler_return_delay_pc=0,consumer_return_pc=0,parent_return_pc=0,port_read_pc=0,frontier=0;
+ int32_t slot_id=0,handler_result=0,pitch_before=0,pitch_product=0,pitch_result=0,pitch_after=0;
+ std::array<uint32_t,12> write_pc{};
+ std::array<uintptr_t,12> write_value{};
+};
+bool GameSourceSfxExact(const GameSourceSfxSnapshot&,const GameSourceSfxSnapshot&)noexcept;
 struct GameSourceSequenceSnapshot {
  bool live=false,active=false,allocation_returned=false,lookup_returned=false,clear_returned=false;
  bool command_entered=false,bank_retained=false,record_lookup_returned=false,track_reserved=false;
@@ -141,6 +152,7 @@ struct GameSourceSequenceSnapshot {
  GameSourcePortInputSnapshot port_input;
  GameSourceChildSnapshot child;
  GameSourceSlotSnapshot slot;
+ GameSourceSfxSnapshot sfx;
 };
 bool GameSourceSequenceExact(const GameSourceSequenceSnapshot&,const GameSourceSequenceSnapshot&)noexcept;
 // NativeIndexedSequenceContextPool16. IDs and pointers are actual Windows
@@ -179,6 +191,15 @@ class GameSourceSequencePool final {
  GameFsStatus Enter6016C(int32_t,int32_t,const ChildPacket&,int32_t);
  GameFsStatus InitializeNativeSlotComponent(uint64_t,uint64_t);
  GameNativeSfxSlotPool16 slots_;
+ GameNativeSfxControl16 controls_;
+ bool advance_sfx_=false;
+ uintptr_t child_wave_pointer_=0;
+ PackageView control_tail_;
+ using TailCall=std::function<GameFsStatus(uintptr_t,PackageView&)>;
+ TailCall control_tail_call_;
+ GameFsStatus ContinueParentSfx(uint8_t*,uint8_t*&);
+ uint8_t* parent_return_node_=nullptr;
+ GameFsStatus CommandAfterParent5B49C(Port&,uint8_t*);
  bool advance_slot_=false;
  std::array<Link,16> child_inner_{};
  Port* child_parent_=nullptr;
@@ -200,6 +221,7 @@ class GameSourceSequencePool final {
  GameFsStatus Command5B2F4(Port&,uint32_t,uint32_t,const ReadByte&,const ControlCall&,const WaveCall&,const ControlCall&);
  GameFsStatus Prepare5B040(Port&,int32_t);
  GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t,const WaveCall&,const ControlCall&);
+ GameFsStatus Child5B130(Port&,int32_t,int32_t,uint32_t,int32_t,int32_t,int32_t,const WaveCall&,const ControlCall&,uint8_t*&);
  GameFsStatus Wave557B8(int32_t,uint32_t,uintptr_t&,const WaveCall&);
  GameFsStatus ContinueChild5B180(Port&,int32_t,int32_t,const ControlCall&);
  GameFsStatus ReadPortWord24(Port&);

@@ -11,7 +11,7 @@ namespace dokodemo::recovered {
 // header keeps its full host pointer separate from PSP32 header words.
 class GameNativeSfxSlotPool16 final {
  public:
- struct Slot {bool callback_readback=false;int32_t id=-1;uint32_t flags=0;int32_t half6=0;uint32_t word8=0,wordC=0,kind=0;uint32_t callback_code=0;uintptr_t callback_context=0;};
+ struct Slot {bool callback_readback=false;int32_t id=-1;uint32_t flags=0;int32_t half6=0;uint32_t word8=0,wordC=0,kind=0;uint32_t callback_code=0,word1C=0,byte5=0;uintptr_t callback_context=0;};
  struct Selection {bool returned=false;int32_t value=-1;int32_t position=-1;uint32_t free_reads=0,fallback_reads=0;};
  struct Observation {bool live=false;uint64_t owner=0,generation=0,serial=0,sound_owner=0,sound_generation=0;uintptr_t base=0;uint32_t count=0,bytes=0,zero_writes=0,zero_readbacks=0,id_writes=0,header_zero_writes=0,range_writes=0;std::array<uint32_t,26> header{};};
  GameNativeSfxSlotPool16()=default;
@@ -88,7 +88,18 @@ class GameNativeSfxSlotPool16 final {
   Slot s;if(!Live()||index>=state_.count)return s;
   const auto* words=block_.get()+index*8;const auto* bytes=reinterpret_cast<const uint8_t*>(words);
   s.id=int32_t(words[0]);s.flags=bytes[4];s.half6=int16_t(uint16_t(bytes[6])|(uint16_t(bytes[7])<<8));s.word8=words[2];s.wordC=words[3];s.kind=words[6];
-  s.callback_code=words[4];s.callback_context=callbacks_[index].context;s.callback_readback=words[4]==callbacks_[index].code;return s;
+  s.word1C=words[7];s.byte5=bytes[5];s.callback_code=words[4];s.callback_context=callbacks_[index].context;s.callback_readback=words[4]==callbacks_[index].code;return s;
+ }
+ //5CEE8 writes the first configured group's actual record index before G4C publication.
+ GameFsStatus PublishRuntimeKind1(){
+  if(!Live())return Refuse("Native runtime G4C base owner unavailable");
+  for(uint32_t i=0;i<state_.count;++i){block_[i*8+7]=i;if(block_[i*8+7]!=i)return Refuse("5CEE8 runtime index readback");}
+  return {};
+ }
+ GameFsStatus FinishCommand0(uint32_t index,int32_t& result){
+  if(!Live()||index>=state_.count)return Refuse("5FE54 actual SFX record unavailable");
+  auto* bytes=reinterpret_cast<uint8_t*>(block_.get()+8*index);const uint8_t flags=bytes[4];
+  bytes[5]=1;result=(flags|2)&0xEF;bytes[4]=uint8_t(result);return {};
  }
  Observation Snapshot()const{auto out=state_;out.live=Live();out.base=out.live?reinterpret_cast<uintptr_t>(block_.get()):0;return out;}
  private:

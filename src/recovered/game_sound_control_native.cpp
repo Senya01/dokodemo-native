@@ -90,6 +90,13 @@ bool GameSourceBankRegistry::ReadModeSlot(int32_t id,uintptr_t slot,uint32_t& va
  GameSourceBankRegistration e;if(!Readback(id,e)||slot!=reinterpret_cast<uintptr_t>(&entries_[size_t(id)].mode))return false;
  value=entries_[size_t(id)].mode;return true;
 }
+bool GameSourceBankRegistry::BorrowControlTail(int32_t id,uintptr_t slot,PackageView& tail)const{
+ GameSourceBankRegistration before,after;
+ if(!Readback(id,before)||slot!=reinterpret_cast<uintptr_t>(&entries_[size_t(id)].mode)||entries_[size_t(id)].mode!=1||!before.attached)return false;
+ //Source modeSlot+8 is BANKnode+2C. Native registry layout is different:
+ //the actual mode cell identifies its SAME private tail view, never &copy+8.
+ tail=tails_[size_t(id)];return Readback(id,after)&&GameSourceBankRegistrationExact(before,after)&&BankSame(tail.Describe(),after.tail);
+}
 void GameSourceBankRegistry::Close()noexcept{
     references_.fill(0);
     for(size_t i=0;i<64;++i){entries_[i]={};tails_[i].Reset();images_[i].Reset();}++generation_;
@@ -197,7 +204,8 @@ GameFsStatus GameSourceSoundControl::Feedback4AC38(const GameSourceSoundSnapshot
     return {GameFsCode::Unavailable,0,record.bank_handle<0?"Unsupported feedback branch4AD08":"Unsupported feedback continuation4ACA0"};
 }
 bool GameSourceFeedbackReachedValid(const GameSourceFeedbackRead& r)noexcept{
-    if(r.outcome!=0||!r.attempted||!r.bank_attached||!r.bank_handle_known||!r.read_returned||!r.getter_returned||r.start_returned||r.handle_stored||r.feedback_returned
+    if(!GameSourceSfxExact(r.owner.voice.sequence.sfx,{})||!GameSourceSfxExact(r.after.voice.sequence.sfx,{})
+       ||r.outcome!=0||!r.attempted||!r.bank_attached||!r.bank_handle_known||!r.read_returned||!r.getter_returned||r.start_returned||r.handle_stored||r.feedback_returned
        ||r.context_index!=5||r.read_pc!=0x4AC84||r.frontier!=0x56598||r.selector||r.gain!=45||r.params_written!=6
        ||r.virtual_target!=0x4AF54||r.wrapper!=0x56930||r.issuer!=0x56598||r.bank_handle<0||r.group||r.event!=6||r.extra||r.mode!=2||r.rate!=1.0f)return false;
     const auto& b=r.owner;const auto& a=r.after;
@@ -512,6 +520,41 @@ GameFsStatus GameSourceSoundControl::ServiceSlotScoped(const GameSourceSoundSnap
  if(GameSourceSlotPrefixValid(r)&&GameSourceSoundSnapshotExact(r.after,Snapshot())){scope.issued_=r;scope.sealed_=true;}
  return status;
 }
+GameFsStatus GameSourceSoundControl::ServiceSfx(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out){
+ GameOptionsChildCallScope scope;scope.active_=scope.component_=scope.slot_=scope.sfx_=true;scope.source_=this;scope.expected_=expected;
+ return ServiceSfxScoped(expected,out,scope);
+}
+GameFsStatus GameSourceSoundControl::ServiceSfxScoped(const GameSourceSoundSnapshot& expected,GameSourceFeedbackRead& out,GameOptionsChildCallScope& scope){
+ out={};const auto current=Snapshot();
+ if(!GameSourceSoundSnapshotExact(current,expected)||!current.live||!current.bank_live||!current.voice.returned||current.voice.services)
+  return {GameFsCode::Unavailable,0,"NativePort current service owner unavailable"};
+ if(!scope.sfx_||!scope.slot_||active_child_scope_||!scope.active_||scope.sealed_||!GameSourceSoundSnapshotExact(scope.expected_,current)
+    ||(!scope.component_&&(!scope.actor_prepared_||!scope.gui_||!scope.serial_||!scope.gui_generation_))
+    ||(scope.component_&&scope.source_!=this))return {GameFsCode::Unavailable,0,"Options child private synchronous callscope unavailable"};
+ if(scope.component_)scope.serial_=++child_component_serial_;
+ scope.source_=this;active_child_scope_=&scope;
+ struct EndScope {GameOptionsChildCallScope*& current;~EndScope(){current=nullptr;}} end{active_child_scope_};
+ auto& pool=voices_.sequences_;pool.advance_sfx_=true;
+ pool.control_tail_call_=[&](uintptr_t slot,PackageView& tail){
+  GameSourceBankRegistration before,after;auto expected_bank=state_.registration;expected_bank.word30=4;
+  if(!active_child_scope_||!active_child_scope_->sfx_||!registry_||owned_bank_refs_!=4||pool.state_.current_refs!=4||slot!=pool.wave_output_
+     ||!registry_->Readback(pool.state_.bank,before)||!GameSourceBankRegistrationExact(before,expected_bank)||!registry_->BorrowControlTail(pool.state_.bank,slot,tail)
+     ||!registry_->Readback(pool.state_.bank,after)||!GameSourceBankRegistrationExact(after,expected_bank))return GameFsStatus{GameFsCode::Unavailable,0,"5FDDC actual BANK tail cell/owner unavailable"};
+  return GameFsStatus{};
+ };
+ struct EndSfx {GameSourceSequencePool& pool;~EndSfx(){pool.advance_sfx_=false;pool.control_tail_call_={};}} end_sfx{pool};
+ const auto tick_serial=worker_tick_serial_,previous_ns=worker_previous_ns_,current_ns=worker_current_ns_; //freeze f12 provenance before562D4 callback
+ auto r=feedback_;r.owner=current;r.outcome=11;
+ auto status=voices_.Service(true,[&]{return AdmitSequence58C04(true);});
+ if(status){auto& q=voices_.sequences_.state_;q.worker_tick_serial=tick_serial;q.worker_previous_ns=previous_ns;q.worker_current_ns=current_ns;
+  if(tick_serial<2||!previous_ns||current_ns<previous_ns){q.frontier=0x5A06C;status={GameFsCode::Unavailable,0,"5A06C missing actual consecutive worker timestamps"};}
+  else status=voices_.sequences_.Update5A06C(current_ns-previous_ns,[&](uint32_t at){return bank_.ReadU8(at);},[&]{return DispatchControl5B9E4(true,true,true);});
+  voices_.state_.frontier=q.frontier;
+ }
+ r.frontier=voices_.Snapshot().frontier;r.after=Snapshot();out=r;
+ if(GameSourceSfxPrefixValid(r)&&GameSourceSoundSnapshotExact(r.after,Snapshot())){scope.issued_=r;scope.sealed_=true;}
+ return status;
+}
 bool GameSourcePortPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  if(r.outcome!=4||r.frontier!=0x59DD4||r.after.voice.frontier!=r.frontier||!r.after.voice.callback_returned)return false;
  auto legacy=r;legacy.outcome=3;legacy.frontier=0x5A5AC;
@@ -739,6 +782,26 @@ bool GameSourceSlotPrefixValid(const GameSourceFeedbackRead& r)noexcept{
  for(size_t i=2;i<12;++i)e.parameters[i]=s.parameters[i];e.parameters[0]=UINT16_MAX;
  for(size_t k=0;k<4;++k){e.parameters[16+6*k]=4096;e.parameters[17+6*k]=1000;}
  return GameSourceSlotExact(s,e);
+}
+bool GameSourceSfxPrefixValid(const GameSourceFeedbackRead& r)noexcept{
+ const auto& q=r.after.voice.sequence;const auto& a=q.sfx;
+ if(r.outcome!=11||r.frontier!=0x5B4C8||r.after.voice.frontier!=r.frontier||q.frontier!=r.frontier||q.wave.frontier!=r.frontier||q.control.frontier!=r.frontier||q.slot.frontier!=r.frontier||q.current_refs!=4||!q.control.child_returned)return false;
+ auto old=r;old.outcome=10;old.frontier=old.after.voice.frontier=old.after.voice.sequence.frontier=old.after.voice.sequence.wave.frontier=old.after.voice.sequence.control.frontier=old.after.voice.sequence.slot.frontier=0x6016C;
+ old.after.voice.sequence.sfx={};old.after.voice.sequence.control.child_returned=false;old.after.voice.sequence.slot.allocation_flags=1;
+ if(!GameSourceSlotPrefixValid(old)||!a.owner||!a.generation||!a.base||a.base%4||!a.core||a.core%64||a.base>UINTPTR_MAX-1600||a.base==a.slot_base||a.core==a.base)return false;
+ const auto& tail=r.after.registration.tail;
+ if(tail.host_address>UINTPTR_MAX-tail.offset||q.slot.wave_word30>=tail.size||tail.host_address+tail.offset>UINTPTR_MAX-q.slot.wave_word30)return false;
+ GameSourceSfxSnapshot e;e.entered=e.live=e.platform_live=e.alias_read=e.index_read=e.tail_read=e.dirty_written=e.handler_returned=e.consumer_returned=e.parent_returned=e.port28_read=e.port2C_attempted=e.current_readback=true;
+ e.owner=a.owner;e.generation=a.generation;e.sound_owner=r.after.owner;e.sound_generation=r.after.generation;e.base=a.base;e.core=a.core;e.slot_base=q.slot.base;e.slot_storage=q.slot.storage;e.record_storage=a.base;
+ e.packet_storage=q.port_input.packet_storage;e.mode_slot=q.wave.control_slot_storage;e.tail_owner=tail.owner;e.tail_generation=tail.generation;e.tail_serial=tail.serial;e.tail_offset=tail.offset;e.tail_bytes=tail.size;e.tail_base=uintptr_t(tail.host_address+tail.offset);e.data_pointer=e.tail_base+q.slot.wave_word30;
+ e.child_wave=q.wave.result_pointer;e.parent_result=q.slot.child_pointer;e.count=16;e.bytes=1600;e.zero_writes=e.zero_readbacks=400;e.grain=256;e.voices=32;e.rate=44100;e.dry=1;
+ e.slot_id=0;e.dirty_flags=0xC0E;e.dirty_word10=0x640;e.slot_flags_before=1;e.slot_flags_after=3;e.slot_byte5=1;e.wave_wordC=a.wave_wordC;e.writes=12;
+ e.handler_pc=0x5FDA8;e.handler_return_pc=0x5FE68;e.handler_return_delay_pc=0x5FE6C;e.consumer_return_pc=0x601AC;e.parent_return_pc=0x5B2D4;e.port_read_pc=e.frontier=0x5B4C8;e.handler_result=3;e.pitch_before=4096;
+ e.pitch_product=int32_t(uint32_t(e.pitch_before)*e.wave_wordC);const int64_t product=int64_t(e.pitch_product)*INT64_C(0x2F8DF18F);const int32_t hi=int32_t(uint64_t(product)>>32);
+ const int32_t shifted=hi>=0?hi/8192:-int32_t((uint32_t(-int64_t(hi))+8191)/8192);e.pitch_result=int32_t(uint32_t(shifted)-uint32_t(e.pitch_product<0?-1:0));e.pitch_after=int16_t(uint16_t(e.pitch_result));
+ e.write_pc={0x5FDE8,0x5FDEC,0x5FE00,0x5FE08,0x5FE18,0x5FE20,0x5FE30,0x5FE38,0x5FE48,0x5FE50,0x5FE5C,0x5FE6C};
+ e.write_value={4,e.data_pointer,0x640,12,0,0x40C,0,0xC0C,0,0xC0E,1,3};
+ return GameSourceSfxExact(a,e);
 }
 GameFsStatus GameSourceSoundControl::RequestBgm(int32_t){
     if(state_.failed)return failure_;

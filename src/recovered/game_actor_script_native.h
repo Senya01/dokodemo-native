@@ -168,6 +168,7 @@ struct GameActorScriptSnapshot {
     bool option_port24_prefix_verified=false;
     bool option_child_prefix_verified=false;
     bool option_slot_prefix_verified=false;
+    bool option_sfx_prefix_verified=false;
     uint32_t option_right_after_key_before=0;
     uint32_t option_yes_writes=0,option_yes_publication_receipt=0,option_completion_kind=0;
     uint32_t option_restore_writes=0,option_gain_returns=0,option_tick_receipts=0,option_after_key_cursor=0,option_lifecycle_phase=0,option_poll_receipt=0,option_drain_receipt=0;
@@ -419,6 +420,7 @@ class GameActorScript final {
     GameFsStatus PrepareMenuOptionVoiceService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus PrepareMenuOptionChildService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,GameOptionsChildCallScope&);
     GameFsStatus PrepareMenuOptionSlotService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,GameOptionsChildCallScope&);
+    GameFsStatus PrepareMenuOptionSfxService(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&,GameOptionsChildCallScope&);
     GameFsStatus CommitMenuOptionVoiceService(const GameOwnerEventTarget&,const GameSourceFeedbackRead&);
     GameFsStatus VerifyMenuOptionVoiceServicePrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionSequencePrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
@@ -429,6 +431,7 @@ class GameActorScript final {
     GameFsStatus VerifyMenuOptionPort24Prefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionChildPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus VerifyMenuOptionSlotPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
+    GameFsStatus VerifyMenuOptionSfxPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus PrepareMenuOptionFeedback(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
     GameFsStatus CommitMenuOptionFeedback(const GameOwnerEventTarget&,const GameSourceFeedbackRead&);
     GameFsStatus VerifyMenuOptionFeedbackPrefix(const GameOwnerEventTarget&,const GameSystemOptionSnapshot&);
