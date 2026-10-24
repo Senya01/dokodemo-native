@@ -51,6 +51,7 @@ struct Options {
     bool connectedStartupTest = false, connectedStartupWindowTest = false;
     bool graphicsSmoke = false,storageWindowTest=false,storageDirectTest=false,storageUnavailable=false,titleWindowTest=false;
     bool nativeTitleMenu=false,testRngSeedReplay=false,keepSceneOpen=false;
+    std::wstring visualCapture; // separate observation purpose, never gameplay completion
     uint32_t testRngSeedWord=0;
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
@@ -87,6 +88,11 @@ Options ParseOptions() {
             options.testRngSeedReplay=true;options.testRngSeedWord=uint32_t(word);
         }
         else if(arg==L"--keep-scene-open")options.keepSceneOpen=true;
+        else if(arg==L"--visual-capture"&&i+1<count){
+            options.visualCapture=args[++i];
+            if(options.visualCapture!=L"room"&&options.visualCapture!=L"dialogue")
+                throw std::runtime_error("Visual capture target must be room or dialogue");
+        }
         else if(arg==L"--storage-unavailable")options.storageUnavailable=true;
         else if (arg == L"--smoke-test") options.smoke = true;
         else if (arg == L"--construction-smoke-test") { options.smoke = true; options.constructionSmoke = true; }
@@ -98,6 +104,15 @@ Options ParseOptions() {
         else { LocalFree(args); throw std::runtime_error("Unknown or incomplete command line argument"); }
     }
     LocalFree(args);
+    if(!options.visualCapture.empty()){
+        if(options.connectedStartupTest||options.connectedStartupWindowTest||options.selfTest||options.smoke
+           ||options.testRngSeedReplay||!options.fixtureChoiceHistory.empty())
+            throw std::runtime_error("Visual capture is a separate mode; do not combine test fixtures");
+        options.connectedStartupWindowTest=true;
+        options.actorChannelWindowTest=options.gameLoopWindowTest=options.softkeyWindowTest=true;
+        options.titleWindowTest=options.storageWindowTest=options.storageDirectTest=true;
+        options.cameraWindowTest=options.visualCapture==L"dialogue";
+    }
     if(options.testRngSeedReplay&&!options.post21WindowFixture)throw std::runtime_error("Captured RNG seed replay requires explicit post21 window fixture");
     if(options.keepSceneOpen&&!options.actorChannelWindowTest)throw std::runtime_error("Keep-scene-open requires an actor scene window fixture");
     if(!options.fixtureChoiceHistory.empty()&&!options.continuationWindowFixture)throw std::runtime_error("Choice history requires explicit continuation fixture");
@@ -106,6 +121,12 @@ Options ParseOptions() {
     options.startupMedia = std::filesystem::absolute(options.startupMedia);
     if (options.evidence.empty()) options.evidence = std::filesystem::current_path() / L"evidence";
     options.evidence = std::filesystem::absolute(options.evidence);
+    if(!options.visualCapture.empty()){
+        std::filesystem::create_directories(options.evidence);
+        for(const auto* name:{L"visual-capture.json",L"visual-target-window.bmp",L"visual-target-framebuffer.bmp"})
+            if(std::filesystem::exists(options.evidence/name))
+                throw std::runtime_error("Visual capture requires a fresh evidence directory");
+    }
     if(options.clockSample.empty()&&(options.selfTest||options.smoke)) {
         const auto cwd=std::filesystem::current_path();
         const auto relative=L"research/verification/stage9/clock-sample/actual-sample.json";
@@ -4846,6 +4867,12 @@ struct Application {
     std::wstring startupStatus = L"Нативный запуск ещё не начат.";
     bool startupWindowCloseSent = false;
     bool startupWindowBoundaryReached=false;
+    bool visualCaptured=false,visualFinished=false,visualWmCloseReceived=false,visualClosed=false;
+    bool visualClosePending=false;
+    uint64_t capturedGeneration=0,capturedSequence=0;
+    uint64_t visualGeneration=0,visualSequence=0;
+    bool capturedDiagnostic=false;
+    uint32_t visualMessages=0,visualGlyphs=0,visualInk=0;
     unsigned storageInputStep=0;uint64_t storageInputStart=0,titleReadyFrame=0;
     bool heldIgnored=false,unfocusedIgnored=false,closingObserved=false,storageBoundaryPassed=false;
     bool titleEarlyCaptured=false,titleAnimationObserved=false;
@@ -5104,8 +5131,15 @@ struct Application {
         return bool(closed);
     }
     void RequestWindowClose() {
-        if (CloseNativeStartup()) DestroyWindow(window);
-        else InvalidateRect(window, nullptr, FALSE);
+        if (CloseNativeStartup()) {if(!options.visualCapture.empty())visualClosed=true;DestroyWindow(window);}
+        else {
+            if(!options.visualCapture.empty()){
+                visualClosePending=true;
+                try {WriteStartupObservation(options.evidence/L"visual-close-pending.json",startupObservation);}
+                catch(const std::exception&){startupStatus=L"Завершение ещё ожидается; запись диагностики не удалась.";}
+            }
+            InvalidateRect(window, nullptr, FALSE);
+        }
     }
     void ReleaseBuffer() {
         if (bufferDC && oldBuffer) SelectObject(bufferDC, oldBuffer);
@@ -5212,7 +5246,9 @@ struct Application {
         if (shown && nativeStartup && renderedFrameSequence)
             (void)nativeStartup->RecordGameFramePresented(renderedFrameGeneration, renderedFrameSequence);
     }
-    void Capture() {
+    bool Capture() {
+        capturedGeneration=capturedSequence=0;
+        capturedDiagnostic=false;
         if(options.post17WindowFixture&&(IsIconic(window)||width<480||height<272)){
             ShowWindow(window,SW_RESTORE);
             SetWindowPos(window,nullptr,0,0,1100,800,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_SHOWWINDOW);
@@ -5220,22 +5256,74 @@ struct Application {
         }
         EnsureBuffer(); Render(bufferDC); std::wstring error;
         GdiFlush(); //complete GDI writes to the DIB before CPU BMP serialization
-        if (WriteBmp(options.evidence / L"native-window.bmp", width,height,pixels,error)) status = L"Снимок записан в " + options.evidence.wstring();
+        const auto window_path=options.evidence/L"native-window.bmp";
+        std::error_code window_remove_error;std::filesystem::remove(window_path,window_remove_error);
+        const bool window_saved=WriteBmp(window_path,width,height,pixels,error);
+        if (window_saved) status = L"Снимок записан в " + options.evidence.wstring();
         else status = error;
         // Actual front buffer, without the recovery window chrome. Remove
         // stride padding only; do not redraw, crop the scene or alter pixels.
         dokodemo::recovered::GameGraphicsFrame frame;
         const auto framebuffer_path=options.evidence/L"native-framebuffer.bmp";
         std::error_code remove_error;std::filesystem::remove(framebuffer_path,remove_error);
-        if(nativeStartup&&nativeStartup->CopyGameFrame(frame)) {
+        bool frame_saved=false;
+        if(nativeStartup&&nativeStartup->CopyGameFrame(frame)&&frame.width&&frame.height
+           &&frame.stride>=frame.width&&frame.height<=frame.pixels.size()/frame.stride) {
             std::vector<uint32_t> packed(size_t(frame.width)*frame.height);
             for(uint32_t y=0;y<frame.height;++y)
                 std::copy_n(frame.pixels.data()+size_t(y)*frame.stride,frame.width,
                             packed.data()+size_t(y)*frame.width);
-            if(!WriteBmp(framebuffer_path,frame.width,frame.height,packed.data(),error))status=error;
+            frame_saved=WriteBmp(framebuffer_path,frame.width,frame.height,packed.data(),error);
+            if(!frame_saved)status=error;
+            else {capturedGeneration=frame.generation;capturedSequence=frame.sequence;capturedDiagnostic=frame.diagnostic;}
         } else {
             status=L"Снимок окна сохранён; игровой framebuffer недоступен.";
         }
+        return window_saved&&frame_saved;
+    }
+    bool VisualCaptureTick() {
+        if(options.visualCapture.empty())return false;
+        if(visualFinished){
+            // A timed-out join keeps its owners alive and retries the normal
+            // WM_CLOSE route. Never abandon it behind the capture-done gate.
+            if(visualClosePending){visualClosePending=false;PostMessageW(window,WM_CLOSE,0,0);}
+            return true;
+        }
+        const auto& c=startupObservation.game_boot.content;
+        const auto& actor=c.actor_script;const auto& room=actor.runtime;
+        const bool owned_room=actor.started&&room.live&&room.actor_model_live&&room.scene_model_live
+            &&room.model_slots>0&&room.actor_draw_frames>1&&room.actor_visible_pixels>0;
+        const bool offered=options.visualCapture==L"room"||
+            (actor.awaiting_message&&!actor.blocked&&c.actor_message_glyphs>0&&c.actor_message_ink_pixels>0);
+        if(nativeStartup&&owned_room&&offered){
+            visualMessages=actor.messages;visualGlyphs=c.actor_message_glyphs;visualInk=c.actor_message_ink_pixels;
+            WriteStartupObservation(options.evidence/L"visual-capture-before-close.json",startupObservation);
+            visualCaptured=Capture()&&!capturedDiagnostic&&capturedGeneration&&capturedSequence;
+            if(visualCaptured){
+                std::error_code error;
+                std::filesystem::copy_file(options.evidence/L"native-window.bmp",options.evidence/L"visual-target-window.bmp",std::filesystem::copy_options::none,error);
+                visualCaptured=!error;
+                error.clear();
+                std::filesystem::copy_file(options.evidence/L"native-framebuffer.bmp",options.evidence/L"visual-target-framebuffer.bmp",std::filesystem::copy_options::none,error);
+                visualCaptured=visualCaptured&&!error;
+                if(!visualCaptured){
+                    std::filesystem::remove(options.evidence/L"visual-target-window.bmp",error);
+                    std::filesystem::remove(options.evidence/L"visual-target-framebuffer.bmp",error);
+                }
+            }
+            if(visualCaptured){visualGeneration=capturedGeneration;visualSequence=capturedSequence;}
+            visualFinished=true;
+            if(!options.keepSceneOpen||!visualCaptured)PostMessageW(window,WM_CLOSE,0,0);
+            return true;
+        }
+        // Dialogue waits for the unmodified source calendar event. This is a
+        // finite observation deadline, never a clock/VM advance or success gate.
+        if(!nativeStartup||elapsed>(options.visualCapture==L"room"?45.0:360.0)){
+            visualFinished=true;
+            WriteStartupObservation(options.evidence/L"visual-capture-timeout.json",startupObservation);
+            PostMessageW(window,WM_CLOSE,0,0);return true;
+        }
+        return false;
     }
     void Audio() {
         if(player.IsPlaying()) {player.Stop();status=L"Нативное воспроизведение остановлено.";return;}
@@ -5339,7 +5427,10 @@ struct Application {
         //Game controls are sampled through the synchronized worker mailbox.
         //They must not simultaneously browse assets or run isolated probes.
         if(nativeStartup&&!options.smoke){
-            if(key==VK_F12)Capture();else if(key==VK_ESCAPE)RequestWindowClose();
+            if(key==VK_F12)Capture();else if(key==VK_ESCAPE){
+                if(!options.visualCapture.empty())PostMessageW(window,WM_CLOSE,0,0);
+                else RequestWindowClose();
+            }
             InvalidateRect(window,nullptr,FALSE);return;
         }
         if ((key == VK_RIGHT || key == VK_LEFT) && !images.empty()) {
@@ -7702,6 +7793,7 @@ struct Application {
         if (double(now.QuadPart-last.QuadPart)/frequency.QuadPart >= 1.0/60.0) {
             ++frames; last = now; InvalidateRect(window,nullptr,FALSE);
         }
+        if(VisualCaptureTick())return;
         if(options.storageWindowTest && nativeStartup && !startupWindowCloseSent) {
             const auto& c=startupObservation.game_boot.content;
             if(!options.storageDirectTest && storageInputStep==0 && c.scene_ui.awaiting_confirmation) {
@@ -7786,7 +7878,7 @@ struct Application {
             }
             if(options.softkeyWindowTest)SoftkeyTestTick(c);
         }
-        if (options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
+        if (options.visualCapture.empty() && options.connectedStartupWindowTest && frames >= 6 && !startupWindowCloseSent
             && ((options.playWindowFixture||options.kanaWindowFixture)?AtOwnedGameplayBoundary(startupObservation,options.kanaWindowFixture,options.notebookWindowFixture&&notePassed,options.wordMemoWindowFixture&&memoPassed,options.diaryWindowFixture&&diaryPassed,options.systemOptionWindowFixture&&systemPassed):AtNativeModuleSequenceBoundary(startupObservation))
             && (!options.inventoryActionWindowFixture || inventoryActionPassed)
             && (!options.decorateWindowFixture || decorationPassed)
@@ -7817,7 +7909,7 @@ struct Application {
             startupWindowCloseSent=true;WriteStartupObservation(options.evidence/L"sound-route-not-passed.json",startupObservation);
             PostMessageW(window,WM_CLOSE,0,0);
         }
-        if (options.connectedStartupWindowTest && elapsed > (options.gameplayWindowFixture?240.0:options.playWindowFixture?300.0:options.repeatWindowFixture?180.0:options.conversationWindowFixture?120.0:options.cameraWindowTest?390.0:(options.softkeyWindowTest?90.0:(options.titleMenuWindowTest?75.0:(options.titleWindowTest?20.0:5.0)))) && !startupWindowCloseSent) {
+        if (options.visualCapture.empty() && options.connectedStartupWindowTest && elapsed > (options.gameplayWindowFixture?240.0:options.playWindowFixture?300.0:options.repeatWindowFixture?180.0:options.conversationWindowFixture?120.0:options.cameraWindowTest?390.0:(options.softkeyWindowTest?90.0:(options.titleMenuWindowTest?75.0:(options.titleWindowTest?20.0:5.0)))) && !startupWindowCloseSent) {
             startupWindowCloseSent = true;
             std::filesystem::create_directories(options.evidence);
             WriteStartupObservation(options.evidence / L"window-startup-unexpected.json", startupObservation);
@@ -7876,7 +7968,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         case WM_IME_STARTCOMPOSITION:app->ImeStart();break;
         case WM_IME_COMPOSITION:if(app->ImeComposition(lParam))return 0;break;
         case WM_IME_ENDCOMPOSITION:app->ImeEnd();break;
-        case WM_CLOSE: app->RequestWindowClose(); return 0;
+        case WM_CLOSE: if(!app->options.visualCapture.empty())app->visualWmCloseReceived=true;app->RequestWindowClose(); return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
         default: break;
     }
@@ -7906,6 +7998,38 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         if (options.connectedStartupWindowTest) {
             app.RefreshNativeStartup();
             WriteStartupObservation(options.evidence / L"window-startup-after-close.json", app.startupObservation);
+            if(!options.visualCapture.empty()){
+                const auto& o=app.startupObservation;const auto& g=o.game_boot.graphics;
+                const bool joined=o.caller_joined&&o.worker_joined;
+                const bool released=o.resources_closed&&!o.staging_live&&!o.staging_borrow_live
+                    &&!o.module_input_live&&o.module_input_released&&o.module_stop_returned&&o.module_unloaded;
+                const bool buffers_closed=!g.live&&!g.color_bytes&&!g.depth_bytes&&!g.matrix_bytes;
+                const bool owners_retired=NativeModuleSequenceClosed(o,false);
+                const bool retired_input=app.nativeStartup&&
+                    app.nativeStartup->InjectTestControllerInput(0,true).code==dokodemo::StartupRuntimeCode::Closed;
+                dokodemo::recovered::GameTextEvent retired_text;
+                retired_text.kind=dokodemo::recovered::GameTextKind::Confirm;retired_text.test_injected=true;
+                const bool retired_text_refused=app.nativeStartup&&
+                    app.nativeStartup->PostGameText(retired_text).code==dokodemo::StartupRuntimeCode::Closed;
+                const bool ok=app.visualCaptured&&app.visualWmCloseReceived&&app.visualClosed
+                    &&joined&&released&&buffers_closed&&owners_retired&&retired_input&&retired_text_refused;
+                std::ofstream report(options.evidence/L"visual-capture.json",std::ios::binary);
+                report<<"{\"purpose\":\"VISUAL_CAPTURE\",\"target\":"<<JsonString(options.visualCapture==L"room"?"room":"dialogue")
+                    <<",\"capture_passed\":"<<(ok?"true":"false")<<",\"captured\":"<<(app.visualCaptured?"true":"false")
+                    <<",\"wm_close\":"<<(app.visualWmCloseReceived?"true":"false")<<",\"normal_close\":"<<(app.visualClosed?"true":"false")
+                    <<",\"joined\":"<<(joined?"true":"false")<<",\"resources_released\":"<<(released?"true":"false")
+                    <<",\"buffers_closed\":"<<(buffers_closed?"true":"false")<<",\"generation\":"<<app.visualGeneration
+                    <<",\"sequence\":"<<app.visualSequence<<",\"messages\":"<<app.visualMessages<<",\"glyphs\":"<<app.visualGlyphs
+                    <<",\"ink\":"<<app.visualInk<<",\"seconds\":"<<app.elapsed
+                    <<",\"owners_retired\":"<<(owners_retired?"true":"false")
+                    <<",\"retired_input_refused\":"<<(retired_input?"true":"false")
+                    <<",\"retired_text_refused\":"<<(retired_text_refused?"true":"false")
+                    <<",\"target_images_written\":"<<(app.visualCaptured?"true":"false")
+                    <<",\"framebuffer_file\":\"visual-target-framebuffer.bmp\",\"window_file\":\"visual-target-window.bmp\""
+                    <<",\"generic_onboarding_images_are_target\":false"
+                    <<",\"input_provenance\":\"ExistingOnboardingTestInputs;ActualSourceOfferedRoomOrMessage\",\"gameplay_pass\":false,\"full_game\":false}\n";
+                return ok?0:1;
+            }
             const auto& graphics = app.startupObservation.game_boot.graphics;
             const bool graphicsOk = !options.graphicsSmoke || (app.graphicsPatternDrawn && app.graphicsSmokeResized
                 && graphics.initialized && graphics.diagnostic_frame && graphics.present_count >= 3

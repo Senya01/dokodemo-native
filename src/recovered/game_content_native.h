@@ -9,6 +9,7 @@
 #include "game_system_option_native.h"
 #include "game_returned_interaction_native.h"
 #include <array>
+#include <string_view>
 #include <vector>
 
 namespace dokodemo::recovered {
@@ -58,6 +59,10 @@ class GameFontResource final {
                                 GameFontBitmap &out, GameFontDrawRecord *records = nullptr,
                                 uint32_t capacity = 0,uint32_t native_modulation=0xFF552F0D,
                                 uint32_t native_line_advance=23,uint32_t native_letter_spacing=2) const;
+    // Ordinary KSC panel only: preserve raw ownership elsewhere, project the
+    // existing no-highlight convention and omit one terminal empty row.
+    GameFsStatus RasterizeDialogueCp932(std::string_view message,uint32_t max_width,
+                                       GameFontBitmap& out) const;
     void Close();
 
   private:

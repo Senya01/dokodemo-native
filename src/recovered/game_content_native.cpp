@@ -65,6 +65,19 @@ void GameFontResource::Close() {
     image_.Reset();
     state_ = {};
 }
+GameFsStatus GameFontResource::RasterizeDialogueCp932(std::string_view message,uint32_t max_width,
+                                                    GameFontBitmap& out) const {
+    std::string visible;
+    for(unsigned char c:message){
+        if(c==0x16)continue; // same NativeNoHighlight projection; no source mutation
+        if(c<32&&c!=10)return {GameFsCode::Unavailable,0,"Unimplemented reached KSC text formatting control"};
+        visible.push_back(char(c));
+    }
+    // The terminal LF does not place a glyph. Retain interior/explicit blank
+    // lines, but do not grow the native panel by an extra trailing empty row.
+    if(!visible.empty()&&visible.back()=='\n')visible.pop_back();
+    return RasterizeCp932({visible},max_width,out);
+}
 GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &lines, uint32_t max_width,
                                               GameFontBitmap &out, GameFontDrawRecord *records,
                                               uint32_t capacity,uint32_t native_modulation,uint32_t native_line_advance,
@@ -1445,13 +1458,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
                 return {};
             }
             if(!state_.actor_script.awaiting_message&&!state_.actor_script.awaiting_choice)return {};
-            std::string visible;
-            for(unsigned char c:state_.actor_script.message){
-                if(c==0x16)continue; //NativeNoHighlight adaptation;rawrequest remains unchanged
-                if(c<32&&c!=10)return {GameFsCode::Unavailable,0,"Unimplemented reached KSC text formatting control"};
-                visible.push_back(char(c));
-            }
-            GameFontBitmap text;const auto drawn=font_.RasterizeCp932({visible},440,text);
+            GameFontBitmap text;const auto drawn=font_.RasterizeDialogueCp932(state_.actor_script.message,440,text);
             if(!drawn)return drawn;
             //Named native KSC panel layout,not originalpopup pixelmatching.
             if(!surface.FillRectangle(12,12,468,24+int32_t(text.height),0xFFF5E8CD,65535)

@@ -331,6 +331,25 @@ void FontDrawTests() {
           "TITLE uses its own live glyph color and fade alpha,not TRC hardcoded "
           "color");
     Check(!font.RasterizeCp932({std::string("\x83", 1)}, 16, bitmap), "incomplete source CP932 rejected");
+    GameFontBitmap ordinary,terminal,wrapped;
+    const std::string raw="A\nA\n";
+    Check(bool(font.RasterizeCp932({raw},16,ordinary))&&ordinary.height==69,
+          "common FONT retains its existing terminal-row behavior");
+    Check(bool(font.RasterizeDialogueCp932(raw,16,terminal))&&terminal.height==46&&terminal.glyphs==2
+          &&raw=="A\nA\n", "ordinary dialogue retains both glyph rows and raw source bytes");
+    Check(std::equal(terminal.pixels.begin(),terminal.pixels.end(),ordinary.pixels.begin())
+          &&std::all_of(ordinary.pixels.begin()+terminal.pixels.size(),ordinary.pixels.end(),[](uint32_t v){return v==0;}),
+          "only a transparent final row is removed; every actual glyph pixel stays exact");
+    Check(bool(font.RasterizeDialogueCp932("AAAAA\n",8,wrapped))&&wrapped.height==69&&wrapped.glyphs==5,
+          "width wrapping remains intact before the terminal LF");
+    Check(bool(font.RasterizeDialogueCp932("A\n\n",16,terminal))&&terminal.height==46,
+          "explicit interior empty line remains after removing one terminal row");
+    Check(bool(font.RasterizeDialogueCp932(std::string("\x16")+"A\x16\n",16,terminal))
+          &&terminal.height==23&&terminal.glyphs==1,
+          "same finite no-highlight projection reaches the original atlas");
+    Check(!font.RasterizeDialogueCp932(std::string("\x14")+"A\n",16,terminal)
+          &&!font.RasterizeDialogueCp932(std::string("\x83",1),16,terminal),
+          "unknown controls and truncated original encoding still refuse");
     auto b = Atlas();
     W(b, 52, 17);
     font.Close();
