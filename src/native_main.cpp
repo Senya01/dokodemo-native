@@ -15,6 +15,7 @@
 #include "game_text_win32.h"
 #include "game_window_presentation.h"
 #include "game_window_input.h"
+#include "game_text_input_win32.h"
 #include <imm.h>
 #include "model_formats.hpp"
 #include "startup_probe.h"
@@ -5421,11 +5422,8 @@ struct Application {
     }
     bool PostText(dokodemo::recovered::GameTextKind kind,uint64_t context=0,std::string_view value={}){
         if(!nativeStartup)return false;
-        dokodemo::recovered::GameTextEvent event;
-        event.context=context?context:textGate.Id();event.kind=kind;event.test_injected=options.softkeyWindowTest;
-        if(value.size()>event.text.size())return false;
-        event.bytes=uint16_t(value.size());std::copy(value.begin(),value.end(),event.text.begin());
-        return bool(nativeStartup->PostGameText(event));
+        return native_port::SubmitGameTextEvent(kind,context?context:textGate.Id(),value,options.softkeyWindowTest,
+            [&](const auto& event){return nativeStartup->PostGameText(event);});
     }
     void SyncTextContext(){
         const auto& e=startupObservation.game_boot.content.scene_ui.editor;
@@ -5446,11 +5444,8 @@ struct Application {
         if(pending){const auto context=ImmGetContext(window);if(context){ImmNotifyIME(context,NI_COMPOSITIONSTR,CPS_CANCEL,0);ImmReleaseContext(window,context);}}
     }
     bool CommitUnicode(std::wstring_view value,uint64_t context=0){
-        std::string encoded,error;
-        if(!dokodemo::EncodeGameText932(value,encoded,error)){
-            PostText(dokodemo::recovered::GameTextKind::InvalidEncoding,context);return false;
-        }
-        return PostText(dokodemo::recovered::GameTextKind::Commit,context,encoded);
+        return native_port::CommitGameTextUnicode(value,context,dokodemo::EncodeGameText932,
+            [&](auto kind,auto owner,std::string_view bytes){return PostText(kind,owner,bytes);});
     }
     void DiscardCharacter(wchar_t value){
         highSurrogate=0;
@@ -5460,20 +5455,16 @@ struct Application {
         const bool translated=translated_key!=UINT32_MAX;
         const auto key=translated?translated_key:MapVirtualKeyW(uint32_t((uint64_t(info)>>16)&255),MAPVK_VSC_TO_VK);
         const auto context=translated?key_context:(options.softkeyWindowTest?textGate.Id():0);
-        const bool admitted=!imeComposing&&value>=32&&value!=127&&
-            (translated?(GetForegroundWindow()==window&&textGate.TranslatedCharacter(key,context,key_epoch))
-                :(options.softkeyWindowTest&&textGate.Character(key)));
+        const auto result=native_port::DeliverGameTextCharacter(textGate,value,
+            {key,context,translated?key_epoch:textGate.Epoch()},
+            translated?GetForegroundWindow()==window:options.softkeyWindowTest,imeComposing,highSurrogate,
+            [&](std::wstring_view text,uint64_t owner){return CommitUnicode(text,owner);});
         auto& observation=textInputObservations[textInputObservationCount++%textInputObservations.size()];
-        observation={uint32_t(value),key,context,textGate.Id(),key_epoch,textGate.Epoch(),admitted,false};
+        observation={uint32_t(value),key,context,textGate.Id(),key_epoch,textGate.Epoch(),result.admitted,result.posted};
         observation.scan=uint32_t((uint64_t(info)>>16)&255);
         observation.mapped_key=MapVirtualKeyW(observation.scan,MAPVK_VSC_TO_VK);
         observation.mapped_admitted=textGate.Character(observation.mapped_key);
         observation.repeated=(uint64_t(info)&(1ull<<30))!=0;
-        if(!admitted)return;
-        if(value>=0xD800&&value<=0xDBFF){highSurrogate=value;return;}
-        std::wstring text;
-        if(highSurrogate){text.push_back(highSurrogate);highSurrogate=0;}
-        text.push_back(value);observation.posted=CommitUnicode(text,context);
     }
     void ImeStart(){
         if(!textGate.Id())return;
@@ -5546,21 +5537,9 @@ struct Application {
         ObservationKey(key,true);
         NormalWindowKey(key,true,(uint64_t(info)&(1ull<<30))!=0);
         if(textGate.Id()){
-            using dokodemo::recovered::GameTextKind;
             const bool repeat=(uint64_t(info)&(1ull<<30))!=0;
-            if(!textGate.KeyDown(uint32_t(key),repeat))return;
-            if(imeComposing)return; //Enter finishes host composition only
-            switch(key){
-                case VK_RETURN:if(!repeat)PostText(GameTextKind::Confirm);break;
-                case VK_ESCAPE:if(!repeat)PostText(GameTextKind::Cancel);break;
-                case VK_BACK:PostText(GameTextKind::Backspace);break;
-                case VK_DELETE:PostText(GameTextKind::Delete);break;
-                case VK_LEFT:PostText(GameTextKind::Left);break;
-                case VK_RIGHT:PostText(GameTextKind::Right);break;
-                case VK_HOME:PostText(GameTextKind::Home);break;
-                case VK_END:PostText(GameTextKind::End);break;
-                case VK_F12:Capture();break;
-            }
+            if(native_port::DispatchGameTextKey(textGate,uint32_t(key),repeat,imeComposing,
+                [&](auto kind,auto owner){return PostText(kind,owner);}))Capture();
             return;
         }
         //Game controls are sampled through the synchronized worker mailbox.
@@ -8165,24 +8144,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
             while (PeekMessageW(&message,nullptr,0,0,PM_REMOVE)) {
                 if (message.message == WM_QUIT) { running = false; break; }
                 if(message.hwnd==window&&message.message==WM_KEYDOWN&&app.textGate.Id()){
-                    // Do not attribute previously queued characters to this key.
-                    MSG prior{};
-                    constexpr unsigned max_characters=128;
-                    for(unsigned i=0;i<max_characters&&PeekMessageW(&prior,window,WM_CHAR,WM_CHAR,PM_REMOVE);++i)
-                        app.DiscardCharacter(wchar_t(prior.wParam));
-                    const bool empty=!PeekMessageW(&prior,window,WM_CHAR,WM_CHAR,PM_NOREMOVE);
-                    const auto context=app.textGate.Id();
-                    const auto before_epoch=app.textGate.Epoch();
-                    // Register the actual admitted key before Windows posts its
-                    // UTF16 characters. Deliver them before a queued key-up.
-                    DispatchMessageW(&message);TranslateMessage(&message);
-                    const auto epoch=app.textGate.Epoch();
-                    const bool owned=empty&&epoch==before_epoch+1&&app.textGate.Id()==context;
-                    MSG character{};
-                    for(unsigned i=0;i<max_characters&&PeekMessageW(&character,window,WM_CHAR,WM_CHAR,PM_REMOVE);++i){
-                        if(owned)app.Character(wchar_t(character.wParam),character.lParam,uint32_t(message.wParam),context,epoch);
-                        else app.DiscardCharacter(wchar_t(character.wParam));
-                    }
+                    native_port::PumpGameTextWindowKey(window,message,app.textGate,
+                        [&](const auto& c,const auto& key){app.Character(c.value,LPARAM(c.info),key.key,key.context,key.epoch);},
+                        [&](wchar_t value){app.DiscardCharacter(value);});
                 }else {TranslateMessage(&message);DispatchMessageW(&message);}
             }
             if (running) { app.Tick(); MsgWaitForMultipleObjects(0,nullptr,FALSE,2,QS_ALLINPUT); }

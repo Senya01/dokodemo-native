@@ -4,6 +4,7 @@
 #include <algorithm>
 #ifdef _WIN32
 #include "game_text_win32.h"
+#include "game_text_transaction_tests.h"
 #endif
 #include <iostream>
 #include <stdexcept>
@@ -253,6 +254,7 @@ int main() {
         ProfileTests();
 #ifdef _WIN32
         EncodingTests();
+        game_text_transaction_tests::Run();
 #endif
         std::cout << "source-unit name editing,context/focus,atomic committed text and encoding PASS\n";
         return 0;

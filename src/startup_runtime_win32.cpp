@@ -1,5 +1,6 @@
 #include "startup_runtime_win32.h"
 #include "game_storage_win32.h"
+#include "game_window_input.h"
 #include "startup_memory_backend_win32.h"
 #include "native_codec_workspace_win32.h"
 #include "sascore_runtime_win32.h"
@@ -1141,11 +1142,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             {'Z', Cross}, {'X', Circle}, {'A', Square}, {'S', Triangle}
         };
         for (const auto& key : keys) if (down(key.first)) buttons |= key.second;
-        if(focused)buttons|=window_buttons;
         const auto x = uint8_t(128 + 127 * (int(down('L')) - int(down('J'))));
         const auto y = uint8_t(128 + 127 * (int(down('K')) - int(down('I'))));
         const auto& editor=state.game_boot.content.scene_ui.editor;
-        if(editor.live&&editor.source_state!=3)buttons=0; //typing X/Z/Enter is never Circle/Cross/Start
+        buttons=native_port::GameWindowControllerButtons(buttons,window_buttons,focused,editor.live&&editor.source_state!=3);
         const auto sample=controller.Update(buttons, x, y, GetTickCount64() * 1000);
         if(game_input_live && !options.test_controller_input)
             game_inputs.Push({sample.buttons,focused,false,++game_input_sequence,state.game_boot.content.post_modal.generation,state.game_boot.content.actor_message_contexts,state.game_boot.content.actor_script.generation,false,state.game_boot.content.returned_interaction.owner,state.game_boot.content.returned_interaction.generation,state.game_boot.content.main_menu_input_epoch});

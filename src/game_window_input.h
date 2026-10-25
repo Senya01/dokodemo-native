@@ -2,6 +2,9 @@
 #include <cstdint>
 
 namespace native_port {
+inline uint32_t GameWindowControllerButtons(uint32_t physical,uint32_t window,bool focused,bool editor_live) {
+    return focused&&!editor_live?(physical|window):0;
+}
 // Window-event button state only. The runtime still owns input publication.
 class GameWindowButtons {
 public:
