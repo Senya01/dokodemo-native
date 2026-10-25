@@ -19,8 +19,10 @@ No ISO/CSO, PSP executable, PRX, artwork, fonts, models, original scripts, sound
 Two game-derived headers are intentionally external: `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`. Generate them locally:
 
 ```powershell
-python tools/generate-user-headers.py --boot private/BOOT.BIN --audio-manifest private/audio-manifest.json
+python tools/generate-user-headers.py --boot private/BOOT.BIN --audio-manifest private/audio-manifest.json --output-dir private/generated-tables
 ```
+
+The output directory must be absent, relative to this checkout, and outside reparse/traversal paths. The tool stages both `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h` before publishing the fresh directory; an existing directory, even empty, is refused. Without `--output-dir`, the legacy direct `src/` output remains available. Synthetic CLI/component tests cover serialization and bundle failures; they do not establish a new original-input decode.
 
 The audio manifest comes from your own preparation with `tools/audio_prepare.py`. Full first-time asset/offline-PRX preparation still requires work; this source snapshot does not promise an end-to-end clean import of an arbitrary ISO. Prepared game inputs remain local.
 
@@ -29,7 +31,7 @@ The audio manifest comes from your own preparation with `tools/audio_prepare.py`
 Windows x64, Visual Studio 2022 C++ tools and its CMake/Ninja integration are required. Python3 supports local data tools. The optional codec backend uses a separately supplied FFmpeg7.1.1 Windows shared development package; vendor binaries are not bundled.
 
 ```powershell
-scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoot <ffmpeg-root> -UserTablesDirectory <generated-header-root> -Test
+scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoot <ffmpeg-root> -UserTablesDirectory private/generated-tables -Test
 ```
 
 The user-table root contains `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`; alternatively generate them at the ignored default locations. Public `game-*` tests exercise authored synthetic data. Seventeen original-byte fixture groups/dependent headers are excluded from publication and explicitly omitted by the default actor runner. Their absence is not reported as original-script equivalence. A developer's own local fixture package may be enabled with `-PrivateSourceFixturesDirectory`; it is optional and is never distributed. See [development and publication](docs/DEVELOPMENT.md).
