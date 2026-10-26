@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Windows source-only app-off build now compiles the core and passes all ten synthetic game tests without user tables or assets. The separate Windows application still requires real user-generated tables; full game and ordinary GUI profile-to-room remain unverified.
+A test-injected, no-device startup scenario reached real Aki profile application and the first owned offscreen room frame, then joined and closed its resources. This is not normal WM keyboard, physical presentation, audio or full-game validation; ordinary GUI profile-to-room remains unverified.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
