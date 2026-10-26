@@ -261,7 +261,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         vm_=std::make_unique<script::Vm>(program_);
         vm_->access_observer([this](const Value& ref,bool write){ObserveNotebookStore(ref,write);});
         owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);ObserveFlow5Event(t);});
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);ObserveFlow5Event(t);ObserveOutingTransition(t);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -312,6 +312,14 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     case 0: {
         Need(runtime_!=nullptr,"Game0 requires live zero-initialized manager owner");
         const auto requested=runtime_->RequestManager();Need(bool(requested),requested.detail.c_str());return False();
+    }
+    case 12: {
+        const auto w=vm_->current_witness();auto& o=state_.outing;
+        Need(runtime_&&o.entered&&!o.returned&&!o.failed&&w.frame_id==o.frame&&w.code_entry==0x13219
+             &&(w.current_pc==0x13249||w.current_pc==0x133A3)&&Number(arg)==0,
+             "GAME12 outside selected outing same-selector0 cancellation");
+        const auto status=runtime_->RequestSameManager0(0);Need(bool(status),status.detail.c_str());
+        ++o.manager_requests;return False();
     }
     case 21:
         Need(runtime_&&runtime_->Snapshot().live,"Game21 requires actor owner");
@@ -703,6 +711,7 @@ GameFsStatus GameActorScript::Tick() {
         }
         ++state_.ticks;
         const auto event=vm_->run(200000);
+        Need(!state_.outing.failed,"Outing source owner/return validation failed");
         dictionary_.Capture(*vm_);
         CompleteInventoryActionReadback();
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
@@ -724,6 +733,14 @@ GameFsStatus GameActorScript::Tick() {
                 state_.choice_options.push_back(value.cp932);
             }
             ++state_.choice_requests;state_.awaiting_choice=true;
+            auto& outing=state_.outing;
+            if(outing.entered&&!outing.returned&&vm_->current_witness().frame_id==outing.frame){
+                Need(!outing.failed&&vm_->current_witness().code_entry==0x13219,"Outing SELECT frame changed");
+                const auto count=vm_->read_slot(script::Table::Frame,10).signed_integer();
+                Need(GameOutingChoiceShape(count,uint32_t(state_.choice_options.size()),event.pc),"Outing selected list/SELECT shape not admitted");
+                outing.choice_seen=true;outing.destinations=count;outing.choice_count=uint32_t(state_.choice_options.size());
+                outing.choice_pc=event.pc;outing.choice_request=state_.choice_requests;
+            }
         }
         if(event.status==script::Status::Input){
             state_.source_main_input_suppressed48=true; //1E154 same source latch
@@ -813,9 +830,10 @@ void GameActorScript::CompleteInventoryActionReadback(){
             action.pending=false;action.completed=true;++action.completions;
         }
 }
-GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected,uint32_t event,uint64_t generation,int32_t& queue){
+GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected,uint32_t event,uint64_t generation,int32_t& queue,int32_t argument){
     queue=-1;
     try{
+        Need(event!=0||argument==1||argument==3,"Menu action argument outside selected domain");
         Need(state_.live&&vm_&&generation&&(event==0||event==10||event==11||event==18)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input
              &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu callback requires its idle owning VM");
@@ -831,11 +849,16 @@ GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected
             Need(phase.kind==Value::Kind::Scalar&&phase.word==0x20000001u
                  &&vm_->unique_active_frame(0x8DDB5),"Teach menu needs its actual source phase1/main owner");
         }
+        if(event==0&&argument==3){
+            Need(MenuOutingCapable()&&(!state_.outing.entered||state_.outing.cleanup_returned),"Outing needs its actual selected script/scene owner");
+        }
         const auto flag=vm_->read_slot(script::Table::Global,0x9A78);
-        queue=event==0?vm_->post_owner_event(target.callback,0,1):vm_->post_owner_nil_event(target.callback,int32_t(event));
+        queue=event==0?vm_->post_owner_event(target.callback,0,argument):vm_->post_owner_nil_event(target.callback,int32_t(event));
         state_.owner_event_callback_word=target.callback.word;state_.owner_event_result=queue;++state_.owner_event_calls;
         if(queue==0){
+            if(event==0&&argument==3)state_.outing={};
             auto& c=state_.menu_callback;c={};c.pending=true;c.event=event;c.menu_generation=generation;
+            c.argument=event==0?argument:0;
             c.receipt=vm_->last_callback_receipt();c.callback_frame=vm_->current_witness().frame_id;c.suspended=saved;
             c.flag_before=flag.word;c.kind_before=uint8_t(flag.kind);c.enabled_before=vm_->context_enabled();
         }
@@ -852,8 +875,8 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
             if(x.code_entry==0x8DA28&&x.current_pc==0x8DA44){
                 const auto integer=[](const script::ValueWitness& v,uint32_t n){return v.kind==Value::Kind::Scalar&&v.word==(0x20000000u|n);};
                 if(t.opcode!=0x20||x.frame_id!=c.callback_frame||y.code_entry!=0x8D4CC||x.frame_captured<2||y.frame_captured<2
-                   ||!integer(x.frame_values[0],0)||!integer(x.frame_values[1],1)
-                   ||!integer(y.frame_values[0],2)||!integer(y.frame_values[1],1))c.failed=true;
+                   ||!integer(x.frame_values[0],0)||!integer(x.frame_values[1],uint32_t(c.argument))
+                   ||!integer(y.frame_values[0],2)||!integer(y.frame_values[1],uint32_t(c.argument)))c.failed=true;
                 else c.setter_frame=y.frame_id;
             }
             if(x.code_entry==0x8D4CC&&x.current_pc==0x8D523){
@@ -861,7 +884,7 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
                 c.phase_written=t.opcode==0x31&&c.setter_frame&&x.frame_id==c.setter_frame
                     &&y.frame_id==c.callback_frame&&y.code_entry==0x8DA28&&y.current_pc==0x8DA49
                     &&phase.kind==Value::Kind::Scalar&&phase.word==0x20000002u
-                    &&arg.kind==Value::Kind::Scalar&&arg.word==0x20000001u;
+                    &&arg.kind==Value::Kind::Scalar&&arg.word==(0x20000000u|uint32_t(c.argument));
                 if(!c.phase_written)c.failed=true;
             }
             if(t.opcode!=0x1C&&t.opcode!=0x32)return;
@@ -912,7 +935,7 @@ GameFsStatus GameActorScript::TickMenuOwner(){
             const auto after=vm_->current_witness();
             Need(after.event_scope_depth==c.suspended.event_scope_depth&&!after.event_envelope_present,"Menu callback public scope did not restore");
             c.pending=false;
-            if(c.event==0)state_.menu_teach_return=c;
+            if(c.event==0){if(c.argument==1)state_.menu_teach_return=c;else state_.menu_outing_return=c;}
             else if(c.event==10)state_.menu_open_return=c;else if(c.event==11)state_.menu_close_return=c;else state_.menu_pause_return=c;
         }
         auto& action=state_.inventory_action;
@@ -950,10 +973,13 @@ GameFsStatus GameActorScript::CompleteChoice(const GameChoiceTarget& expected,ui
         Need(owner&&owner==current.context.context_owner.lock()&&expected.context.word==current.context.word
              &&expected.generation==current.generation&&expected.request==current.request&&expected.pc==current.pc,
              "SELECT completion target generation/registry/request changed");
+        const auto only=OutingChoiceOnlyRow();
+        Need(only==UINT32_MAX||result==0||result==only+1,"Outing destination result unimplemented before VM publication");
         Need(result<=state_.choice_options.size()&&vm_->complete_choice(result),"SELECT result outside actual option range");
         //complete_choice may drain a queued event and temporarily replace
         //VMresult with that callback's result. Retain the published value,
         //not the result of a different currently executing context phase.
+        if(only!=UINT32_MAX){state_.outing.choice_completed=true;state_.outing.choice_result=result;}
         state_.awaiting_choice=false;++state_.choice_completions;state_.choice_result_word=script::Value::integer(int32_t(result)).word;
         //1E508 publishes/drains first;only raw zero then emits owner event20.
         //Positive user choice never emits this timeout/cleanup event.
@@ -961,6 +987,53 @@ GameFsStatus GameActorScript::CompleteChoice(const GameChoiceTarget& expected,ui
         state_.source_main_input_suppressed48=false;
         return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+bool GameOutingChoiceShape(int32_t count,uint32_t rows,uint32_t pc)noexcept{
+    static constexpr uint32_t calls[]{0x13303,0x13325,0x1334D};
+    return count>=1&&count<=3&&rows==uint32_t(count+1)&&pc==calls[count-1];
+}
+bool GameActorScript::MenuOutingCapable()const noexcept{
+    try{
+        if(!state_.live||!vm_||!runtime_||state_.blocked||!runtime_->OwnersLive())return false;
+        const auto r=runtime_->Snapshot();
+        return r.actor==0&&r.manager_scene14==0&&r.scene_clock_ready&&r.manager_switch.live&&r.manager_switch.bound
+            &&!r.manager_switch.pending&&r.manager_switch.epoch==r.owner_epoch
+            &&program_.source().sha256=="c64773090b1c331d043b264b291c8948a8b99787f541ddc44d8e1d027958c93b";
+    }catch(...){return false;}
+}
+uint32_t GameActorScript::OutingChoiceOnlyRow()const{
+    const auto& o=state_.outing;
+    if(!o.entered||o.returned)return UINT32_MAX;
+    Need(vm_&&!o.failed&&o.choice_seen&&state_.awaiting_choice&&vm_->choice_waiting()
+         &&o.choice_request==state_.choice_requests&&vm_->current_witness().frame_id==o.frame
+         &&vm_->current_witness().code_entry==0x13219
+         &&GameOutingChoiceShape(o.destinations,uint32_t(state_.choice_options.size()),o.choice_pc),"Outing choice owner replaced");
+    return uint32_t(o.destinations);
+}
+void GameActorScript::ObserveOutingTransition(const script::FrameTransition& t)noexcept{
+    try{
+        auto& o=state_.outing;const auto& c=state_.menu_outing_return;
+        if(!o.entered&&c.returned&&c.phase_written&&!c.failed&&c.argument==3
+           &&t.before.current_pc==0x8DF88&&t.after.code_entry==0x13219&&t.opcode==0x21){
+            o.entered=true;o.run=t.after.run_id;o.frame=t.after.frame_id;o.caller=t.before.frame_id;
+            o.context=t.after.context_word;o.receipt=c.receipt;o.menu_generation=c.menu_generation;o.call_pc=t.before.current_pc;
+        }
+        if(!o.entered||o.failed||o.cleanup_returned)return;
+        if(t.before.run_id!=o.run||t.after.run_id!=o.run||t.after.context_word!=o.context){o.failed=true;return;}
+        if(!o.returned&&t.opcode==0x31&&t.before.frame_id==o.frame&&t.before.code_entry==0x13219){
+            const bool empty=t.before.current_pc==0x13252;
+            const bool cancel=t.before.current_pc==0x133A6&&o.choice_completed
+                &&(o.choice_result==0||o.choice_result==o.choice_count);
+            o.returned=(empty||cancel)&&o.manager_requests==1&&t.after.frame_id==o.caller&&t.after.current_pc==0x8DF8C;
+            o.empty=empty;o.failed=!o.returned;o.return_pc=t.before.current_pc;o.result_word=t.after.result.word;
+        }
+        if(o.returned&&t.opcode==0x31&&t.before.code_entry==0x8D932&&t.before.current_pc==0x8D9C9
+           &&t.after.frame_id==o.caller&&t.after.current_pc==0x8E029){
+            const auto phase=vm_->read_slot(script::Table::Global,0x9A76),arg=vm_->read_slot(script::Table::Global,0x9A77);
+            o.cleanup_returned=phase.kind==Value::Kind::Scalar&&phase.word==0x20000001u
+                &&arg.kind==Value::Kind::Scalar&&arg.word==0;o.failed=!o.cleanup_returned;o.cleanup_pc=t.before.current_pc;
+        }
+    }catch(...){state_.outing.failed=true;}
 }
 GameChoiceTarget GameActorScript::InputTarget()const{
     Need(state_.live&&state_.awaiting_input&&vm_&&vm_->input_waiting(),"Input32 target needs live state8 context");

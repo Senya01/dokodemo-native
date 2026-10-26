@@ -1082,9 +1082,11 @@ GameContentBoot::MenuInputRoute GameContentBoot::MainMenuInput(const GameInputFr
 GameFsStatus GameContentBoot::CheckMainMenuLease()const{
     try{
         const auto actor=actor_script_.Snapshot();const auto available=returned_interaction_.Snapshot();const auto target=actor_script_.OwnerEventTarget();
-        const auto& teach=actor.menu_callback.event==0?actor.menu_callback:actor.menu_teach_return;
-        const bool consumed_teach=(state_.main_menu_phase==4||state_.main_menu_phase==5)&&main_menu_.Snapshot().result==0
+        const auto result=main_menu_.Snapshot().result;
+        const auto& teach=actor.menu_callback.event==0?actor.menu_callback:result==2?actor.menu_outing_return:actor.menu_teach_return;
+        const bool consumed_teach=(state_.main_menu_phase==4||state_.main_menu_phase==5)&&(result==0||result==2)
             &&available.event_posted&&available.activation.consumed&&teach.receipt
+            &&teach.argument==(result==2?3:1)
             &&teach.menu_generation==main_menu_.Snapshot().generation&&!teach.failed&&(teach.pending||teach.returned)
             &&teach.receipt>actor.menu_open_return.receipt;
         if(!actor.live||actor.blocked||actor.generation!=main_menu_lease_.script_generation||actor.vm_current.run_id!=main_menu_lease_.run_id
@@ -1116,7 +1118,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         switch(state_.main_menu_phase){
         case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
         case 2:{
-            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent());
+            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent(),actor_script_.MenuOutingCapable());
             if(status)status=main_flow_.MenuOpened();
             int32_t queue=-1;if(status)status=actor_script_.PostMenuEvent(main_menu_target_,10,main_menu_.Snapshot().generation,queue);
             if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event10 queue refused"};
@@ -1192,11 +1194,11 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                         state_.main_menu_inventory_child_clock=state_.main_menu_inventory_retire_clock=0;
                     }
                 }
-                if(status)state_.main_menu_phase=result==0?9:4;
+                if(status)state_.main_menu_phase=(result==0||result==2)?9:4;
             }
             break;
         case 9:
-            status=main_flow_.DispatchMenuTeach();
+            status=main_menu_.Snapshot().result==2?main_flow_.DispatchMenuOuting():main_flow_.DispatchMenuTeach();
             if(status)state_.main_menu_phase=4;
             break;
         case 4:{
@@ -1396,7 +1398,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             if(actor_choice_target_.generation!=state_.actor_script.generation||actor_choice_target_.request!=state_.actor_script.choice_requests){
                 actor_choice_target_=actor_script_.ChoiceTarget();++state_.actor_message_contexts;
                 actor_message_gate_.Stop();state_.actor_message_input_armed=false;
-                state_.status=scene_ui_.BeginChoice(state_.actor_script.choice_options,state_.actor_message_contexts,state_.actor_script.generation);
+                state_.status=scene_ui_.BeginChoice(state_.actor_script.choice_options,state_.actor_message_contexts,state_.actor_script.generation,actor_script_.OutingChoiceOnlyRow());
             }
             if(state_.status)state_.status=scene_ui_.TickChoice();
             state_.actor_choice=scene_ui_.Choice();
@@ -1555,6 +1557,9 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){
                 if(event==0&&arg==1&&state_.main_menu_phase==9)
                     return returned_interaction_.PostMenuTeach(actor_script_,main_menu_lease_.available_owner,
+                        main_menu_lease_.available_generation,main_menu_.Snapshot().generation);
+                if(event==0&&arg==3&&state_.main_menu_phase==9)
+                    return returned_interaction_.PostMenuOuting(actor_script_,main_menu_lease_.available_owner,
                         main_menu_lease_.available_generation,main_menu_.Snapshot().generation);
                 return actor_script_.PostMainFlowEvent(event,arg);
             });

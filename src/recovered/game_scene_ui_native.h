@@ -44,6 +44,7 @@ struct GameChoiceSnapshot {
     bool live=false,timed_out=false;
     uint32_t state=3,row=0,result=0,remaining=0,active_updates=0,confirmations=0,rejected_inputs=0;
     uint64_t context=0,owner_generation=0;
+    uint32_t confirm_only_row=UINT32_MAX,unsupported=0; // refusal-only finite capability
     std::vector<std::string> options;
 };
 enum class GameChoiceDrawCode { Idle, Drawn, Owner, TextControl, Font, Overflow, Viewport, RowTooTall, Ui };
@@ -58,7 +59,7 @@ struct GameChoiceDrawSnapshot {
 // completion;dynamic row drawing uses the named NativeSelectTextPanel.
 class GameChoiceController {
   public:
-    bool Begin(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t timeout=5400);
+    bool Begin(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t timeout=5400,uint32_t confirm_only_row=UINT32_MAX);
     bool Input(const GameInputFrame&);
     void Tick(uint8_t main_mode,bool trc_idle=true);
     void Retire(){input_.BeginContext();state_.live=false;}
@@ -135,7 +136,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool DrawEditor(GameGraphics&);
     GameFsStatus BeginProfileConfirmation();
     bool DrawProfileConfirmation(GameGraphics&);
-    GameFsStatus BeginChoice(std::vector<std::string>,uint64_t context,uint64_t owner);
+    GameFsStatus BeginChoice(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t confirm_only_row=UINT32_MAX);
     GameFsStatus TickChoice();
     bool HandleChoiceInput(const GameInputFrame& frame){return choice_.Input(frame);}
     bool DrawChoice(GameGraphics&);

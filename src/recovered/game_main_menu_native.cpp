@@ -8,13 +8,14 @@ int32_t GameMainMenuControl::Resolve(bool full,int32_t row,int32_t column)noexce
     if(row<0||column<0||column>=4||row>=(full?7:4))return -1;
     return full?a[row][column]:b[row][column];
 }
-bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles){
+bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing){
     if((state_.live&&state_.state78!=3)||!full||!lease.script_generation||!lease.run_id
        ||!lease.available_owner||!lease.available_generation||!lease.message_context||!lease.input_epoch)return false;
     const auto old=state_;state_={};state_.generation=old.generation+1;state_.opens=old.opens+1;
     state_.cancels=old.cancels;state_.closed=old.closed;state_.rejected=old.rejected;state_.unsupported=old.unsupported;
     state_.live=true;state_.full=full;state_.source_scene_nonzero=scene;state_.lease=lease;state_.state78=0;
     state_.notebook_enabled=notebook;state_.other_profiles=profiles;
+    state_.outing_capable=outing;
     input_.BeginContext();return true;
 }
 bool GameMainMenuControl::Input(const GameInputFrame& f){
@@ -92,10 +93,11 @@ void GameMainMenuControl::Tick(uint8_t mode){
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
     if(input_.First(Circle)){
+        if(state_.row==1&&!state_.outing_capable){++state_.unsupported;return;}
         if(state_.row==4){state_.substate7C=2;state_.column=0;input_.BeginContext();return;}
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
-        if(state_.row==0||state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
+        if(state_.row==0||state_.row==1||state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
         else ++state_.unsupported;
         return;
     }
@@ -128,10 +130,10 @@ void GameMainMenu::Auxiliary(){
     const uint32_t indices[]={9,10,11,12,17,18},frames[]={5,6,6,5,6,5};
     for(uint32_t i=0;i<6;++i){auto* c=clone_.Control(indices[i]);c->frame=frames[i];c->mode=2;c->active=1;}
 }
-GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles){
+GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing){
     if(Modal()||!full)return {GameFsCode::Unavailable,0,"Main menu finite full-mode owner only"};
     auto status=Load(source);if(!status)return status;
-    if(!control_.Begin(lease,full,scene,notebook,profiles))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
+    if(!control_.Begin(lease,full,scene,notebook,profiles,outing))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return {GameFsCode::Unavailable,0,"Main menu opening clip"};
     auto* main=clone_.Control(0);*main={0,0,1,1};
     auto* context=clone_.Control(1);context->frame=scene?2:1;context->mode=2;context->active=1;

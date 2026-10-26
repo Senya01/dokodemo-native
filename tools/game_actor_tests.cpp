@@ -448,6 +448,17 @@ void RuntimeOwners(){
         Check(bool(teach.Tick({}))&&teach.Snapshot().phase1C==1&&posted==1,"pending3 becomes outer1 without another event");
         teach.Close();Check(!teach.DispatchMenuTeach(),"retired teach owner refuses replay");
     }
+    {
+        GameMainFlow outing;unsigned posts=0;Check(bool(outing.Initialize(actor,[&](uint32_t e,int32_t a){
+            Check(e==0&&a==3&&!actor.Snapshot().manager_request8&&!actor.Snapshot().manager_request9,"outing integer0/3 after real clears");++posts;return GameFsStatus{};
+        })),"outing actual main-flow owner");
+        Check(!outing.DispatchMenuOuting()&&!outing.PollMenuResult(2),"no unselected outing dispatch");
+        Check(bool(outing.BeginAvailableMenu())&&bool(outing.AdvanceMenuOpening())&&bool(outing.MenuOpened())&&bool(outing.PollMenuResult(2)),"selected actual result2");
+        Check(outing.Snapshot().return20==4&&outing.Snapshot().menu58==3&&!outing.RetireMenuResult()&&!outing.DispatchMenuTeach(),"pending4 distinct from teach3");
+        Check(bool(actor.RequestManager())&&bool(actor.RequestManager9())&&bool(outing.DispatchMenuOuting())&&posts==1&&!outing.DispatchMenuOuting(),"outing exactly one selected callback");
+        Check(bool(outing.RetireMenuResult())&&outing.Snapshot().phase1C==4&&outing.Snapshot().menu_result50==2&&bool(outing.Tick({}))&&outing.Snapshot().phase1C==1,"real pending4 retirement then phase1");
+        outing.Close();Check(!outing.DispatchMenuOuting(),"retired action cannot replay");
+    }
     Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
           "zeroed1B188 manager receives actualservice0 request,not completion");
     owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
@@ -585,7 +596,42 @@ void OwnedInlineStringChecks(){
         Check(valid.run(30).status==Status::Complete&&valid.owned_string_receipt(valid.read_slot(Table::Ctx28,1)).live,"actual current context accepts owned transfer");
     }
 }
+void OutingComponents(){
+    GameManagerSwitchControl owner;Check(!owner.Initialize(0)&&!owner.RequestSame0(1,0),"manager cold receipt unavailable");
+    Check(owner.Initialize(101)&&!owner.Snapshot().bound&&!owner.RequestSame0(101,0),"actual constructor does not supply selector binding");
+    Check(!owner.BindScene0(102)&&owner.BindScene0(101),"genuine selector0 publication requires current owner");
+    Check(!owner.RequestSame0(102,0)&&!owner.RequestSame0(101,1)&&!owner.Snapshot().pending,"foreign/non-equal domain refuses without effects");
+    Check(owner.RequestSame0(101,0)&&owner.Snapshot().pending&&owner.Snapshot().requested18==0&&owner.Snapshot().current14==0,"GAME12 setter leaves current unchanged");
+    Check(!owner.ConsumeSame0(102)&&owner.Snapshot().pending&&owner.ConsumeSame0(101)&&!owner.Snapshot().pending&&owner.Snapshot().consumed==1,"actual equal-current consumer clears pending once");
+    Check(!owner.ConsumeSame0(101),"no replay of consumed switch");owner.Retire();
+    Check(!owner.RequestSame0(101,0)&&!owner.BindScene0(101)&&owner.Initialize(202)&&owner.BindScene0(202)
+          &&!owner.RequestSame0(101,0)&&owner.RequestSame0(202,0),"retirement/new epoch blocks stale binding");
+    for(uint32_t count=1;count<=3;++count){
+        const uint32_t sites[]{0x13303,0x13325,0x1334D};
+        Check(GameOutingChoiceShape(int32_t(count),count+1,sites[count-1])&&!GameOutingChoiceShape(int32_t(count),count,sites[count-1])
+              &&!GameOutingChoiceShape(int32_t(count),count+1,sites[count-1]+1),"strict selected source choice shape");
+        GameChoiceController choice;std::vector<std::string> options(count,"place");options.push_back("cancel");
+        Check(choice.Begin(options,9,10,100,count),"actual choice restriction is refusal-only");choice.Tick(2);uint64_t seq=0;
+        const auto edge=[&](uint32_t buttons){GameInputFrame f;f.focused=true;f.sequence=++seq;f.message_context=9;f.message_owner_generation=10;
+            Check(choice.Input(f),"choice release owner");choice.Tick(2);f.buttons=buttons;f.sequence=++seq;Check(choice.Input(f),"choice fresh owner");choice.Tick(2);};
+        edge(Circle);Check(choice.Snapshot().state==1&&choice.Snapshot().confirmations==0&&choice.Snapshot().unsupported==1,"destination refused before close/confirmation");
+        for(uint32_t i=0;i<count;++i)edge(Down);Check(choice.Snapshot().row==count,"existing navigation reaches real final row");
+        edge(Circle);Check(choice.Snapshot().state==2&&choice.Snapshot().result==count+1&&choice.Snapshot().confirmations==1,"source row+1 cancellation result");
+        choice.Tick(1);Check(choice.Snapshot().state==2,"actual closing mode required");choice.Tick(2);Check(choice.Snapshot().state==3,"actual choice returns");
+        choice.Retire();Check(!choice.Input({}),"retired choice input refuses");
+    }
+    Check(!GameOutingChoiceShape(0,1,0x13303)&&!GameOutingChoiceShape(4,5,0x1337B),"no fabricated empty/over-cap choice");
+    // Arbitrary synthetic mailbox forwarding uses typed argument3, no game bytes.
+    std::vector<uint8_t> code(80,0x03);const uint8_t root[]={0x30,0,0x80,9,0x70,0x80,20,0x38};std::copy(std::begin(root),std::end(root),code.begin());
+    const uint8_t callback[]={0x30,2,0x95,0,0,0x90,1,0,0x51,0x1C};std::copy(std::begin(callback),std::end(callback),code.begin()+32);
+    auto p=Fixture(code,{0});script::Vm vm(p);vm.start();(void)vm.context_value();for(unsigned i=0;i<4;++i)Check(vm.step().status==script::Status::Running,"prepare suspended source caller");
+    const auto before=vm.current_witness();script::Value target;target.kind=script::Value::Kind::Code;target.word=0x70000020;
+    Check(vm.post_owner_event(target,0,3)==0,"real typed0/3 mailbox admitted");
+    for(unsigned i=0;i<5;++i)Check(vm.step().status==script::Status::Running,"real typed0/3 callback transaction");
+    Check(vm.read_slot(script::Table::Global,0).signed_integer()==3&&vm.callbacks_returned()==1&&vm.current_witness().frame_id==before.frame_id,"actual integer3 store and owning restoration");
+}
 void Focused(){
+    OutingComponents();
     OwnedInlineStringChecks();
     {
         // Synthetic callback forwards the two actual typed mailbox arguments.

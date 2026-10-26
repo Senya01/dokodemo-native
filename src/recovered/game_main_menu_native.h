@@ -12,6 +12,7 @@ struct GameMainMenuLease {
 };
 struct GameMainMenuSnapshot {
     bool live=false,full=false,source_scene_nonzero=false,render_live=false,notebook_enabled=false,other_profiles=false;
+    bool outing_capable=false; // native capability restriction, not a source gate/provider
     uint64_t generation=0;
     GameMainMenuLease lease;
     uint32_t state78=3,substate7C=0,opens=0,cancels=0,closed=0,rejected=0,unsupported=0;
@@ -26,7 +27,7 @@ struct GameMainMenuSnapshot {
 // Results publish only after real closing-control completion.
 class GameMainMenuControl final {
   public:
-    bool Begin(GameMainMenuLease,bool full,bool source_scene_nonzero,bool notebook=false,bool other_profiles=false);
+    bool Begin(GameMainMenuLease,bool full,bool source_scene_nonzero,bool notebook=false,bool other_profiles=false,bool outing_capable=false);
     bool Input(const GameInputFrame&);
     void Tick(uint8_t actual_main_mode);
     void Close()noexcept;
@@ -39,7 +40,7 @@ class GameMainMenuControl final {
 };
 class GameMainMenu final {
   public:
-    GameFsStatus Open(GameResourceSource&,GameMainMenuLease,bool full,bool source_scene_nonzero,bool notebook=false,bool other_profiles=false);
+    GameFsStatus Open(GameResourceSource&,GameMainMenuLease,bool full,bool source_scene_nonzero,bool notebook=false,bool other_profiles=false,bool outing_capable=false);
     bool Input(const GameInputFrame& frame){return control_.Input(frame);}
     GameFsStatus Tick();
     GameFsStatus Draw(GameGraphics&);

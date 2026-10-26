@@ -118,6 +118,7 @@ struct GameMenuCallbackSnapshot {
     bool phase_written=false;
     bool enabled_before=false,enabled_after=false;
     uint32_t event=0,flag_before=0,flag_after=0,return_pc=0,return_opcode=0;
+    int32_t argument=0;
     uint8_t kind_before=0,kind_after=0;
     uint64_t menu_generation=0,receipt=0,callback_frame=0,setter_frame=0;
     script::VmStateWitness suspended,restored;
@@ -141,6 +142,15 @@ struct GameNotebookStoreWitness {
     uint64_t executed=0,frame=0,run_id=0,generation=0;
     script::ValueWitness value;
 };
+struct GameMenuOutingSnapshot {
+    bool entered=false,returned=false,cleanup_returned=false,choice_seen=false,choice_completed=false,empty=false,failed=false;
+    uint64_t run=0,frame=0,caller=0,receipt=0,menu_generation=0;
+    uint32_t context=0,call_pc=0,return_pc=0,result_word=0,cleanup_pc=0;
+    uint32_t choice_pc=0,choice_request=0,choice_count=0,choice_result=0,manager_requests=0;
+    int32_t destinations=-1;
+};
+// Selected argument3 can confirm only the genuine appended cancellation row.
+bool GameOutingChoiceShape(int32_t destinations,uint32_t rows,uint32_t pc)noexcept;
 struct GameActorScriptSnapshot {
     std::vector<GameNotebookStoreWitness> notebook_slot0_stores;
     uint32_t notebook_slot0_stores_dropped=0;
@@ -188,7 +198,8 @@ struct GameActorScriptSnapshot {
     uint64_t menu_notebook_generation=0,menu_notebook_parent=0;
     uint32_t menu_notebook_requests=0,menu_notebook_completions=0;
     GameOrdinaryControlObservation ordinary_controls;
-    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return,menu_teach_return;
+    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return,menu_teach_return,menu_outing_return;
+    GameMenuOutingSnapshot outing;
     GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
     GameInventoryMarkSnapshot menu_mark;
     GameInventoryPlacementSnapshot menu_placement;
@@ -322,11 +333,13 @@ class GameActorScript final {
                             GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr,GameSoundBank* sound=nullptr);
     GameFsStatus Tick();
     GameFsStatus TickMenuOwner();
-    GameFsStatus PostMenuEvent(const GameOwnerEventTarget&,uint32_t event,uint64_t menu_generation,int32_t& queue_result);
+    GameFsStatus PostMenuEvent(const GameOwnerEventTarget&,uint32_t event,uint64_t menu_generation,int32_t& queue_result,int32_t argument=1);
     bool AcknowledgeMessage(const GameMessageTarget* expected=nullptr);
     GameMessageTarget MessageTarget()const;
     GameChoiceTarget ChoiceTarget()const;
     GameFsStatus CompleteChoice(const GameChoiceTarget&,uint32_t result);
+    uint32_t OutingChoiceOnlyRow()const;
+    bool MenuOutingCapable()const noexcept;
     GameChoiceTarget InputTarget()const;
     GameFsStatus CompleteInput(const GameChoiceTarget&,std::string text,std::string auxiliary,bool timed_out);
     GameInventoryActionAdmission PostInventoryAction(uint64_t inventory_generation,uint32_t event,int32_t row);
@@ -386,6 +399,7 @@ class GameActorScript final {
     void ObserveInventoryAction(const script::FrameTransition&)noexcept;
     void ObserveWordSelection(const script::FrameTransition&)noexcept;
     void ObserveMenuCallback(const script::FrameTransition&)noexcept;
+    void ObserveOutingTransition(const script::FrameTransition&)noexcept;
     void ObserveFlow5Event(const script::FrameTransition&)noexcept;
     void ObserveNotebookStore(const script::Value&,bool)noexcept;
     void RecordInventoryModelService(uint32_t,int32_t,int32_t,int32_t,int32_t,int32_t,uint32_t,bool=true);

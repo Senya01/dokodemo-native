@@ -104,12 +104,18 @@ void GameReturnedConversationInteraction::CheckInputOwners(const GameActorScript
     if(!Ready(s,f,g)){state_.eligible=state_.armed=false;input_.Stop();}
 }
 GameFsStatus GameReturnedConversationInteraction::PostMenuTeach(GameActorScript& script,uint64_t owner,uint64_t generation,uint64_t menu_generation){
+    return PostMenuAction(script,owner,generation,menu_generation,1);
+}
+GameFsStatus GameReturnedConversationInteraction::PostMenuOuting(GameActorScript& script,uint64_t owner,uint64_t generation,uint64_t menu_generation){
+    return PostMenuAction(script,owner,generation,menu_generation,3);
+}
+GameFsStatus GameReturnedConversationInteraction::PostMenuAction(GameActorScript& script,uint64_t owner,uint64_t generation,uint64_t menu_generation,int32_t argument){
     const auto before=script.Snapshot();
     if(!state_.live||!state_.admitted||state_.event_posted||state_.revoked||!menu_generation
        ||owner!=state_.owner||generation!=state_.generation||activation_.State().consumed
        ||!activation_.State().main_consumed||!activation_.HistoryMatches(before)||!SameTarget())
-        return {GameFsCode::Unavailable,0,"Teach menu lost its borrowed available activation"};
-    int32_t queue=-1;const auto status=script.PostMenuEvent(target_,0,menu_generation,queue);
+        return {GameFsCode::Unavailable,0,"Menu action lost its borrowed available activation"};
+    int32_t queue=-1;const auto status=script.PostMenuEvent(target_,0,menu_generation,queue,argument);
     if(!status)return status;
     if(queue!=0)return {GameFsCode::Unavailable,0,"Teach menu integer event queue refused"};
     // The genuine selected menu callback consumes the borrowed activation.

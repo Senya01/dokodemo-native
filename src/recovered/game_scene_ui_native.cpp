@@ -313,11 +313,12 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
     ++state_.native_frames;
     return true;
 }
-bool GameChoiceController::Begin(std::vector<std::string> options,uint64_t context,uint64_t owner,uint32_t timeout){
+bool GameChoiceController::Begin(std::vector<std::string> options,uint64_t context,uint64_t owner,uint32_t timeout,uint32_t confirm_only_row){
     if((state_.live&&state_.state!=3)||options.empty()||options.size()>32||!context||!owner)return false;
     for(const auto& text:options)if(text.size()>1023||text.find('\0')!=std::string::npos)return false;
+    if(confirm_only_row!=UINT32_MAX&&confirm_only_row>=options.size())return false;
     state_={};state_.live=true;state_.state=0;state_.context=context;state_.owner_generation=owner;
-    state_.remaining=timeout;state_.options=std::move(options);input_.BeginContext();return true;
+    state_.remaining=timeout;state_.confirm_only_row=confirm_only_row;state_.options=std::move(options);input_.BeginContext();return true;
 }
 bool GameChoiceController::Input(const GameInputFrame& frame){
     if(frame.overflow_resync){input_.BeginContext();++state_.rejected_inputs;return false;}
@@ -341,12 +342,15 @@ void GameChoiceController::Tick(uint8_t mode,bool trc_idle){
     state_.result=state_.row+1;
     //10844 positive deadline policy1: expiry wins over same-tick Circle.
     if(state_.remaining&&!--state_.remaining){state_.result=0;state_.timed_out=true;state_.state=2;return;}
-    if(input_.First(Circle)){++state_.confirmations;state_.state=2;}
+    if(input_.First(Circle)){
+        if(state_.confirm_only_row!=UINT32_MAX&&state_.row!=state_.confirm_only_row){++state_.unsupported;input_.BeginContext();return;}
+        ++state_.confirmations;state_.state=2;
+    }
     //FFFC(0): Cross/Escape is deliberately not a result producer.
 }
-GameFsStatus GameSceneUiBootstrap::BeginChoice(std::vector<std::string> options,uint64_t context,uint64_t owner){
+GameFsStatus GameSceneUiBootstrap::BeginChoice(std::vector<std::string> options,uint64_t context,uint64_t owner,uint32_t confirm_only_row){
     if(!state_.live||!font_||(editor_.Snapshot().live&&editor_.Snapshot().source_state!=3))return {GameFsCode::Busy,0,"SELECT owner busy/retired"};
-    if(!choice_.Begin(std::move(options),context,owner))return {GameFsCode::Busy,0,"SELECT request/options/context invalid"};
+    if(!choice_.Begin(std::move(options),context,owner,5400,confirm_only_row))return {GameFsCode::Busy,0,"SELECT request/options/context invalid"};
     auto& gui=clones_[0];auto* main=gui.Control(0);auto* auxiliary=gui.Control(1);auto* cursor=gui.Control(2);
     if(!main||!auxiliary||!cursor||!gui.Bind(2,13,0)||!gui.ShowRoot(2))return {GameFsCode::Unavailable,0,"SELECT mode0 root2/clip13 unavailable"};
     main->clip=13;main->frame=0;main->mode=main->active=1;
@@ -358,6 +362,7 @@ GameFsStatus GameSceneUiBootstrap::TickChoice(){
     auto& gui=clones_[0];std::string error;if(!gui.Update(error))return {GameFsCode::Unavailable,0,error};
     auto* main=gui.Control(0);if(!main)return {GameFsCode::Unavailable,0,"SELECT main control retired"};
     choice_.Tick(main->mode,dialog_.Snapshot().state==3);const auto after=choice_.Snapshot();
+    if(after.unsupported)return {GameFsCode::Unavailable,0,"Outing destination confirmation unsupported before SELECT close/result"};
     if(before.state==1&&after.state==2){
         if(!gui.Bind(2,14,0))return {GameFsCode::Unavailable,0,"SELECT close clip14 unavailable"};
         main->clip=14;main->frame=0;main->mode=main->active=1;

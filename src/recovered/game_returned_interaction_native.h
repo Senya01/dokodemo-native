@@ -36,11 +36,13 @@ class GameReturnedConversationInteraction final {
     GameFsStatus Update(const GameActorScriptSnapshot&,const GameMainFlowSnapshot&,const GameReturnedInteractionGate&);
     bool Input(const GameInputFrame&);
     GameFsStatus PostMenuTeach(GameActorScript&,uint64_t owner,uint64_t generation,uint64_t menu_generation);
+    GameFsStatus PostMenuOuting(GameActorScript&,uint64_t owner,uint64_t generation,uint64_t menu_generation);
     void CheckInputOwners(const GameActorScriptSnapshot&,const GameMainFlowSnapshot&,const GameReturnedInteractionGate&);
     void SuspendInput(){input_.Stop();state_.eligible=state_.armed=false;}
     GameReturnedInteractionSnapshot Snapshot()const{return state_;}
     void Close();
   private:
+    GameFsStatus PostMenuAction(GameActorScript&,uint64_t,uint64_t,uint64_t,int32_t);
     bool Ready(const GameActorScriptSnapshot&,const GameMainFlowSnapshot&,const GameReturnedInteractionGate&)const;
     bool SameTarget()const;
     void Revoke(std::string);

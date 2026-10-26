@@ -21,7 +21,7 @@ return a.script_generation==b.script_generation&&a.run_id==b.run_id
   &&a.message_context==b.message_context&&a.input_epoch==b.input_epoch;
 }
 inline bool Same(const Snapshot& a,const Snapshot& b) {
-return a.live==b.live&&a.full==b.full&&a.source_scene_nonzero==b.source_scene_nonzero
+return a.live==b.live&&a.full==b.full&&a.outing_capable==b.outing_capable&&a.source_scene_nonzero==b.source_scene_nonzero
   &&a.generation==b.generation&&SameLease(a.lease,b.lease)&&a.state78==b.state78&&a.substate7C==b.substate7C
   &&a.opens==b.opens&&a.cancels==b.cancels&&a.closed==b.closed&&a.rejected==b.rejected
   &&a.unsupported==b.unsupported&&a.row==b.row&&a.column==b.column&&a.result==b.result
@@ -35,8 +35,8 @@ f.main_menu_epoch=lease.input_epoch;return f;
 }
 struct Case {
 Control menu;MenuLease lease=Lease();uint64_t sequence=0;
-explicit Case(bool scene=false) {
-  Check(menu.Begin(lease,true,scene),"valid Begin");
+explicit Case(bool scene=false,bool outing=false) {
+  Check(menu.Begin(lease,true,scene,false,false,outing),"valid Begin");
   menu.Tick(2);
   Check(menu.Snapshot().state78==1,"mode2 admits input");
 }
@@ -200,6 +200,15 @@ for(int32_t row=0;row<7;++row) {
       &&SameLease(f.State().lease,f.lease),"Cancel after refusal");
 }
 }
+inline void Row1Close() {
+Case f(false,true);f.Press(Down);Check(f.State().row==1,"source scene0 offers row1");const auto owner=f.State();
+f.Press(Right);Check(f.State().state78==1&&f.State().result==-1,"leaf Right does not confirm");
+auto bad=Frame(f.lease,++f.sequence,Circle);++bad.main_menu_epoch;Check(!f.menu.Input(bad),"row1 foreign epoch");
+f.Press(Circle|Cross);Check(f.State().state78==2&&f.State().cancels==0&&f.State().result==-1,"row1 Circle ahead of Cancel");
+f.menu.Tick(1);Check(f.State().state78==2&&f.State().closed==0,"actual close mode needed");f.menu.Tick(2);
+Check(f.State().state78==3&&f.State().result==2&&f.State().closed==1&&SameLease(f.State().lease,owner.lease),"owning result2 after close");
+Case other(true);other.Press(Down);Check(other.State().row==2,"scene-dependent skip preserved");
+}
 inline void Row4OpenBack() {
 for(bool scene:{false,true})for(uint32_t open:{uint32_t(Circle|Cross),uint32_t(Right|Cross)})
 for(uint32_t back:{uint32_t(Cross),uint32_t(Left)}) {
@@ -344,6 +353,16 @@ Ui(menu.Input(Frame(lease,++seq,Left))&&bool(menu.Tick())&&menu.Snapshot().state
 menu.Close();const auto retired=menu.Snapshot();
 Ui(!retired.live&&!menu.Modal()&&!menu.Input(Frame(lease,++seq,Cross))&&bool(menu.Tick()),"retired menu rejects input");
 }
+inline void SyntheticRow1Close() {
+Resources source;GameMainMenu menu;const auto lease=Lease();uint64_t seq=0;GameGraphics graphics;
+Ui(graphics.Initialize({})&&bool(menu.Open(source,lease,true,false,false,false,true)),"row1 real synthetic UI open");
+for(unsigned i=0;i<3;++i)Ui(bool(menu.Tick()),"row1 actual open update");
+const auto edge=[&](uint32_t key){Ui(menu.Input(Frame(lease,++seq)),"row1 release");Ui(bool(menu.Tick()),"row1 release tick");Ui(menu.Input(Frame(lease,++seq,key)),"row1 fresh");Ui(bool(menu.Tick()),"row1 input tick");};
+edge(Down);Ui(menu.Snapshot().row==1&&bool(menu.Draw(graphics)),"row1 actual UI draw");edge(Circle);
+Ui(menu.Snapshot().clip==1&&menu.Snapshot().state78==2&&menu.Snapshot().closed==0,"row1 actual closing clip");
+for(unsigned i=0;i<4;++i)Ui(bool(menu.Tick()),"row1 real close update");
+Ui(menu.Snapshot().state78==3&&menu.Snapshot().result==2&&menu.Snapshot().closed==1,"row1 actual UI return2");menu.Close();
+}
 inline void SyntheticRow4Clip() {
 Resources source;GameMainMenu menu;const auto lease=Lease();uint64_t seq=0;GameGraphics graphics;
 Ui(graphics.Initialize({})&&bool(menu.Open(source,lease,true,false)),"row4 fixture opens");
@@ -387,5 +406,5 @@ menu.Close();Ui(!menu.Input(Frame(lease,++seq,Up))&&menu.Snapshot().system_curso
 } // namespace dokodemo::main_menu_tests
 inline void GameMainMenuRegressionChecks() {
 using namespace dokodemo::main_menu_tests;
-LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();Row4OpenBack();SystemCursor02();SyntheticClips();SyntheticRow4Clip();SyntheticSystemCursor();
+LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();Row1Close();Row4OpenBack();SystemCursor02();SyntheticClips();SyntheticRow1Close();SyntheticRow4Clip();SyntheticSystemCursor();
 }

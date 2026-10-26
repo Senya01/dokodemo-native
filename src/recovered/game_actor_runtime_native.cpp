@@ -119,6 +119,22 @@ int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
   }
   return 4;
 }
+bool GameManagerSwitchControl::Initialize(uint64_t epoch){
+  if(!epoch||state_.live)return false;
+  state_={};state_.live=true;state_.epoch=epoch;return true;
+}
+bool GameManagerSwitchControl::BindScene0(uint64_t epoch){
+  if(!state_.live||epoch!=state_.epoch||state_.bound||state_.pending)return false;
+  state_.current14=state_.requested18=0;state_.bound=true;return true;
+}
+bool GameManagerSwitchControl::RequestSame0(uint64_t epoch,int32_t target){
+  if(!state_.live||!state_.bound||epoch!=state_.epoch||target!=0||state_.current14!=0)return false;
+  state_.requested18=target;state_.pending=true;++state_.requests;return true;
+}
+bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
+  if(!state_.live||!state_.bound||epoch!=state_.epoch||!state_.pending||state_.current14!=0||state_.requested18!=0)return false;
+  state_.pending=false;++state_.consumed;return true; //1B2C8/CC, no resource calls
+}
 GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameTransition &transition,
                                           GameResourceSource *resources) {
@@ -126,6 +142,8 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
   state_ = {};
   state_.owner_epoch=next_room_owner_epoch.fetch_add(1,std::memory_order_relaxed)+1;
   try {
+    if(!manager_switch_.Initialize(state_.owner_epoch))throw std::runtime_error("Manager constructor owner unavailable");
+    state_.manager_switch=manager_switch_.Snapshot();
     if (actor >= 5 || !selection.Describe().readable ||
         !transition.Snapshot().live)
       throw std::runtime_error(
@@ -210,6 +228,8 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
     state_.scene_period_table52=season;
   }
   season_controls_=std::move(seasons);light_on_control_=std::move(light_on);
+  if(!manager_switch_.BindScene0(state_.owner_epoch))return {GameFsCode::Unavailable,0,"Source scene0 manager binding refused"};
+  state_.manager_switch=manager_switch_.Snapshot();
   state_.manager_scene14=0; // actual17C84 ->1839C/1B2DC,not a BSS premise
   state_.scene_clock_ready=true;
   state_.light_on_control_present=light_on_control_.present;
@@ -372,6 +392,16 @@ GameFsStatus GameActorRuntime::SetField54(int32_t value) {
 GameFsStatus GameActorRuntime::RequestManager9(){
   if(!Live())return {GameFsCode::Unavailable,0,"GAME3 manager owner/lease retired"};
   state_.manager_request9=true;return {};
+}
+GameFsStatus GameActorRuntime::RequestSameManager0(int32_t target){
+  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.RequestSame0(state_.owner_epoch,target))
+    return {GameFsCode::Unavailable,0,"GAME12 outside current same-selector0 owner"};
+  state_.manager_switch=manager_switch_.Snapshot();return {};
+}
+GameFsStatus GameActorRuntime::ConsumeSameManager0(){
+  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.ConsumeSame0(state_.owner_epoch))
+    return {GameFsCode::Unavailable,0,"1B238 pending equal-selector0 unavailable"};
+  state_.manager_switch=manager_switch_.Snapshot();return {};
 }
 GameFsStatus GameActorRuntime::ClearManager8(){
   if(!Live())return {GameFsCode::Unavailable,0,"Manager8 clear owner retired"};
@@ -1119,6 +1149,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
+  manager_switch_.Retire();state_.manager_switch=manager_switch_.Snapshot();
   intro_clone_.Close();intro_resource_.reset();state_.intro_live=false;state_.intro_controls={};
   light_on_control_={};season_controls_.clear();
   state_.scene_clock_ready=state_.light_on_control_present=false;

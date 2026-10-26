@@ -56,7 +56,7 @@ GameFsStatus GameMainFlow::Tick(const GameMainFlowGate& gate){
         }
         state_.last_pc=0x23C30;
         if(current.manager_request8){state_.phase1C=1;return {};}
-        if(gate.manager_switch_pending)return {GameFsCode::Unavailable,0,"Reached main-flow1B238 scene switch not implemented"};
+        if(gate.manager_switch_pending||current.manager_switch.pending)return runtime_->ConsumeSameManager0();
         return {};
     }
     if(state_.phase1C==1){
@@ -90,7 +90,7 @@ GameFsStatus GameMainFlow::Tick(const GameMainFlowGate& gate){
     if(state_.substate24==4){
         state_.last_pc=0x2360C;
         if(gate.extension_busy){++state_.busy_blocks;return {};}
-        if(gate.manager_switch_pending)return {GameFsCode::Unavailable,0,"Reached235B0 scene-switch branch not implemented"};
+        if(gate.manager_switch_pending||current.manager_switch.pending)return runtime_->ConsumeSameManager0();
     }
     if(input_.First(Circle)){state_.last_pc=0x2363C;return Event(12,5);}
     if(current.manager_request9){
@@ -118,9 +118,10 @@ GameFsStatus GameMainFlow::PollMenuCancel(){
 }
 GameFsStatus GameMainFlow::PollMenuResult(int32_t result){
     if(state_.phase1C!=7||state_.menu58!=2)return {GameFsCode::Unavailable,0,"Main menu completion owner mismatch"};
-    if(result!=-1&&result!=0&&result!=5&&result!=3&&result!=4&&result!=6&&result!=13)return {GameFsCode::Unavailable,0,"Main menu result outside finite ordinary domain"};
+    if(result!=-1&&result!=0&&result!=2&&result!=5&&result!=3&&result!=4&&result!=6&&result!=13)return {GameFsCode::Unavailable,0,"Main menu result outside finite ordinary domain"};
     state_.menu_result54=result;state_.menu58=5;state_.last_pc=0x23748;
     if(result==0){state_.return20=3;state_.menu58=3;}
+    if(result==2){state_.return20=4;state_.menu58=3;}
     return {};
 }
 GameFsStatus GameMainFlow::DispatchMenuTeach(){
@@ -136,9 +137,16 @@ GameFsStatus GameMainFlow::RetireMenuCancel(){
     if(state_.menu_result54!=-1)return {GameFsCode::Unavailable,0,"Main menu Cancel result mismatch"};
     return RetireMenuResult();
 }
+GameFsStatus GameMainFlow::DispatchMenuOuting(){
+    if(!state_.live||!runtime_||!runtime_->OwnersLive()||state_.phase1C!=7||state_.menu58!=3
+       ||state_.menu_result54!=2||state_.return20!=4)
+        return {GameFsCode::Unavailable,0,"Outing requires its selected result2 owner"};
+    auto status=Clear9();if(status)status=Clear8();if(status)status=Event(0,3);
+    if(status)state_.menu58=5;return status;
+}
 GameFsStatus GameMainFlow::RetireMenuResult(){
-    const bool teach=state_.menu_result54==0&&state_.return20==3;
-    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=0&&state_.menu_result54!=5&&state_.menu_result54!=3&&state_.menu_result54!=4&&state_.menu_result54!=6&&state_.menu_result54!=13)||(!teach&&state_.return20))
+    const bool action=(state_.menu_result54==0&&state_.return20==3)||(state_.menu_result54==2&&state_.return20==4);
+    if(state_.phase1C!=7||state_.menu58!=5||(state_.menu_result54!=-1&&state_.menu_result54!=0&&state_.menu_result54!=2&&state_.menu_result54!=5&&state_.menu_result54!=3&&state_.menu_result54!=4&&state_.menu_result54!=6&&state_.menu_result54!=13)||(!action&&state_.return20))
         return {GameFsCode::Unavailable,0,"Main menu Cancel retirement owner mismatch"};
     state_.menu_result50=state_.menu_result54;state_.menu_result54=-1;state_.menu58=0;
     state_.phase1C=state_.return20;state_.return20=0;state_.last_pc=0x238B0;input_.BeginContext();return {};

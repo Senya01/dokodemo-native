@@ -45,7 +45,26 @@ struct GameModelRetirementWitness {
   bool assets_retained_at_disable=false,clone_retained_at_disable=false;
   bool asset_owner_expired=false,clone_owner_cleared=false;
 };
+struct GameManagerSwitchSnapshot {
+  bool live=false,bound=false,pending=false;
+  uint64_t epoch=0,requests=0,consumed=0;
+  int32_t current14=0,requested18=0;
+};
+// Native typed1B188/1B2DC owner. Only the source equal-selector0 cancellation
+// is admitted; it has no resource/unload calls. Never supplies a scene gate.
+class GameManagerSwitchControl {
+public:
+  bool Initialize(uint64_t epoch);
+  bool BindScene0(uint64_t epoch);
+  bool RequestSame0(uint64_t epoch,int32_t target);
+  bool ConsumeSame0(uint64_t epoch);
+  void Retire(){state_.live=state_.bound=state_.pending=false;}
+  GameManagerSwitchSnapshot Snapshot()const{return state_;}
+private:
+  GameManagerSwitchSnapshot state_;
+};
 struct GameActorRuntimeSnapshot {
+  GameManagerSwitchSnapshot manager_switch;
   uint64_t owner_epoch=0;
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
@@ -157,6 +176,8 @@ public:
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();
   GameFsStatus RequestManager9();
+  GameFsStatus RequestSameManager0(int32_t target);
+  GameFsStatus ConsumeSameManager0();
   GameFsStatus ClearManager8();
   GameFsStatus ClearManager9();
   bool OwnersLive()const{return Live();}
@@ -188,6 +209,7 @@ private:
   };
   std::array<ModelSlot, 100> models_;
   GameActorRuntimeSnapshot state_;
+  GameManagerSwitchControl manager_switch_;
   PackageView actor_asc_;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;

@@ -38,6 +38,7 @@ class GameMainFlow final {
     GameFsStatus RetireMenuCancel();
     GameFsStatus PollMenuResult(int32_t);
     GameFsStatus DispatchMenuTeach();
+    GameFsStatus DispatchMenuOuting();
     GameFsStatus RetireMenuResult();
     void ResetInput(){input_.BeginContext();}
     GameMainFlowSnapshot Snapshot()const{return state_;}
