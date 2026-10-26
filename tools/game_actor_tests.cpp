@@ -1,6 +1,7 @@
 #include "recovered/game_actor_script_native.h"
 #include "recovered/game_main_flow_native.h"
 #include "recovered/game_value_array_native.h"
+#include "recovered/string_native.h"
 #include "game_choice_regressions.h"
 #include "game_message_scope_regressions.h"
 #include "game_post21_regressions.h"
@@ -115,6 +116,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <type_traits>
+#include <thread>
 using namespace dokodemo;
 using namespace dokodemo::recovered;
 namespace {
@@ -174,7 +176,7 @@ script::Program Fixture(std::vector<uint8_t> code,std::vector<uint32_t> globals=
     std::copy(code.begin(),code.end(),b.begin()+28);
     for(size_t i=0;i<ctx.size();++i)Word(b,28+code.size()+4*i,ctx[i]);
     for(size_t i=0;i<globals.size();++i)Word(b,28+code.size()+4*(ctx.size()+i),globals[i]);
-    script::Program p;script::Diagnostic error;Check(p.load_test_fixture(std::move(b),error),error.text().c_str());return p;
+    script::Program p;script::Diagnostic error;const bool loaded=p.load_test_fixture(std::move(b),error);Check(loaded,error.text().c_str());return p;
 }
 std::vector<uint8_t> Dictionary(){
     std::vector<uint8_t> b(34);Word(b,0,0x90000001);Word(b,4,0xB0000008);
@@ -459,7 +461,132 @@ void RuntimeOwners(){
     Check(!model_owner.CreateModel(170,1,0,0,failed_slot)&&missing.calls==1,"unrecovered category refuses before I/O");
     model_owner.Close();model_fade.Retire();
 }
+void OwnedInlineStringChecks(){
+    using namespace script;
+    const auto refuses=[](auto fn){try{fn();return false;}catch(const std::exception&){return true;}};
+    const WindowsStringPolicy small{0x01000000,1024,0x01000000};
+    StringArena unavailable;Check(!unavailable.ready(),"old StringFixture defaults remain unavailable");
+    {
+        WindowsOwnedStringArena arena(small),foreign(small);
+        Check(!arena.Snapshot().initialized,"no binding authority before actual allocation");
+        auto first=arena.Create("same");const auto r=arena.Observe(first,"same");
+        Check(r.live&&r.address==small.heap_base+48&&r.common_base==small.common_base
+            &&r.encoded_word==(0x60000000u|((r.address-r.common_base)&0x0FFFFFFFu)),"real initialized allocator and packed relation");
+        auto alias=first;const auto count=arena.Snapshot().allocations;
+        Check(arena.Observe(alias,"same").serial==r.serial&&arena.Snapshot().allocations==count,"C++ transport is not source copy");
+        auto copy=arena.Copy(first,"same");const auto c=arena.Observe(copy,"same");
+        Check(c.address!=r.address&&c.serial!=r.serial&&c.sha256==r.sha256,"7581C makes independent owned allocation");
+        Check(refuses([&]{(void)foreign.Observe(first,"same");})&&!foreign.Snapshot().initialized,"foreign binding cannot initialize authority");
+        auto other_value=foreign.Create("same");
+        Check(refuses([&]{(void)foreign.Observe(first,"same");})&&foreign.Observe(other_value,"same").owner!=r.owner,"live foreign arena still refuses the binding");
+        Check(refuses([&]{(void)arena.Observe(first,"tamper");}),"binding checks current bytes, not a text predicate");
+        bool thread_refused=false;std::thread other([&]{thread_refused=refuses([&]{(void)arena.Observe(first,"same");});});other.join();
+        Check(thread_refused,"foreign-thread binding refused");
+        auto grown=arena.Resize(copy,"same",std::string(180,'x'));const auto g=arena.Observe(grown,std::string(180,'x'));
+        Check(g.bytes==180&&g.serial!=c.serial&&refuses([&]{(void)arena.Observe(copy,"same");}),"753E0 resize revokes old receipt");
+        auto assigned=arena.Assign(grown,std::string(180,'x'),first,"same");
+        Check(arena.Observe(assigned,"same").sha256==r.sha256&&refuses([&]{(void)arena.Observe(grown,std::string(180,'x'));}),"owned assignment reads source allocation and retires replaced serial");
+        arena.Release(first);Check(refuses([&]{(void)arena.Observe(alias,"same");})&&arena.Observe(assigned,"same").live,"7515C invalidates aliases, not independent copy");
+        auto retained=assigned;const auto epoch=arena.Observe(assigned,"same");arena.Restart();
+        Check(!arena.Snapshot().initialized&&refuses([&]{(void)arena.Observe(retained,"same");}),"retirement revokes even retained C++ transport");
+        auto next=arena.Create("same");const auto n=arena.Observe(next,"same");
+        Check(n.address==r.address&&n.owner!=epoch.owner&&n.epoch!=epoch.epoch,"address reuse has new owner and epoch");
+        arena.Release(next);Check(arena.Snapshot().live_allocations==0,"explicit release leaves no allocation");
+    }
+    {
+        WindowsOwnedStringArena limited({small.heap_base,112,small.common_base});auto one=limited.Create("");
+        Check(refuses([&]{(void)limited.Copy(one,"");})&&limited.Snapshot().failed,"exhaustion poisons native domain, never supplies success");
+        Check(refuses([&]{(void)limited.Observe(one,"");}),"failed allocator cannot grant condition");
+    }
+    const auto literal=[](std::vector<uint8_t>& code,const std::string& text){code.push_back(0x8E);code.insert(code.end(),text.begin(),text.end());code.push_back(0);};
+    const auto target=[](std::vector<uint8_t>& code,uint32_t at,uint32_t to){for(unsigned i=0;i<3;++i)code.at(at+1+i)=uint8_t(to>>(i*8));};
+    for(const auto& text:{std::string(),std::string("word")})for(uint8_t op:{uint8_t(0x11),uint8_t(0x12)})for(bool zero:{false,true}){
+        std::vector<uint8_t> code{0x30,0,0x80,91,0x70};literal(code,text);const auto branch=uint32_t(code.size());
+        code.insert(code.end(),{op,0,0,0,0x80,1,0x70,0x31});const auto to=uint32_t(code.size());code.insert(code.end(),{0x80,2,0x70,0x31});target(code,branch,to);
+        auto p=Fixture(code);WindowsStringPolicy policy=small;if(zero)policy.common_base=policy.heap_base+48;
+        Vm vm(p,policy);vm.start();while(vm.pc()!=branch)Check(vm.step().status==Status::Running,"literal reaches conditional");
+        auto borrow=vm.stack().back();const auto before=vm.owned_string_receipt(borrow);
+        auto malformed=borrow;malformed.word^=1;
+        Check(refuses([&]{(void)vm.owned_string_receipt(malformed);}),"canonical transport and binding must agree");
+        Check((before.encoded_word&0x0FFFFFFFu)==(zero?0u:48u),"zero/nonzero is actual allocation offset, never content");
+        const bool take=op==0x11?zero:!zero;const auto event=vm.step();const auto witness=vm.owned_string_branch();
+        Check(event.status==Status::Running&&event.has_branch_decision&&event.branch_taken==take&&vm.stack().empty(),"op11/op12 opposite branch and one pop");
+        Check(vm.result().kind==Value::Kind::Scalar&&vm.result().word==0&&witness.valid&&witness.released
+            &&witness.allocation.serial==before.serial&&witness.allocation.encoded_word==before.encoded_word,"source result cleared and exact consumed allocation released");
+        Check(refuses([&]{(void)vm.owned_string_receipt(borrow);})&&vm.owned_string_arena().live_allocations==0,"popped allocation is stale despite retained transport");
+        Check(vm.run(20).status==Status::Complete&&vm.result().signed_integer()==(take?2:1),"actual continuation/normal return");
+    }
+    {
+        // Arbitrary synthetic frame-array program: create -> MOVE51 -> F4 copy -> branch.
+        std::vector<uint8_t> code{0x30,2,0x4E,0,0,1,0,0x91,1,0};literal(code,"record");
+        const auto store=uint32_t(code.size());code.push_back(0x51);code.insert(code.end(),{0x91,0,0,0x85,0xF4});
+        const auto branch=uint32_t(code.size());code.insert(code.end(),{0x11,0,0,0,0x31});target(code,branch,uint32_t(code.size()-1));
+        auto p=Fixture(code);Vm vm(p,small);vm.start();while(vm.pc()!=store)Check(vm.step().status==Status::Running,"owned record setup");
+        const auto incoming=vm.owned_string_receipt(vm.stack().back());vm.step();auto saved=vm.read_slot(Table::Frame,1);
+        const auto moved=vm.owned_string_receipt(saved);Check(moved.serial==incoming.serial&&moved.address==incoming.address,"51 transfers, does not silently deep-copy");
+        const auto counts=vm.owned_string_arena();for(unsigned i=0;i<8;++i)(void)vm.read_slot(Table::Frame,1);
+        Check(vm.owned_string_arena().copies==counts.copies,"passive slot reads allocate nothing");
+        while(vm.pc()!=branch)Check(vm.step().status==Status::Running,"owned F4 path");
+        const auto loaded=vm.owned_string_receipt(vm.stack().back());
+        Check(loaded.serial!=moved.serial&&loaded.address!=moved.address&&loaded.sha256==moved.sha256,"F4 executes source7581C copy");
+        vm.step();Check(vm.owned_string_receipt(saved).serial==moved.serial&&vm.owned_string_branch().allocation.serial==loaded.serial,"conditional releases copy, keeps current record");
+        auto arg=Fixture({0x30,1,0x90,0,0,0x31});Vm foreign(arg,small);foreign.start({saved});foreign.step();
+        Check(foreign.step().status==Status::Stopped&&!foreign.owned_string_arena().initialized,"foreign Value cannot acquire a new VM arena");
+        auto stale=saved;vm.start();Check(refuses([&]{(void)vm.owned_string_receipt(stale);}),"restart retires old native binding");
+    }
+    {
+        // A real 90 load makes a different source copy even with identical text.
+        std::vector<uint8_t> code{0x30,1,0x91,0,0};literal(code,"copy");code.insert(code.end(),{0x51,0x90,0,0,0x31});
+        auto p=Fixture(code);Vm vm(p,small);vm.start();for(unsigned i=0;i<4;++i)vm.step();
+        const auto slot=vm.owned_string_receipt(vm.read_slot(Table::Frame,0));vm.step();
+        Check(vm.owned_string_receipt(vm.stack().back()).address!=slot.address,"90 uses owned7581C");
+    }
+    for(const auto& text:{std::string(),std::string("unbound")}){
+        auto p=Fixture({0x30,1,0x90,0,0,0x11,9,0,0,0x31});Vm vm(p);vm.start({Value::string(text)});vm.step();vm.step();
+        const auto before=vm.current_witness();Check(vm.step().status==Status::Stopped&&vm.stack().size()==1
+            &&vm.current_witness().clock_tick==before.clock_tick&&!vm.owned_string_branch().valid,"unbound String refuses without pop/time/authority");
+    }
+    {
+        std::vector<uint8_t> code{0x30,0};literal(code,"old");code.push_back(0x70);literal(code,"current");
+        const auto branch=uint32_t(code.size());code.insert(code.end(),{0x12,0,0,0,0x31});target(code,branch,uint32_t(code.size()-1));
+        auto p=Fixture(code);Vm vm(p,small);vm.start();while(vm.pc()!=branch)vm.step();auto old=vm.result();
+        Check(vm.owned_string_arena().live_allocations==2,"conditional has an actual owned old result");vm.step();
+        Check(vm.result().word==0&&vm.owned_string_arena().live_allocations==0&&refuses([&]{(void)vm.owned_string_receipt(old);}),"conditional releases old result before consuming operand");
+    }
+    {
+        const std::vector<uint8_t> code{0x30,0,0x8E,'x',0,0x11,1,0,0,0x31};std::vector<uint8_t> bytes(28+code.size());
+        Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,uint32_t(code.size()));
+        std::copy(code.begin(),code.end(),bytes.begin()+28);Program invalid;Diagnostic error;
+        Check(!invalid.load_test_fixture(std::move(bytes),error)&&!invalid.loaded()&&!error.reason.empty(),"parser refuses a target inside operands before any VM allocation");
+    }
+    {
+        std::vector<uint8_t> code{0x30,0};literal(code,"return");code.insert(code.end(),{0x8B,1,1,0x89});
+        const auto branch=uint32_t(code.size());code.insert(code.end(),{0x11,0,0,0,0x31});target(code,branch,uint32_t(code.size()-1));
+        auto p=Fixture(code);Vm vm(p,small);unsigned calls=0;vm.host_service([&](uint8_t,const std::vector<Value>& args){++calls;return args.at(0);});
+        vm.start();while(vm.pc()!=branch)Check(vm.step().status==Status::Running,"synthetic host return reaches conditional");
+        Check(calls==1&&!vm.stack().back().owned_string.bound()&&vm.step().status==Status::Stopped,"unproved HostReturn does not inherit owned branch authority");
+    }
+    {
+        auto p=Fixture({0x30,0,0x80,7,0x70,0x85,0x11,10,0,0,0x31});Vm vm(p);vm.start();for(unsigned i=0;i<4;++i)vm.step();vm.step();
+        Check(vm.result().signed_integer()==7&&!vm.owned_string_arena().initialized,"old scalar branch/result unchanged");
+        auto q=Fixture({0x30,0,0x99,0,0,0x11,9,0,0,0x31},{},{0});Vm ctx(q);ctx.start();(void)ctx.context_value();ctx.step();ctx.step();
+        Check(!ctx.step().branch_taken&&!ctx.owned_string_branch().valid,"old Ctx28 reference branch stays independent");
+    }
+    {
+        // Same-owned Ctx28 store is admitted; a live foreign context is not.
+        std::vector<uint8_t> code{0x30,1,0x90,0,0};literal(code,"ctx");code.insert(code.end(),{0x51,0x31});
+        auto p=Fixture(code,{}, {0x90000001,0});Vm current(p,small),foreign(p,small);foreign.start({Value::integer(0)});
+        Value ref;ref.kind=Value::Kind::Reference;ref.table=Table::Ctx28;ref.index=1;ref.context_owner=foreign.context_value().context_owner;
+        current.start({ref});(void)current.context_value();current.step();current.step();current.step();const auto count=current.stack().size();
+        Check(current.step().status==Status::Stopped&&current.stack().size()==count&&current.read_slot(Table::Ctx28,1).word==0,"foreign context store refuses before write/pop");
+        // Use the existing actual frame reference opcode for the valid path instead.
+        auto valid_code=code;valid_code[2]=0x99;valid_code[3]=1;valid_code[4]=0;
+        auto v=Fixture(valid_code,{}, {0x90000001,0});Vm valid(v,small);valid.start({Value::integer(0)});(void)valid.context_value();
+        Check(valid.run(30).status==Status::Complete&&valid.owned_string_receipt(valid.read_slot(Table::Ctx28,1)).live,"actual current context accepts owned transfer");
+    }
+}
 void Focused(){
+    OwnedInlineStringChecks();
     {
         // Synthetic callback forwards the two actual typed mailbox arguments.
         // No extracted callback bytes or game addresses are embedded here.

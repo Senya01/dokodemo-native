@@ -41,6 +41,9 @@ class StringArena {
 public:
     StringArena() = default;
     explicit StringArena(const StringFixture& fixture);
+    // Fresh NONMATCHING Windows storage, not imported PSP readiness premises.
+    // Owns/initializes the actual byte buffer and verifies allocator headers.
+    static StringArena WindowsOwned(uint32_t base, uint32_t size, uint32_t common_base);
     // Import an explicit current mapped arena, preserving all bytes and live
     // block identities. The caller supplies current state, never fresh BSS.
     static StringArena FromMappedStorage(const StringFixture& fixture,
@@ -73,6 +76,8 @@ private:
     struct Storage;
     std::shared_ptr<Storage> storage_;
     void unique();
+    void initialize(uint32_t base,uint32_t size,uint32_t common,bool forward,
+                    const std::vector<uint8_t>& initial_heap,uint32_t cursor);
     uint32_t read(uint32_t address, unsigned width = 4) const;
     void write(uint32_t address, uint32_t value, unsigned width = 4);
     uint32_t rounded(uint32_t bytes) const;

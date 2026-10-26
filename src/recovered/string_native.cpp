@@ -34,17 +34,31 @@ StringArena::StringArena(const StringFixture& f) {
     if(!f.enabled)return;
     need(f.heap_ready && f.memory_disjoint && f.allocator_policy_known,
          "String arena requires explicit mapped readiness/disjoint/allocator policy premises");
-    need(f.heap_base && f.heap_base%16==0 && f.heap_size>=112 && f.heap_size%16==0 &&
-         f.heap_size<=0x400000 && f.heap_base<=UINT32_MAX-f.heap_size,
+    initialize(f.heap_base,f.heap_size,f.common_base,f.forward_positive,f.initial_heap,f.conversion_cursor);
+}
+StringArena StringArena::WindowsOwned(uint32_t base,uint32_t size,uint32_t common) {
+    need(size>=112 && size<=0x400000,"Windows string storage capacity outside native policy");
+    StringArena arena;arena.initialize(base,size,common,true,std::vector<uint8_t>(size,0),0);
+    const auto control=arena.control_bytes();
+    need(control.size()==32 && control[16]==1 && arena.read(base+4)==base+32
+         && arena.read(base+32+4)==base+size-32 && arena.read(base+size-32)==base+32
+         && arena.read(base+32+15,1)==0x79 && arena.live_blocks().empty(),
+         "Windows string storage initialization readback failed");
+    return arena;
+}
+void StringArena::initialize(uint32_t base,uint32_t size,uint32_t common,bool forward,
+                            const std::vector<uint8_t>& initial_heap,uint32_t cursor) {
+    need(base && base%16==0 && size>=112 && size%16==0 &&
+         size<=0x400000 && base<=UINT32_MAX-size,
          "String arena639CC bounded aligned size/base domain");
-    need(f.initial_heap.size()==f.heap_size,"String arena initial readable heap bytes not explicitly mapped");
-    need(static_cast<int64_t>(f.heap_base)-f.common_base>=-0x08000000LL &&
-         static_cast<int64_t>(f.heap_base)+f.heap_size-f.common_base<0x08000000LL,
+    need(initial_heap.size()==size,"String arena initial readable heap bytes not explicitly mapped");
+    need(static_cast<int64_t>(base)-common>=-0x08000000LL &&
+         static_cast<int64_t>(base)+size-common<0x08000000LL,
          "String arena signed28 offset range");
     storage_=std::make_shared<Storage>(); auto& s=*storage_;
-    s.base=f.heap_base;s.common=f.common_base;s.size=f.heap_size;s.forward=f.forward_positive;
-    need(f.conversion_cursor<4,"String conversion cursor outside mapped modulo4 domain");s.cursor=f.conversion_cursor;
-    s.heap=f.initial_heap;s.control.assign(32,0);
+    s.base=base;s.common=common;s.size=size;s.forward=forward;
+    need(cursor<4,"String conversion cursor outside mapped modulo4 domain");s.cursor=cursor;
+    s.heap=initial_heap;s.control.assign(32,0);
     const auto ctl=[&](uint32_t at,uint32_t v,unsigned n=4) {
         for(unsigned i=0;i<n;++i)s.control[at+i]=static_cast<uint8_t>(v>>(8*i));
     };

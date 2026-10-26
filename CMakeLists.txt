@@ -91,6 +91,7 @@ add_library(dokodemo-core STATIC
     src/recovered/bulk_array_native.cpp
     src/recovered/manager_queue_native.cpp
     src/recovered/string_native.cpp
+    src/recovered/windows_owned_string_native.cpp
     src/recovered/service48_native.cpp
     src/recovered/context_owner_native.cpp
     src/recovered/context_callback_native.cpp

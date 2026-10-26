@@ -8,6 +8,7 @@
 #include <vector>
 #include <deque>
 #include "recovered/current_tables_native.h"
+#include "recovered/windows_owned_string_native.h"
 
 // Restricted KSC v20030204 reader/interpreter. No PSP CPU, OS or GPU emulation.
 // Source tables and strings are data; reading them never emits dialogue.
@@ -114,6 +115,7 @@ struct Value {
     // local and image-table references use the VM's stable typed tables.
     std::weak_ptr<std::vector<Value>> frame_owner;
     std::weak_ptr<NativeScriptContext> context_owner;
+    recovered::OwnedStringBinding owned_string; // current Windows Inline8E allocation, not word truthiness
     static Value integer(int32_t value);
     static Value string(std::string cp932);
     int32_t signed_integer() const;
@@ -173,9 +175,16 @@ struct Event {
     Diagnostic diagnostic;
 };
 
+// Passive receipt of the consumed allocation BEFORE its source7515C release.
+struct OwnedStringBranchWitness {
+    bool valid=false,released=false,branch_taken=false;
+    uint64_t branches=0,run=0,frame=0;
+    uint32_t pc=0,opcode=0,stack_before=0,stack_after=0;
+    recovered::OwnedStringReceipt allocation;
+};
 class Vm {
 public:
-    explicit Vm(const Program& program) : program_(program) {}
+    explicit Vm(const Program& program,recovered::WindowsStringPolicy strings={}) : program_(program),owned_strings_(strings) {}
     ~Vm();
     Vm(const Vm&)=delete;
     Vm& operator=(const Vm&)=delete;
@@ -231,6 +240,10 @@ public:
     using HostService = std::function<Value(uint8_t, const std::vector<Value>&)>;
     void host_service(HostService callback) { service_ = std::move(callback); }
     const Value& result() const noexcept { return result_; }
+    recovered::OwnedStringReceipt owned_string_receipt(const Value&)const;
+    recovered::OwnedStringArenaReceipt owned_string_arena()const{return owned_strings_.Snapshot();}
+    const OwnedStringBranchWitness& owned_string_branch()const noexcept{return owned_string_branch_;}
+    const OwnedStringBranchWitness& first_owned_string_branch()const noexcept{return first_owned_string_branch_;}
     void access_observer(std::function<void(const Value&,bool)> callback) { access_ = std::move(callback); }
     uint64_t executed() const noexcept { return executed_; }
     uint32_t call_depth() const noexcept { return uint32_t(calls_.size()); }
@@ -306,6 +319,14 @@ public:
     bool deadline_waiting() const noexcept { return clock_tick_<wait_until_; }
 private:
     const Program& program_; // program must outlive Vm and remain unchanged
+    recovered::WindowsOwnedStringArena owned_strings_;
+    OwnedStringBranchWitness owned_string_branch_;
+    OwnedStringBranchWitness first_owned_string_branch_;
+    Value inline_owned_string(std::string);
+    Value copy_owned_value(Value)const;
+    void require_string_reference_owner(const Value&)const;
+    void store_reference_impl(const Value&,Value,bool transfer);
+    void release_owned_value(Value&);
     std::vector<Value> stack_, local_, global_, ctx28_;
     std::shared_ptr<std::vector<Value>> frame_;
     struct CallFrame {

@@ -457,6 +457,37 @@ int32_t Value::signed_integer() const {
     uint32_t payload = word & 0x0FFFFFFF;
     return static_cast<int32_t>(payload & 0x08000000 ? payload | 0xF0000000 : payload);
 }
+recovered::OwnedStringReceipt Vm::owned_string_receipt(const Value& value)const{
+    if(value.kind!=Value::Kind::String||value.word!=0x60000000u||!value.owned_string.bound())
+        throw std::runtime_error("String condition requires a current Inline8E owned binding");
+    return owned_strings_.Observe(value.owned_string,value.cp932);
+}
+Value Vm::inline_owned_string(std::string text){
+    auto value=Value::string(std::move(text));
+    value.owned_string=owned_strings_.Create(value.cp932);return value;
+}
+Value Vm::copy_owned_value(Value value)const{
+    if(value.owned_string.bound()){
+        (void)owned_string_receipt(value);
+        value.owned_string=owned_strings_.Copy(value.owned_string,value.cp932);
+    }
+    return value;
+}
+void Vm::require_string_reference_owner(const Value& ref)const{
+    if(ref.table==Table::Ctx28){
+        if(!context_||ref.context_owner.lock()!=context_||context_->vm!=this||context_->thread!=std::this_thread::get_id())
+            throw std::runtime_error("Owned String requires its current context-table reference");
+    }else if(ref.table==Table::Frame||ref.table==Table::InputResult){
+        const auto owner=ref.frame_owner.lock();bool current=owner&&(owner==frame_||owner==input_result_);
+        for(const auto& call:calls_)current=current||(owner&&owner==call.values);
+        if(!current)throw std::runtime_error("Owned String reference is not a current VM frame");
+    }
+}
+void Vm::release_owned_value(Value& value){
+    if(value.owned_string.bound()){
+        (void)owned_string_receipt(value);owned_strings_.Release(value.owned_string);
+    }
+}
 Value Vm::decode(uint32_t word) const {
     Value result; result.word = word;
     switch (word >> 28) {
@@ -499,7 +530,8 @@ Value Vm::read_slot(Table table, uint16_t index) const {
     return values[index];
 }
 Value Vm::load_reference(const Value& ref) const {
-    auto value=peek_reference(ref);if(access_)access_(ref,false);return value;
+    auto value=peek_reference(ref);if(value.owned_string.bound())require_string_reference_owner(ref);
+    if(access_)access_(ref,false);return value;
 }
 Value Vm::peek_reference(const Value& ref) const {
     if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script reference");
@@ -509,14 +541,32 @@ Value Vm::peek_reference(const Value& ref) const {
     if (ref.index >= owner->size()) throw std::runtime_error("Frame reference out of bounds");
     return (*owner)[ref.index];
 }
-void Vm::store_reference(const Value& ref, Value value) {
+void Vm::store_reference(const Value& ref,Value value){store_reference_impl(ref,std::move(value),false);}
+void Vm::store_reference_impl(const Value& ref,Value value,bool transfer) {
     if (ref.kind != Value::Kind::Reference) throw std::runtime_error("Expected typed script destination");
     const auto owner=ref.frame_owner.lock();
     const bool weak_owner=ref.table==Table::Frame||ref.table==Table::InputResult;
     if(weak_owner&&!owner)throw std::runtime_error("Retired native script destination frame");
     auto& values = weak_owner ? *owner : slots(ref.table);
     if (ref.index >= values.size()) throw std::runtime_error("Script destination out of bounds");
-    values[ref.index] = std::move(value);
+    auto& destination=values[ref.index];
+    if(value.owned_string.bound()||destination.owned_string.bound()){
+        require_string_reference_owner(ref);
+        if(value.owned_string.bound()){
+            const auto source=owned_string_receipt(value);
+            if(destination.owned_string.bound()){
+                const auto old=owned_string_receipt(destination);
+                if(transfer&&old.serial==source.serial)
+                    throw std::runtime_error("Owned String move cannot release an aliased source");
+            }
+            if(!transfer){
+                value.owned_string=destination.owned_string.bound()
+                    ?owned_strings_.Assign(destination.owned_string,destination.cp932,value.owned_string,value.cp932)
+                    :owned_strings_.Copy(value.owned_string,value.cp932);
+            }else release_owned_value(destination);
+        }else release_owned_value(destination);
+    }
+    destination = std::move(value);
     if(access_)access_(ref,true);
 }
 Value Vm::indexed_reference(const Value& reference, uint32_t index) const {
@@ -536,6 +586,7 @@ Event Vm::stop(const Command* cmd, const std::string& reason) {
 }
 Event Vm::start(const std::vector<Value>& arguments) { return start_at(program_.header().entrypoint, arguments); }
 Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
+    owned_strings_.Restart();owned_string_branch_={};first_owned_string_branch_={};
     choice_arguments_.clear();choice_waiting_=choice_arguments_taken_=false;choice_count_=0;
     input_arguments_.clear();input_waiting_=false;
     input_result_=std::make_shared<std::vector<Value>>(3);
@@ -858,13 +909,16 @@ Event Vm::step() {
             } else {
                 value = read_slot(table, index);
                 if (!usable(value)) return stop(cmd, "Uninitialized/opaque runtime slot; table="+std::to_string(uint32_t(table))+"; index="+std::to_string(index)+"; frame_cells="+std::to_string(frame_->size())+"; caller_return="+std::to_string(calls_.empty()?0:calls_.back().return_pc)+"; caller argument or service required");
+                value=copy_owned_value(std::move(value)); // source90/7581C; diagnostics read_slot stays passive
             }
             stack_.push_back(std::move(value));
         } else if (op == 0x50 || op == 0x51) {
             if (stack_.size() < 2) return stop(cmd, "Assignment stack underflow");
             Value value = stack_.back(), ref = stack_[stack_.size() - 2];
             if (ref.kind != Value::Kind::Reference || !usable(value)) return stop(cmd, "Unsupported assignment reference/value");
-            store_reference(ref,value); stack_.resize(stack_.size() - 2);
+            //51 releases the old destination and TRANSFERS the source word.
+            //The public checked store/50 path is an explicit owned copy.
+            store_reference_impl(ref,value,op==0x51);stack_.resize(stack_.size()-2);
             if(op==0x50)stack_.push_back(value);
         } else if(op==0x57) {
             if(stack_.size()<2)throw std::runtime_error("Array assignment needs two references");
@@ -935,7 +989,8 @@ Event Vm::step() {
             const auto index=numeric(pop());const auto array=pop();
             if(index<0)throw std::runtime_error("Negative script array index");
             const auto ref=indexed_reference(array,uint32_t(index));
-            stack_.push_back(op==0xF5?ref:load_reference(ref));
+            if(op==0xF5)stack_.push_back(ref);
+            else stack_.push_back(copy_owned_value(load_reference(ref))); //743E0/7581C
         } else if(op==0xF6) {
             const auto input=pop();const auto count=numeric(load_reference(input));
             if(count<=0||!random_)throw std::runtime_error("F6 needs live nonempty list and real RNG owner");
@@ -1041,6 +1096,8 @@ Event Vm::step() {
                 if(!service_)return stop(cmd,"Unbound builtin;id="+std::to_string(id));
                 std::vector<Value> arguments(stack_.end()-argc,stack_.end());stack_.resize(stack_.size()-argc);
                 result_=service_(id,arguments);
+                // Unknown host-return ownership is not the selected Inline8E/copy domain.
+                if(result_.kind==Value::Kind::String)result_.owned_string={};
                 if(waiting_event_)event.status=Status::Waiting;
             }
         } else if(op==0x65||op==0x67||op==0x6D) {
@@ -1148,6 +1205,8 @@ Event Vm::step() {
                 if (stack_.empty()) return stop(cmd, "Conditional branch stack underflow");
                 const Value& condition = stack_.back();
                 bool nonzero=false;
+                if(condition.owned_string.bound()&&condition.kind!=Value::Kind::String)
+                    return stop(cmd,"Owned String binding attached to a non-String value");
                 if(condition.kind==Value::Kind::Scalar)nonzero=(condition.word&0x0FFFFFFF)!=0;
                 else if(condition.kind==Value::Kind::Reference&&condition.table==Table::Ctx28){
                     //6BBF8 masks the original nonnull reference address;
@@ -1159,6 +1218,24 @@ Event Vm::step() {
                     nonzero=true;
                     if(!ctx_reference_branches_){ctx_reference_first_pc_=pc_;ctx_reference_first_index_=condition.index;}
                     ++ctx_reference_branches_;
+                }else if(condition.kind==Value::Kind::String){
+                    const auto allocation=owned_string_receipt(condition);
+                    // Preflight before native safety refusal mutates any word.
+                    if(result_.owned_string.bound()){
+                        const auto old=owned_string_receipt(result_);
+                        if(old.serial==allocation.serial) return stop(cmd,"Owned conditional aliases its old result");
+                    }else if(result_.kind==Value::Kind::String&&(result_.word>>28)==6)
+                        return stop(cmd,"Owned conditional old result has no release binding");
+                    nonzero=(allocation.encoded_word&0x0FFFFFFFu)!=0;
+                    release_owned_value(result_);result_={};result_.kind=Value::Kind::Scalar;
+                    owned_string_branch_.valid=true;owned_string_branch_.released=false;
+                    ++owned_string_branch_.branches;owned_string_branch_.run=run_id_;owned_string_branch_.frame=frame_id_;
+                    owned_string_branch_.pc=pc_;owned_string_branch_.opcode=uint32_t(op);
+                    owned_string_branch_.stack_before=uint32_t(stack_.size());owned_string_branch_.stack_after=uint32_t(stack_.size()-1);
+                    owned_string_branch_.branch_taken=op==0x11?!nonzero:nonzero;
+                    owned_string_branch_.allocation=allocation;
+                    release_owned_value(stack_.back());owned_string_branch_.released=true;
+                    if(!first_owned_string_branch_.valid)first_owned_string_branch_=owned_string_branch_;
                 }else return stop(cmd,"Conditional payload for non-scalar unsupported");
                 take = op == 0x11 ? !nonzero : nonzero;
                 stack_.pop_back();
@@ -1168,7 +1245,7 @@ Event Vm::step() {
         } else if(op==0x8C){stack_.push_back(context_value());
         } else if (op == 0x48 || op == 0x8E) {
             std::string text = expand(*cmd);
-            if (op == 0x8E) stack_.push_back(Value::string(std::move(text)));
+            if (op == 0x8E) stack_.push_back(inline_owned_string(std::move(text)));
             else {
                 display_state_ = 6; ++display_count_;
                 event.status = Status::Message; event.message_cp932 = std::move(text);
