@@ -1348,8 +1348,10 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             // CVSync input service uses the SAME live Windows input owner as
             // the window. It is a named native adaptation, not94D34 always1.
             DWORD foreground_process = 0;
-            GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
-            (void)PollGameController(foreground_process == GetCurrentProcessId());
+            if (!options.test_controller_input) {
+                GetWindowThreadProcessId(GetForegroundWindow(), &foreground_process);
+                (void)PollGameController(foreground_process == GetCurrentProcessId());
+            }
             if (!game_content.TickLoading(game_filesystem)) {
                 std::lock_guard<std::mutex> lock(metadata);
                 state.game_boot.content = game_content.Snapshot();
@@ -1965,6 +1967,28 @@ StartupCoordinator::~StartupCoordinator() {
 }
 std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRuntimeOptions& options,
                                                              StartupRuntimeStatus& status) {
+    return CreateImpl(options, status
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+        , {}
+#endif
+    );
+}
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+std::unique_ptr<StartupCoordinator> StartupCoordinator::CreateForOutputTest(
+    const StartupRuntimeOptions& options, std::shared_ptr<audio::Game73OutputTestControl> control,
+    StartupRuntimeStatus& status) {
+    if (!control || !options.test_controller_input) {
+        status=Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_PARAMETER);return {};
+    }
+    return CreateImpl(options,status,std::move(control));
+}
+#endif
+std::unique_ptr<StartupCoordinator> StartupCoordinator::CreateImpl(const StartupRuntimeOptions& options,
+    StartupRuntimeStatus& status
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+    , std::shared_ptr<audio::Game73OutputTestControl> output_test
+#endif
+) {
     status = {};
     if(options.test_rng_seed_replay&&!options.test_controller_input){
         status=Failure(StartupRuntimeCode::HostFailure,ERROR_INVALID_PARAMETER);return {};
@@ -1979,7 +2003,14 @@ std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRunt
     auto& impl = owner->impl_;
     // Publish immutable owner/sink BEFORE any source Start or exit notification.
     // Endpoint/COM failures remain asynchronous native audio failures.
-    try {impl->sound_output=audio::Game73PcmOutput::Create(impl->state.native_audio_creation_error);}
+    try {
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+        if(output_test)impl->sound_output=audio::Game73PcmOutput::CreateForTest(
+            std::move(output_test),impl->state.native_audio_creation_error);
+        else
+#endif
+            impl->sound_output=audio::Game73PcmOutput::Create(impl->state.native_audio_creation_error);
+    }
     catch(...){impl->state.native_audio_creation_error=ERROR_NOT_ENOUGH_MEMORY;}
     impl->game_content.SetSoundOutput(impl->sound_output.get());
     StartupHostStatus backend_status;

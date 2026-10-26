@@ -153,6 +153,12 @@ class StartupCoordinator final {
 public:
     static std::unique_ptr<StartupCoordinator> Create(const StartupRuntimeOptions&,
                                                        StartupRuntimeStatus& status);
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+    // Test-binary-only PCM transport; requires explicit injected input mode.
+    static std::unique_ptr<StartupCoordinator> CreateForOutputTest(
+        const StartupRuntimeOptions&, std::shared_ptr<audio::Game73OutputTestControl>,
+        StartupRuntimeStatus& status);
+#endif
     ~StartupCoordinator();
     StartupCoordinator(const StartupCoordinator&) = delete;
     StartupCoordinator& operator=(const StartupCoordinator&) = delete;
@@ -175,6 +181,12 @@ public:
     static uint32_t PendingDeferredCodecCleanup() noexcept;
     static StartupRuntimeStatus RetryDeferredCodecCleanup(uint32_t timeout_ms = 5000);
 private:
+    static std::unique_ptr<StartupCoordinator> CreateImpl(const StartupRuntimeOptions&,
+        StartupRuntimeStatus& status
+#ifdef DOKODEMO_SOUND_OUTPUT_TESTS
+        , std::shared_ptr<audio::Game73OutputTestControl> output_test
+#endif
+    );
     struct Impl;
     explicit StartupCoordinator(std::unique_ptr<Impl> impl) noexcept;
     std::unique_ptr<Impl> impl_;
