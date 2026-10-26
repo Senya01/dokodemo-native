@@ -18,6 +18,7 @@ struct GameMainMenuSnapshot {
     uint32_t unsupported_pc=0;
     int32_t row=0,column=0,result=-1;
     uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0,render_retirements=0;
+    uint32_t system_cursor_frame=0; // actual control12 readback, no input authority
 };
 // Finite full-mode leaves include teach row0, inventory row5 and Cancel.
 // Row4 opens its authored submenu and returns Back to this same lease. Its

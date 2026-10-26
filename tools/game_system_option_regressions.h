@@ -42,11 +42,12 @@ Menu t;t.Enter(enter);const auto parent=t.Get();for(U i=0;i<3;++i)t.Send(enter);
 C(t.Get().state78==1&&t.Get().substate7C==3&&t.Get().result==-1,"A13");
 t.Fresh(Right);C(t.Get().substate7C==3&&t.Get().column==0&&t.Get().unsupported==parent.unsupported,"A14");
 for(U dir:{U(Down),U(Up)}){const auto old=t.Get();t.Fresh(dir|Circle|Cross|Left);
-C(t.Get().unsupported==old.unsupported+1&&t.Get().unsupported_pc==(dir==Down?0x4E67Cu:0x1310Cu),"A15");
-C(t.Get().state78==1&&t.Get().substate7C==3&&t.Get().row==6&&t.Get().column==0&&t.Get().result==-1,"A16");
+if(dir==Down)C(t.Get().unsupported==old.unsupported+1&&t.Get().unsupported_pc==0x4E67Cu,"A15");
+else C(t.Get().unsupported==old.unsupported&&t.Get().column==2,"A15-fresh-Up02");
+C(t.Get().state78==1&&t.Get().substate7C==3&&t.Get().row==6&&t.Get().column==(dir==Down?0:2)&&t.Get().result==-1,"A16");
 t.Send(dir|Circle|Cross|Left);C(t.Get().substate7C==3&&t.Get().state78==1,"A17");}
 t.Fresh(back);const auto returned=t.Get();
-C(returned.substate7C==0&&returned.state78==1&&returned.row==6&&returned.column==0&&returned.result==-1&&returned.cancels==0,"A18");
+C(returned.substate7C==0&&returned.state78==1&&returned.row==6&&returned.column==2&&returned.result==-1&&returned.cancels==0,"A18");
 C(returned.generation==parent.generation&&returned.opens==parent.opens&&EqL(returned.lease,parent.lease),"A19");
 t.Send(back);C(t.Get().state78==1&&t.Get().cancels==0,"A20");t.Fresh(back);
 C(t.Get().state78==2&&t.Get().row==-1&&t.Get().column==-1&&t.Get().cancels==1&&t.Get().closed==0,"A21");

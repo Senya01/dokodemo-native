@@ -46,14 +46,28 @@ void GameMainMenuControl::Tick(uint8_t mode){
         return;
     }
     if(state_.substate7C==3){
-        // NativeSystemFirstLeafOnly. Down from0 needs the unavailable4E67C
-        // registry result to choose1/2. Fresh Up from0 wraps directly to2 at
-        //1310C; that other leaf is outside this finite native selection domain.
-        // Both refusals consume priority, without a claimed source no-op.
-        if(down||up){++state_.unsupported;state_.unsupported_pc=down?0x4E67C:0x1310C;return;}
-        // At column0 source1311C takes7C7 before the conditional gate query.
-        if(input_.First(Circle)){state_.state78=2;input_.BeginContext();return;}
+        // NativeSystemCursor02: only fresh Up0->2 at1310C is admitted.
+        // Down retains priority. Its column2 wrap is outside this finite edge,
+        // and must not be mislabeled as a4E67C query. No refused-path store or
+        // registry call is performed (source Down0/Up2 store before querying).
+        if(down){++state_.unsupported;state_.unsupported_pc=state_.column==0?0x4E67C:0x1300C;return;}
+        if(up){
+            if(state_.column==0){if(up==1)state_.column=2;}
+            else{++state_.unsupported;state_.unsupported_pc=0x130E8;}
+            return;
+        }
+        // Source Circle goes directly to close-store13184 at every column.
+        // Keep the implemented Options leaf0; never expose result15 by merely
+        // adding navigation. Unknown leaves refuse BEFORE close/query/effects.
+        if(input_.First(Circle)){
+            if(state_.column==0){state_.state78=2;input_.BeginContext();}
+            else{++state_.unsupported;state_.unsupported_pc=0x13184;}
+            return;
+        }
         if(input_.First(Cross)||input_.First(Left)){state_.substate7C=0;input_.BeginContext();}
+        // Source idle13160 queries4E67C. For columns0/2 BOTH result paths
+        // preserve selection; this existing Windows UI effect-slice omits that
+        // query without supplying a result or claiming its side effects.
         return;
     }
     if(state_.substate7C==1){
@@ -163,6 +177,7 @@ GameFsStatus GameMainMenu::Draw(GameGraphics& graphics){
 GameMainMenuSnapshot GameMainMenu::Snapshot()const{
     auto out=control_.Snapshot();out.frame=last_frame_;out.clip=last_clip_;out.mode=last_mode_;
     if(auto* c=clone_.Control(0)){out.frame=c->frame;out.clip=c->clip;out.mode=c->mode;}
+    if(auto* c=clone_.Control(12))out.system_cursor_frame=c->frame;
     out.render_live=bool(resource_);out.render_retirements=render_retirements_;
     out.draw_frames=draw_frames_;out.quads=quads_;return out;
 }

@@ -25,7 +25,7 @@ return a.live==b.live&&a.full==b.full&&a.source_scene_nonzero==b.source_scene_no
   &&a.generation==b.generation&&SameLease(a.lease,b.lease)&&a.state78==b.state78&&a.substate7C==b.substate7C
   &&a.opens==b.opens&&a.cancels==b.cancels&&a.closed==b.closed&&a.rejected==b.rejected
   &&a.unsupported==b.unsupported&&a.row==b.row&&a.column==b.column&&a.result==b.result
-  &&a.frame==b.frame&&a.clip==b.clip&&a.mode==b.mode&&a.draw_frames==b.draw_frames&&a.quads==b.quads;
+  &&a.frame==b.frame&&a.clip==b.clip&&a.mode==b.mode&&a.draw_frames==b.draw_frames&&a.quads==b.quads&&a.system_cursor_frame==b.system_cursor_frame;
 }
 inline InputFrame Frame(MenuLease lease,uint64_t sequence,uint32_t buttons=0,bool focused=true) {
 InputFrame f;f.buttons=buttons;f.focused=focused;f.test_injected=true;f.sequence=sequence;
@@ -226,6 +226,46 @@ for(uint32_t back:{uint32_t(Cross),uint32_t(Left)}) {
   f.menu.Close();Check(!f.Input(Circle),"retired submenu rejects input");
 }
 }
+inline void SystemCursor02() {
+for(bool scene:{false,true})for(uint32_t open:{uint32_t(Circle),uint32_t(Right)})
+for(uint32_t back:{uint32_t(Cross),uint32_t(Left)}) {
+  Case f(scene);f.Press(Up);Check(f.State().row==6,"System main row6");f.Press(open);const auto owner=f.State();
+  Check(owner.substate7C==3&&owner.column==0,"System opens first column");
+  f.menu.Tick(1);f.Step(Up);Check(f.State().column==0,"opening held Up needs release");
+  f.Step(Up,false);f.Step(Up);Check(f.State().column==0,"refocus held Up cannot navigate");
+  const auto before=f.State();f.Press(Down|Up|Circle|Cross);
+  Check(f.State().column==0&&f.State().unsupported==before.unsupported+1&&f.State().unsupported_pc==0x4E67Cu,"Down priority keeps old query refusal");
+  f.Press(Up|Circle|back);auto s=f.State();
+  Check(s.column==2&&s.substate7C==3&&s.state78==1&&s.result==-1&&s.cancels==0&&s.closed==0
+    &&s.unsupported==before.unsupported+1&&SameLease(s.lease,owner.lease)&&s.generation==owner.generation,"fresh Up02 consumes mixed confirm/back priority");
+  const auto moved=s;f.Step(Circle);
+  Check(f.State().column==2&&f.State().unsupported==moved.unsupported&&f.State().state78==1,"subsequent held Circle not a new confirm");
+  auto foreign=Frame(f.lease,++f.sequence,Up|Circle);++foreign.main_menu_epoch;
+  Check(!f.menu.Input(foreign),"column2 rejects foreign epoch");f.menu.Tick(2);
+  Check(f.State().column==2&&f.State().state78==1,"foreign input has no column2 effect");
+  for(uint32_t keys:{uint32_t(Circle|back),uint32_t(Down|Up|Circle|back),uint32_t(Up|Circle|back)}) {
+    const auto old=f.State();f.Press(keys);s=f.State();
+    Check(s.column==2&&s.state78==1&&s.substate7C==3&&s.result==-1&&s.closed==0&&s.cancels==0
+      &&s.unsupported==old.unsupported+1&&SameLease(s.lease,owner.lease),"unsupported column2 edge has no close/result/owner effects");
+    Check(s.unsupported_pc==((keys&Down)?0x1300Cu:(keys&Up)?0x130E8u:0x13184u),"refusal is actual branch boundary, not invented registry invocation");
+  }
+  f.Press(back);s=f.State();Check(s.substate7C==0&&s.row==6&&s.column==2&&s.state78==1&&s.cancels==0
+    &&s.generation==owner.generation&&SameLease(s.lease,owner.lease),"column2 Back returns same parent");
+  f.Step(back);Check(f.State().state78==1,"held Back cannot cancel parent");
+  f.Press(open);Check(f.State().substate7C==3&&f.State().column==0,"reopen System resets source column0");
+  f.Press(Circle);Check(f.State().state78==2&&f.State().closed==0,"original Options close still starts");
+  f.menu.Tick(1);Check(f.State().state78==2&&f.State().closed==0,"Options waits close control");f.menu.Tick(2);
+  Check(f.State().state78==3&&f.State().result==13&&f.State().closed==1,"reopen cannot leak result15 into Options");
+}
+Case repeat;repeat.Press(Up);repeat.Press(Right);repeat.Press(Up);const auto start=repeat.State();
+for(unsigned tick=1;tick<=12;++tick){repeat.Step(Up);const auto s=repeat.State();
+  const uint32_t failures=tick<10?0u:tick<12?1u:2u;
+  Check(s.column==2&&s.state78==1&&s.unsupported==start.unsupported+failures,"held Up02 stays2 and refuses only repeat10/2 queries");}
+repeat.Press(Left);repeat.Step(Left);Check(repeat.State().state78==1,"held Left after Back");repeat.Press(Cross);
+repeat.menu.Tick(1);Check(repeat.State().closed==0,"separate Cancel awaits close");repeat.menu.Tick(2);
+Check(repeat.State().state78==3&&repeat.State().result==-1&&repeat.State().closed==1,"separate Cancel returns -1 exactly once");
+repeat.menu.Close();Check(!repeat.Input(Up),"retired System refuses input");
+}
 inline void Put(std::vector<uint8_t>& b,size_t at,uint32_t word,unsigned width=4) {
 for(unsigned i=0;i<width;++i)b.at(at+i)=uint8_t(word>>(8*i));
 }
@@ -254,6 +294,7 @@ GameFsStatus OpenResource(const std::string& path,PackageView& out)override {
       for(uint32_t i=0;i<30;++i)Put(b,clips+i*52+48,i==0?3:i==1?4:12);
       for(uint32_t i=0;i<2;++i){Put(b,clips+i*52,1);Put(b,clips+i*52+4,keys+i*8);Put(b,keys+i*8+2,1,2);Put(b,keys+i*8+4,values);}
       Put(b,clips+4*52,1);Put(b,clips+4*52+4,keys); // synthetic submenu clip uses the same white quad
+      Put(b,clips+5*52,1);Put(b,clips+5*52+4,keys); // synthetic System clip, existing generated quad
       Put(b,values,1);out=View(std::move(b));return {};
   }
   if(path=="data\\gui\\main_menu\\test-menu.GIM") {
@@ -322,8 +363,29 @@ for(unsigned i=0;i<4;++i)Ui(bool(menu.Tick()),"closing Update");
 Ui(menu.Snapshot().state78==3&&menu.Snapshot().closed==1&&menu.Snapshot().result==-1,"actual owned close/result");
 menu.Close();Ui(!menu.Modal()&&!menu.Input(Frame(lease,++seq,Right)),"retired UI rejects input");
 }
+inline void SyntheticSystemCursor() {
+Resources source;GameMainMenu menu;const auto lease=Lease();uint64_t seq=0;GameGraphics graphics;
+Ui(graphics.Initialize({})&&bool(menu.Open(source,lease,true,false)),"System UI fixture opens");
+const auto tick=[&]{Ui(bool(menu.Tick()),"System real Update");};for(unsigned i=0;i<3;++i)tick();
+const auto edge=[&](uint32_t key){for(uint32_t k:{0u,key})Ui(menu.Input(Frame(lease,++seq,k))&&bool(menu.Tick()),"System actual fresh edge");};
+edge(Up);edge(Right);auto s=menu.Snapshot();const auto generation=s.generation;
+Ui(s.clip==5&&s.mode==1&&s.column==0&&s.system_cursor_frame==2,"actual control12 first frame2/clip5");
+for(unsigned i=0;i<12;++i){Ui(menu.Input(Frame(lease,++seq,Up)),"opening held Up sample");tick();}
+Ui(menu.Snapshot().mode==2&&menu.Snapshot().column==0,"opening held Up remains unarmed");
+edge(Up);tick();tick();s=menu.Snapshot();
+Ui(s.column==2&&s.system_cursor_frame==4&&s.clip==5&&s.mode==2&&s.result==-1&&s.closed==0,"actual control12 third frame4");
+const auto draws=s.draw_frames;for(unsigned i=0;i<2;++i)Ui(bool(menu.Draw(graphics)),"System actual fixture Draw");
+s=menu.Snapshot();Ui(s.draw_frames==draws+2&&s.column==2&&s.system_cursor_frame==4&&s.generation==generation,"repeated Draw preserves logical owner/selection");
+edge(Circle);Ui(menu.Snapshot().state78==1&&menu.Snapshot().result==-1&&menu.Snapshot().system_cursor_frame==4
+  &&menu.Snapshot().unsupported_pc==0x13184u,"actual UI column2 confirm refuses before close");
+edge(Left);s=menu.Snapshot();Ui(s.substate7C==0&&s.row==6&&s.column==2&&s.clip==0&&s.system_cursor_frame==5
+  &&s.generation==generation&&SameLease(s.lease,lease),"Back actual neutral control12 frame5/same parent");
+for(unsigned i=0;i<3;++i)tick();edge(Cross);for(unsigned i=0;i<4;++i)tick();
+Ui(menu.Snapshot().state78==3&&menu.Snapshot().result==-1&&menu.Snapshot().closed==1,"System UI separate actual Cancel close");
+menu.Close();Ui(!menu.Input(Frame(lease,++seq,Up))&&menu.Snapshot().system_cursor_frame==0,"retired actual control has no cursor readback");
+}
 } // namespace dokodemo::main_menu_tests
 inline void GameMainMenuRegressionChecks() {
 using namespace dokodemo::main_menu_tests;
-LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();Row4OpenBack();SyntheticClips();SyntheticRow4Clip();
+LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();Row4OpenBack();SystemCursor02();SyntheticClips();SyntheticRow4Clip();SyntheticSystemCursor();
 }
