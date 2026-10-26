@@ -1,6 +1,6 @@
 # dokodemo-native
 
-An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Linux and a matching PSP rebuild are unverified.
+An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Windows is the application target. Ubuntu x86_64 headless component testing is described below; a Linux game application/window backend is not implemented. A matching PSP rebuild remains unverified.
 
 The current source includes title/new-game/profile entry, room and actor rendering, repeated owned conversations, choices and finite Latin/kana word input. Implemented finite operations include inventory marking, decoration, putaway and confirmed discard; main-menu inventory; empty friend/word notebooks, self-details, the current diary record; and selected Options edit/No/Yes RAM paths. Coverage is bounded by each supported operation, data shape and lifecycle. Original save import, durable state, networking, full text/IME and broad scene progression remain open.
 
@@ -55,7 +55,31 @@ cmake --build build/synthetic --parallel 2
 ctest --test-dir build/synthetic -R '^game-.*-tests$' --output-on-failure
 ```
 
-This Windows configuration builds the core and ten synthetic game tests without assets, generated headers, FFmpeg or private fixtures. `StartupProbe` is a separate library used by the application and explicit legacy consumers. `DOKODEMO_CORE_TESTS=ON` enables legacy startup tests requiring local original inputs; those tests are not data-free. The application build above still needs genuine user-generated tables. This component result does not establish Linux support, first-time ISO import or gameplay completion.
+This Windows configuration builds the core and ten synthetic game tests without assets, generated headers, FFmpeg or private fixtures. `StartupProbe` is a separate library used by the application and explicit legacy consumers. `DOKODEMO_CORE_TESTS=ON` enables legacy startup tests requiring local original inputs; those tests are not data-free. The application build above still needs genuine user-generated tables. This Windows component result does not establish Linux application support, first-time ISO import or gameplay completion.
+
+
+### Linux headless core (components only)
+
+An unmodified public source snapshot has passed all seven available synthetic suites on Ubuntu x86_64 with GCC13.3.0, CMake3.31.10 and Ninja1.13.1. These are `game-boot-tests`, `game-graphics-tests`, `game-content-tests`, `game-scene-ui-tests`, `game-model-tests`, `game-text-tests` and `game-actor-tests`. The three Windows-specific suites are outside this Linux set.
+
+With Linux CMake, Ninja and a C++17 compiler available in the command environment:
+
+```sh
+cmake -S . -B build/headless -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DDOKODEMO_BUILD_WINDOWS_APP=OFF \
+  -DDOKODEMO_CORE_TESTS=OFF \
+  -DDOKODEMO_GAME_BOOT_TESTS=ON \
+  -DDOKODEMO_FFMPEG_ROOT= \
+  -DDOKODEMO_USER_TABLES_DIR= \
+  -DDOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR= \
+  -DDOKODEMO_MODULE_CONTROLS_SOURCE= \
+  -DDOKODEMO_BACKEND_CONTROLS_SOURCE=
+cmake --build build/headless --parallel 2
+ctest --test-dir build/headless -R '^game-.*-tests$' --output-on-failure
+```
+
+No game assets, generated tables, FFmpeg or private fixtures are needed for this configuration. This verifies shared headless components, including software-renderer tests; it is not a Linux game application, Linux window/backend implementation, first-time ISO import or gameplay pass.
 
 
 ## Run the native game window
