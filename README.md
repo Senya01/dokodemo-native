@@ -36,6 +36,28 @@ scripts/build-functional.ps1 -OutputDirectory build/functional -PreparedCodecRoo
 
 The user-table root contains `audio_catalog.h` and `recovered/ksc_dispatch_addresses.h`; alternatively generate them at the ignored default locations. Public `game-*` tests exercise authored synthetic data. Seventeen original-byte fixture groups/dependent headers are excluded from publication and explicitly omitted by the default actor runner. Their absence is not reported as original-script equivalence. A developer's own local fixture package may be enabled with `-PrivateSourceFixturesDirectory`; it is optional and is never distributed. See [development and publication](docs/DEVELOPMENT.md).
 
+### Synthetic component tests without game data
+
+From an x64 Visual Studio 2022 developer PowerShell with CMake and Ninja on PATH:
+
+```powershell
+cmake -S . -B build/synthetic -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DDOKODEMO_BUILD_WINDOWS_APP=OFF `
+  -DDOKODEMO_CORE_TESTS=OFF `
+  -DDOKODEMO_GAME_BOOT_TESTS=ON `
+  -DDOKODEMO_FFMPEG_ROOT= `
+  -DDOKODEMO_USER_TABLES_DIR= `
+  -DDOKODEMO_PRIVATE_SOURCE_FIXTURES_DIR= `
+  -DDOKODEMO_MODULE_CONTROLS_SOURCE= `
+  -DDOKODEMO_BACKEND_CONTROLS_SOURCE=
+cmake --build build/synthetic --parallel 2
+ctest --test-dir build/synthetic -R '^game-.*-tests$' --output-on-failure
+```
+
+This Windows configuration builds the core and ten synthetic game tests without assets, generated headers, FFmpeg or private fixtures. `StartupProbe` is a separate library used by the application and explicit legacy consumers. `DOKODEMO_CORE_TESTS=ON` enables legacy startup tests requiring local original inputs; those tests are not data-free. The application build above still needs genuine user-generated tables. This component result does not establish Linux support, first-time ISO import or gameplay completion.
+
+
 ## Run the native game window
 
 Use your own prepared native assets and extracted media directory (not an ISO filename). Example paths below are placeholders:
