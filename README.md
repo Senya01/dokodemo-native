@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-System fresh Up0to2 and safe leaf refusal verified by component and authored-resource offline QA; actual System0/1 because pre-menu String899E Unsupported. Full game remains incomplete.
+Inline VM strings use a native owned arena with checked logical offsets, explicit source copy/move/release and synthetic lifetime/conditional regressions. Unknown string origins remain unsupported. This Windows mapping is nonmatching; the full game remains incomplete.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
