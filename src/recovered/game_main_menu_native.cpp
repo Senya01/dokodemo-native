@@ -35,6 +35,16 @@ void GameMainMenuControl::Tick(uint8_t mode){
     if(mode==1){input_.BeginContext();return;}
     input_.Tick();
     const auto down=input_.Repeat(Down,10,2),up=input_.Repeat(Up,10,2);
+    if(state_.substate7C==2){
+        // Source12E00: Open/Back do not query the separate D7150 object.
+        // Up/Down do: its native producer/lifetime is not bound here. Refuse
+        // before that read rather than inventing a NULL/present permission.
+        if(down||up){++state_.unsupported;state_.unsupported_pc=down?0x12E4C:0x12F20;return;}
+        // Source12F90 would close toward results8..11. No leaf is implemented.
+        if(input_.First(Circle)){++state_.unsupported;state_.unsupported_pc=0x12F90;return;}
+        if(input_.First(Cross)||input_.First(Left)){state_.substate7C=0;input_.BeginContext();}
+        return;
+    }
     if(state_.substate7C==3){
         // NativeSystemFirstLeafOnly. Down from0 needs the unavailable4E67C
         // registry result to choose1/2. Fresh Up from0 wraps directly to2 at
@@ -68,6 +78,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
     if(input_.First(Circle)){
+        if(state_.row==4){state_.substate7C=2;state_.column=0;input_.BeginContext();return;}
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==0||state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
@@ -75,6 +86,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
         return;
     }
     if(input_.First(Right)){
+        if(state_.row==4){state_.substate7C=2;state_.column=0;input_.BeginContext();return;}
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3||state_.row==4||state_.row==6)++state_.unsupported;
@@ -120,13 +132,15 @@ GameFsStatus GameMainMenu::Tick(){
     control_.Tick(main->mode);const auto after=control_.Snapshot();
     if(before.state78==1&&after.state78==1&&before.substate7C!=after.substate7C){
         const auto system=after.substate7C==3||before.substate7C==3;
-        const auto clip=after.substate7C==3?5u:after.substate7C==1?(after.other_profiles?3u:2u):0u;
+        const auto row4=after.substate7C==2||before.substate7C==2;
+        const auto clip=after.substate7C==3?5u:after.substate7C==2?4u:after.substate7C==1?(after.other_profiles?3u:2u):0u;
         if(!clone_.Bind(0,clip,0))return {GameFsCode::Unavailable,0,"Main menu authored submenu clip"};
         *main={0,clip,1,1};
-        auto* selected=clone_.Control(system?12:after.other_profiles?10:9);
-        selected->frame=after.substate7C?uint32_t(after.column+2):(system?5u:after.other_profiles?4u:3u);
+        auto* selected=clone_.Control(system?12:row4?11:after.other_profiles?10:9);
+        selected->frame=after.substate7C?uint32_t(after.column+2):(system?5u:row4?6u:after.other_profiles?4u:3u);
     }
     if(after.state78==1&&after.substate7C==1)clone_.Control(after.other_profiles?10:9)->frame=uint32_t(after.column+2);
+    if(after.state78==1&&after.substate7C==2)clone_.Control(11)->frame=uint32_t(after.column+2);
     if(after.state78==1&&after.substate7C==3)clone_.Control(12)->frame=uint32_t(after.column+2);
     if(before.state78==1&&after.state78==2){
         if(!clone_.ShowRoot(0)||!clone_.Bind(0,1,0))return {GameFsCode::Unavailable,0,"Main menu closing clip"};

@@ -22,7 +22,7 @@ return a.script_generation==b.script_generation&&a.run_id==b.run_id
 }
 inline bool Same(const Snapshot& a,const Snapshot& b) {
 return a.live==b.live&&a.full==b.full&&a.source_scene_nonzero==b.source_scene_nonzero
-  &&a.generation==b.generation&&SameLease(a.lease,b.lease)&&a.state78==b.state78
+  &&a.generation==b.generation&&SameLease(a.lease,b.lease)&&a.state78==b.state78&&a.substate7C==b.substate7C
   &&a.opens==b.opens&&a.cancels==b.cancels&&a.closed==b.closed&&a.rejected==b.rejected
   &&a.unsupported==b.unsupported&&a.row==b.row&&a.column==b.column&&a.result==b.result
   &&a.frame==b.frame&&a.clip==b.clip&&a.mode==b.mode&&a.draw_frames==b.draw_frames&&a.quads==b.quads;
@@ -182,7 +182,7 @@ for(uint32_t phase=0;phase<3;++phase) {
   Check(!m.Begin(other,true,true)&&!m.Begin(other,false,true)&&Same(before,m.Snapshot()),"live replacement unchanged");
 }
 for(int32_t row=0;row<7;++row) {
-  if(row==0||row==5||row==6)continue; // separate teach/inventory/System owning regressions
+  if(row==0||row==4||row==5||row==6)continue; // separate finite owning regressions
   Case f(row==2);
   for(unsigned guard=0;f.State().row!=row&&guard<7;++guard)f.Press(Down);
   Check(f.State().row==row,"reach each full-mode row");
@@ -198,6 +198,32 @@ for(int32_t row=0;row<7;++row) {
   }
   f.Press(Cross);Check(f.State().state78==2&&f.State().cancels==1
       &&SameLease(f.State().lease,f.lease),"Cancel after refusal");
+}
+}
+inline void Row4OpenBack() {
+for(bool scene:{false,true})for(uint32_t open:{uint32_t(Circle|Cross),uint32_t(Right|Cross)})
+for(uint32_t back:{uint32_t(Cross),uint32_t(Left)}) {
+  Case f(scene);while(f.State().row!=4)f.Press(Down);
+  const auto owner=f.State();f.Press(open);auto s=f.State();
+  Check(s.substate7C==2&&s.state78==1&&s.column==0&&s.result==-1
+    &&s.generation==owner.generation&&SameLease(s.lease,owner.lease)&&s.opens==1&&s.cancels==0,"row4 opens same owner ahead of Cancel");
+  f.menu.Tick(1);f.Step(back);Check(f.State().substate7C==2,"transition held Back cannot arm");
+  auto bad=Frame(f.lease,++f.sequence,back);++bad.message_context;
+  Check(!f.menu.Input(bad),"submenu foreign context refuses");f.menu.Tick(2);
+  for(uint32_t keys:{uint32_t(Down|Circle|Cross),uint32_t(Up|Circle|Left),uint32_t(Circle|Cross)}) {
+    const auto before=f.State();f.Press(keys);s=f.State();
+    Check(s.unsupported==before.unsupported+1&&s.substate7C==2&&s.column==0&&s.state78==1&&s.result==-1
+      &&s.closed==0&&s.cancels==0&&SameLease(s.lease,owner.lease),"unknown navigation and leaf refuse before close/effects");
+    Check(s.unsupported_pc==((keys&Down)?0x12E4Cu:(keys&Up)?0x12F20u:0x12F90u),"exact refused consumer");
+  }
+  f.Press(back);s=f.State();
+  Check(s.substate7C==0&&s.row==4&&s.state78==1&&s.result==-1&&s.closed==0&&s.cancels==0
+    &&s.generation==owner.generation&&SameLease(s.lease,owner.lease),"Back retains main owner without consumption/rearm");
+  f.Step(back);Check(f.State().state78==1,"held Back cannot cancel parent");
+  f.Press(back);Check(f.State().state78==2&&f.State().cancels==1,"separate fresh Cancel closes parent");
+  f.menu.Tick(1);Check(f.State().closed==0,"Cancel waits actual close control");f.menu.Tick(2);
+  Check(f.State().state78==3&&f.State().closed==1&&f.State().result==-1,"Cancel returns once");
+  f.menu.Close();Check(!f.Input(Circle),"retired submenu rejects input");
 }
 }
 inline void Put(std::vector<uint8_t>& b,size_t at,uint32_t word,unsigned width=4) {
@@ -227,6 +253,7 @@ GameFsStatus OpenResource(const std::string& path,PackageView& out)override {
       const char stem[]="test-menu.GIM";for(size_t i=0;i<sizeof(stem);++i)b.at(name+i)=uint8_t(stem[i]);
       for(uint32_t i=0;i<30;++i)Put(b,clips+i*52+48,i==0?3:i==1?4:12);
       for(uint32_t i=0;i<2;++i){Put(b,clips+i*52,1);Put(b,clips+i*52+4,keys+i*8);Put(b,keys+i*8+2,1,2);Put(b,keys+i*8+4,values);}
+      Put(b,clips+4*52,1);Put(b,clips+4*52+4,keys); // synthetic submenu clip uses the same white quad
       Put(b,values,1);out=View(std::move(b));return {};
   }
   if(path=="data\\gui\\main_menu\\test-menu.GIM") {
@@ -276,8 +303,27 @@ Ui(menu.Input(Frame(lease,++seq,Left))&&bool(menu.Tick())&&menu.Snapshot().state
 menu.Close();const auto retired=menu.Snapshot();
 Ui(!retired.live&&!menu.Modal()&&!menu.Input(Frame(lease,++seq,Cross))&&bool(menu.Tick()),"retired menu rejects input");
 }
+inline void SyntheticRow4Clip() {
+Resources source;GameMainMenu menu;const auto lease=Lease();uint64_t seq=0;GameGraphics graphics;
+Ui(graphics.Initialize({})&&bool(menu.Open(source,lease,true,false)),"row4 fixture opens");
+for(unsigned i=0;i<3;++i)Ui(bool(menu.Tick()),"opening clip completes");
+const auto edge=[&](uint32_t key){
+  for(uint32_t k:{0u,key})Ui(menu.Input(Frame(lease,++seq,k))&&bool(menu.Tick()),"real UI fresh edge");
+};
+while(menu.Snapshot().row!=4)edge(Down);const auto owner=menu.Snapshot();edge(Right);
+auto s=menu.Snapshot();Ui(s.substate7C==2&&s.clip==4&&s.frame==0&&s.mode==1,"authored row4 clip4 starts");
+for(unsigned i=0;i<12;++i)Ui(bool(menu.Tick()),"actual clip4 Update");
+s=menu.Snapshot();Ui(s.mode==2&&s.substate7C==2&&bool(menu.Draw(graphics))&&menu.Snapshot().quads==1,"clip4 draws owned resource");
+edge(Left);s=menu.Snapshot();Ui(s.substate7C==0&&s.clip==0&&s.frame==0&&s.mode==1
+  &&s.row==4&&s.generation==owner.generation&&SameLease(s.lease,owner.lease),"Back reopens main render on same generation");
+for(unsigned i=0;i<3;++i)Ui(bool(menu.Tick()),"main clip Update after Back");
+edge(Cross);Ui(menu.Snapshot().clip==1&&menu.Snapshot().state78==2,"fresh parent Cancel uses actual closing clip");
+for(unsigned i=0;i<4;++i)Ui(bool(menu.Tick()),"closing Update");
+Ui(menu.Snapshot().state78==3&&menu.Snapshot().closed==1&&menu.Snapshot().result==-1,"actual owned close/result");
+menu.Close();Ui(!menu.Modal()&&!menu.Input(Frame(lease,++seq,Right)),"retired UI rejects input");
+}
 } // namespace dokodemo::main_menu_tests
 inline void GameMainMenuRegressionChecks() {
 using namespace dokodemo::main_menu_tests;
-LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();SyntheticClips();
+LiteralResults();InputLeases();SourceRows();ControlLifecycle();Refusals();Row4OpenBack();SyntheticClips();SyntheticRow4Clip();
 }

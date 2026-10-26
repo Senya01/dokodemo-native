@@ -20,6 +20,8 @@ struct GameMainMenuSnapshot {
     uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0,render_retirements=0;
 };
 // Finite full-mode leaves include teach row0, inventory row5 and Cancel.
+// Row4 opens its authored submenu and returns Back to this same lease. Its
+// separate object-dependent navigation and all results8..11 remain refused.
 // Results publish only after real closing-control completion.
 class GameMainMenuControl final {
   public:
