@@ -142,6 +142,7 @@ std::vector<uint8_t> Ui(bool select_transform=false) {
         H(b,ancestor,2);H(b,ancestor+2,2);W(b,ancestor+4,ancestor+8);
         x=11;y=5;std::memcpy(b.data()+ancestor+8,&x,4);std::memcpy(b.data()+ancestor+12,&y,4);
         W(b,ancestor+32,1);W(b,ancestor+36,1);W(b,32+200*8+13*52+48,1);
+        W(b,32+200*8+14*52+48,2); // invented finite close clip for result-path regression
     }
     return b;
 }
@@ -420,10 +421,54 @@ void ChoiceDrawTests() {
         Check(layout.Choice().options==rows&&layout.Choice().row==before.row&&layout.Choice().state==before.state,
               "drawing cannot select,complete or rewrite owning SELECT options");
         Check(layout.Close(),"SELECT layout retires");
-        GameSceneUiBootstrap oversized;Check(bool(oversized.Initialize(source,arena,vm,font)),"SELECT long-list owners");
-        Check(bool(oversized.BeginChoice(std::vector<std::string>(32,"A"),91,4))&& !oversized.DrawChoice(graphics)
-              &&oversized.Choice().state==0,"unimplemented scrolling cannot silently publish clipped choices or complete a result");
-        Check(oversized.Close(),"SELECT long-list retires");
+        // WindowsSelectRowViewport is a render-only capability. The original
+        // 32-row refusal fixture is retained in the task's BEFORE snapshot.
+        for(const uint32_t count:{19u,32u}){
+            GameSceneUiBootstrap window;Check(bool(window.Initialize(source,arena,vm,font)),"SELECT viewport owners");
+            std::vector<std::string> many(count,"A");many[6]=std::string(41,'A');
+            Check(bool(window.BeginChoice(many,91,4))&&graphics.Clear(0xFF000000)&&window.DrawChoice(graphics)&&window.Choice().state==0,
+                  "new viewport capability also draws opening lists without completing the source clip");
+            Check(bool(window.TickChoice())&&window.Choice().state==1,"viewport uses actual opened SELECT");
+            uint64_t sequence=0;
+            const auto send=[&](uint32_t keys){Check(window.HandleChoiceInput({keys,true,true,++sequence,0,91,4})&&bool(window.TickChoice()),"actual viewport input and clip update");};
+            const auto edge=[&](uint32_t keys){send(0);send(keys);send(0);};
+            const auto draw=[&](){
+                const auto before=window.Choice();
+                Check(graphics.Clear(0xFF000000)&&window.DrawChoice(graphics),"actual long-list resource/font draw");
+                const auto d=window.ChoiceDraw();
+                Check(d.code==GameChoiceDrawCode::Drawn&&d.viewport&&d.first<=before.row&&before.row<d.end&&d.end<=count
+                      &&d.visible_height<=231&&d.total_height==(count+1)*21&&d.selected_height==uint32_t(before.row==6?42:21),"complete variable rows fit the selected logical window");
+                Check(d.selected_y>=d.text_y&&d.selected_y>=8&&d.selected_y+int32_t(d.selected_height)<=264
+                      &&d.cursor_y==d.selected_y,"selected complete row and authored cursor share the visible origin");
+                GameGraphicsFrame first,second;
+                Check(graphics.SwapBuffers()&&graphics.CopyFront(first),"viewport publication");
+                Check(first.pixels[size_t(d.selected_y)*first.stride+size_t(d.text_x)]==0xFF552F0D,"selected synthetic FONT glyph is actually rasterized");
+                Check(graphics.Clear(0xFF000000)&&window.DrawChoice(graphics)&&graphics.SwapBuffers()&&graphics.CopyFront(second)
+                      &&first.pixels==second.pixels,"repeated production draw is pixel stable");
+                const auto after=window.Choice();
+                Check(after.live==before.live&&after.timed_out==before.timed_out&&after.options==before.options&&after.state==before.state
+                      &&after.row==before.row&&after.result==before.result&&after.remaining==before.remaining&&after.active_updates==before.active_updates
+                      &&after.confirmations==before.confirmations&&after.rejected_inputs==before.rejected_inputs&&after.context==before.context
+                      &&after.owner_generation==before.owner_generation,"drawing preserves every logical choice field and lease identity");
+            };
+            draw();edge(Up);Check(window.Choice().row==count-1,"fresh Up wraps first to last");draw();
+            edge(Down);Check(window.Choice().row==0,"fresh Down wraps last to first");draw();
+            for(uint32_t row=1;row<count;++row){edge(Down);Check(window.Choice().row==row,"navigation retains actual logical order");draw();}
+            send(0);send(Circle);Check(window.Choice().result==count&&window.Choice().state==2,"confirm returns selected actual row+1, not viewport index");
+            for(unsigned i=0;i<120&&window.Choice().state!=3;++i)Check(bool(window.TickChoice()),"actual source close clip");
+            Check(window.Choice().state==3&&window.Choice().result==count&&window.Choice().confirmations==1,"real close publishes the unmodified result once");
+            Check(window.Close()&&!window.HandleChoiceInput({Down,true,true,++sequence,0,91,4})&&window.DrawChoice(graphics)
+                  &&window.ChoiceDraw().code==GameChoiceDrawCode::Idle,"retired owner neither accepts navigation nor draws stale rows");
+        }
+        for(const auto& bad:std::vector<std::string>{std::string(12,'\n'),std::string(1023,'A'),std::string("\x81\x30",2)}){
+            GameSceneUiBootstrap rejected;Check(bool(rejected.Initialize(source,arena,vm,font))&&bool(rejected.BeginChoice({"A",bad},92,4)),"bounded refusal fixture owners");
+            Check(!rejected.DrawChoice(graphics)&&rejected.Choice().row==0&&rejected.Choice().state==0&&rejected.Choice().options[1]==bad,
+                  "too-tall whole row, FONT overflow and malformed CP932 refuse without partial selection or source rewrite");
+            Check(rejected.Close(),"refused draw owners retire");
+        }
+        GameSceneUiBootstrap bounds;Check(bool(bounds.Initialize(source,arena,vm,font)),"SELECT count/byte bounds owners");
+        Check(!bounds.BeginChoice(std::vector<std::string>(33,"A"),93,4)&&!bounds.BeginChoice({std::string(1024,'A')},93,4),"existing bounded logical admission unchanged");
+        Check(bounds.Close(),"SELECT bounds retire");
     }
     Check(vm.Close()&&!arena.Used(),"SELECT draw registry and buffers retired");
 }

@@ -366,8 +366,10 @@ GameFsStatus GameSceneUiBootstrap::TickChoice(){
     return {};
 }
 bool GameSceneUiBootstrap::DrawChoice(GameGraphics& graphics){
+    choice_draw_={};
+    const auto fail=[&](GameChoiceDrawCode code){choice_draw_.code=code;return false;};
     const auto choice=choice_.Snapshot();if(!choice.live||choice.state==3)return true;
-    if(!font_)return false;
+    if(!font_||!font_->Snapshot().ready)return fail(GameChoiceDrawCode::Owner);
     // Mode0 already owns SELECT.CB2A root2/clip13, auxiliary control0 and
     // cursor control25. Draw those actual source textures instead of painting
     // full-width rectangles over them. FONT remains a native display adapter.
@@ -378,41 +380,59 @@ bool GameSceneUiBootstrap::DrawChoice(GameGraphics& graphics){
         std::string visible;
         for(unsigned char c:choice.options[i]){
             if(c==0x16)continue;
-            if(c<32&&c!=10)return false;
+            if(c<32&&c!=10)return fail(GameChoiceDrawCode::TextControl);
             visible.push_back(char(c));
         }
         GameFontBitmap text;const auto drawn=font_->RasterizeCp932({visible},160,text,nullptr,0,0xFF552F0D,21);
-        if(!drawn)return false;
+        if(!drawn)return fail(GameChoiceDrawCode::Font);
+        if(height>UINT32_MAX-text.height)return fail(GameChoiceDrawCode::Overflow);
         height+=text.height;rows.push_back(std::move(text));
     }
+    choice_draw_.total_height=height;
+    const auto config=graphics.Snapshot().config;
+    // Named Windows NONMATCHING render-only window. Whole measured rows,
+    // unchanged21px line advance/160px width; no source scrolling claim.
+    if(config.height<=40||choice.row>=rows.size())return fail(GameChoiceDrawCode::Viewport);
+    const auto budget=(std::min)(11u*21u,config.height-40u);
+    for(const auto& row:rows)
+        if(!row.height||row.height>budget)return fail(GameChoiceDrawCode::RowTooTall);
+    uint32_t first=0,end=0,visible_height=0;
+    for(uint32_t i=0;i<=choice.row;++i){
+        while(visible_height>budget-rows[i].height)visible_height-=rows[first++].height;
+        visible_height+=rows[i].height;
+    }
+    end=choice.row+1;
+    while(end<rows.size()&&rows[end].height<=budget-visible_height)visible_height+=rows[end++].height;
+    choice_draw_.first=first;choice_draw_.end=end;choice_draw_.visible_height=visible_height;
+    choice_draw_.viewport=first!=0||end!=rows.size();
+    choice_draw_.selected_height=rows[choice.row].height;
     auto& gui=clones_[0];auto* auxiliary=gui.Control(1);auto* cursor=gui.Control(2);
-    if(!auxiliary||!cursor)return false;
-    // General scrolling/rich-format layout remains unimplemented. Do not
-    // publish clipped text as a complete native SELECT surface.
-    if(height>11*21)return false;
-    const auto units=height/21;auxiliary->frame=units>=12?14:units;
+    if(!auxiliary||!cursor)return fail(GameChoiceDrawCode::Ui);
+    const auto units=visible_height/21;auxiliary->frame=units>=12?14:units;
     std::string error;
-    if(!gui.SampleControl(0,*auxiliary,error)||!gui.SampleControl(3,*cursor,error))return false;
+    if(!gui.SampleControl(0,*auxiliary,error)||!gui.SampleControl(3,*cursor,error))return fail(GameChoiceDrawCode::Ui);
     // WorldMatrix follows the visible root2 -> node43 -> root0 reference.
     // It already includes the ancestor transform; never compose it twice.
-    GameUiMatrix anchor;if(!gui.WorldMatrix(0,anchor))return false;
-    const auto config=graphics.Snapshot().config;
+    GameUiMatrix anchor;if(!gui.WorldMatrix(0,anchor))return fail(GameChoiceDrawCode::Ui);
     // Render-only viewport fit; no change to SELECT's logical/source position.
-    GameUiMatrix base;const auto bottom=float(config.height)*.5f+anchor.ty+float(height)+24;
+    GameUiMatrix base;const auto bottom=float(config.height)*.5f+anchor.ty+float(visible_height)+24;
     base.ty=(std::min)(0.f,float(config.height)-8-bottom);
-    GameUiDrawStats stats;if(!gui.Draw(graphics,stats,error,nullptr,base,0,UINT32_MAX,2))return false;
+    if(choice_draw_.viewport&&float(config.height)*.5f+anchor.ty+base.ty<8)base.ty=8-float(config.height)*.5f-anchor.ty;
+    GameUiDrawStats stats;if(!gui.Draw(graphics,stats,error,nullptr,base,0,UINT32_MAX,2))return fail(GameChoiceDrawCode::Ui);
     const auto x=int32_t(std::lround(float(config.width)*.5f+anchor.tx));
     auto y=int32_t(std::lround(float(config.height)*.5f+anchor.ty+base.ty));
-    for(uint32_t i=0;i<rows.size();++i){
+    choice_draw_.text_x=x;choice_draw_.text_y=y;
+    for(uint32_t i=first;i<end;++i){
         const auto& text=rows[i];
-        if(!graphics.DrawImage(text.pixels,text.width,text.height,x,y,0xFFFFFFFF,65535))return false;
+        if(!graphics.DrawImage(text.pixels,text.width,text.height,x,y,0xFFFFFFFF,65535))return fail(GameChoiceDrawCode::Ui);
         if(i==choice.row){
+            choice_draw_.selected_y=choice_draw_.cursor_y=y;
             GameUiMatrix selection;selection.tx=anchor.tx;selection.ty=float(y)-float(config.height)*.5f;
-            if(!gui.Draw(graphics,stats,error,nullptr,selection,0,UINT32_MAX,3))return false;
+            if(!gui.Draw(graphics,stats,error,nullptr,selection,0,UINT32_MAX,3))return fail(GameChoiceDrawCode::Ui);
         }
         y+=int32_t(text.height);
     }
-    return true;
+    choice_draw_.code=GameChoiceDrawCode::Drawn;return true;
 }
 GameFsStatus GameSceneUiBootstrap::ShowStorageDialog(const GameFontResource &font, uint32_t error) {
     if (!state_.constructors_returned || state_.storage_dialog)
@@ -480,6 +500,7 @@ GameFsStatus GameSceneUiBootstrap::PrepareOptionsPrompt(){
 bool GameSceneUiBootstrap::Close() {
     options_prompt_.Close(); //borrowed global before clone/template/text/FONT
     choice_.Retire();
+    choice_draw_={};
     editor_.Retire();font_=nullptr;
     profile_confirmation_=false;
     std::vector<uint32_t>().swap(dialog_pixels_);

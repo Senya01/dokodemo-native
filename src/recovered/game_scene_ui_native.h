@@ -46,6 +46,14 @@ struct GameChoiceSnapshot {
     uint64_t context=0,owner_generation=0;
     std::vector<std::string> options;
 };
+enum class GameChoiceDrawCode { Idle, Drawn, Owner, TextControl, Font, Overflow, Viewport, RowTooTall, Ui };
+// WindowsSelectRowViewport: render evidence only, never choice/result authority.
+struct GameChoiceDrawSnapshot {
+    GameChoiceDrawCode code=GameChoiceDrawCode::Idle;
+    bool viewport=false;
+    uint32_t first=0,end=0,total_height=0,visible_height=0,selected_height=0;
+    int32_t text_x=0,text_y=0,selected_y=0,cursor_y=0;
+};
 // Mode0 SELECT10884/10BCC: source counters,deadline priority and real clip
 // completion;dynamic row drawing uses the named NativeSelectTextPanel.
 class GameChoiceController {
@@ -131,6 +139,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     GameFsStatus TickChoice();
     bool HandleChoiceInput(const GameInputFrame& frame){return choice_.Input(frame);}
     bool DrawChoice(GameGraphics&);
+    GameChoiceDrawSnapshot ChoiceDraw()const noexcept{return choice_draw_;}
     GameChoiceSnapshot Choice()const{return choice_.Snapshot();}
     GameSceneUiSnapshot Snapshot() const;
     bool Close();
@@ -163,6 +172,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool editor_failed_=false;
     bool profile_confirmation_=false;
     GameChoiceController choice_;
+    GameChoiceDrawSnapshot choice_draw_;
     bool DrawUiCallback(uint32_t,uint32_t,const GameUiMatrix&,uint32_t,GameGraphics&,std::string&)override;
 };
 
