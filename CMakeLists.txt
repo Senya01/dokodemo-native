@@ -34,7 +34,6 @@ add_library(dokodemo-core STATIC
     src/game73_selected.cpp
     src/core/cp932.cpp
     src/script_vm.cpp
-    src/startup_probe.cpp
     src/recovered/startup_flow_native.cpp
     src/recovered/game_boot_native.cpp
     src/recovered/game_graphics_native.cpp
@@ -114,6 +113,18 @@ if(MSVC)
     target_compile_options(dokodemo-core PRIVATE /W4 /EHsc /permissive- /Zc:__cplusplus /utf-8 /Brepro)
 else()
     target_compile_options(dokodemo-core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# Original-address-dependent legacy probe is not a dependency of the synthetic
+# game core/tests. Build it only through an explicit legacy consumer below.
+add_library(dokodemo-startup-probe STATIC EXCLUDE_FROM_ALL src/startup_probe.cpp)
+target_link_libraries(dokodemo-startup-probe PUBLIC dokodemo-core)
+set_target_properties(dokodemo-startup-probe PROPERTIES CXX_EXTENSIONS OFF)
+if(MSVC)
+    set_target_properties(dokodemo-startup-probe PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(dokodemo-startup-probe PRIVATE /W4 /EHsc /permissive- /Zc:__cplusplus /utf-8 /Brepro)
+else()
+    target_compile_options(dokodemo-startup-probe PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 enable_testing()
@@ -217,7 +228,8 @@ if(DOKODEMO_MODULE_CONTROLS_SOURCE)
         target_compile_definitions(dokodemo-module-controls PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
         dokodemo_configure_prepared_codec(dokodemo-module-controls)
     endif()
-    target_link_libraries(dokodemo-module-controls PRIVATE dokodemo-core)
+    # Explicit legacy controls retain the old core's probe API dependency.
+    target_link_libraries(dokodemo-module-controls PRIVATE dokodemo-startup-probe)
     set_target_properties(dokodemo-module-controls PROPERTIES CXX_EXTENSIONS OFF)
     if(MSVC)
         set_target_properties(dokodemo-module-controls PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -226,7 +238,7 @@ if(DOKODEMO_MODULE_CONTROLS_SOURCE)
         target_compile_options(dokodemo-module-controls PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
 endif()
-option(DOKODEMO_CORE_TESTS "Build headless tests of the portable recovery core" ON)
+option(DOKODEMO_CORE_TESTS "Build legacy core/startup tests requiring local original inputs" ON)
 set(DOKODEMO_BACKEND_CONTROLS_SOURCE "" CACHE FILEPATH "Optional focused Win32 backend ownership controls source inside the workspace")
 if(DOKODEMO_BACKEND_CONTROLS_SOURCE)
     if(NOT WIN32 OR NOT MSVC)
@@ -246,7 +258,7 @@ if(DOKODEMO_BACKEND_CONTROLS_SOURCE)
 endif()
 if(DOKODEMO_CORE_TESTS)
     add_executable(dokodemo-core-tests tools/core_tests.cpp)
-    target_link_libraries(dokodemo-core-tests PRIVATE dokodemo-core)
+    target_link_libraries(dokodemo-core-tests PRIVATE dokodemo-startup-probe)
     set_target_properties(dokodemo-core-tests PROPERTIES CXX_EXTENSIONS OFF)
     if(MSVC)
         set_target_properties(dokodemo-core-tests PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -282,7 +294,8 @@ file(GLOB native_modules CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cp
 list(FILTER native_modules EXCLUDE REGEX "(/test_[^/]*|_tests?(_[^/]*)?|_main|/main)\\.cpp$")
 list(APPEND native_modules "${CMAKE_CURRENT_SOURCE_DIR}/src/native_main.cpp")
 get_target_property(core_modules dokodemo-core SOURCES)
-foreach(core_source IN LISTS core_modules)
+get_target_property(probe_modules dokodemo-startup-probe SOURCES)
+foreach(core_source IN LISTS core_modules probe_modules)
     list(REMOVE_ITEM native_modules "${CMAKE_CURRENT_SOURCE_DIR}/${core_source}")
 endforeach()
 foreach(extra IN LISTS DOKODEMO_EXTRA_SOURCES)
@@ -307,7 +320,7 @@ target_compile_definitions(dokodemo-native PRIVATE UNICODE _UNICODE NOMINMAX WIN
 target_compile_options(dokodemo-native PRIVATE /W4 /EHsc /permissive- /Zc:__cplusplus /utf-8 /Brepro)
 target_include_directories(dokodemo-native PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 dokodemo_configure_prepared_codec(dokodemo-native)
-target_link_libraries(dokodemo-native PRIVATE dokodemo-core user32 gdi32 opengl32 shell32 ole32 uuid winmm advapi32 bcrypt imm32 ${DOKODEMO_EXTRA_LIBRARIES})
+target_link_libraries(dokodemo-native PRIVATE dokodemo-startup-probe user32 gdi32 opengl32 shell32 ole32 uuid winmm advapi32 bcrypt imm32 ${DOKODEMO_EXTRA_LIBRARIES})
 # Explicit Windows main/worker stack reserve for nested typed VM witnesses.
 # This changes host capacity, not game clocks, scheduling, records or permission.
 target_link_options(dokodemo-native PRIVATE /MACHINE:X64 /INCREMENTAL:NO /Brepro /STACK:8388608)
