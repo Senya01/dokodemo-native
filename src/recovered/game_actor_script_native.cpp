@@ -816,7 +816,7 @@ void GameActorScript::CompleteInventoryActionReadback(){
 GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected,uint32_t event,uint64_t generation,int32_t& queue){
     queue=-1;
     try{
-        Need(state_.live&&vm_&&generation&&(event==10||event==11||event==18)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
+        Need(state_.live&&vm_&&generation&&(event==0||event==10||event==11||event==18)&&!state_.menu_callback.pending,"Menu callback owner/event unavailable");
         Need(!state_.blocked&&!state_.awaiting_message&&!state_.awaiting_choice&&!state_.awaiting_input
              &&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Menu callback requires its idle owning VM");
         const auto target=OwnerEventTarget();
@@ -826,8 +826,13 @@ GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected
              &&target.callback.word==0x7008DA28u,"Menu callback registry/callback replaced");
         const auto saved=vm_->current_witness();
         Need(saved.valid&&!saved.event_envelope_present&&vm_->context_enabled(),"Menu callback needs its live enabled suspended caller");
+        if(event==0){
+            const auto phase=vm_->read_slot(script::Table::Global,0x9A76);
+            Need(phase.kind==Value::Kind::Scalar&&phase.word==0x20000001u
+                 &&vm_->unique_active_frame(0x8DDB5),"Teach menu needs its actual source phase1/main owner");
+        }
         const auto flag=vm_->read_slot(script::Table::Global,0x9A78);
-        queue=vm_->post_owner_nil_event(target.callback,int32_t(event));
+        queue=event==0?vm_->post_owner_event(target.callback,0,1):vm_->post_owner_nil_event(target.callback,int32_t(event));
         state_.owner_event_callback_word=target.callback.word;state_.owner_event_result=queue;++state_.owner_event_calls;
         if(queue==0){
             auto& c=state_.menu_callback;c={};c.pending=true;c.event=event;c.menu_generation=generation;
@@ -838,11 +843,31 @@ GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexcept{
-    auto& c=state_.menu_callback;if(!c.pending||c.returned||c.failed||t.opcode!=0x32)return;
+    auto& c=state_.menu_callback;if(!c.pending||c.returned||c.failed)return;
     try{
         const auto& x=t.before;const auto& y=t.after;const auto& s=c.suspended;
         const auto same=[](const script::ValueWitness& a,const script::ValueWitness& b){return a.kind==b.kind&&a.word==b.word&&a.table==b.table&&a.index==b.index&&a.cp932_bytes==b.cp932_bytes&&a.cp932_sha256==b.cp932_sha256;};
-        bool valid=t.callback_receipt==c.receipt&&x.frame_id==c.callback_frame&&x.code_entry==0x8DA28&&x.current_pc==0x8DD8B
+        if(c.event==0){
+            if(t.callback_receipt!=c.receipt){c.failed=true;return;}
+            if(x.code_entry==0x8DA28&&x.current_pc==0x8DA44){
+                const auto integer=[](const script::ValueWitness& v,uint32_t n){return v.kind==Value::Kind::Scalar&&v.word==(0x20000000u|n);};
+                if(t.opcode!=0x20||x.frame_id!=c.callback_frame||y.code_entry!=0x8D4CC||x.frame_captured<2||y.frame_captured<2
+                   ||!integer(x.frame_values[0],0)||!integer(x.frame_values[1],1)
+                   ||!integer(y.frame_values[0],2)||!integer(y.frame_values[1],1))c.failed=true;
+                else c.setter_frame=y.frame_id;
+            }
+            if(x.code_entry==0x8D4CC&&x.current_pc==0x8D523){
+                const auto phase=vm_->read_slot(script::Table::Global,0x9A76),arg=vm_->read_slot(script::Table::Global,0x9A77);
+                c.phase_written=t.opcode==0x31&&c.setter_frame&&x.frame_id==c.setter_frame
+                    &&y.frame_id==c.callback_frame&&y.code_entry==0x8DA28&&y.current_pc==0x8DA49
+                    &&phase.kind==Value::Kind::Scalar&&phase.word==0x20000002u
+                    &&arg.kind==Value::Kind::Scalar&&arg.word==0x20000001u;
+                if(!c.phase_written)c.failed=true;
+            }
+            if(t.opcode!=0x1C&&t.opcode!=0x32)return;
+        }else if(t.opcode!=0x32)return;
+        bool valid=(c.event==0?(t.opcode==0x1C&&c.phase_written&&x.current_pc==0x8DA49):x.current_pc==0x8DD8B)
+            &&t.callback_receipt==c.receipt&&x.frame_id==c.callback_frame&&x.code_entry==0x8DA28
             &&x.event_envelope_present&&!y.event_envelope_present&&y.run_id==s.run_id&&y.code_sha256==s.code_sha256
             &&y.context_word==s.context_word&&y.frame_id==s.frame_id&&y.code_entry==s.code_entry&&y.current_pc==s.current_pc
             &&y.call_depth==s.call_depth&&y.active_blocks==s.active_blocks&&y.event_scope_depth==s.event_scope_depth+1
@@ -852,7 +877,8 @@ void GameActorScript::ObserveMenuCallback(const script::FrameTransition& t)noexc
         for(uint32_t i=0;i<s.operands_captured;++i)valid=valid&&same(s.operands[i],y.operands[i]);
         const auto flag=vm_->read_slot(script::Table::Global,0x9A78);c.flag_after=flag.word;c.kind_after=uint8_t(flag.kind);
         c.enabled_after=vm_->context_enabled();
-        valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u)
+        if(c.event==0)valid=valid&&uint8_t(flag.kind)==c.kind_before&&flag.word==c.flag_before&&c.enabled_after==c.enabled_before;
+        else valid=valid&&flag.kind==Value::Kind::Scalar&&flag.word==(c.event==10?0x10000001u:0x10000000u)
             &&c.enabled_after==(c.event!=18);
         c.return_pc=x.current_pc;c.return_opcode=t.opcode;
         c.restored=y;c.returned=valid;c.failed=!valid;
@@ -886,7 +912,8 @@ GameFsStatus GameActorScript::TickMenuOwner(){
             const auto after=vm_->current_witness();
             Need(after.event_scope_depth==c.suspended.event_scope_depth&&!after.event_envelope_present,"Menu callback public scope did not restore");
             c.pending=false;
-            if(c.event==10)state_.menu_open_return=c;else if(c.event==11)state_.menu_close_return=c;else state_.menu_pause_return=c;
+            if(c.event==0)state_.menu_teach_return=c;
+            else if(c.event==10)state_.menu_open_return=c;else if(c.event==11)state_.menu_close_return=c;else state_.menu_pause_return=c;
         }
         auto& action=state_.inventory_action;
         if(action.pending&&action.menu_origin){

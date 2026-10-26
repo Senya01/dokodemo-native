@@ -19,8 +19,8 @@ struct GameMainMenuSnapshot {
     int32_t row=0,column=0,result=-1;
     uint32_t frame=0,clip=0,mode=0,draw_frames=0,quads=0,render_retirements=0;
 };
-// Finite full-mode rows: inventory row5 or Cancel. Other actions refuse.
-// Result5/-1 publishes only after real closing-control completion.
+// Finite full-mode leaves include teach row0, inventory row5 and Cancel.
+// Results publish only after real closing-control completion.
 class GameMainMenuControl final {
   public:
     bool Begin(GameMainMenuLease,bool full,bool source_scene_nonzero,bool notebook=false,bool other_profiles=false);

@@ -70,7 +70,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
     if(input_.First(Circle)){
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}
-        if(state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
+        if(state_.row==0||state_.row==5){if(!input_.First(Right)){state_.state78=2;input_.BeginContext();}}
         else ++state_.unsupported;
         return;
     }

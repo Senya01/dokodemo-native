@@ -103,5 +103,21 @@ void GameReturnedConversationInteraction::CheckInputOwners(const GameActorScript
     // This path can only disarm. Admission and publication happen in Tick.
     if(!Ready(s,f,g)){state_.eligible=state_.armed=false;input_.Stop();}
 }
+GameFsStatus GameReturnedConversationInteraction::PostMenuTeach(GameActorScript& script,uint64_t owner,uint64_t generation,uint64_t menu_generation){
+    const auto before=script.Snapshot();
+    if(!state_.live||!state_.admitted||state_.event_posted||state_.revoked||!menu_generation
+       ||owner!=state_.owner||generation!=state_.generation||activation_.State().consumed
+       ||!activation_.State().main_consumed||!activation_.HistoryMatches(before)||!SameTarget())
+        return {GameFsCode::Unavailable,0,"Teach menu lost its borrowed available activation"};
+    int32_t queue=-1;const auto status=script.PostMenuEvent(target_,0,menu_generation,queue);
+    if(!status)return status;
+    if(queue!=0)return {GameFsCode::Unavailable,0,"Teach menu integer event queue refused"};
+    // The genuine selected menu callback consumes the borrowed activation.
+    // Its argument1 branch earns no argument0 common-conversation completion.
+    state_.queue_result=queue;state_.event_posted=true;state_.eligible=state_.armed=false;
+    ++state_.posted;input_.Stop();
+    if(!activation_.Consume()){Revoke("Teach menu consumed an invalid activation");return {GameFsCode::Unavailable,0,state_.error};}
+    state_.activation=activation_.Snapshot();return {};
+}
 void GameReturnedConversationInteraction::Close(){Revoke("Returned interaction owner retired");}
 }

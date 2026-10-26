@@ -1082,10 +1082,15 @@ GameContentBoot::MenuInputRoute GameContentBoot::MainMenuInput(const GameInputFr
 GameFsStatus GameContentBoot::CheckMainMenuLease()const{
     try{
         const auto actor=actor_script_.Snapshot();const auto available=returned_interaction_.Snapshot();const auto target=actor_script_.OwnerEventTarget();
+        const auto& teach=actor.menu_callback.event==0?actor.menu_callback:actor.menu_teach_return;
+        const bool consumed_teach=(state_.main_menu_phase==4||state_.main_menu_phase==5)&&main_menu_.Snapshot().result==0
+            &&available.event_posted&&available.activation.consumed&&teach.receipt
+            &&teach.menu_generation==main_menu_.Snapshot().generation&&!teach.failed&&(teach.pending||teach.returned)
+            &&teach.receipt>actor.menu_open_return.receipt;
         if(!actor.live||actor.blocked||actor.generation!=main_menu_lease_.script_generation||actor.vm_current.run_id!=main_menu_lease_.run_id
            ||!actor_runtime_.OwnersLive()||actor.runtime.camera_mode==0||state_.current_scene!=4
            ||!available.live||available.revoked||available.owner!=main_menu_lease_.available_owner||available.generation!=main_menu_lease_.available_generation
-           ||available.event_posted||target.generation!=main_menu_target_.generation||target.callback.kind!=main_menu_target_.callback.kind
+           ||(available.event_posted&&!consumed_teach)||target.generation!=main_menu_target_.generation||target.callback.kind!=main_menu_target_.callback.kind
            ||target.callback.word!=main_menu_target_.callback.word||target.context.word!=main_menu_target_.context.word
            ||main_menu_target_.context.context_owner.expired()||target.context.context_owner.lock()!=main_menu_target_.context.context_owner.lock())
             return {GameFsCode::Unavailable,0,"Main menu borrowed owner replaced or retired"};
@@ -1187,8 +1192,12 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
                         state_.main_menu_inventory_child_clock=state_.main_menu_inventory_retire_clock=0;
                     }
                 }
-                if(status)state_.main_menu_phase=4;
+                if(status)state_.main_menu_phase=result==0?9:4;
             }
+            break;
+        case 9:
+            status=main_flow_.DispatchMenuTeach();
+            if(status)state_.main_menu_phase=4;
             break;
         case 4:{
             // A separate main-flow invocation after GUIready/result poll.
@@ -1543,7 +1552,12 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_,&sound_bank_);
         state_.actor_script=actor_script_.Snapshot();
         if(state_.status){
-            state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){return actor_script_.PostMainFlowEvent(event,arg);});
+            state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){
+                if(event==0&&arg==1&&state_.main_menu_phase==9)
+                    return returned_interaction_.PostMenuTeach(actor_script_,main_menu_lease_.available_owner,
+                        main_menu_lease_.available_generation,main_menu_.Snapshot().generation);
+                return actor_script_.PostMainFlowEvent(event,arg);
+            });
             if(!state_.status)throw std::runtime_error(state_.status.detail);
             state_.main_flow=main_flow_.Snapshot();
             state_.status=returned_interaction_.Initialize([this]{return actor_script_.OwnerEventTarget();},

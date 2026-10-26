@@ -115,10 +115,11 @@ struct GameOrdinaryControlObservation {
 };
 struct GameMenuCallbackSnapshot {
     bool pending=false,returned=false,failed=false;
+    bool phase_written=false;
     bool enabled_before=false,enabled_after=false;
     uint32_t event=0,flag_before=0,flag_after=0,return_pc=0,return_opcode=0;
     uint8_t kind_before=0,kind_after=0;
-    uint64_t menu_generation=0,receipt=0,callback_frame=0;
+    uint64_t menu_generation=0,receipt=0,callback_frame=0,setter_frame=0;
     script::VmStateWitness suspended,restored;
 };
 // Passive evidence for the existing phase5 Circle -> event12,arg5 route.
@@ -187,7 +188,7 @@ struct GameActorScriptSnapshot {
     uint64_t menu_notebook_generation=0,menu_notebook_parent=0;
     uint32_t menu_notebook_requests=0,menu_notebook_completions=0;
     GameOrdinaryControlObservation ordinary_controls;
-    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return;
+    GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return,menu_teach_return;
     GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
     GameInventoryMarkSnapshot menu_mark;
     GameInventoryPlacementSnapshot menu_placement;

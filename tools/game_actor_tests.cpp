@@ -424,6 +424,28 @@ void RuntimeOwners(){
         flow.Close();Check(!flow.Input({Circle,true,false,5})&&!flow.Tick(gate),"retiredmainflow refuseslateinput/requests");
         Check(bool(actor.AdvanceActorFrame()),"remainingindependentcamera requeststillowned");
     }
+    {
+        GameMainFlow teach;unsigned posted=0;
+        Check(bool(teach.Initialize(actor,[&](uint32_t event,int32_t argument){
+            Check(event==0&&argument==1,"teach posts typed integer event0/arg1");
+            Check(!actor.Snapshot().manager_request9&&!actor.Snapshot().manager_request8
+                  &&teach.Snapshot().request9_clears==1&&teach.Snapshot().request8_clears==1,
+                  "both real manager requests cleared before teach dispatch");
+            ++posted;return GameFsStatus{};
+        })),"teach source main owner");
+        Check(!teach.DispatchMenuTeach()&&!teach.PollMenuResult(0)&&!posted,"no teach without selected live menu");
+        Check(bool(actor.RequestManager9())&&bool(actor.RequestManager()),"teach owns pending managers");
+        Check(bool(teach.BeginAvailableMenu())&&bool(teach.AdvanceMenuOpening())&&bool(teach.MenuOpened())
+              &&bool(teach.PollMenuResult(0)),"actual selected result0");
+        Check(teach.Snapshot().menu58==3&&teach.Snapshot().return20==3&&!teach.RetireMenuResult()&&!posted,
+              "state3 action precedes retirement");
+        Check(bool(teach.DispatchMenuTeach())&&posted==1&&teach.Snapshot().menu58==5&&!teach.DispatchMenuTeach(),
+              "selected teach dispatch exactly once");
+        Check(bool(teach.RetireMenuResult())&&teach.Snapshot().menu_result50==0&&teach.Snapshot().menu_result54==-1
+              &&teach.Snapshot().phase1C==3&&teach.Snapshot().return20==0,"source pending3 retirement");
+        Check(bool(teach.Tick({}))&&teach.Snapshot().phase1C==1&&posted==1,"pending3 becomes outer1 without another event");
+        teach.Close();Check(!teach.DispatchMenuTeach(),"retired teach owner refuses replay");
+    }
     Check(!actor.Snapshot().manager_request8&&bool(actor.RequestManager())&&actor.Snapshot().manager_request8,
           "zeroed1B188 manager receives actualservice0 request,not completion");
     owner_input.live=false;Check(!actor.WaitReady()&&!actor.BindCamera(0)&&!actor.RequestCamera(1)&&!actor.RequestManager9(),"retired target lease blocks camera/wait/setter");
@@ -438,6 +460,41 @@ void RuntimeOwners(){
     model_owner.Close();model_fade.Retire();
 }
 void Focused(){
+    {
+        // Synthetic callback forwards the two actual typed mailbox arguments.
+        // No extracted callback bytes or game addresses are embedded here.
+        std::vector<uint8_t> code(80,0x03);
+        const uint8_t root[]={0x30,0,0x80,73,0x70,0x80,57,0x38};
+        std::copy(std::begin(root),std::end(root),code.begin());
+        const uint8_t callback[]={0x30,2,0x95,0,0,0x90,0,0,0x51,0x95,1,0,0x90,1,0,0x51,0x1C};
+        std::copy(std::begin(callback),std::end(callback),code.begin()+32);
+        auto program=Fixture(code,{0,0});script::Vm vm(program);vm.start();
+        for(unsigned i=0;i<4;++i)Check(vm.step().status==script::Status::Running,"prepare retained caller state");
+        (void)vm.context_value();const auto before=vm.current_witness();
+        script::Value target;target.kind=script::Value::Kind::Code;target.word=0x70000020;
+        Check(vm.post_owner_event(target,0,1)==0,"integer event0/arg1 admitted by actual VM");
+        for(unsigned i=0;i<8;++i)Check(vm.step().status==script::Status::Running,"real callback forwarding/return");
+        const auto event=vm.read_slot(script::Table::Global,0),argument=vm.read_slot(script::Table::Global,1);
+        const auto after=vm.current_witness();
+        Check(event.kind==script::Value::Kind::Scalar&&event.word==0x20000000
+              &&argument.kind==script::Value::Kind::Scalar&&argument.word==0x20000001,"typed Integer1 survives callback, not NIL/Integer0");
+        Check(vm.callbacks_returned()==1&&!after.event_envelope_present&&after.frame_id==before.frame_id
+              &&after.current_pc==before.current_pc&&after.result.word==before.result.word&&after.operand_cells==before.operand_cells,
+              "1C restores actual suspended caller and operand/result state");
+    }
+    {
+        GameMainMenuControl menu;GameMainMenuLease lease{1,2,3,4,5,6};
+        Check(menu.Begin(lease,true,false),"teach menu fresh lease");menu.Tick(2);
+        uint64_t sequence=0;
+        const auto input=[&](uint32_t buttons){GameInputFrame f;f.focused=true;f.test_injected=true;f.sequence=++sequence;
+            f.buttons=buttons;f.message_owner_generation=lease.script_generation;f.message_context=lease.message_context;
+            f.returned_owner=lease.available_owner;f.returned_generation=lease.available_generation;f.main_menu_epoch=lease.input_epoch;
+            Check(menu.Input(f),"teach current menu input");menu.Tick(2);};
+        input(0);input(Right);Check(menu.Snapshot().state78==1&&!menu.Snapshot().unsupported,"Right alone does not close row0");
+        input(0);input(Circle);Check(menu.Snapshot().state78==2&&!menu.Snapshot().unsupported,"row0 Circle starts real close");
+        menu.Tick(1);Check(menu.Snapshot().state78==2,"teach awaits actual close mode");
+        menu.Tick(2);Check(menu.Snapshot().state78==3&&menu.Snapshot().result==0,"teach closed result0");
+    }
     {
         GameTransition fade;
         Check(!GameMainMenuCanBorrowTransition(fade.Snapshot()),"menu refuses missing transition owner");
