@@ -178,4 +178,50 @@ class GameModelPlayback final {
   private:
     GamePlaybackState state_;
 };
+
+// WindowsBackgroundPreparation: a separately owned, read-only background
+// package/model staging job. It grants NO manager, scene or script readiness.
+// 25438 uses inline20-byte registrations; 4EF4 supplies the nested model path.
+// The caller must supply current candidate/period provenance. This component
+// checks its own owner/epoch/request; it does not issue a gameplay capability.
+struct GameBackgroundCandidate {
+    uint32_t id=0, selector=0, period=0;
+    uint64_t request=0;
+};
+struct GameBackgroundPreparationSnapshot {
+    bool live=false,pending=false,package_read=false,staged=false,failed=false;
+    uint64_t epoch=0,request=0;
+    uint32_t candidate=0,selector=0,period=0,variant=0,resource=0;
+    uint64_t package_owner=0,package_generation=0,package_serial=0;
+    GameModelStatistics model;
+    GameFsStatus status;
+    std::string registration;
+    // Preparation never publishes source4A8/4DC, manager14 or VM completion.
+    bool source_committed=false;
+};
+class GameBackgroundPreparation final {
+  public:
+    GameBackgroundPreparation()=default;
+    GameBackgroundPreparation(const GameBackgroundPreparation&)=delete;
+    GameBackgroundPreparation& operator=(const GameBackgroundPreparation&)=delete;
+    GameFsStatus Begin(std::shared_ptr<const void> owner,uint64_t epoch,
+                       const GameBackgroundCandidate&,PackageView registrations,
+                       std::unique_ptr<GameFileSource> source);
+    GameFsStatus Load(const std::shared_ptr<const void>& owner,uint64_t epoch);
+    GameFsStatus Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                      GameGraphics&,const GameMatrix& view_projection) const;
+    GameFsStatus Close();
+    GameBackgroundPreparationSnapshot Snapshot()const;
+  private:
+    bool Current(const std::shared_ptr<const void>&,uint64_t)const;
+    bool RegistrationsCurrent()const;
+    std::weak_ptr<const void> owner_;
+    PackageView registrations_,package_;
+    std::array<uint8_t,32> registrations_digest_{};
+    GameFilesystem filesystem_;
+    std::shared_ptr<GameModelAsset> asset_;
+    GameModelClone clone_;
+    GameBackgroundPreparationSnapshot state_;
+    uint64_t last_epoch_=0,last_request_=0;
+};
 } // namespace dokodemo::recovered

@@ -39,6 +39,122 @@ GameVector4 UnitNormal(GameVector4 normal) {
     return normal;
 }
 } // namespace
+
+namespace {
+std::string BackgroundRegistration(const PackageView& records,uint32_t variant) {
+    Need(records.Describe().size==60 && variant<3,"background registration extent/variant");
+    std::string result;
+    for(uint32_t i=0;i<20;++i){
+        const auto c=records.ReadU8(variant*20+i);
+        if(!c){
+            Need(!result.empty(),"empty background registration");
+            for(++i;i<20;++i)Need(records.ReadU8(variant*20+i)==0,"background registration padding");
+            return result;
+        }
+        Need((c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_',"unsafe background registration");
+        result+=char(c);
+    }
+    throw std::runtime_error("unterminated background registration");
+}
+class BackgroundPackageSource final:public GameResourceSource {
+  public:
+    BackgroundPackageSource(PackageView package,std::string mount)
+        :directory_(BpDirectory::Parse(package,package.Describe().size)),mount_(std::move(mount)+"\\"){}
+    GameFsStatus OpenResource(const std::string& path,PackageView& out)override {
+        try{
+            Need(path.compare(0,mount_.size(),mount_)==0,"background mount mismatch");
+            out=directory_.Open(path.substr(mount_.size()));return {};
+        }catch(const std::exception& e){return Error(e);}
+    }
+  private:
+    BpDirectory directory_;
+    std::string mount_;
+};
+}
+bool GameBackgroundPreparation::Current(const std::shared_ptr<const void>& owner,uint64_t epoch)const {
+    const auto current=owner_.lock();
+    return owner&&current&&state_.live&&epoch&&epoch==state_.epoch&&current==owner
+        &&!owner.owner_before(current)&&!current.owner_before(owner);
+}
+bool GameBackgroundPreparation::RegistrationsCurrent()const {
+    try{return registrations_.Describe().size==60&&registrations_.InitializedDigest()==registrations_digest_;}
+    catch(...){return false;}
+}
+GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
+        const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source) {
+    if(state_.live||state_.failed||!owner||epoch<=last_epoch_||candidate.request<=last_request_
+       ||candidate.selector!=12||candidate.period>=6||!source)
+        return {GameFsCode::Unavailable,0,"background preparation owner/request/selected domain"};
+    try{
+        // 4848: source period->variant; no date-derived/default variant.
+        constexpr uint32_t variants[]{0,1,1,2,0,0};
+        const auto variant=variants[candidate.period];
+        const auto name=BackgroundRegistration(records,variant);
+        const auto digest=records.InitializedDigest();
+        // A restarted epoch must follow explicit retirement; this object owns
+        // both file and buffers even if Mount fails part way through.
+        state_={};state_.live=true;state_.pending=true;state_.epoch=epoch;
+        state_.request=candidate.request;state_.candidate=candidate.id;
+        state_.selector=candidate.selector;state_.period=candidate.period;
+        state_.variant=variant;state_.resource=30+3*candidate.selector+variant;
+        state_.registration=name;owner_=owner;registrations_=std::move(records);registrations_digest_=digest;
+        last_epoch_=epoch;last_request_=candidate.request;
+        const auto status=filesystem_.Mount(std::move(source));
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        return {};
+    }catch(const std::exception& e){if(state_.live){state_.failed=true;state_.pending=false;state_.status=Error(e);}return Error(e);}
+}
+GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& owner,uint64_t epoch) {
+    if(!Current(owner,epoch)||!state_.pending||state_.staged||state_.failed)
+        return {GameFsCode::Unavailable,0,"background pending owner/epoch/registration changed"};
+    if(!RegistrationsCurrent()){
+        state_.failed=true;state_.pending=false;
+        state_.status={GameFsCode::Unavailable,0,"background registration retired/changed"};return state_.status;
+    }
+    try{
+        // This is an actual separately owned file read, not request-bit ready.
+        auto status=filesystem_.LoadMember(state_.registration+".BPM",package_);
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        const auto span=package_.Describe();Need(span.readable,"background package readback");
+        state_.package_read=true;state_.package_owner=span.owner;
+        state_.package_generation=span.generation;state_.package_serial=span.serial;
+        BackgroundPackageSource resources(package_,state_.registration);
+        auto asset=std::make_shared<GameModelAsset>();
+        const auto prefix=state_.registration+"\\"+state_.registration+"\\";
+        status=asset->Load(resources,prefix+"model01.DVS",prefix+"gim\\");
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        GameModelClone clone;status=clone.Initialize(asset);
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        status=clone.Update(ModelIdentity());
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        Need(Current(owner,epoch)&&RegistrationsCurrent()&&asset->Live(),"background load owner drift");
+        // Only native staging is published. No source4DC,4A8,manager14 or
+        // actor/context effects are admitted by successful model construction.
+        state_.model=asset->Statistics();asset_=std::move(asset);clone_=std::move(clone);
+        state_.pending=false;state_.staged=true;return {};
+    }catch(const std::exception& e){state_.failed=true;state_.pending=false;state_.status=Error(e);return state_.status;}
+}
+GameFsStatus GameBackgroundPreparation::Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        GameGraphics& graphics,const GameMatrix& camera)const {
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background staged draw owner retired/changed"};
+    // Explicit component/offline view, never an ordinary game scene publish.
+    return clone_.Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+}
+GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
+    auto out=state_;
+    if(owner_.expired()||!RegistrationsCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
+        out.live=out.pending=out.staged=false;
+    return out;
+}
+GameFsStatus GameBackgroundPreparation::Close() {
+    // Clone/template/material views die before their backing/file is revoked.
+    clone_.Close();asset_.reset();package_.Reset();
+    auto status=filesystem_.Close();
+    state_.live=state_.pending=state_.staged=false;
+    if(!status){state_.failed=true;state_.status=status;return status;}
+    registrations_.Reset();owner_.reset();state_={};return {};
+}
 GameMatrix ModelIdentity() noexcept {
     GameMatrix m{};
     m[0] = m[5] = m[10] = m[15] = 1;

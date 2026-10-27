@@ -111,6 +111,100 @@ struct Lease : PackageStorageLease {
         return true;
     }
 };
+
+struct BackgroundFileState {
+    bool live=false,fail_read=false,fail_close=false;
+    uint32_t reads=0,closes=0;
+    std::vector<std::shared_ptr<Lease>> buffers;
+};
+class BackgroundFile final:public GameFileSource {
+    std::vector<uint8_t> bytes_;
+    std::shared_ptr<BackgroundFileState> state_;
+  public:
+    BackgroundFile(std::vector<uint8_t> bytes,std::shared_ptr<BackgroundFileState> state)
+        :bytes_(std::move(bytes)),state_(std::move(state)){}
+    ~BackgroundFile()override{(void)Close();}
+    GameFsStatus Open()override{state_->live=true;return {};}
+    GameFsStatus Read(uint64_t at,uint32_t count,PackageView& out)override{
+        if(!state_->live||at>bytes_.size()||count>bytes_.size()-at||state_->fail_read)
+            return {GameFsCode::IoFailure,0,"synthetic read failure"};
+        auto lease=std::make_shared<Lease>(std::vector<uint8_t>(bytes_.begin()+size_t(at),bytes_.begin()+size_t(at)+count));
+        state_->buffers.push_back(lease);out=PackageStorage::Attach(lease,count);++state_->reads;return {};
+    }
+    GameFsStatus Close()override{
+        if(state_->live&&state_->fail_close)return {GameFsCode::IoFailure,0,"synthetic close failure"};
+        if(state_->live){for(auto& b:state_->buffers)b->live=false;state_->live=false;++state_->closes;}
+        return {};
+    }
+    GameFileIoSnapshot Snapshot()const override{GameFileIoSnapshot s;s.file_live=state_->live;s.file_bytes=bytes_.size();s.read_calls=state_->reads;return s;}
+};
+std::vector<uint8_t> BackgroundArchive(const std::vector<std::pair<std::string,std::vector<uint8_t>>>& entries){
+    size_t names=0;for(const auto& e:entries)names+=e.first.size()+1;
+    const auto payload=(16+entries.size()*16+names+15)&~size_t(15);
+    std::vector<uint8_t> out(payload);Word(out,0,1);Word(out,4,uint32_t(entries.size()));Word(out,8,uint32_t(names));Word(out,12,uint32_t(payload));
+    size_t name=16+entries.size()*16;
+    for(size_t i=0;i<entries.size();++i){
+        const auto& e=entries[i];const auto at=16+i*16;
+        Word(out,at,uint32_t(name-16-entries.size()*16));Word(out,at+4,uint32_t(out.size()-payload));Word(out,at+8,uint32_t(e.second.size()));Word(out,at+12,i+1<entries.size()?uint32_t(i+1):UINT32_MAX);
+        std::copy(e.first.begin(),e.first.end(),out.begin()+name);name+=e.first.size()+1;
+        out.insert(out.end(),e.second.begin(),e.second.end());out.resize((out.size()+15)&~size_t(15));
+    }
+    return out;
+}
+void BackgroundPreparationTests(){
+    // Arbitrary synthetic names/geometry; no extracted registry/asset fixture.
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    std::vector<std::pair<std::string,std::vector<uint8_t>>> packages;
+    for(unsigned i=0;i<3;++i){const auto name=std::string("SYN_")+char('A'+i);
+        std::copy(name.begin(),name.end(),records->b.begin()+i*20);
+        packages.push_back({name+".BPM",BackgroundArchive({{name+"\\model01.DVS",Fixture()}})});
+    }
+    const auto file=BackgroundArchive(packages);
+    auto owner=std::make_shared<int>(11),foreign=std::make_shared<int>(12);
+    GameBackgroundPreparation job;GameGraphics graphics;Check(graphics.Initialize({}),"background offscreen renderer");
+    const auto view=[&]{return PackageStorage::Attach(records,records->b.size());};
+    const std::array<uint32_t,6> variants{{0,1,1,2,0,0}};
+    for(uint32_t period=0;period<6;++period){
+        auto io=std::make_shared<BackgroundFileState>();
+        Check(bool(job.Begin(owner,period+1,{21,12,period,period+1},view(),std::make_unique<BackgroundFile>(file,io))),"real initialized pending background owner");
+        auto pending=job.Snapshot();Check(pending.pending&&!pending.staged&&!pending.source_committed&&pending.resource==66+variants[period]&&pending.candidate==21,"live period lineage, not scene publication");
+        auto foreign_control=std::shared_ptr<const void>(owner.get(),[](const void*){});
+        Check(!job.Load(foreign_control,period+1)&&!job.Load(foreign,period+1)&&!job.Load(owner,period+2)&&io->reads==2,"foreign/stale epoch refused before member load");
+        Check(bool(job.Load(owner,period+1)),"actual nested package/DVS clone load");
+        auto ready=job.Snapshot();Check(ready.live&&ready.staged&&!ready.pending&&!ready.failed&&!ready.source_committed&&ready.model.vertices==3&&ready.variant==variants[period],"actual staged model only");
+        Check(!job.Load(owner,period+1),"completed request cannot replay load");
+        Check(graphics.Clear(0xFF000000)&&bool(job.Draw(owner,period+1,graphics,ModelIdentity()))&&graphics.Snapshot().mesh_pixels>0,"production staged clone render");
+        Check(!job.Draw(foreign,period+1,graphics,ModelIdentity()),"foreign draw refused");
+        Check(!job.Begin(owner,99,{1,12,0,99},view(),std::make_unique<BackgroundFile>(file,std::make_shared<BackgroundFileState>())),"pending/current cannot be overwritten");
+        Check(bool(job.Close())&&io->closes==1&&!job.Snapshot().live,"clone/template retire before real file close");
+        for(const auto& b:io->buffers)Check(!b->live,"every staged allocation retired");
+        Check(!job.Draw(owner,period+1,graphics,ModelIdentity())&&bool(job.Close()),"retired draw and idempotent close");
+    }
+    auto io=std::make_shared<BackgroundFileState>();
+    Check(!job.Begin(owner,0,{1,12,0,1},view(),std::make_unique<BackgroundFile>(file,io))&&!io->reads,"uninitialized epoch no I/O");
+    Check(!job.Begin(owner,7,{1,11,0,7},view(),std::make_unique<BackgroundFile>(file,io)),"other selector unimplemented");
+    Check(!job.Begin(owner,7,{1,12,6,7},view(),std::make_unique<BackgroundFile>(file,io)),"invalid period not default variant");
+    records->b[0]='/';Check(!job.Begin(owner,7,{1,12,0,7},view(),std::make_unique<BackgroundFile>(file,io)),"unsafe registration no load");records->b[0]='S';
+    Check(bool(job.Begin(owner,7,{1,12,0,7},view(),std::make_unique<BackgroundFile>(file,io))),"fresh owner after retirement");
+    const auto reads=io->reads;records->b[1]='X';Check(!job.Load(owner,7)&&io->reads==reads&&!job.Snapshot().live,"current registration drift refuses before I/O");records->b[1]='Y';
+    Check(bool(job.Close()),"drifted owner can retire");
+    Check(!job.Begin(owner,7,{1,12,0,7},view(),std::make_unique<BackgroundFile>(file,io)),"retired epoch/request cannot rearm");
+    io=std::make_shared<BackgroundFileState>();Check(bool(job.Begin(owner,8,{1,12,0,8},view(),std::make_unique<BackgroundFile>(file,io))),"failure pending");io->fail_read=true;
+    Check(!job.Load(owner,8)&&job.Snapshot().failed&&!job.Snapshot().staged&&!job.Snapshot().source_committed,"failed load never becomes scene success");Check(bool(job.Close()),"failed load cleanup");
+    io=std::make_shared<BackgroundFileState>();Check(bool(job.Begin(owner,9,{1,12,0,9},view(),std::make_unique<BackgroundFile>(file,io))),"weak owner pending");owner.reset();
+    Check(!job.Snapshot().live&&!job.Load(foreign,9)&&bool(job.Close()),"owner expiration refuses, explicit file retirement");
+
+    auto bad_model=Fixture();const auto parsed=dokodemo::model::parseDvs(bad_model);const auto node=parsed.nodes[0].source.offset;
+    bad_model[node+4]=13;bad_model[node+5]=0;bad_model[node+6+74+6]=255;bad_model[node+6+74+7]=0;
+    const auto bad_file=BackgroundArchive({{"SYN_A.BPM",BackgroundArchive({{"SYN_A\\model01.DVS",bad_model}})}});
+    io=std::make_shared<BackgroundFileState>();Check(bool(job.Begin(foreign,10,{1,12,0,10},view(),std::make_unique<BackgroundFile>(bad_file,io))),"unsupported model pending");
+    const auto unsupported=job.Load(foreign,10);const auto cut=job.Snapshot();
+    Check(!unsupported&&unsupported.code==GameFsCode::Unavailable&&cut.failed&&cut.package_read&&!cut.staged&&!cut.source_committed&&cut.package_owner,"actual unimplemented node refuses after package read, not ready");
+    io->fail_close=true;Check(!job.Close()&&io->live&&!job.Snapshot().staged,"close failure retains backing for retry");
+    Check(!job.Begin(foreign,11,{1,12,0,11},view(),std::make_unique<BackgroundFile>(file,std::make_shared<BackgroundFileState>())),"failed retirement cannot restart");
+    io->fail_close=false;Check(bool(job.Close())&&!io->live,"explicit retirement retry succeeds");
+    graphics.Close();
+}
 struct ContactTextureSource final:GameResourceSource {
     uint8_t alpha=0;
     GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
@@ -998,6 +1092,7 @@ void TitleMenuLifecycle() {
 } // namespace
 int main() {
     try {
+        BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
         TexturedColorApproximation();
