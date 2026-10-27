@@ -27,14 +27,25 @@ struct GameModelStatistics {
     uint32_t nodes = 0, meshes = 0, vertices = 0, triangles = 0, weighted_vertices = 0, materials = 0;
     uint32_t particle_emitters = 0; //descriptor/common transforms only,no spawning
     uint32_t secondary_textures = 0; //owned source images;native diffuse-only shading
+    uint32_t area_markers=0; //typed13 metadata/common transform, not own geometry
+};
+enum class GameModelTransformPolicy {
+    // Existing normalized native common-transform path; not PSP matching.
+    SourceCommon,
+    // 8C684's oriented-scale sequence with real native canonical axes.
+    // Its referenced PSP NOBITS basis initializer is not recovered here.
+    WindowsAreaMarkerCanonicalBasis
 };
 // 80384/80DA8: immutable source arrays/material images are shared; every clone
 // has independent pose/world/palette state. No PSP pointers or padding layouts.
 class GameModelAsset final {
   public:
-    GameFsStatus Load(GameResourceSource &source, const std::string &path, const std::string &texture_prefix);
+    GameFsStatus Load(GameResourceSource &source, const std::string &path, const std::string &texture_prefix,
+                      GameModelTransformPolicy policy=GameModelTransformPolicy::SourceCommon);
     GameFsStatus Decode(PackageView image, GameResourceSource *source = nullptr,
-                        const std::string &texture_prefix = {});
+                        const std::string &texture_prefix = {},
+                        GameModelTransformPolicy policy=GameModelTransformPolicy::SourceCommon);
+    GameModelTransformPolicy TransformPolicy()const noexcept{return transform_policy_;}
     const model::Dvs &Data() const noexcept {
         return data_;
     }
@@ -59,11 +70,13 @@ class GameModelAsset final {
     std::vector<GameModelMaterial> materials_;
     GameModelStatistics stats_;
     uint32_t header_color_=0;
+    GameModelTransformPolicy transform_policy_=GameModelTransformPolicy::SourceCommon;
 };
 struct GameModelPose {
     GameVector4 position{{0, 0, 0, 1}}, base_rotation{{0, 0, 0, 1}}, rotation{{0, 0, 0, 1}},
         scale{{1, 1, 1, 1}};
     GameMatrix world{};
+    GameVector4 scale_orientation{{0,0,0,1}};
     int32_t material = -1;
     float opacity=1,world_opacity=1;
     // Reached8A214/8A1F4 outputs. The current native diffuse-only shader does
@@ -72,6 +85,14 @@ struct GameModelPose {
     GameVector4 source230{{0,0,0,1}};
     bool source210_written=false,source230_written=false;
     model::ParticleEmitterParameters emitter;
+};
+struct GameAreaMarkerState {
+    uint32_t node=0;
+    int32_t parent=-1,material=-1;
+    model::AreaMarkerParameters parameters;
+    GameMatrix world{},final_matrix{};
+    float world_opacity=0;
+    GameModelTransformPolicy transform_policy=GameModelTransformPolicy::SourceCommon;
 };
 enum class GameModelColorPolicy {
     SourceRgb,
@@ -89,10 +110,14 @@ class GameModelClone final {
   public:
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
     GameFsStatus Update(const GameMatrix &root);
+    // Current typed copy only. No pointer/lease/issuer escapes; expected asset
+    // prevents foreign-template mapping. Field interpretation stays at source.
+    GameFsStatus AreaMarkers(const GameModelAsset& expected,std::vector<GameAreaMarkerState>& out)const;
     GameFsStatus Draw(GameGraphics &graphics, const GameMatrix &view_projection,
                       GameModelColorPolicy color_policy=GameModelColorPolicy::SourceRgb,
                       GameModelLightingPolicy lighting_policy=GameModelLightingPolicy::Unlit) const;
     std::vector<GameModelPose> &Pose() noexcept {
+        marker_pose_current_=false;
         return pose_;
     }
     const std::vector<GameModelPose> &Pose() const noexcept {
@@ -109,6 +134,7 @@ class GameModelClone final {
     const LightSelection& Lights() const noexcept { return lights_; }
     void SetLightColor14(uint32_t color) { if(lights_.present){lights_.packed_color14=color;++lights_.color_writes;} }
     void Close() {
+        marker_pose_current_=false;
         lights_={};
         pose_.clear();
         inverse_bind_.clear();
@@ -129,6 +155,7 @@ class GameModelClone final {
     struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
     GeometrySpace GeometryTransforms(uint32_t node) const;
     std::shared_ptr<const GameModelAsset> asset_;
+    bool marker_pose_current_=false;
     std::vector<GameModelPose> pose_;
     LightSelection lights_;
     std::vector<GameMatrix> inverse_bind_;
@@ -189,12 +216,14 @@ struct GameBackgroundCandidate {
     uint64_t request=0;
 };
 struct GameBackgroundPreparationSnapshot {
-    bool live=false,pending=false,package_read=false,staged=false,failed=false;
+    bool live=false,pending=false,package_read=false,staged=false,failed=false,model_motions_staged=false;
     uint64_t epoch=0,request=0;
     uint32_t candidate=0,selector=0,period=0,variant=0,resource=0;
     uint64_t package_owner=0,package_generation=0,package_serial=0;
     GameModelStatistics model;
+    uint32_t model_motions=0,model_motion_deferred=0;
     GameFsStatus status;
+    GameModelTransformPolicy transform_policy=GameModelTransformPolicy::SourceCommon;
     std::string registration;
     // Preparation never publishes source4A8/4DC, manager14 or VM completion.
     bool source_committed=false;
@@ -206,21 +235,32 @@ class GameBackgroundPreparation final {
     GameBackgroundPreparation& operator=(const GameBackgroundPreparation&)=delete;
     GameFsStatus Begin(std::shared_ptr<const void> owner,uint64_t epoch,
                        const GameBackgroundCandidate&,PackageView registrations,
-                       std::unique_ptr<GameFileSource> source);
+                       std::unique_ptr<GameFileSource> source,
+                       GameModelTransformPolicy policy=GameModelTransformPolicy::SourceCommon);
     GameFsStatus Load(const std::shared_ptr<const void>& owner,uint64_t epoch);
+    // 52AC's selected three (presence,count) pairs, supplied as current owned
+    // user data. Only template loading; no635C random selection/playback.
+    GameFsStatus LoadModelMotions(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                  PackageView counts);
     GameFsStatus Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
                       GameGraphics&,const GameMatrix& view_projection) const;
+    GameFsStatus AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                             std::vector<GameAreaMarkerState>& out)const;
     GameFsStatus Close();
     GameBackgroundPreparationSnapshot Snapshot()const;
   private:
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RegistrationsCurrent()const;
+    bool MotionCountsCurrent()const;
     std::weak_ptr<const void> owner_;
     PackageView registrations_,package_;
     std::array<uint8_t,32> registrations_digest_{};
+    PackageView model_motion_counts_;
+    std::array<uint8_t,32> model_motion_counts_digest_{};
     GameFilesystem filesystem_;
     std::shared_ptr<GameModelAsset> asset_;
     GameModelClone clone_;
+    std::vector<GameModelMotion> model_motions_;
     GameBackgroundPreparationSnapshot state_;
     uint64_t last_epoch_=0,last_request_=0;
 };

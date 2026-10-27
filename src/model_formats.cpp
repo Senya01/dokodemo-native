@@ -52,7 +52,7 @@ Dvs parseDvs(const Bytes& data){
             }g.source.bytes=q.p-g.source.offset;
         }else if(node.type==4){auto p=q.p;q.take(24);Reader c(data,p,p+24);c.take(2);auto flags=c.u16();auto value=c.i16();if(value)q.take(4);if(flags&2)q.take(32);
         }else if(node.type==5){auto value=q.i16();auto flags=q.u16();q.take(8);if(flags&0x30)q.take(4);if(value==3)q.take(8);else if(value==2)q.take(12);
-        }else if(node.type==12 || node.type==13){auto p=q.p;q.take(12);node.typePayload.assign(data.begin()+p,data.begin()+p+12);if(node.type==12){Reader c(data,p,p+12);node.emitter.first=c.u16();node.emitter.second=c.u16();node.emitter.scalar0=c.f32();node.emitter.scalar1=c.f32();}else{Reader c(data,p+6,p+8);auto mi=c.i16();if(mi!=255 && (mi<0 || std::size_t(mi)>=out.materials.size()))q.fail("type13 material index");}
+        }else if(node.type==12 || node.type==13){auto p=q.p;q.take(12);node.typePayload.assign(data.begin()+p,data.begin()+p+12);if(node.type==12){Reader c(data,p,p+12);node.emitter.first=c.u16();node.emitter.second=c.u16();node.emitter.scalar0=c.f32();node.emitter.scalar1=c.f32();}else{Reader c(data,p,p+12);auto& a=node.areaMarker;a.field208=c.u16();a.field20C=c.u16();a.field214=c.u16();a.material=c.i16();a.word210=c.u32();if(a.material!=255 && (a.material<0 || std::size_t(a.material)>=out.materials.size()))q.fail("type13 material index");}
         }else if(node.type<0 || node.type>13)node.unsupportedType=true;
         node.uninterpreted=q.take(q.end-q.p);out.nodes.push_back(std::move(node));r.p=end;
     }out.postNodeTail=r.take(r.end-r.p);return out;

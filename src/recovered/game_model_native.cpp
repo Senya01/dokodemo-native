@@ -80,10 +80,16 @@ bool GameBackgroundPreparation::RegistrationsCurrent()const {
     try{return registrations_.Describe().size==60&&registrations_.InitializedDigest()==registrations_digest_;}
     catch(...){return false;}
 }
+bool GameBackgroundPreparation::MotionCountsCurrent()const {
+    if(!state_.model_motions_staged)return true;
+    try{return model_motion_counts_.Describe().size==6&&model_motion_counts_.InitializedDigest()==model_motion_counts_digest_;}
+    catch(...){return false;}
+}
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
-        const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source) {
+        const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
     if(state_.live||state_.failed||!owner||epoch<=last_epoch_||candidate.request<=last_request_
-       ||candidate.selector!=12||candidate.period>=6||!source)
+       ||candidate.selector!=12||candidate.period>=6||!source
+       ||(policy!=GameModelTransformPolicy::SourceCommon&&policy!=GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis))
         return {GameFsCode::Unavailable,0,"background preparation owner/request/selected domain"};
     try{
         // 4848: source period->variant; no date-derived/default variant.
@@ -95,6 +101,7 @@ GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,
         // both file and buffers even if Mount fails part way through.
         state_={};state_.live=true;state_.pending=true;state_.epoch=epoch;
         state_.request=candidate.request;state_.candidate=candidate.id;
+        state_.transform_policy=policy;
         state_.selector=candidate.selector;state_.period=candidate.period;
         state_.variant=variant;state_.resource=30+3*candidate.selector+variant;
         state_.registration=name;owner_=owner;registrations_=std::move(records);registrations_digest_=digest;
@@ -121,12 +128,16 @@ GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& 
         BackgroundPackageSource resources(package_,state_.registration);
         auto asset=std::make_shared<GameModelAsset>();
         const auto prefix=state_.registration+"\\"+state_.registration+"\\";
-        status=asset->Load(resources,prefix+"model01.DVS",prefix+"gim\\");
+        status=asset->Load(resources,prefix+"model01.DVS",prefix+"gim\\",state_.transform_policy);
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
         GameModelClone clone;status=clone.Initialize(asset);
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
         status=clone.Update(ModelIdentity());
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        std::vector<GameAreaMarkerState> markers;
+        status=clone.AreaMarkers(*asset,markers);
+        if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
+        Need(markers.size()==asset->Statistics().area_markers,"background marker-list readback");
         Need(Current(owner,epoch)&&RegistrationsCurrent()&&asset->Live(),"background load owner drift");
         // Only native staging is published. No source4DC,4A8,manager14 or
         // actor/context effects are admitted by successful model construction.
@@ -136,19 +147,52 @@ GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& 
 }
 GameFsStatus GameBackgroundPreparation::Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
         GameGraphics& graphics,const GameMatrix& camera)const {
-    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!asset_||!asset_->Live())
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background staged draw owner retired/changed"};
     // Explicit component/offline view, never an ordinary game scene publish.
     return clone_.Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
 }
+GameFsStatus GameBackgroundPreparation::AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        std::vector<GameAreaMarkerState>& out)const {
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!asset_)
+        return {GameFsCode::Unavailable,0,"background marker-list owner unavailable"};
+    return clone_.AreaMarkers(*asset_,out);
+}
+GameFsStatus GameBackgroundPreparation::LoadModelMotions(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        PackageView counts) {
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||state_.model_motions_staged||!RegistrationsCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background model-motion owner unavailable"};
+    try{
+        Need(counts.Describe().size==6,"background model-motion count extent");
+        const auto digest=counts.InitializedDigest();const auto raw=counts.ReadU8(state_.variant*2+1);
+        const auto count=raw<128?int(raw):int(raw)-256;
+        // Source allocates four handle/template slots. Refuse larger values
+        // before loading instead of writing past that selected finite domain.
+        Need(count<=4,"unimplemented background model-motion count");
+        BackgroundPackageSource resources(package_,state_.registration);
+        std::vector<GameModelMotion> motions;uint32_t deferred=0;
+        for(int i=0;i<count;++i){
+            GameModelMotion motion;
+            const auto path=state_.registration+"\\"+state_.registration+"\\model0"+char('1'+i)+".DAK";
+            const auto status=motion.Load(resources,path,*asset_);
+            if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+            deferred+=motion.Statistics().deferred_sections;motions.push_back(std::move(motion));
+        }
+        Need(Current(owner,epoch)&&RegistrationsCurrent()&&counts.InitializedDigest()==digest,"background model-motion recipe drift");
+        model_motion_counts_=std::move(counts);model_motion_counts_digest_=digest;
+        model_motions_=std::move(motions);state_.model_motions=uint32_t(model_motions_.size());
+        state_.model_motion_deferred=deferred;state_.model_motions_staged=true;return {};
+    }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
+}
 GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
     auto out=state_;
-    if(owner_.expired()||!RegistrationsCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
-        out.live=out.pending=out.staged=false;
+    if(owner_.expired()||!RegistrationsCurrent()||!MotionCountsCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
+        out.live=out.pending=out.staged=out.model_motions_staged=false;
     return out;
 }
 GameFsStatus GameBackgroundPreparation::Close() {
     // Clone/template/material views die before their backing/file is revoked.
+    model_motions_.clear();model_motion_counts_.Reset();
     clone_.Close();asset_.reset();package_.Reset();
     auto status=filesystem_.Close();
     state_.live=state_.pending=state_.staged=false;
@@ -254,16 +298,18 @@ uint32_t ModelWindowsActorSoftDiffuse(uint32_t color,const GameVector4 &world_no
     return out;
 }
 GameFsStatus GameModelAsset::Load(GameResourceSource &source, const std::string &path,
-                                  const std::string &prefix) {
+                                  const std::string &prefix,GameModelTransformPolicy policy) {
     PackageView image;
     auto status = source.OpenResource(path, image);
-    return status ? Decode(std::move(image), &source, prefix) : status;
+    return status ? Decode(std::move(image), &source, prefix,policy) : status;
 }
 GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *source,
-                                    const std::string &prefix) {
+                                    const std::string &prefix,GameModelTransformPolicy policy) {
     if (Live())
         return {GameFsCode::Busy, 0, "model asset already live"};
     try {
+        Need(policy==GameModelTransformPolicy::SourceCommon||policy==GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis,
+             "unimplemented model transform policy");
         const auto extent = image.Describe().size;
         Need(extent >= 24 && extent <= 16 * 1024 * 1024, "model source extent cap");
         model::Bytes bytes(size_t(extent), 0);
@@ -276,8 +322,16 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
         stats.materials = uint32_t(parsed.materials.size());
         for (const auto &n : parsed.nodes) {
             Need(!n.unsupportedType &&
-                     (n.type == 0 || n.type == 1 || n.type == 3 || n.type == 4 || n.type == 5 || n.type==12),
+                     (n.type == 0 || n.type == 1 || n.type == 3 || n.type == 4 || n.type == 5 || n.type==12 || n.type==13),
                  "unimplemented model node type");
+            if(n.type==13){
+                Need(n.hasCommon&&n.typePayload.size()==12,"area-marker descriptor extent/common");
+                Need(n.uninterpreted.bytes==0,"unimplemented area-marker trailing payload");
+                Need(!(n.commonFlags&~3u),"unimplemented area-marker common flags");
+                Need(!(n.commonFlags&2)||policy==GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis,
+                     "unimplemented source area-marker flag2 basis initializer");
+                ++stats.area_markers;
+            }
             if(n.type==12){
                 Need(n.typePayload.size()==12,"type12 region descriptor extent");
                 ++stats.particle_emitters;
@@ -288,7 +342,7 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
             if (n.hasCommon) {
                 Need(n.commonShorts[1] >= -1 && n.commonShorts[1] < int32_t(stats.nodes),
                      "model parent index");
-                Need(!(n.commonFlags & 2), "unimplemented oriented-scale common transform");
+                Need(n.type==13||!(n.commonFlags & 2), "unimplemented oriented-scale common transform");
             }
             if (!n.hasGeometry || !n.geometry.vertexCount)
                 continue;
@@ -305,6 +359,15 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
                 for (const auto &b : g.bones)
                     Need(int16_t(b.idWord & 65535) >= 0 && (b.idWord & 65535) < stats.nodes,
                          "skin palette target index");
+                for(const auto& bone:g.bones){
+                    auto parent=int32_t(bone.idWord&65535);size_t depth=0;
+                    while(parent>=0){
+                        Need(size_t(parent)<parsed.nodes.size()&&++depth<=parsed.nodes.size(),"skin parent hierarchy");
+                        const auto& ancestor=parsed.nodes[size_t(parent)];
+                        Need(ancestor.type!=13,"unimplemented skin binding through area marker");
+                        parent=ancestor.hasCommon?ancestor.commonShorts[1]:-1;
+                    }
+                }
                 stats.weighted_vertices += uint32_t(g.vertexCount);
             }
             stats.vertices += uint32_t(g.vertexCount);
@@ -336,6 +399,7 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
             materials.push_back(std::move(material));
         }
         header_color_=image.ReadLE32(8);
+        transform_policy_=policy;
         data_ = std::move(parsed);
         materials_ = std::move(materials);
         stats_ = stats;
@@ -357,7 +421,9 @@ GameFsStatus GameModelClone::Initialize(std::shared_ptr<const GameModelAsset> as
             p.position = node.commonVectors[0];
             p.rotation = node.commonVectors[1];
         }
-        p.material = node.hasGeometry ? node.geometry.materialIndex : -1;
+        p.material = node.hasGeometry ? node.geometry.materialIndex :
+            node.type==13&&node.areaMarker.material!=255?node.areaMarker.material:-1;
+        if(node.type==13){p.scale=node.commonVectors[3];p.scale_orientation=node.commonVectors[2];}
         p.emitter=node.emitter;
         if(node.type==5)lights_.type5_nodes.push_back(uint32_t(i));
     }
@@ -374,6 +440,7 @@ GameFsStatus GameModelClone::Initialize(std::shared_ptr<const GameModelAsset> as
     return status;
 }
 GameFsStatus GameModelClone::Update(const GameMatrix &root) {
+    marker_pose_current_=false;
     if (!asset_ || !asset_->Live())
         return {GameFsCode::Unavailable, 0, "model clone source lease retired"};
     try {
@@ -385,7 +452,22 @@ GameFsStatus GameModelClone::Update(const GameMatrix &root) {
             visited[i] = 1;
             const auto &node = asset_->Data().nodes[i];
             auto &pose = pose_[i];
-            const auto local = ModelTRS(pose.position, pose.base_rotation, pose.rotation, pose.scale);
+            auto local = ModelTRS(pose.position, pose.base_rotation, pose.rotation, pose.scale);
+            if(node.type==13){
+                // 8C684 multiply order; opted Windows policy supplies native
+                // canonical axes. PSP NOBITS basis/current values UNKNOWN.
+                // Existing native quaternion normalization remains explicit.
+                local=ModelTRS(pose.position,pose.base_rotation,pose.rotation,{{1,1,1,1}});
+                if(node.commonFlags&2){
+                    const auto orientation=ModelQuaternion(pose.scale_orientation);
+                    auto scale=ModelIdentity();
+                    for(unsigned axis=0;axis<3;++axis){
+                        Need(std::isfinite(pose.scale[axis]),"nonfinite area-marker scale");
+                        scale[axis*5]=pose.scale[axis];
+                    }
+                    local=ModelMultiply(local,ModelMultiply(orientation,ModelMultiply(scale,ModelInverseRigid(orientation))));
+                }
+            }
             Need(std::isfinite(pose.opacity)&&pose.opacity>=0,"nonfinite/negative model opacity");
             pose.world_opacity=pose.opacity;
             const auto parent = node.hasCommon ? node.commonShorts[1] : -1;
@@ -396,14 +478,44 @@ GameFsStatus GameModelClone::Update(const GameMatrix &root) {
                 pose.world_opacity*=pose_[size_t(parent)].world_opacity;
             } else
                 pose.world = ModelMultiply(root, local);
+            if(node.type==13)
+                for(const auto value:pose.world)Need(std::isfinite(value),"nonfinite area-marker world matrix");
             visited[i] = 2;
         };
         for (size_t i = 0; i < pose_.size(); ++i)
             update(i);
+        marker_pose_current_=true;
         return {};
     } catch (const std::exception &e) {
         return Error(e);
     }
+}
+GameFsStatus GameModelClone::AreaMarkers(const GameModelAsset& expected,std::vector<GameAreaMarkerState>& out)const {
+    if(!asset_||asset_.get()!=&expected||!asset_->Live()||!marker_pose_current_)
+        return {GameFsCode::Unavailable,0,"area-marker template/lease unavailable"};
+    try{
+        Need(pose_.size()==asset_->Data().nodes.size(),"area-marker clone table extent");
+        std::vector<GameAreaMarkerState> current;
+        for(size_t i=0;i<pose_.size();++i){
+            const auto& node=asset_->Data().nodes[i];if(node.type!=13)continue;
+            const auto& p=pose_[i];
+            Need(p.material==(node.areaMarker.material==255?-1:node.areaMarker.material),
+                 "unimplemented area-marker material rebinding");
+            GameAreaMarkerState marker;marker.node=uint32_t(i);marker.parent=node.commonShorts[1];
+            marker.material=p.material;marker.parameters=node.areaMarker;
+            marker.world=p.world;marker.final_matrix=p.world;marker.world_opacity=p.world_opacity;
+            marker.transform_policy=asset_->TransformPolicy();
+            if(!node.optionalMatrix.empty()){
+                Need(node.optionalMatrix.size()==16,"area-marker optional matrix extent");
+                GameMatrix optional;std::copy(node.optionalMatrix.begin(),node.optionalMatrix.end(),optional.begin());
+                marker.final_matrix=ModelMultiply(p.world,optional);
+            }
+            for(const auto value:marker.final_matrix)Need(std::isfinite(value),"nonfinite area-marker final matrix");
+            Need(std::isfinite(marker.world_opacity),"nonfinite area-marker inherited opacity");
+            current.push_back(marker);
+        }
+        out=std::move(current);return {};
+    }catch(const std::exception& e){return Error(e);}
 }
 GameVector4 GameModelClone::Skin(const model::Geometry &g, uint32_t vertex,
                                  const std::vector<GameMatrix> &palette) {

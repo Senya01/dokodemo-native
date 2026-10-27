@@ -48,6 +48,13 @@ struct ParticleEmitterParameters {
     std::uint16_t first=0,second=0;
     float scalar0=0,scalar1=0;
 };
+// 7F0E8: AREAMARKER13's twelve source bytes. Names retain source offsets
+// until a reached consumer establishes their gameplay meaning.
+struct AreaMarkerParameters {
+    std::uint16_t field208=0,field20C=0,field214=0;
+    std::int16_t material=255;
+    std::uint32_t word210=0;
+};
 struct Node {
     Range source, commonSource, uninterpreted;
     int type=0;
@@ -59,6 +66,7 @@ struct Node {
     std::vector<float> optionalMatrix;
     Bytes typePayload; // retained node-specific bytes,never native pointers
     ParticleEmitterParameters emitter;
+    AreaMarkerParameters areaMarker;
     Geometry geometry;
 };
 struct Dvs {

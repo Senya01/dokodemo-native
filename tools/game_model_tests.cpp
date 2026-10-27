@@ -197,13 +197,80 @@ void BackgroundPreparationTests(){
     auto bad_model=Fixture();const auto parsed=dokodemo::model::parseDvs(bad_model);const auto node=parsed.nodes[0].source.offset;
     bad_model[node+4]=13;bad_model[node+5]=0;bad_model[node+6+74+6]=255;bad_model[node+6+74+7]=0;
     const auto bad_file=BackgroundArchive({{"SYN_A.BPM",BackgroundArchive({{"SYN_A\\model01.DVS",bad_model}})}});
-    io=std::make_shared<BackgroundFileState>();Check(bool(job.Begin(foreign,10,{1,12,0,10},view(),std::make_unique<BackgroundFile>(bad_file,io))),"unsupported model pending");
+    io=std::make_shared<BackgroundFileState>();Check(bool(job.Begin(foreign,10,{1,12,0,10},view(),std::make_unique<BackgroundFile>(bad_file,io))),"unadmitted marker tail pending");
     const auto unsupported=job.Load(foreign,10);const auto cut=job.Snapshot();
-    Check(!unsupported&&unsupported.code==GameFsCode::Unavailable&&cut.failed&&cut.package_read&&!cut.staged&&!cut.source_committed&&cut.package_owner,"actual unimplemented node refuses after package read, not ready");
+    Check(!unsupported&&unsupported.code==GameFsCode::Unavailable&&cut.failed&&cut.package_read&&!cut.staged&&!cut.source_committed&&cut.package_owner,"unadmitted marker tail refuses after package read, not ready");
     io->fail_close=true;Check(!job.Close()&&io->live&&!job.Snapshot().staged,"close failure retains backing for retry");
     Check(!job.Begin(foreign,11,{1,12,0,11},view(),std::make_unique<BackgroundFile>(file,std::make_shared<BackgroundFileState>())),"failed retirement cannot restart");
     io->fail_close=false;Check(bool(job.Close())&&!io->live,"explicit retirement retry succeeds");
     graphics.Close();
+}
+
+std::vector<uint8_t> AreaMarkerFixture(uint16_t flags=3,bool material=true){
+    auto b=Fixture();auto parsed=dokodemo::model::parseDvs(b);
+    if(material){
+        const auto old=parsed.nodes[0].source.offset;
+        b.insert(b.begin()+24,36,0);Word(b,16,15);Word(b,20,1);Word(b,old+36,uint32_t(b.size()/4));
+        parsed=dokodemo::model::parseDvs(b);
+    }
+    const auto node=parsed.nodes[0].source.offset;std::vector<uint8_t> marker;
+    W(marker,0);H(marker,13);H(marker,flags);H(marker,-1);H(marker,-1);H(marker,255);H(marker,0);
+    // Synthetic pose and typed payload, not the extracted156B target nodes.
+    for(const auto& v:std::array<GameVector4,4>{{{{5,8,11,1}},{{0,0,0,1}},{{0,0,.3826834324f,.9238795325f}},{{2,4,3,1}}}})
+        for(auto x:v)F(marker,x);
+    if(flags&1){auto optional=ModelIdentity();optional[12]=2;for(auto x:optional)F(marker,x);}
+    H(marker,9);H(marker,7);H(marker,13);H(marker,material?0:255);W(marker,0x11223344);
+    b.insert(b.begin()+node,marker.begin(),marker.end());Word(b,node,uint32_t((node+marker.size())/4));
+    const auto mesh=node+marker.size();Word(b,mesh,uint32_t(b.size()/4));
+    b[mesh+8]=b[mesh+9]=0; // geometry child really inherits marker0
+    uint32_t one;const float f=1;std::memcpy(&one,&f,4);Word(b,mesh+16,one);
+    b[parsed.bounds.source.offset+parsed.bounds.source.bytes]=2; // node count
+    return b;
+}
+void AreaMarkerTests(){
+    constexpr auto windows_basis=GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis;
+    const auto near=[](float a,float b){return std::abs(a-b)<.0003f;};
+    auto bytes=AreaMarkerFixture();const auto parsed=dokodemo::model::parseDvs(bytes);
+    Check(parsed.nodes.size()==2&&parsed.nodes[0].areaMarker.field208==9&&parsed.nodes[0].areaMarker.field20C==7&&parsed.nodes[0].areaMarker.field214==13&&parsed.nodes[0].areaMarker.word210==0x11223344&&parsed.nodes[0].areaMarker.material==0,"source typed12B marker parse");
+    auto lease=std::make_shared<Lease>(bytes);auto asset=std::make_shared<GameModelAsset>();
+    const auto strict=asset->Decode(PackageStorage::Attach(lease,lease->b.size()));
+    Check(!strict&&strict.code==GameFsCode::Unavailable&&!asset->Live(),"unknown PSP flag2 basis is refused by default");
+    Check(bool(asset->Decode(PackageStorage::Attach(lease,lease->b.size()),nullptr,{},windows_basis)),"finite area-marker model load");
+    Check(asset->Statistics().area_markers==1&&asset->Statistics().meshes==1&&asset->Statistics().vertices==3,"marker is typed metadata, no manufactured geometry");
+    GameModelClone clone,second;Check(bool(clone.Initialize(asset))&&bool(second.Initialize(asset)),"independent marker clones share live immutable template");
+    auto root=ModelIdentity();root[12]=100;root[13]=200;root[14]=300;
+    Check(bool(clone.Update(root)),"marker oriented-scale hierarchy update");std::vector<GameAreaMarkerState> markers;
+    Check(bool(clone.AreaMarkers(*asset,markers))&&markers.size()==1,"current owned marker-list consumer");const auto m=markers[0];
+    Check(m.node==0&&m.parent==-1&&m.material==0&&m.parameters.word210==0x11223344&&near(m.world[0],3)&&near(m.world[1],1)&&near(m.world[4],1)&&near(m.world[5],3)&&near(m.world[10],3),"R O S inverseO order under named native canonical-basis policy");
+    Check(near(m.world[12],105)&&near(m.world[13],208)&&near(m.final_matrix[12],111)&&near(m.final_matrix[13],210),"optional final matrix follows world, not a second parent");
+    const auto& pose=static_cast<const GameModelClone&>(clone).Pose();Check(near(pose[1].world[12],108)&&near(pose[1].world[13],209),"child inherits marker world without optional correction twice");
+    Check(bool(second.AreaMarkers(*asset,markers))&&near(markers[0].world[12],5),"clone transforms do not alias");
+    GameModelAsset foreign;markers[0].node=999;Check(!clone.AreaMarkers(foreign,markers)&&markers[0].node==999,"foreign template cannot replace current copied receipt");
+    auto nonfinite_root=root;nonfinite_root[12]=std::numeric_limits<float>::infinity();
+    Check(!clone.Update(nonfinite_root)&&!clone.AreaMarkers(*asset,markers),"nonfinite composed marker matrix refuses receipt");
+    Check(bool(clone.Update(root)),"valid explicit root restores pose");
+    clone.Pose()[0].position[0]=6;Check(!clone.AreaMarkers(*asset,markers)&&bool(clone.Update(root))&&bool(clone.AreaMarkers(*asset,markers))&&near(markers[0].world[12],106),"mutable pose invalidates receipt until real update");
+    clone.Pose()[0].material=-1;Check(bool(clone.Update(root))&&!clone.AreaMarkers(*asset,markers),"unclosed marker material writer refuses");clone.Pose()[0].material=0;
+    clone.Pose()[0].scale_orientation={{0,0,0,0}};Check(!clone.Update(root)&&!clone.AreaMarkers(*asset,markers),"invalid quaternion never publishes marker matrix");clone.Pose()[0].scale_orientation={{0,0,.3826834324f,.9238795325f}};
+    Check(bool(clone.Update(ModelIdentity())),"recover only after valid explicit pose update");
+    GameGraphics graphics;Check(graphics.Initialize({})&&graphics.Clear(0xFF000000),"marker child raster");auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.1f;camera[12]=-.6f;camera[13]=-.8f;camera[14]=-1.1f;
+    const auto pixels=graphics.Snapshot().mesh_pixels;Check(bool(clone.Draw(graphics,camera))&&graphics.Snapshot().mesh_pixels>pixels,"geometry child renders through actual transformed marker parent");graphics.Close();
+    for(uint16_t flags:{uint16_t(0),uint16_t(1),uint16_t(2)}){
+        auto l=std::make_shared<Lease>(AreaMarkerFixture(flags,false));auto a=std::make_shared<GameModelAsset>();GameModelClone c;
+        Check(bool(a->Decode(PackageStorage::Attach(l,l->b.size()),nullptr,{},flags&2?windows_basis:GameModelTransformPolicy::SourceCommon))&&bool(c.Initialize(a))&&bool(c.AreaMarkers(*a,markers)),"closed flags0..3 and material255 null binding");
+        Check(markers[0].material==-1&&near(markers[0].world[0],flags&2?3.f:1.f),"source flag2 controls scale consumption");
+        c.Close();Check(!c.AreaMarkers(*a,markers),"closed marker owner refuses");
+    }
+    for(unsigned kind=0;kind<4;++kind){
+        auto b=AreaMarkerFixture();const auto p=dokodemo::model::parseDvs(b);const auto n=p.nodes[0].source.offset;const auto end=n+p.nodes[0].source.bytes;
+        if(kind==0){b[n+6]=7;} // unknown common flag4
+        if(kind==1){b[end-6]=3;} // foreign material index
+        if(kind==2){Word(b,n,uint32_t((end-4)/4));} // truncated payload
+        if(kind==3){b[n+8]=1;b[n+9]=0;} // actual parent cycle through geometry child
+        auto l=std::make_shared<Lease>(b);auto a=std::make_shared<GameModelAsset>();auto status=a->Decode(PackageStorage::Attach(l,l->b.size()),nullptr,{},windows_basis);GameModelClone c;
+        Check(!status||!c.Initialize(a),"malformed marker bounds/flags/material/cycle refuse");
+    }
+    lease->live=false;Check(!clone.AreaMarkers(*asset,markers)&&!clone.Update(root)&&!second.AreaMarkers(*asset,markers),"retired source template refuses every marker clone");clone.Close();second.Close();
 }
 struct ContactTextureSource final:GameResourceSource {
     uint8_t alpha=0;
@@ -580,6 +647,34 @@ void Motion() {
           "inactive unknown track retained,not executed at template admission");
     const auto prior=clone.Pose()[0].position;
     Check(!bad.Apply(clone,0)&&clone.Pose()[0].position==prior,"active unknown track refused before partial pose mutation");
+}
+
+void BackgroundModelMotionTests(){
+    auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    for(unsigned i=0;i<3;++i){const auto name=std::string("MOTION_")+char('A'+i);std::copy(name.begin(),name.end(),records->b.begin()+i*20);}
+    std::vector<std::pair<std::string,std::vector<uint8_t>>> entries{{"MOTION_A\\model01.DVS",Fixture()}};
+    for(unsigned i=1;i<=4;++i)entries.push_back({"MOTION_A\\model0"+std::to_string(i)+".DAK",MotionFixture(i==4)});
+    const auto file=BackgroundArchive({{"MOTION_A.BPM",BackgroundArchive(entries)}});
+    for(int count:{0,2,4,-1,5}){
+        GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();
+        auto counts=std::make_shared<Lease>(std::vector<uint8_t>{9,uint8_t(count),8,0,7,4});
+        Check(bool(job.Begin(owner,1,{27,12,0,1},PackageStorage::Attach(records,60),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,1)),"model-motion real package stage");
+        Check(!job.LoadModelMotions(foreign,1,PackageStorage::Attach(counts,6))&&!job.Snapshot().model_motions_staged,"foreign model-motion owner refuses");
+        const auto status=job.LoadModelMotions(owner,1,PackageStorage::Attach(counts,6));const auto q=job.Snapshot();
+        if(count>4)Check(!status&&q.failed&&!q.staged&&!q.model_motions_staged&&!q.source_committed,"count outside four source slots fails before template publication");
+        else{
+            Check(bool(status)&&q.model_motions_staged&&q.model_motions==uint32_t((std::max)(0,count))&&!q.source_committed,"source signed count, actual templates, no playback/scene ready");
+            Check(q.model_motion_deferred==(count==4?1u:0u),"inactive deferred tracks preserved, never played by staging");
+            Check(!job.LoadModelMotions(owner,1,PackageStorage::Attach(counts,6)),"template stage cannot replay");
+            counts->live=false;std::vector<GameAreaMarkerState> markers;
+            Check(!job.Snapshot().staged&&!job.AreaMarkers(owner,1,markers),"retired recipe no longer supplies current factory lineage");
+        }
+        Check(bool(job.Close())&&io->closes==1,"templates retire before backing file");
+    }
+    GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();
+    Check(bool(job.Begin(owner,1,{27,12,0,1},PackageStorage::Attach(records,60),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,1)),"missing recipe model staged");
+    Check(!job.LoadModelMotions(owner,1,{})&&!job.Snapshot().model_motions_staged&&bool(job.Close()),"unknown recipe is not empty/default controls");
 }
 struct TitleSource final : GameResourceSource {
     bool fail = false;
@@ -1092,6 +1187,8 @@ void TitleMenuLifecycle() {
 } // namespace
 int main() {
     try {
+        AreaMarkerTests();
+        BackgroundModelMotionTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
