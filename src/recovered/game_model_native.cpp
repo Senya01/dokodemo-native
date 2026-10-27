@@ -86,6 +86,17 @@ bool GameBackgroundPreparation::MotionCountsCurrent()const {
     try{return model_motion_counts_.Describe().size==6&&model_motion_counts_.InitializedDigest()==model_motion_counts_digest_;}
     catch(...){return false;}
 }
+bool GameBackgroundPreparation::AuxiliaryCurrent()const {
+    if(!state_.auxiliary_staged)return true;
+    try{
+        for(const auto& input:auxiliary_inputs_)
+            if(input.view.InitializedDigest()!=input.digest)return false;
+        if(!auxiliary_entries_.empty()&&(!auxiliary_asset_||!auxiliary_asset_->Live()))return false;
+        for(const auto& entry:auxiliary_entries_)for(const auto& motion:entry.motions)
+            if(motion&&!motion->Live())return false;
+        return true;
+    }catch(...){return false;}
+}
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
         const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
     if(state_.live||state_.failed||!owner||epoch<=last_epoch_||candidate.request<=last_request_
@@ -148,14 +159,14 @@ GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& 
 }
 GameFsStatus GameBackgroundPreparation::Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
         GameGraphics& graphics,const GameMatrix& camera)const {
-    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!asset_||!asset_->Live())
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background staged draw owner retired/changed"};
     // Explicit component/offline view, never an ordinary game scene publish.
     return clone_.Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
 }
 GameFsStatus GameBackgroundPreparation::AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
         std::vector<GameAreaMarkerState>& out)const {
-    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!asset_)
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_)
         return {GameFsCode::Unavailable,0,"background marker-list owner unavailable"};
     return clone_.AreaMarkers(*asset_,out);
 }
@@ -185,14 +196,146 @@ GameFsStatus GameBackgroundPreparation::LoadModelMotions(const std::shared_ptr<c
         state_.model_motion_deferred=deferred;state_.model_motions_staged=true;return {};
     }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
 }
+GameFsStatus GameBackgroundPreparation::LoadAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        PackageView triplets,PackageView format,const GameAuxiliaryNameResolver& resolve) {
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||state_.auxiliary_staged
+       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background auxiliary owner unavailable"};
+    try{
+        std::vector<AuxiliaryInput> inputs;
+        const auto remember=[&](const PackageView& view){inputs.push_back({view,view.InitializedDigest()});};
+        const auto text=[&](const PackageView& view){
+            const auto size=view.Describe().size;Need(size>1&&size<=96,"auxiliary text extent");
+            remember(view);std::string out;
+            for(uint64_t i=0;i<size;++i){const auto c=view.ReadU8(i);
+                if(!c){Need(i+1==size,"auxiliary text trailing bytes");return out;}
+                Need(c>=32&&c<127,"auxiliary text encoding");out+=char(c);
+            }
+            throw std::runtime_error("unterminated auxiliary text");
+        };
+        const auto filename=[](const std::string& name){
+            Need(!name.empty()&&name.size()<=64&&name!="."&&name!="..","auxiliary filename extent");
+            for(auto c:name)Need((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')
+                                ||c=='_'||c=='-'||c=='.',"unsafe auxiliary filename");
+        };
+        const auto bytes=triplets.Describe().size;
+        // Native bounded capacity, not a recovered PSP capacity.
+        Need(bytes>=12&&bytes<=33*12&&bytes%12==0,"auxiliary triplet extent");remember(triplets);
+        std::vector<AuxiliaryEntry> entries;
+        std::vector<std::array<std::string,3>> names;
+        bool terminated=false;
+        for(uint64_t at=0;at<bytes;at+=12){
+            AuxiliaryEntry entry;
+            for(unsigned slot=0;slot<3;++slot)entry.words[slot]=triplets.ReadLE32(at+slot*4);
+            if(entry.words==std::array<uint32_t,3>{}){
+                Need(at+12==bytes,"auxiliary entries after terminator");terminated=true;break;
+            }
+            Need(bool(resolve),"auxiliary name resolver unavailable");
+            std::array<std::string,3> row;
+            for(unsigned slot=0;slot<3;++slot)if(entry.words[slot]){
+                PackageView view;const auto status=resolve(entry.words[slot],view);
+                if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+                row[slot]=text(view);filename(row[slot]);
+            }
+            Need(!entry.words[1]||entry.words[0],"unimplemented auxiliary slot1 without child producer");
+            entries.push_back(std::move(entry));names.push_back(std::move(row));
+        }
+        Need(terminated,"auxiliary triplet terminator missing");
+        std::shared_ptr<GameModelAsset> auxiliary;
+        GameModelClone main_template;
+        std::vector<AuxiliaryBinding> bindings;
+        uint32_t templates=0,children=0;
+        if(!entries.empty()){
+            const auto model_format=text(format);
+            const std::string prefix_format="%s\\%s\\";
+            Need(model_format.compare(0,prefix_format.size(),prefix_format)==0,"auxiliary model path format");
+            const auto model_name=model_format.substr(prefix_format.size());filename(model_name);
+            BackgroundPackageSource resources(package_,state_.registration);
+            const auto prefix=state_.registration+"\\"+state_.registration+"\\";
+            auxiliary=std::make_shared<GameModelAsset>();
+            auto status=auxiliary->Load(resources,prefix+model_name,prefix+"gim\\",state_.transform_policy);
+            if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+            for(size_t i=0;i<entries.size();++i){auto& entry=entries[i];
+                for(unsigned slot=0;slot<3;++slot)if(entry.words[slot]){
+                    auto motion=std::make_unique<GameModelMotion>();
+                    // 4A0C parses templates; Windows validates the later635C
+                    // target eagerly. Source random choice/5BFC is not issued.
+                    status=motion->Load(resources,prefix+names[i][slot],slot==2?*asset_:*auxiliary);
+                    if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+                    entry.motions[slot]=std::move(motion);++templates;
+                }
+                if(entry.words[0]){
+                    entry.child=std::make_unique<GameModelClone>();status=entry.child->Initialize(auxiliary);
+                    if(status)status=entry.child->Update(ModelIdentity());
+                    if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}++children;
+                }
+                for(unsigned slot=0;slot<3;++slot)if(entry.motions[slot]){
+                    const auto bind=[&](GameAuxiliaryTarget target){
+                        AuxiliaryBinding b;b.entry=uint32_t(i);b.slot=slot;b.target=target;
+                        const auto stats=entry.motions[slot]->Statistics();b.playback.Configure(stats.duration,stats.loop);
+                        // 88728/89954 leaves state1. Only635C's child/visible
+                        // controls receive explicit state3; template stays1.
+                        if(target!=GameAuxiliaryTarget::MainTemplate)b.playback.Start(0);
+                        bindings.push_back(std::move(b));
+                    };
+                    if(slot<2)bind(GameAuxiliaryTarget::Child);
+                    else{
+                        if(!main_template.Asset()){
+                            status=main_template.Initialize(asset_);if(status)status=main_template.Update(ModelIdentity());
+                            if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+                        }
+                        bind(GameAuxiliaryTarget::MainTemplate);bind(GameAuxiliaryTarget::MainClone);
+                    }
+                }
+            }
+        }
+        Need(Current(owner,epoch)&&RegistrationsCurrent()&&MotionCountsCurrent(),"auxiliary owner drift");
+        for(const auto& input:inputs)Need(input.view.InitializedDigest()==input.digest,"auxiliary recipe/name drift");
+        auxiliary_inputs_=std::move(inputs);auxiliary_entries_=std::move(entries);
+        auxiliary_bindings_=std::move(bindings);auxiliary_asset_=std::move(auxiliary);main_template_clone_=std::move(main_template);
+        state_.auxiliary_entries=uint32_t(auxiliary_entries_.size());state_.auxiliary_children=children;
+        state_.auxiliary_templates=templates;state_.auxiliary_bindings=uint32_t(auxiliary_bindings_.size());
+        if(auxiliary_asset_)state_.auxiliary_model=auxiliary_asset_->Statistics();
+        state_.auxiliary_staged=true;return {};
+    }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
+}
+GameFsStatus GameBackgroundPreparation::Auxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        std::vector<GameAuxiliaryBindingState>& out)const {
+    if(!Current(owner,epoch)||state_.failed||!state_.staged||!state_.auxiliary_staged
+       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background auxiliary readback unavailable"};
+    std::vector<GameAuxiliaryBindingState> result;
+    for(const auto& b:auxiliary_bindings_){
+        const auto& entry=auxiliary_entries_.at(b.entry);
+        const auto* target=b.target==GameAuxiliaryTarget::Child?entry.child.get():
+                           b.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:&clone_;
+        if(!target||!target->Asset()||!target->Asset()->Live())
+            return {GameFsCode::Unavailable,0,"background auxiliary target retired"};
+        result.push_back({b.entry,b.slot,entry.words[b.slot],b.target,b.playback.Snapshot(),
+                          entry.motions[b.slot]->Statistics(),target->Asset()->Statistics()});
+    }
+    out=std::move(result);return {};
+}
+GameFsStatus GameBackgroundPreparation::DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        uint32_t entry,GameGraphics& graphics,const GameMatrix& camera)const {
+    std::vector<GameAuxiliaryBindingState> readback;
+    const auto status=Auxiliary(owner,epoch,readback);if(!status)return status;
+    if(entry>=auxiliary_entries_.size()||!auxiliary_entries_[entry].child)
+        return {GameFsCode::Unavailable,0,"background auxiliary child not present"};
+    return auxiliary_entries_[entry].child->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+}
 GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
     auto out=state_;
-    if(owner_.expired()||!RegistrationsCurrent()||!MotionCountsCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
-        out.live=out.pending=out.staged=out.model_motions_staged=false;
+    if(owner_.expired()||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
+        out.live=out.pending=out.staged=out.model_motions_staged=out.auxiliary_staged=false;
     return out;
 }
 GameFsStatus GameBackgroundPreparation::Close() {
     // Clone/template/material views die before their backing/file is revoked.
+    auxiliary_bindings_.clear();
+    for(auto& entry:auxiliary_entries_)if(entry.child)entry.child->Close();
+    main_template_clone_.Close();auxiliary_entries_.clear();auxiliary_asset_.reset();auxiliary_inputs_.clear();
+    state_.auxiliary_staged=false;
     model_motions_.clear();model_motion_counts_.Reset();
     clone_.Close();asset_.reset();package_.Reset();
     auto status=filesystem_.Close();

@@ -3,6 +3,7 @@
 #include "game_graphics_native.h"
 #include "model_formats.hpp"
 #include <memory>
+#include <functional>
 
 namespace dokodemo::recovered {
 using GameVector4 = std::array<float, 4>;
@@ -177,6 +178,7 @@ class GameModelMotion final {
     GameFsStatus Load(GameResourceSource &source, const std::string &path, const GameModelAsset &target);
     GameFsStatus Decode(PackageView image, const GameModelAsset &target);
     GameFsStatus Apply(GameModelClone &clone, uint32_t time) const;
+    bool Live()const noexcept {try{return ready_&&image_.Describe().readable;}catch(...){return false;}}
     GameMotionStatistics Statistics() const noexcept {
         return stats_;
     }
@@ -208,6 +210,17 @@ class GameModelPlayback final {
     GamePlaybackState state_;
 };
 
+// Source5070 triplets are supplied as initialized user data. Nonzero words
+// are source tokens resolved to bounded owned text, never cast host pointers.
+using GameAuxiliaryNameResolver=std::function<GameFsStatus(uint32_t,PackageView&)>;
+enum class GameAuxiliaryTarget { Child, MainTemplate, MainClone };
+struct GameAuxiliaryBindingState {
+    uint32_t entry=0,slot=0,source_word=0;
+    GameAuxiliaryTarget target=GameAuxiliaryTarget::Child;
+    GamePlaybackState playback;
+    GameMotionStatistics motion;
+    GameModelStatistics model;
+};
 // WindowsBackgroundPreparation: a separately owned, read-only background
 // package/model staging job. It grants NO manager, scene or script readiness.
 // 25438 uses inline20-byte registrations; 4EF4 supplies the nested model path.
@@ -224,6 +237,9 @@ struct GameBackgroundPreparationSnapshot {
     uint64_t package_owner=0,package_generation=0,package_serial=0;
     GameModelStatistics model;
     uint32_t model_motions=0,model_motion_deferred=0;
+    bool auxiliary_staged=false;
+    uint32_t auxiliary_entries=0,auxiliary_children=0,auxiliary_templates=0,auxiliary_bindings=0;
+    GameModelStatistics auxiliary_model;
     GameFsStatus status;
     GameModelTransformPolicy transform_policy=GameModelTransformPolicy::SourceCommon;
     std::string registration;
@@ -244,6 +260,18 @@ class GameBackgroundPreparation final {
     // user data. Only template loading; no635C random selection/playback.
     GameFsStatus LoadModelMotions(const std::shared_ptr<const void>& owner,uint64_t epoch,
                                   PackageView counts);
+    // 50AC/4A0C owned recipe/templates. Windows eagerly prepares all candidate
+    // bindings (635C targets), without random selection, sampling or activation
+    // publication. Constructor state1/time0 is retained; only635C child/visible
+    // targets receive its explicit state3 store. No control is sampled.
+    GameFsStatus LoadAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                               PackageView triplets,PackageView model_format,
+                               const GameAuxiliaryNameResolver& resolve);
+    GameFsStatus Auxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                           std::vector<GameAuxiliaryBindingState>& out)const;
+    // Explicit component preview of one prepared child; not source visibility.
+    GameFsStatus DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t entry,
+                               GameGraphics&,const GameMatrix& view_projection)const;
     GameFsStatus Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
                       GameGraphics&,const GameMatrix& view_projection) const;
     GameFsStatus AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
@@ -254,6 +282,23 @@ class GameBackgroundPreparation final {
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RegistrationsCurrent()const;
     bool MotionCountsCurrent()const;
+    bool AuxiliaryCurrent()const;
+    struct AuxiliaryEntry {
+        std::array<uint32_t,3> words{};
+        std::array<std::unique_ptr<GameModelMotion>,3> motions;
+        std::unique_ptr<GameModelClone> child;
+    };
+    struct AuxiliaryBinding {
+        uint32_t entry=0,slot=0;
+        GameAuxiliaryTarget target=GameAuxiliaryTarget::Child;
+        GameModelPlayback playback;
+    };
+    struct AuxiliaryInput {PackageView view;std::array<uint8_t,32> digest{};};
+    std::vector<AuxiliaryInput> auxiliary_inputs_;
+    std::vector<AuxiliaryEntry> auxiliary_entries_;
+    std::vector<AuxiliaryBinding> auxiliary_bindings_;
+    std::shared_ptr<GameModelAsset> auxiliary_asset_;
+    GameModelClone main_template_clone_;
     std::weak_ptr<const void> owner_;
     PackageView registrations_,package_;
     std::array<uint8_t,32> registrations_digest_{};

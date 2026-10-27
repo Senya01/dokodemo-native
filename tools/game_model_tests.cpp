@@ -681,6 +681,80 @@ void BackgroundModelMotionTests(){
     Check(bool(job.Begin(owner,1,{27,12,0,1},PackageStorage::Attach(records,60),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,1)),"missing recipe model staged");
     Check(!job.LoadModelMotions(owner,1,{})&&!job.Snapshot().model_motions_staged&&bool(job.Close()),"unknown recipe is not empty/default controls");
 }
+void BackgroundAuxiliaryTests(){
+    // Entirely generated ASCII recipes/models/motions, not source table bytes.
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    for(unsigned i=0;i<3;++i){const std::string n="AUX_"+std::to_string(i);std::copy(n.begin(),n.end(),records->b.begin()+i*20);}
+    const auto view=[](const std::shared_ptr<Lease>& l){return PackageStorage::Attach(l,l->b.size());};
+    const auto chars=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    auto format=chars("%s\\%s\\SYN_CHILD.DVS");
+    std::array<std::shared_ptr<Lease>,3> texts{{chars("walk.dak"),chars("idle.dak"),chars("scene.dak")}};
+    const GameAuxiliaryNameResolver resolve=[&](uint32_t token,PackageView& out)->GameFsStatus{
+        if(token<101||token>103)return {GameFsCode::Unavailable,0,"synthetic unknown token"};
+        out=view(texts[token-101]);return {};
+    };
+    auto recipe=std::make_shared<Lease>(std::vector<uint8_t>(36));
+    Word(recipe->b,0,101);Word(recipe->b,4,102);Word(recipe->b,20,103); // row1 slot2 only
+    const std::vector<std::array<int16_t,3>> quad{{{-20000,-20000,0}},{{20000,-20000,0}},{{20000,20000,0}},{{-20000,20000,0}}};
+    const auto nested=BackgroundArchive({{"AUX_0\\model01.DVS",Fixture(false,&quad)},
+        {"AUX_0\\SYN_CHILD.DVS",Fixture()},{"AUX_0\\walk.dak",MotionFixture()},
+        {"AUX_0\\idle.dak",MotionFixture()},{"AUX_0\\scene.dak",MotionFixture()}});
+    const auto file=BackgroundArchive({{"AUX_0.BPM",nested}});
+    auto owner=std::make_shared<int>(31),foreign=std::make_shared<int>(32);
+    GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();uint64_t generation=0;
+    const auto begin=[&](const std::vector<uint8_t>& bytes){++generation;io=std::make_shared<BackgroundFileState>();
+        Check(bool(job.Begin(owner,generation,{47,12,0,generation},view(records),std::make_unique<BackgroundFile>(bytes,io)))&&bool(job.Load(owner,generation)),"auxiliary initialized real main owner");};
+    begin(file);const auto reads=io->reads;
+    std::vector<GameAuxiliaryBindingState> bindings;
+    Check(!job.LoadAuxiliary(foreign,generation,view(recipe),view(format),resolve)
+          &&!job.LoadAuxiliary(owner,generation+1,view(recipe),view(format),resolve)&&io->reads==reads,"foreign/stale auxiliary request no load");
+    Check(bool(job.LoadAuxiliary(owner,generation,view(recipe),view(format),resolve)),"actual triplet/model/DAK typed owner construction");
+    auto state=job.Snapshot();Check(state.auxiliary_staged&&state.auxiliary_entries==2&&state.auxiliary_children==1
+        &&state.auxiliary_templates==3&&state.auxiliary_bindings==4&&!state.source_committed,"slot2 nonzero continues5070; distinct real bindings not ready");
+    Check(bool(job.Auxiliary(owner,generation,bindings))&&bindings.size()==4,"current copied binding readback");
+    for(const auto& b:bindings){Check(b.playback.state==(b.target==GameAuxiliaryTarget::MainTemplate?1u:3u)&&b.playback.time==0&&b.playback.samples==0
+        &&b.playback.speed==4800&&b.playback.stop_limit==-1&&b.playback.duration==160,"88728/89954 initialization without sampling/selection");
+        Check(b.model.vertices==(b.target==GameAuxiliaryTarget::Child?3u:4u),"DAK owns correct child/template/visible-clone target");}
+    Check(bindings[2].target==GameAuxiliaryTarget::MainTemplate&&bindings[3].target==GameAuxiliaryTarget::MainClone,"independent template and visible clone controls");
+    GameGraphics graphics;Check(graphics.Initialize({})&&graphics.Clear(0xFF000000)
+        &&bool(job.DrawAuxiliary(owner,generation,0,graphics,ModelIdentity()))&&graphics.Snapshot().mesh_pixels>0,"actual auxiliary child offscreen draw");
+    Check(!job.DrawAuxiliary(owner,generation,1,graphics,ModelIdentity())&&!job.LoadAuxiliary(owner,generation,view(recipe),view(format),resolve),"no fabricated child and no load replay");
+    Check(bool(job.Auxiliary(owner,generation,bindings))&&bindings[0].playback.samples==0,"preview leaves controls/selected state unchanged");
+    texts[0]->b[0]='W';bindings[0].entry=99;
+    Check(!job.Auxiliary(owner,generation,bindings)&&bindings[0].entry==99&&!job.Snapshot().auxiliary_staged
+        &&!job.Draw(owner,generation,graphics,ModelIdentity()),"name/recipe drift rejects current bindings without rebasing output");texts[0]->b[0]='w';
+    io->fail_close=true;Check(!job.Close()&&io->live&&!job.Snapshot().auxiliary_staged,"failed backing retirement keeps owner for retry");
+    Check(!job.Begin(owner,generation+1,{47,12,0,generation+1},view(records),std::make_unique<BackgroundFile>(file,io)),"failed close prevents fresh reuse");
+    io->fail_close=false;Check(bool(job.Close())&&!io->live,"auxiliary controls/templates retire before file close retry");
+    Check(!job.Auxiliary(owner,generation,bindings),"retired owner cannot read prior controls");
+    // Each malformed/unknown input is a fresh real request, never an empty list.
+    for(unsigned failure=0;failure<8;++failure){
+        begin(file);auto bad=std::make_shared<Lease>(recipe->b);PackageView r=view(bad),f=view(format);
+        GameAuxiliaryNameResolver resolver=resolve;
+        if(failure==0)r={};
+        if(failure==1){bad->b.resize(24);bad->known.resize(24);r=view(bad);} // missing terminator
+        if(failure==2){bad->b.resize(48);bad->known.resize(48,1);r=view(bad);} // bytes after sentinel
+        if(failure==3)resolver={};
+        if(failure==4){bad->known[4]=0;}
+        if(failure==5){Word(bad->b,0,0);} // slot1 has no child producer
+        if(failure==6){texts[0]->b[0]='/';}
+        if(failure==7)f={};
+        Check(!job.LoadAuxiliary(owner,generation,r,f,resolver)&&job.Snapshot().failed
+              &&!job.Snapshot().auxiliary_staged&&!job.Snapshot().source_committed,"malformed/unknown auxiliary recipe never publishes");
+        texts[0]->b[0]='w';Check(bool(job.Close()),"bad recipe teardown");
+    }
+    const auto missing=BackgroundArchive({{"AUX_0.BPM",BackgroundArchive({{"AUX_0\\model01.DVS",Fixture()}})}});
+    begin(missing);Check(!job.LoadAuxiliary(owner,generation,view(recipe),view(format),resolve)
+        &&job.Snapshot().failed&&!job.Snapshot().staged,"missing mandatory child model not optional success");Check(bool(job.Close()),"failed-load cleanup");
+    begin(file);Check(bool(job.LoadAuxiliary(owner,generation,view(recipe),view(format),resolve)),"fresh epoch after failed load retries real construction");
+    recipe->live=false;Check(!job.Snapshot().staged&&!job.Auxiliary(owner,generation,bindings),"retired recipe prevents live readback");
+    recipe->live=true;owner.reset();Check(!job.Auxiliary(foreign,generation,bindings)&&!job.Snapshot().live,"expired owning control block refuses");
+    Check(bool(job.Close()),"final auxiliary teardown");
+    owner=std::make_shared<int>(33);begin(file);auto empty=std::make_shared<Lease>(std::vector<uint8_t>(12));
+    const auto before=io->reads;Check(bool(job.LoadAuxiliary(owner,generation,view(empty),{},{}))
+        &&job.Snapshot().auxiliary_staged&&!job.Snapshot().auxiliary_entries&&io->reads==before,"actual all-zero terminator is the only empty source recipe branch");
+    Check(bool(job.Close()),"empty recipe owner retires");graphics.Close();
+}
 struct TitleSource final : GameResourceSource {
     bool fail = false;
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -1194,6 +1268,7 @@ int main() {
     try {
         AreaMarkerTests();
         BackgroundModelMotionTests();
+        BackgroundAuxiliaryTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
