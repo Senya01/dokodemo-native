@@ -154,8 +154,10 @@ class GameModelClone final {
   private:
     struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
     GeometrySpace GeometryTransforms(uint32_t node) const;
+    std::array<uint8_t,32> MarkerPoseDigest()const;
     std::shared_ptr<const GameModelAsset> asset_;
     bool marker_pose_current_=false;
+    std::array<uint8_t,32> marker_pose_digest_{};
     std::vector<GameModelPose> pose_;
     LightSelection lights_;
     std::vector<GameMatrix> inverse_bind_;

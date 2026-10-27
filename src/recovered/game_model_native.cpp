@@ -1,4 +1,5 @@
 #include "game_model_native.h"
+#include "core_hash.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -484,17 +485,31 @@ GameFsStatus GameModelClone::Update(const GameMatrix &root) {
         };
         for (size_t i = 0; i < pose_.size(); ++i)
             update(i);
+        if(asset_->Statistics().area_markers)marker_pose_digest_=MarkerPoseDigest();
         marker_pose_current_=true;
         return {};
     } catch (const std::exception &e) {
         return Error(e);
     }
 }
+std::array<uint8_t,32> GameModelClone::MarkerPoseDigest()const {
+    core::Sha256 hash;
+    const auto bytes=[&](const void* p,size_t n){hash.update(static_cast<const uint8_t*>(p),n);};
+    for(const auto& p:pose_){
+        for(const auto* v:{&p.position,&p.base_rotation,&p.rotation,&p.scale,&p.scale_orientation})
+            bytes(v->data(),v->size()*sizeof(float));
+        bytes(p.world.data(),p.world.size()*sizeof(float));
+        bytes(&p.material,sizeof(p.material));bytes(&p.opacity,sizeof(p.opacity));bytes(&p.world_opacity,sizeof(p.world_opacity));
+    }
+    return hash.digest();
+}
 GameFsStatus GameModelClone::AreaMarkers(const GameModelAsset& expected,std::vector<GameAreaMarkerState>& out)const {
     if(!asset_||asset_.get()!=&expected||!asset_->Live()||!marker_pose_current_)
         return {GameFsCode::Unavailable,0,"area-marker template/lease unavailable"};
     try{
         Need(pose_.size()==asset_->Data().nodes.size(),"area-marker clone table extent");
+        if(asset_->Statistics().area_markers)
+            Need(MarkerPoseDigest()==marker_pose_digest_,"area-marker pose changed after update");
         std::vector<GameAreaMarkerState> current;
         for(size_t i=0;i<pose_.size();++i){
             const auto& node=asset_->Data().nodes[i];if(node.type!=13)continue;

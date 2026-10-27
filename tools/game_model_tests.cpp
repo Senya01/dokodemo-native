@@ -249,6 +249,11 @@ void AreaMarkerTests(){
     auto nonfinite_root=root;nonfinite_root[12]=std::numeric_limits<float>::infinity();
     Check(!clone.Update(nonfinite_root)&&!clone.AreaMarkers(*asset,markers),"nonfinite composed marker matrix refuses receipt");
     Check(bool(clone.Update(root)),"valid explicit root restores pose");
+    auto& retained_pose=clone.Pose();Check(bool(clone.Update(root)),"retained alias baseline update");
+    retained_pose[0].position[0]=99;Check(!clone.AreaMarkers(*asset,markers),"retained input alias cannot reuse a stale marker receipt");
+    retained_pose[0].position[0]=5;Check(bool(clone.Update(root)),"explicit producer restores consistent pose");
+    retained_pose[0].world[12]+=1;Check(!clone.AreaMarkers(*asset,markers),"retained world alias drift is checked directly");
+    Check(bool(clone.Update(root)),"world drift repaired only by explicit update");
     clone.Pose()[0].position[0]=6;Check(!clone.AreaMarkers(*asset,markers)&&bool(clone.Update(root))&&bool(clone.AreaMarkers(*asset,markers))&&near(markers[0].world[12],106),"mutable pose invalidates receipt until real update");
     clone.Pose()[0].material=-1;Check(bool(clone.Update(root))&&!clone.AreaMarkers(*asset,markers),"unclosed marker material writer refuses");clone.Pose()[0].material=0;
     clone.Pose()[0].scale_orientation={{0,0,0,0}};Check(!clone.Update(root)&&!clone.AreaMarkers(*asset,markers),"invalid quaternion never publishes marker matrix");clone.Pose()[0].scale_orientation={{0,0,.3826834324f,.9238795325f}};
