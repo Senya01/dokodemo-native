@@ -630,7 +630,45 @@ void OutingComponents(){
     for(unsigned i=0;i<5;++i)Check(vm.step().status==script::Status::Running,"real typed0/3 callback transaction");
     Check(vm.read_slot(script::Table::Global,0).signed_integer()==3&&vm.callbacks_returned()==1&&vm.current_witness().frame_id==before.frame_id,"actual integer3 store and owning restoration");
 }
+void IntegerReferenceSwap78(){
+    using namespace script;
+    //Arbitrary synthetic words; no extracted helper or game list bytes.
+    for(bool alias:{false,true}){
+        std::vector<uint8_t> code{0x30,2,0x80,77,0x70,0x80,42,0x91,0,0,0x91,uint8_t(alias?0:1),0,0x78,0x38};
+        auto p=Fixture(code,{});Vm vm(p);vm.start({Value::integer(-7),Value::integer(11)});
+        Check(vm.run(50).status==Status::Complete&&vm.stack().size()==1&&vm.stack()[0].signed_integer()==42,"78 consumes exactly two refs, keeps lower operand");
+        Check(vm.result().signed_integer()==77&&vm.read_slot(Table::Frame,0).signed_integer()==(alias?-7:11)
+              &&vm.read_slot(Table::Frame,1).signed_integer()==(alias?11:-7),"78 actual integer swap/alias and unchanged result");
+    }
+    for(unsigned bad=0;bad<5;++bad){
+        std::vector<uint8_t> code{0x30,2,0x91,0,0,0x91,1,0,0x78,0x38};
+        if(bad==0)code[7]=9; //invalid extent, no partial store
+        auto p=Fixture(code,{});Vm vm(p);Value a=Value::integer(3),b=Value::integer(9);
+        if(bad==1)b=Value::string("synthetic");
+        if(bad==2)b={};
+        if(bad==3){b.kind=Value::Kind::Scalar;b.word=0x10000001;}
+        if(bad==4){b.kind=Value::Kind::Scalar;b.word=0x40000000;}
+        vm.start({a,b});const auto event=vm.run(20);
+        const auto good=event.status==Status::Stopped&&vm.stack().size()==(bad==0?1u:2u)
+              &&(bad!=0||event.opcode==0x91)&&vm.read_slot(Table::Frame,0).word==a.word&&vm.read_slot(Table::Frame,1).word==b.word;
+        if(!good)throw std::runtime_error("78 negative case="+std::to_string(bad)+" stack="+std::to_string(vm.stack().size())+" "+event.diagnostic.text());
+    }
+    for(bool retired:{false,true}){
+        auto p=Fixture({0x30,1,0x90,0,0,0x95,0,0,0x78,0x38},{0x20000009});
+        Value foreign;
+        {auto q=Fixture({0x30,1,0x91,0,0,0x38},{});Vm other(q);other.start({Value::integer(23)});Check(other.step().status==Status::Running&&other.step().status==Status::Running,"foreign real frame");
+         foreign=other.stack().back();
+         if(!retired){Vm vm(p);vm.start({foreign});Check(vm.run(20).status==Status::Stopped&&vm.stack().size()==2&&vm.read_slot(Table::Global,0).word==0x20000009,"foreign live frame cannot be swap target");}}
+        if(retired){Vm vm(p);vm.start({foreign});Check(vm.run(20).status==Status::Stopped&&vm.stack().size()==2&&vm.read_slot(Table::Global,0).word==0x20000009,"retired frame cannot be swap target");}
+    }
+    {auto p=Fixture({0x30,1,0x90,0,0,0x95,0,0,0x78,0x38},{0x20000009},{0x20000003});Vm other(p);other.start();Value ref;ref.kind=Value::Kind::Reference;ref.table=Table::Ctx28;ref.context_owner=other.context_value().context_owner;
+     Vm vm(p);vm.start({ref});(void)vm.context_value();Check(vm.run(20).status==Status::Stopped&&vm.read_slot(Table::Global,0).word==0x20000009&&vm.read_slot(Table::Ctx28,0).word==0x20000003,"foreign Ctx28 refuses before mutation");}
+    {auto p=Fixture({0x30,0,0x78,0x38},{});Vm vm(p);vm.start();Check(vm.run(20).status==Status::Stopped&&vm.stack().empty(),"swap underflow refuses");}
+    {auto p=Fixture({0x30,0,0x95,1,0,0x95,4,0,0x78,0x95,2,0,0x95,3,0,0x78,0x38},{0x90000004,0x20000001,0x20000002,0x20000003,0x20000004});Vm vm(p);vm.start();
+     Check(vm.run(40).status==Status::Complete&&vm.stack().empty(),"two actual array-cell swaps");for(uint16_t n=1;n<=4;++n)Check(vm.read_slot(Table::Global,n).signed_integer()==5-n,"current Global list ordering, no row fabrication");}
+}
 void Focused(){
+    IntegerReferenceSwap78();
     OutingComponents();
     OwnedInlineStringChecks();
     {

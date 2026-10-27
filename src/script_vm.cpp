@@ -977,6 +977,22 @@ Event Vm::step() {
             if(!op55_calls_){op55_first_pc_=cmd->pc;op55_first_before_=old.word;op55_first_after_=value.word;
                 op55_first_table_=uint32_t(ref.table);op55_first_index_=ref.index;}
             ++op55_calls_;
+        } else if(op==0x78) {
+            //7096C: source B-reference pair; B-address branch swaps the two
+            //referent words at70A6C/70A70/70A78, then709B8 removes both refs.
+            //Native current-table/weak-frame mapping admits integer cells only.
+            if(stack_.size()<2)return stop(cmd,"Opcode78 requires two live references");
+            const auto left=stack_[stack_.size()-2],right=stack_.back();
+            for(const auto& ref:{left,right}){
+                if(ref.kind!=Value::Kind::Reference||uint32_t(ref.table)>uint32_t(Table::Ctx28))
+                    return stop(cmd,"Opcode78 reference representation unimplemented");
+                require_string_reference_owner(ref); // current frame/context registry, no pointer adoption
+            }
+            const auto a=load_reference(left),b=load_reference(right);
+            if(a.kind!=Value::Kind::Scalar||b.kind!=Value::Kind::Scalar||(a.word>>28)!=2||(b.word>>28)!=2)
+                return stop(cmd,"Opcode78 outside admitted integer-cell swap");
+            //Both addresses/extents/owners and values were checked before writes.
+            store_reference(right,a);store_reference(left,b);stack_.resize(stack_.size()-2);
         } else if(op==0x52||op==0x53) {
             const auto ref=pop(),old=load_reference(ref);result_=ref;
             if(op==0x52)stack_.push_back(old);
