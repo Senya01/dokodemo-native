@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Ordinary initialization now binds held original main DATA before current BGM/primary placement. Pass --prepared-main-data PATH to your already-prepared original BOOT.BIN, or place it at <assets>/scripts/original/BOOT.BIN. This is a checked native DATA input, never MIPS execution or ISO import. Initial owning preparation is implemented; target scene adoption, ordinary travel and fullgame remain incomplete.
+Ordinary initialization now binds held original main DATA before current BGM/primary placement. Pass --prepared-main-data PATH to your already-prepared original BOOT.BIN, or place it at `USER_ASSET_ROOT/scripts/original/BOOT.BIN`. This is a checked native DATA input, never MIPS execution or ISO import. Initial owning preparation is implemented; target scene adoption, ordinary travel and fullgame remain incomplete.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
@@ -90,9 +90,12 @@ Use your own prepared native assets and extracted media directory (not an ISO fi
 .\build\functional\dokodemo-native.exe --game-window `
   --assets "C:\DokoData\native" `
   --startup-media-root "C:\DokoData\iso" `
+  --prepared-main-data "C:\DokoData\prepared\BOOT.BIN" `
   --native-save-root ".\private\user-save" `
   --evidence ".\private\captures"
 ```
+
+The runtime also needs your already-prepared original main DATA file (`BOOT.BIN`, ELF32 little-endian MIPS PRX for the supported game version). `--prepared-main-data` supplies it explicitly; the application otherwise checks `scripts/original/BOOT.BIN` under `--assets`. The native provider checks its identity, retains only owned input views and consumes selected data/relocations; it executes no MIPS instructions. Missing or mismatched input is reported as a load failure. This does not implement extraction or first-time ISO import. Build-time generated headers remain separate inputs.
 
 This is normal startup: no `--visual-capture` or automatic fixture confirmations. Follow the title/profile prompts with arrows, X (Circle), Z (Cross), text and Enter. Text must round-trip through CP932; comprehensive IME/prediction support remains incomplete. F12 saves the actual window and native framebuffer plus local diagnostics. Esc cancels an active text entry; outside text entry it closes the window. The close button also uses normal joined shutdown. The presentation preserves 480:272 aspect, prefers integer scaling and letterboxes on resize. Omit `--game-window` for the diagnostic shell.
 
