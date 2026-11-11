@@ -641,6 +641,15 @@ void OutingComponents(){
         choice.Tick(1);Check(choice.Snapshot().state==2,"actual closing mode required");choice.Tick(2);Check(choice.Snapshot().state==3,"actual choice returns");
         choice.Retire();Check(!choice.Input({}),"retired choice input refuses");
     }
+    {
+        GameChoiceController choice;Check(choice.Begin({"supported","unsupported","cancel"},91,92,200,2,1u),"current per-row capability mask");choice.Tick(2);uint64_t seq=0;
+        const auto edge=[&](uint32_t buttons){GameInputFrame f;f.focused=true;f.sequence=++seq;f.message_context=91;f.message_owner_generation=92;
+          Check(choice.Input(f),"mask owner release");choice.Tick(2);f.sequence=++seq;f.buttons=buttons;Check(choice.Input(f),"mask fresh owner");choice.Tick(2);};
+        edge(Down);edge(Circle);Check(choice.Snapshot().row==1&&choice.Snapshot().state==1&&choice.Snapshot().unsupported==1&&!choice.Snapshot().confirmations,
+          "unsupported positive row refuses before close/result despite another supported row");
+        edge(Up);edge(Circle);Check(choice.Snapshot().state==2&&choice.Snapshot().result==1&&choice.Snapshot().confirmations==1,
+          "only genuinely supported logical row publishes source row+1 after fresh input");choice.Retire();
+    }
     Check(!GameOutingChoiceShape(0,1,0x13303)&&!GameOutingChoiceShape(4,5,0x1337B),"no fabricated empty/over-cap choice");
     // Arbitrary synthetic mailbox forwarding uses typed argument3, no game bytes.
     std::vector<uint8_t> code(80,0x03);const uint8_t root[]={0x30,0,0x80,9,0x70,0x80,20,0x38};std::copy(std::begin(root),std::end(root),code.begin());

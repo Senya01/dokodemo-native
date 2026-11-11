@@ -248,6 +248,17 @@ GameFsStatus GameSceneBgm::RequestControl(const std::shared_ptr<GameBackgroundRu
     status=d.files.BindControl(runtime,d.state.epoch,uint32_t(d.state.stored4BC),control);if(status)d.state.control_return=control.wrapper_return;return status;
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameSceneBgm::RequestCleanupControl(const std::shared_ptr<GameBackgroundRuntime>& runtime,bool loader469,uint32_t ui){
+    if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"188BC current scene/settings/record owner required"};
+    if(!loader469)return RequestControl(runtime,0);
+    //18898 unsigned(ui-16)<5 selects5, otherwise2. Not a BGM/file-ready flag.
+    const uint32_t index=uint32_t(ui-16)<5?5u:2u;
+    auto& d=*data_;const auto before=d.settings->OptionSettings();const auto sound=d.settings->OptionSoundOwner();GameBgmControlRecord out;
+    const auto status=d.settings->RequestBgmRecordControlPrefix(before,sound,d.inputs[1],index,0,out);if(!status)return status;
+    if(!d.Bound(runtime)||!GameOptionSnapshotExact(before,d.settings->OptionSettings())||!out.bound||out.record_index!=index||out.file_request_bound||out.linked_request)
+        return {GameFsCode::Unavailable,0,"188BC same initialized record/control readback drift"};
+    d.state.control_return=out.wrapper_return;d.state.cleanup_control=out;return {};
+}
 GameFsStatus GameSceneBgm::Pump(const std::shared_ptr<GameBackgroundRuntime>& runtime){
     if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"BGM current file worker owner required"};
     return data_->files.Pump(runtime,data_->state.epoch);
@@ -397,7 +408,7 @@ struct GameSupportRegistration::State {
     bool Current(script::Vm& vm)const{
         try{const auto w=vm.current_witness();if(manager.expired()||!w.valid||w.stopped||w.run_id!=record.run||w.code_sha256!=record.module||!w.context_registered||context.expired())return false;
             if(vm.context_value().context_owner.lock()!=context.lock())return false;
-            if(table==script::Table::Frame&&!vm.reference_belongs_to_frame(Reference(),record.frame))return false;
+            if(table==script::Table::Frame&&!vm.reference_belongs_to_frame(Reference(),record.frame)&&!vm.reference_belongs_to_event_caller(Reference(),record.frame))return false;
             (void)vm.peek_reference(Reference());return true;
         }catch(...){return false;}
     }

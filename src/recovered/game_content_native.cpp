@@ -245,6 +245,14 @@ GameFsStatus GameContentBoot::RequestBgmControlPrefix(const GameOptionSettingsSn
     if(!GameOptionSnapshotExact(current,OptionSettings()))return {GameFsCode::Unavailable,0,"14834 settings changed before4AD4C"};
     return sound_bank_.BgmPrefix(source,index,gain,argument,file,out);
 }
+GameFsStatus GameContentBoot::RequestBgmRecordControlPrefix(const GameOptionSettingsSnapshot& expected,const GameSourceSoundSnapshot& source,
+    PackageView gains,uint32_t index,uint32_t argument,GameBgmControlRecord& out){
+    const auto current=OptionSettings();
+    if(!current.live||!option_settings_lifetime_||!GameOptionSnapshotExact(current,expected))return {GameFsCode::Unavailable,0,"14834 current record settings unavailable"};
+    uint32_t gain=0;const auto read=ReadBgmGain14834(current,gains,gain);if(!read)return read;
+    if(!GameOptionSnapshotExact(current,OptionSettings()))return {GameFsCode::Unavailable,0,"14834 settings drift before record control"};
+    return sound_bank_.BgmRecordPrefix(source,index,gain,argument,out);
+}
 bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     if (arena_)
         return false;
@@ -1509,13 +1517,29 @@ GameFsStatus GameContentBoot::TickSceneBgmFiles(){
     if(!status&&status.code==GameFsCode::Unavailable)return status;
     return {};
 }
+bool GameContentBoot::OutingInputsCurrent(const GameActorRuntime& actor)const{
+    if(&actor!=&actor_runtime_||state_.closed||state_.blocked||!destination_data_||!destination_data_->Current()||!destination_file_
+      ||!scene_bgm_||!scene_bgm_->SharesDataBacking(destination_data_->origin)||!background_runtime_||!background_runtime_->Live()
+      ||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))return false;
+    const auto s=loadman_->control->Snapshot();const auto r=actor_runtime_.Snapshot();const auto b=scene_bgm_->Snapshot();
+    return s.bound&&!s.pending&&s.current14==0&&s.loadman.source_selector4DC==0&&s.loadman.rendered_selector4DC==0
+      &&s.loadman.transition50==0&&s.loadman.ui_current&&!s.loadman.ui464&&!s.loadman.ui_change461
+      &&s.loadman.initial_scene6_handoff&&b.selected&&scene_ui_.Snapshot().moving.current&&r.live&&r.scene_clock_ready;
+}
 GameFsStatus GameContentBoot::TickPendingSceneRequest(){
     if(state_.closed||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
         return {GameFsCode::Unavailable,0,"current ordinary LoadMan module unavailable"};
     auto pending=actor_runtime_.Snapshot().manager_switch;
     const auto destination=actor_runtime_.DestinationPreparation();
     if(destination.failed)return destination.status;
-    if(destination.adopted)return {GameFsCode::Unavailable,0,"18568 actual paused-context/event17 continuation not implemented; no arrival or wake"};
+    if(destination.adopted){
+        if(destination.scene_dispatch_completed)return {}; // genuine completed source dispatch no longer borrows the retired temporary root
+        if(!scene_bgm_)return {GameFsCode::Unavailable,0,"current destination BGM owner retired"};
+        return actor_script_.TickPendingDestinationContinuation(scene_ui_,*scene_bgm_,state_.source_loader469);
+    }
+    // The actual self callback may be in flight at the end of the last VM
+    // slice. Let THAT callback execute3A/32 before borrowing root refs again.
+    if(actor_script_.OutingWaitingForPause())return {};
     if(pending.pending&&pending.requested18!=0){
         if(!scene_bgm_)return {GameFsCode::Unavailable,0,"ordinary pending request has no current BGM owner"};
         auto status=actor_runtime_.PublishPendingScene1B238(*scene_bgm_);if(!status)return status;
@@ -1533,7 +1557,7 @@ GameFsStatus GameContentBoot::TickPendingSceneRequest(){
             const auto prepared=actor_script_.PreparePendingDestination(destination_data_,*scene_bgm_,destination_file_);if(!prepared)return prepared;
         }
         const auto adopted=actor_script_.AdoptPendingDestination();if(!adopted)return adopted;
-        return {GameFsCode::Unavailable,0,"target owners adopted; actual18568 paused-context/event17 continuation not implemented"};
+        return {}; // following ordinary poll executes the same owned18568 continuation
     }
     return {};
 }
@@ -1567,7 +1591,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             if(actor_choice_target_.generation!=state_.actor_script.generation||actor_choice_target_.request!=state_.actor_script.choice_requests){
                 actor_choice_target_=actor_script_.ChoiceTarget();++state_.actor_message_contexts;
                 actor_message_gate_.Stop();state_.actor_message_input_armed=false;
-                state_.status=scene_ui_.BeginChoice(state_.actor_script.choice_options,state_.actor_message_contexts,state_.actor_script.generation,actor_script_.OutingChoiceOnlyRow());
+                state_.status=scene_ui_.BeginChoice(state_.actor_script.choice_options,state_.actor_message_contexts,state_.actor_script.generation,actor_script_.OutingChoiceOnlyRow(),actor_script_.OutingChoiceMask());
             }
             if(state_.status)state_.status=scene_ui_.TickChoice();
             state_.actor_choice=scene_ui_.Choice();
@@ -1721,6 +1745,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_,&sound_bank_);
+        if(state_.status)actor_script_.BindOrdinaryOuting(*this);
         state_.actor_script=actor_script_.Snapshot();
         if(state_.status){
             state_.status=main_flow_.Initialize(actor_runtime_,[this](uint32_t event,int32_t arg){

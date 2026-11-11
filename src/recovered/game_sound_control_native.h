@@ -10,7 +10,8 @@ class GameSoundBank;
 class GameBgmFileQueue;
 class GameSceneBgm;
 struct GameBgmControlRecord {
-    bool bound=false,pending=false;
+    bool bound=false,pending=false,file_request_bound=false;
+    uint32_t record_index=UINT32_MAX;
     int32_t handle14=-1;
     int32_t wrapper_return=0;
     uint32_t gain0C=128,argument28=0;
@@ -217,6 +218,9 @@ class GameSourceSoundControl final {
   private:
     friend class GameSoundBank;
     GameFsStatus BgmPrefix(const GameSourceSoundSnapshot&,uint32_t,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&);
+    //4AD4C links the initialized same-index source FILE-RECORD even before
+    //255A8 has issued I/O for it. This owns no invented file request/buffer.
+    GameFsStatus BgmRecordPrefix(const GameSourceSoundSnapshot&,uint32_t,uint32_t,uint32_t,GameBgmControlRecord&);
     GameFsStatus StoreRegisteredSe5(GameSourceBankRegistry&,int32_t);
     GameFsStatus Start4AF54(GameSourceFeedbackRead&);
     GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);

@@ -41,6 +41,9 @@ class GameOptionSettings {
     virtual GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&){
         return {GameFsCode::Unavailable,0,"current BGM settings/control owner unavailable"};
     }
+    virtual GameFsStatus RequestBgmRecordControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,GameBgmControlRecord&){
+        return {GameFsCode::Unavailable,0,"current initialized BGM record/control owner unavailable"};
+    }
     virtual GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)=0;
     // Readonly providers retain their prior explicit direction refusal. Only
     // the current Content/actor owner may issue actual Right writer receipts.

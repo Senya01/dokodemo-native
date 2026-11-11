@@ -61,6 +61,10 @@ struct GameDestinationPreparationSnapshot {
   std::optional<uint32_t> current_selector24AA4;
   uint32_t current_selector_writer=0;
   bool old_source_retired=false,old_render_retired=false;
+  bool arrival_event_posted=false,moving_hide_requested=false,scene_dispatch_completed=false;
+  uint64_t arrival_receipt=0;
+  uint32_t camera_ready_writer=0;
+  bool camera_readyB0=false,camera_holdB3=false;
   uint32_t placement_pc=0,regions_pc=0,adoption_pc=0;
   uint64_t request=0,epoch=0;
   uint32_t candidate=0,selector=0,period=0,resource=0,phase=0;
@@ -91,6 +95,7 @@ struct GameLoadManSnapshot {
   uint32_t current_variant4A8=1,staged_variant4AC=1,cached_period4B4=2;
   int32_t stored_bgm4BC=0,rendered_selector4DC=-1;
   uint32_t transition50_writer=0,ui464_writer=0;
+  std::optional<uint8_t> cleanup4B8,cleanup54; // actual unconditional188F8/18908 writes, no invented prior values
 };
 struct GameManagerSwitchSnapshot {
   bool live=false,bound=false,pending=false;
@@ -184,7 +189,9 @@ struct GameActorRuntimeSnapshot {
   bool intro_live=false;uint32_t intro_requests=0,intro_closes=0,intro_state34=3,intro_state38=3;
   uint32_t intro_nodes=0,intro_quads=0,intro_updates=0;
   std::array<GameUiControl,3> intro_controls{};
+  GameDestinationPreparationSnapshot destination;
   int32_t active_command = -1, camera_mode = 0;
+  std::optional<uint8_t> camera_byteB0,camera_byteB3; // current camera18668/18670 writers
   int32_t source_field5C = 0; //9480/94F8 explicit produced base+4C
   bool region_owners_live=false;
   std::array<uint32_t,3> region_counts{};
@@ -288,6 +295,7 @@ public:
   GameFsStatus FinishTransitionGame7();
   GameFsStatus AdvanceDestinationLoad(script::Vm&,const GameOutingCommand&,GameSceneUiBootstrap&,GameSceneBgm&);
   GameFsStatus AdoptPreparedDestination(script::Vm&,const GameOutingCommand&);
+  GameFsStatus TickDestinationContinuation(script::Vm&,GameOutingCommand&,GameSceneUiBootstrap&,GameSceneBgm&,bool loader469);
   bool WaitReady() const;
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();

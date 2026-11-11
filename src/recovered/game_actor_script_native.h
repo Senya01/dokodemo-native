@@ -15,6 +15,7 @@
 #include <map>
 
 namespace dokodemo::recovered {
+class GameContentBoot;
 //6A350/7BF18 reached string-only ABI. Bytewise,nonoverlapping replacement;
 //empty needle is refused (original explicitly traps),result owns its bytes.
 script::Value GameStringReplace51(const std::vector<script::Value>&);
@@ -159,11 +160,18 @@ struct GameOutingCommandAbi {
     uint32_t root=0x13219,produce_call=0x133B7,producer=0x2C61;
     uint32_t copy_call=0x13402,copier=0x20DA,travel_call=0x1340C,travel=0x1264E,game12=0x1269F;
     uint16_t candidates=0x59DA,stored=0x243F;
+    uint32_t wait_call=0x126A2,wait_entry=0x1C5B,wait_builtin=0x1C64,deadline=0x1C69,wait_resume=0x1C6A;
+    uint32_t pause_entry=0x1C57,pause_disable=0x1C59,pause_return=0x1C5A;
+    uint32_t event_entry=0x8DA28,event_enable=0x8DC14,event_return=0x8DD8B;
+    uint32_t field5_store=0x126AD,root_return=0x13411;
 };
 struct GameOutingCommandSnapshot {
     bool live=false,produced=false,stored=false,current=false,failed=false;
     uint64_t run=0,root=0,producer_frame=0,copy_frame=0,request=0,actor_epoch=0;
-    bool issued=false;
+    bool issued=false,wait_posted=false,paused=false,event_posted=false,event_returned=false;
+    bool field5_written=false,travel_returned=false,completed=false;
+    uint64_t travel_frame=0,wait_frame=0,pause_receipt=0,event_receipt=0,field5_sequence=0,completion_sequence=0;
+    script::VmStateWitness suspended,restored;
     uint32_t context=0,candidate=0,word=0,selector=0,record_table=0,record_index=0,record_header=0;
     std::array<script::ValueWitness,6> fields{};
 };
@@ -175,6 +183,11 @@ public:
     GameFsStatus Begin(script::Vm&,const GameOutingCommandAbi& = {});
     void Observe(script::Vm&,const script::FrameTransition&)noexcept;
     GameFsStatus ValidateGame12(script::Vm&,int32_t selector)const;
+    bool IsWaitCall(script::Vm&)const;
+    int32_t PostWait(script::Vm&,const std::vector<script::Value>&);
+    GameFsStatus PostArrival17(script::Vm&);
+    bool WaitingForPause()const noexcept;
+    static bool ChoiceSupported(script::Vm&,uint32_t row);
     GameFsStatus Issue(script::Vm&,GameActorRuntime&,int32_t selector);
     GameFsStatus CurrentRequest(script::Vm&,const GameActorRuntime&,GameBackgroundCandidate&)const;
     GameOutingCommandSnapshot Snapshot(script::Vm&)const;
@@ -375,6 +388,10 @@ class GameActorScript final {
     GameChoiceTarget ChoiceTarget()const;
     GameFsStatus CompleteChoice(const GameChoiceTarget&,uint32_t result);
     uint32_t OutingChoiceOnlyRow()const;
+    uint32_t OutingChoiceMask()const;
+    bool OutingWaitingForPause()const{return outing_command_.WaitingForPause();}
+    void BindOrdinaryOuting(GameContentBoot& content){outing_content_=&content;}
+    GameFsStatus TickPendingDestinationContinuation(GameSceneUiBootstrap&,GameSceneBgm&,bool loader469);
     bool MenuOutingCapable()const noexcept;
     GameFsStatus PreparePendingDestination(const std::shared_ptr<const GameOutingData>&,GameSceneBgm&,const std::function<std::unique_ptr<GameFileSource>()>&);
     GameChoiceTarget InputTarget()const;
@@ -450,6 +467,7 @@ class GameActorScript final {
     GameAsciiClass70Owner ascii_class70_;
     GameOwnedConversation owned_conversation_;
     GameOutingCommand outing_command_;
+    GameContentBoot* outing_content_=nullptr; // Content owns this script; checked against its SAME live runtime
     GameInventoryMarkChain menu_mark_;
     GameInventoryPlacementProof menu_placement_;
     GameNotebookSelfImage notebook_self_before_;

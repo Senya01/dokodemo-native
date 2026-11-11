@@ -76,7 +76,7 @@ struct GameChoiceSnapshot {
     bool live=false,timed_out=false;
     uint32_t state=3,row=0,result=0,remaining=0,active_updates=0,confirmations=0,rejected_inputs=0;
     uint64_t context=0,owner_generation=0;
-    uint32_t confirm_only_row=UINT32_MAX,unsupported=0; // refusal-only finite capability
+    uint32_t confirm_only_row=UINT32_MAX,unsupported=0,confirm_mask=0; // refusal-only finite capability
     std::vector<std::string> options;
 };
 enum class GameChoiceDrawCode { Idle, Drawn, Owner, TextControl, Font, Overflow, Viewport, RowTooTall, Ui };
@@ -91,7 +91,7 @@ struct GameChoiceDrawSnapshot {
 // completion;dynamic row drawing uses the named NativeSelectTextPanel.
 class GameChoiceController {
   public:
-    bool Begin(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t timeout=5400,uint32_t confirm_only_row=UINT32_MAX);
+    bool Begin(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t timeout=5400,uint32_t confirm_only_row=UINT32_MAX,uint32_t confirm_mask=0);
     bool Input(const GameInputFrame&);
     void Tick(uint8_t main_mode,bool trc_idle=true);
     void Retire(){input_.BeginContext();state_.live=false;}
@@ -174,7 +174,7 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     bool DrawEditor(GameGraphics&);
     GameFsStatus BeginProfileConfirmation();
     bool DrawProfileConfirmation(GameGraphics&);
-    GameFsStatus BeginChoice(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t confirm_only_row=UINT32_MAX);
+    GameFsStatus BeginChoice(std::vector<std::string>,uint64_t context,uint64_t owner,uint32_t confirm_only_row=UINT32_MAX,uint32_t confirm_mask=0);
     GameFsStatus TickChoice();
     bool HandleChoiceInput(const GameInputFrame& frame){return choice_.Input(frame);}
     bool DrawChoice(GameGraphics&);
@@ -235,6 +235,9 @@ class GameSoundBank final {
     friend class GameContentBoot;
     GameFsStatus BgmPrefix(const GameSourceSoundSnapshot& before,uint32_t index,uint32_t gain,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
         return source_control_.BgmPrefix(before,index,gain,argument,file,out);
+    }
+    GameFsStatus BgmRecordPrefix(const GameSourceSoundSnapshot& before,uint32_t index,uint32_t gain,uint32_t argument,GameBgmControlRecord& out){
+        return source_control_.BgmRecordPrefix(before,index,gain,argument,out);
     }
   public:
     GameFsStatus InitializeSource17F0(){return source_control_.Initialize17F0();}

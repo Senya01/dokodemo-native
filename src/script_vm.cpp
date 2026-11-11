@@ -604,7 +604,7 @@ Event Vm::start_at(uint32_t code_pc, const std::vector<Value>& arguments) {
     blocks_.clear(); blocks_entered_ = blocks_closed_ = switches_ = 0;
     opcode_cost_ = 1;
     event_depth_=0;event_signal_=true;waiting_event_=false;
-    pending_callbacks_.clear();event_envelope_.reset();context_enabled_=true;event_override_=false;
+    pending_callbacks_.clear();event_envelope_.reset();observed_frame_instructions_.clear();context_enabled_=true;event_override_=false;
     callbacks_posted_=callbacks_returned_=0;
     timestamp_writes_=deadline_writes_=0;
     random_selections_=0;last_random_={};root_returns_=0;list_call25_={};
@@ -648,6 +648,14 @@ bool Vm::reference_belongs_to_frame(const Value& ref,uint64_t id)const noexcept{
     for(const auto& c:calls_)if(c.frame_id==id&&c.values==owner)return true;
     return false;
 }
+bool Vm::reference_belongs_to_event_caller(const Value& ref,uint64_t id)const noexcept{
+    if(stopped_||!event_envelope_||!context_||context_->vm!=this||context_->thread!=std::this_thread::get_id()
+      ||ref.kind!=Value::Kind::Reference||ref.table!=Table::Frame||!id)return false;
+    const auto owner=ref.frame_owner.lock();if(!owner)return false;
+    if(event_envelope_->frame_id==id&&event_envelope_->frame==owner)return true;
+    for(const auto& f:event_envelope_->calls)if(f.frame_id==id&&f.values==owner)return true;
+    return false;
+}
 bool Vm::stable_value_owner(const Value& value)const noexcept{
     if(value.kind==Value::Kind::Reference){
         if(value.table==Table::Frame||value.table==Table::InputResult)return false;
@@ -659,6 +667,13 @@ bool Vm::stable_value_owner(const Value& value)const noexcept{
     }else if(value.kind!=Value::Kind::Context)return true;
     const auto owner=value.context_owner.lock();
     return owner&&owner==context_&&owner->vm==this&&owner->thread==std::this_thread::get_id();
+}
+bool Vm::observe_frame_instruction(uint32_t pc,uint8_t opcode){
+    const auto* cmd=program_.command(pc);
+    if(!cmd||cmd->opcode!=opcode)return false;
+    for(const auto& v:observed_frame_instructions_)if(v.first==pc)return v.second==opcode;
+    if(observed_frame_instructions_.size()>=8)return false;
+    observed_frame_instructions_.emplace_back(pc,opcode);return true;
 }
 bool Vm::owns_active_frame(uint64_t id,uint32_t entry)const noexcept{
     if(stopped_||event_envelope_||!context_||context_->vm!=this||context_->thread!=std::this_thread::get_id())return false;
@@ -695,10 +710,25 @@ Event Vm::step() {
     uint32_t next = pc_ + cmd->size;
     size_t captured_normal_return=normal_returns_.size();
     const bool observe_frame=bool(frame_observer_)&&((cmd->opcode>=0x20&&cmd->opcode<=0x23)||cmd->opcode==0x25
-        ||cmd->opcode==0x31||cmd->opcode==0x32||cmd->opcode==0x1C);
+        ||cmd->opcode==0x31||cmd->opcode==0x32||cmd->opcode==0x1C
+        ||cmd->opcode==0x3A||cmd->opcode==0x3B
+        ||std::find(observed_frame_instructions_.begin(),observed_frame_instructions_.end(),
+            std::make_pair(cmd->pc,uint8_t(cmd->opcode)))!=observed_frame_instructions_.end());
     FrameTransition transition;
     if(observe_frame){transition.opcode=uint8_t(cmd->opcode);transition.before=current_witness();
-        transition.callback_receipt=event_envelope_?event_envelope_->receipt:0;}
+        transition.callback_receipt=event_envelope_?event_envelope_->receipt:0;
+        if(cmd->opcode==0x51&&stack_.size()>=2){
+            try{const auto& ref=stack_[stack_.size()-2];const auto v=peek_reference(ref);
+                const auto ctx=ref.context_owner.lock();
+                transition.store_context_current=ref.table==Table::Ctx28&&ctx&&ctx==context_
+                    &&!ref.context_owner.owner_before(context_)&&!context_.owner_before(ref.context_owner);
+                transition.previous_store.kind=v.kind;transition.previous_store.word=v.word;
+                transition.previous_store.table=uint32_t(v.table);transition.previous_store.index=v.index;
+                if(v.kind==Value::Kind::String){transition.previous_store.cp932_bytes=v.cp932.size();
+                    transition.previous_store.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(v.cp932.data()),v.cp932.size());}
+                transition.previous_store_valid=true;
+            }catch(...){} // evidence cannot change store semantics
+        }}
     try {
         int op = cmd->opcode;
         const auto pop = [&]() {

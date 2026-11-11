@@ -6,6 +6,7 @@
 #include "game_sound_control_native.h"
 #include <memory>
 #include <functional>
+#include <optional>
 
 namespace dokodemo::script {class Vm;struct Value;struct NativeScriptContext;enum class Table:uint8_t;}
 namespace dokodemo {struct StartupRuntimeTestAccess;}
@@ -452,6 +453,7 @@ struct GameSceneBgmSnapshot {
     uint32_t initial_clock52=0,period4B4=0,variant4AC=1;
     uint64_t cache_revision=0;
     int32_t stored4BC=0,control_return=0;
+    std::optional<GameBgmControlRecord> cleanup_control;
     std::array<uint32_t,7> calendar{};
     GameBgmSelection selection;
     GameBgmFileResult file_result;
@@ -471,6 +473,7 @@ class GameSceneBgm final {
     // Selected1B114(flag1): refresh from the SAME current scene before target mapping.
     GameFsStatus RefreshCachedPeriod(const std::shared_ptr<GameBackgroundRuntime>&,GameActorRuntime&);
     GameFsStatus RequestControl(const std::shared_ptr<GameBackgroundRuntime>&,uint32_t argument);
+    GameFsStatus RequestCleanupControl(const std::shared_ptr<GameBackgroundRuntime>&,bool loader469,uint32_t current_ui464);
     GameFsStatus Pump(const std::shared_ptr<GameBackgroundRuntime>&);
     bool CurrentChoice(int32_t&)const;
     bool SharesDataBacking(PackageView)const;

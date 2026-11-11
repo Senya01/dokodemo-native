@@ -307,11 +307,18 @@ GameFsStatus GameSourceSoundControl::BindSe5(PackageView image){
 GameFsStatus GameSourceSoundControl::BgmPrefix(const GameSourceSoundSnapshot& expected,uint32_t index,uint32_t gain,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
     if(!state_.live||state_.failed||!state_.cold_initialized||index>=25||!file||!GameSourceSoundSnapshotExact(expected,Snapshot()))
         return {GameFsCode::Unavailable,0,"4AD4C current source control/index/file record required"};
+    const auto status=BgmRecordPrefix(expected,index,gain,argument,out);if(!status)return status;
+    out.linked_request=file;out.file_request_bound=true;bgm_controls_[index]=out;return {};
+}
+GameFsStatus GameSourceSoundControl::BgmRecordPrefix(const GameSourceSoundSnapshot& expected,uint32_t index,uint32_t gain,uint32_t argument,GameBgmControlRecord& out){
+    if(!state_.live||state_.failed||!state_.cold_initialized||index>=25||!GameSourceSoundSnapshotExact(expected,Snapshot()))
+        return {GameFsCode::Unavailable,0,"4AD4C current initialized source FILE-RECORD/control required"};
     auto& record=records_[6+index];auto control=bgm_controls_[index];
     control.bound=true;control.source_owner=state_.owner;control.source_generation=state_.generation;control.handle14=record.handle;
+    control.record_index=index;control.linked_request=0;control.file_request_bound=false;
     if(record.handle>=0){control.wrapper_return=record.handle;out=control;return {};}
     record.gain=gain;record.position=argument;record.resource_state=0;
-    control.gain0C=record.gain;control.argument28=record.position;control.linked_request=file;control.pending=true;control.wrapper_return=0;
+    control.gain0C=record.gain;control.argument28=record.position;control.pending=true;control.wrapper_return=0;
     bgm_controls_[index]=control;++state_.bgm_attempts;out=control;return {};
 }
 GameSourceSoundSnapshot GameSourceSoundControl::Snapshot()const{

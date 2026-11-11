@@ -313,7 +313,7 @@ struct GameActorRuntime::ContextActorData {
   ~ContextActorData(){Close();}
 };
 GameActorRuntimeSnapshot GameActorRuntime::Snapshot()const{
-  auto result=state_;
+  auto result=state_;result.destination=destination_state_;
   if(manager_switch_)result.manager_switch=manager_switch_->Snapshot();
   result.camera_target_current=ReadCameraTarget(result.camera_target_position);
   result.camera_target_epoch=result.camera_target_current?state_.owner_epoch:0;
@@ -978,6 +978,58 @@ GameFsStatus GameActorRuntime::AdoptPreparedDestination(script::Vm& vm,const Gam
   }
   destination_state_.old_render_retired=std::none_of(models_.begin(),models_.end(),[](const auto& m){return m.active;});
   return {}; // display/adoption only; actual18568 context/event17 still required
+}
+
+GameFsStatus GameActorRuntime::TickDestinationContinuation(script::Vm& vm,GameOutingCommand& command,GameSceneUiBootstrap& ui,GameSceneBgm& bgm,bool loader469){
+  GameBackgroundCandidate candidate;auto status=command.CurrentRequest(vm,*this,candidate);if(!status)return status;
+  auto& d=destination_state_;auto& l=manager_switch_->state_.loadman;const auto module=background_module_.lock();
+  if(!Live()||!module||!BackgroundModuleMatches(module)||!destination_||!d.adopted||d.failed
+    ||d.request!=candidate.request||d.period!=candidate.period||d.candidate!=candidate.id||!destination_->Current(module,d.epoch)
+    ||l.source_selector4DC!=12||l.rendered_selector4DC!=12||l.source_scene_generation!=d.request
+    ||!transition_||&ui.TitleTransitionOwner()!=transition_||!transition_->Snapshot().live
+    ||l.transition50!=0||l.ui_change461)
+    return {GameFsCode::Unavailable,0,"18568 current adopted scene/request/radial or admitted history changed"};
+  if(d.scene_dispatch_completed)return {};
+  switch(l.scene_phase44){
+  case 1:{
+    //297A8: the Windows synchronous worker polls ITS current held data and
+    // owned pixels/attachments. This is not an independent VM wake provider.
+    status=destination_->UpdateSupport(module,d.epoch,vm);if(!status)return status;
+    GameSupportSnapshot support;status=destination_->ReadSupport(module,d.epoch,vm,support);if(!status)return status;
+    if(!support.glyph_pixels_ready)return {};
+    l.scene_phase44=3;l.counter42=0;return {};
+  }
+  case 3:l.scene_phase44=2;[[fallthrough]]; // signedhalf50 current constructor/request history0
+  case 2:{
+    if(l.counter42<2){++l.counter42;return {};}
+    // If preparation completed early, retain this request and WAIT for its
+    // actual1C5B/3A/32 owner. Never borrow the latest diagnostic VM witness.
+    if(command.WaitingForPause())return {};
+    if(!d.camera_ready_writer){d.camera_readyB0=true;d.camera_holdB3=false;d.camera_ready_writer=0x18668;
+      state_.camera_byteB0=uint8_t(1);state_.camera_byteB3=uint8_t(0);}
+    if(!d.arrival_event_posted){status=RefreshCamera7980();if(!status)return status;}
+    if(l.change40&&!d.arrival_event_posted){
+      status=command.PostArrival17(vm);if(!status)return status;
+      const auto receipt=command.Snapshot(vm);d.arrival_event_posted=true;d.arrival_receipt=receipt.event_receipt;
+    }
+    //186B0 posts17 BEFORE18698 hides moving. A hide failure retains the
+    // real event receipt, so retry cannot post a duplicate callback.
+    if(!d.moving_hide_requested){if(!ui.FinishMoving(false))return {GameFsCode::Unavailable,0,"18698 current moving receiver refused hide"};d.moving_hide_requested=true;}
+    l.scene_phase44=4;++l.counter42;return {};
+  }
+  case 4:
+    //18754: current radial!=0 OR actual byte461==0 enters5 without DA64.
+    // Do not invent an Open here; the live source script may still issue it.
+    l.scene_phase44=5;l.counter42=0;return {};
+  case 5:
+    if(transition_->Snapshot().state!=2)return {};
+    {const auto current=manager_switch_->Snapshot();if(!current.loadman.ui_current)return {GameFsCode::Unavailable,0,"18894 current UI464 owner unknown"};
+      status=bgm.RequestCleanupControl(module,loader469,current.loadman.ui464);if(!status)return status;} //188BC real local request, no playback credit
+    l.scene_phase44=0;l.cleanup4B8=uint8_t(0);l.ui_change461=false;l.change40=false;l.phase28=0;l.cleanup54=uint8_t(0);
+    if(!transition_->SetCenter({{0,0}}))return {GameFsCode::Unavailable,0,"1890C actual produced radial center refused"};
+    d.scene_dispatch_completed=true;return {};
+  default:return {GameFsCode::Unavailable,0,"18568 unsupported source phase"};
+  }
 }
 
 GameFsStatus GameActorRuntime::ClearManager8(){

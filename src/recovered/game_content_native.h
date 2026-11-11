@@ -190,9 +190,11 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameFsStatus InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource&,GameTransition&);
     GameFsStatus TickSceneBgmFiles();
     GameFsStatus TickPendingSceneRequest();
+    bool OutingInputsCurrent(const GameActorRuntime&)const;
     GameSceneBgmSnapshot SceneBgm()const{return scene_bgm_?scene_bgm_->Snapshot():GameSceneBgmSnapshot{};}
     std::weak_ptr<const void> OptionSettingsLifetime()const override{return option_settings_lifetime_;}
     GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&)override;
+    GameFsStatus RequestBgmRecordControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,GameBgmControlRecord&)override;
     void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
     void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
     void SetSoundOutput(audio::Game73SelectedSink* sink){sound_bank_.SetSink(sink);}

@@ -1338,6 +1338,8 @@ void ManagerSupportJobTests(){
             Check(id==0x27&&args.size()==4,"only actual callback builtin admitted");before_callback=vm.current_witness();++posts;return Value::integer(vm.post_callback(args[0],args[1],args[2],args[3]));});
         const auto first=vm.run(100);if(first.status==Status::Stopped)throw std::runtime_error(first.diagnostic.text());
         Check(first.status==Status::Yield&&registration_calls==1&&posts==1&&vm.last_callback_receipt()==1,"real service -> self callback -> one deadline yield");
+        Check(runtime.SupportRegistration().Current(vm)&&!runtime.SupportRegistration().Current(other),
+          "actual saved event caller owns its same registered frame borrow while callback executes; foreign run is not a caller");
         Check(vm.run(100).status==Status::Yield&&!vm.context_enabled()&&vm.callbacks_returned()==1&&vm.callback_depth()==0&&vm.queued_callbacks()==0,"3A/event32 actually restore disabled caller");
         const auto paused=vm.current_witness();Check(paused.code_entry==wait&&paused.caller_return_pc==continuation&&paused.call_depth==1&&paused.deadline_tick==1
             &&paused.frame_id==before_callback.frame_id&&paused.caller_frame_id==before_callback.caller_frame_id&&paused.result.word==0x20000000,"restored caller, result, stack and source deadline");
@@ -1695,9 +1697,9 @@ void CameraTargetRender(){
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
 }
 
-void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={}){
+void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0){
   static_assert(!std::is_copy_constructible<GameOutingData>::value,"selected DATA packet is not an editable copied receipt");
-  for(unsigned failure=0;failure<3;++failure){
+  for(unsigned failure=0;failure<(owning_return?1u:3u);++failure){
     const auto bytes=SyntheticOutingData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data;
     auto data_io=std::make_shared<BackgroundFileState>();Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash)),"vertical current held DATA");
     std::shared_ptr<const GameOutingData> packet;Check(bool(data.Outing12(packet)),"vertical selected packet");
@@ -1733,19 +1735,39 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     auto call=[&](uint8_t n){const auto pc=uint32_t(code.size());emit({0x20,n,0,0,0});return pc;};
     emit({0x30,24});for(unsigned i=0;i<8;++i){slot(0x99,uint16_t(17+i));emit({0x8E,'A',0,0x51});}slot(0x99,16);emit({0x8B,0x70,1});
     emit({0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,0x84});GameOutingCommandAbi abi;abi.root=0;abi.candidates=abi.stored=0;abi.produce_call=call(3);
-    slot(0x91,13);slot(0x99,0);abi.copy_call=call(2);emit({0x80,12,0x80,1});abi.travel_call=call(2);emit({0x31});
+    slot(0x91,13);slot(0x99,0);abi.copy_call=call(2);emit({0x80,12,0x80,1});abi.travel_call=call(2);abi.root_return=uint32_t(code.size());emit({0x31});
     abi.producer=uint32_t(code.size());emit({0x30,3});for(unsigned i=0;i<6;++i){slot(0x90,0);emit({0x80,uint8_t(i),0xF5});
       if(i==0)slot(0x90,1);else if(i==1){slot(0x95,0);slot(0x90,1);emit({0xF4});}else if(i==2)emit({0x80,7});else if(i==3||i==4)emit({0x8E,'T',0});else emit({0x84});emit({0x51});}emit({0x87,0x70,0x31});
-    abi.copier=uint32_t(code.size());emit({0x30,2});slot(0x90,1);slot(0x90,0);emit({0x57,0x31});abi.travel=uint32_t(code.size());emit({0x30,2});slot(0x90,0);abi.game12=uint32_t(code.size());emit({0x8B,0x7E,1,0x31});
+    abi.copier=uint32_t(code.size());emit({0x30,2});slot(0x90,1);slot(0x90,0);emit({0x57,0x31});abi.travel=uint32_t(code.size());emit({0x30,2});slot(0x90,0);abi.game12=uint32_t(code.size());emit({0x8B,0x7E,1});
+    uint32_t pause_code_patch=0;
+    if(owning_return){
+      abi.wait_call=uint32_t(code.size());emit({0x21,0,0,0});
+      slot(0x99,0);emit({0x80,5,0xF5,0x87});abi.field5_store=uint32_t(code.size());emit({0x51});
+      // Synthetic SOURCE instruction asks the real GAME6 owner to open. No
+      // host assignment of radial state, source phase or completion receipt.
+      emit({0x8B,0x7B,0});
+    }
+    emit({0x31});
+    if(owning_return){
+      abi.wait_entry=uint32_t(code.size());emit({0x30,0,0x8C,0x8A});pause_code_patch=uint32_t(code.size());emit({0,0,0,0x85,0x85});
+      abi.wait_builtin=uint32_t(code.size());emit({0x8B,0x27,4,0x80,1});abi.deadline=uint32_t(code.size());emit({0x44});abi.wait_resume=uint32_t(code.size());emit({0x31});
+      abi.pause_entry=uint32_t(code.size());emit({0x30,3});abi.pause_disable=uint32_t(code.size());emit({0x3A});abi.pause_return=uint32_t(code.size());emit({0x32});
+      abi.event_entry=uint32_t(code.size());emit({0x30,2});abi.event_enable=uint32_t(code.size());emit({0x3B});abi.event_return=uint32_t(code.size());emit({0x32});
+    }
     const auto patch=[&](uint32_t at,uint32_t target){for(unsigned i=0;i<3;++i)code[at+2+i]=uint8_t(target>>(8*i));};patch(abi.produce_call,abi.producer);patch(abi.copy_call,abi.copier);patch(abi.travel_call,abi.travel);
-    std::vector<uint8_t> ksc(28+code.size()+4*(25+13));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[24]=13;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
-    const auto ctx_at=uint32_t(28+code.size());Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
+    if(owning_return)for(unsigned i=0;i<3;++i){code[abi.wait_call+1+i]=uint8_t(abi.wait_entry>>(8*i));code[pause_code_patch+i]=uint8_t(abi.pause_entry>>(8*i));}
+    std::vector<uint8_t> ksc(28+code.size()+4*(25+13+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=13;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
+    if(owning_return)Word(ksc,28+code.size(),0x70000000u|abi.event_entry);
+    const auto ctx_at=uint32_t(28+code.size()+(owning_return?4:0));Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
     const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);
     script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());script::Vm vm(program);vm.native_reserved_local_nil(true);vm.start();
     Check(bool(actor.BindScriptContextActor1C0FC(vm)),"actual constructor context captures this actor5 owner");auto image=std::make_shared<Lease>(ksc);const auto image_view=PackageStorage::Attach(image,image->b.size());
     GameOutingCommand command;Check(bool(command.Begin(vm,abi)),"vertical command actual VM root");vm.frame_observer([&](const script::FrameTransition& t){command.Observe(vm,t);});
-    auto target_io=std::make_shared<BackgroundFileState>();bool consumed=false;
+    auto target_io=std::make_shared<BackgroundFileState>();bool consumed=false,source_open=false;
+    std::weak_ptr<const GameModelAsset> returned_old;
     vm.host_service([&](uint8_t id,const std::vector<script::Value>& args){
+      if(owning_return&&id==0x27)return script::Value::integer(command.PostWait(vm,args));
+      if(owning_return&&id==0x7B){Check(args.empty()&&bool(actor.StartTransition()),"executed synthetic GAME6 opens current radial");source_open=true;return script::Value::integer(0);}
       if(id==0x70){Check(args.size()==1&&bool(actor.RegisterSupportData16(vm,args[0])),"actual eight typed current texts producer registration");return script::Value::integer(0);}
       Check(id==0x7E&&args.size()==1&&bool(command.Issue(vm,actor,args[0].signed_integer())),"executed producer/copy/operand issues same real context request");
       Check(!command.Issue(vm,actor,12)&&bool(actor.PublishPendingScene1B238(bgm)),"no issue replay; actual source request publication");
@@ -1759,7 +1781,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       for(unsigned i=0;i<100&&transition.Snapshot().state==1;++i)transition.Update();
       Check(transition.Snapshot().state==2,"real radial open update, no prefilled state");
       const auto before_dispatch=rng.CurrentSeed64();auto& ui=dokodemo::StartupRuntimeTestAccess::SceneUi(*content);
-      const auto old_scene=dokodemo::StartupRuntimeTestAccess::OldScene(actor);
+      const auto old_scene=dokodemo::StartupRuntimeTestAccess::OldScene(actor);returned_old=old_scene;
       GameSceneUiBootstrap foreign_ui;auto foreign_ui_module=std::make_shared<int>(1);
       Check(foreign_ui.TitleTransitionOwner().Initialize({{0,0}})&&dokodemo::StartupRuntimeTestAccess::ForeignMoving(foreign_ui,foreign_ui_module,moving_image),"independent LIVE foreign UI owners");
       Check(!actor.AdvanceDestinationLoad(vm,command,foreign_ui,bgm)&&control->Snapshot().loadman.load_phase2C==0
@@ -1832,6 +1854,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         Check(graphics.Snapshot().mesh_pixels>0&&dokodemo::StartupRuntimeTestAccess::Scene(actor).frames>0&&dokodemo::StartupRuntimeTestAccess::Scene(actor).regions,
           "actual target/main/support/selected-child composition consumed by Runtime.Draw, no Scene0 copy");
         if(capture){GameGraphicsFrame frame;Check(graphics.CopyFront(frame),"actual adopted target frame");capture("synthetic-adopted-transition-pending",frame);}
+        if(owning_return){graphics.Close();consumed=true;return script::Value::integer(0);}
         // Explicit COMPONENT inspection request. This is NOT the unimplemented
         // source18568 continuation/event17 and must never grant ordinary input.
         Check(bool(actor.StartTransition()),"component-only GAME6 opens adopted composition for inspection");
@@ -1851,7 +1874,67 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         &&control->Snapshot().loadman.source_selector4DC==-1,"closed attempt cannot replay same request/source publication or target RNG");
       consumed=true;return script::Value::integer(0);
     });
-    const auto result=vm.run(4096);if(result.status!=script::Status::Complete)throw std::runtime_error(result.diagnostic.text());
+    if(owning_return){
+      // Local0 is established by executed synthetic KSC below, not a supplied
+      // completion record. Use the module's actual local table image.
+      const auto first=vm.run(4096);if(first.status!=script::Status::Yield)throw std::runtime_error("owning wait: "+first.diagnostic.text());
+      auto w=command.Snapshot(vm);Check(w.wait_posted&&!w.paused&&!w.failed&&actor.DestinationPreparation().adopted&&vm.callbacks_posted()==1,
+        "target prepared/adopted EARLY, actual builtin27/deadline queued; no completion before caller pause");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==1,"event17 cannot replace an in-flight pause callback");
+      Check(vm.run(100).status==script::Status::Yield&&!vm.context_enabled(),"actual3A/32 disables and restores wait caller");
+      w=command.Snapshot(vm);Check(w.paused&&!w.failed&&w.suspended.frame_id==w.wait_frame&&w.suspended.deadline_tick==1&&w.suspended.caller_frame_id==w.travel_frame,
+        "actual paused receipt carries correct caller/frame/operands/result/deadline");
+      auto& ui=dokodemo::StartupRuntimeTestAccess::SceneUi(*content);
+      script::Vm foreign_vm(program);foreign_vm.start();const auto prior=control->Snapshot().loadman;
+      Check(!actor.TickDestinationContinuation(foreign_vm,command,ui,bgm,false)&&control->Snapshot().loadman.scene_phase44==prior.scene_phase44,
+        "foreign live VM cannot advance adopted source phases");
+      // Real host clock advances while source is disabled: event return must
+      // restore the expired signed deadline as0, rather than forcing a wait.
+      if(return_fault==3){
+        vm.start();Check(!command.PostArrival17(vm)&&!actor.TickDestinationContinuation(vm,command,ui,bgm,false)&&vm.callbacks_posted()==0,
+          "restart invalidates request/paused run before any event or phase effects");
+        Check(bool(actor.CloseDestination())&&!target_io->live,"restarted command still permits honest resource cleanup");
+      }else{
+      vm.clock_tick(return_fault==1?0:4);
+      for(unsigned i=0;i<8&&!actor.DestinationPreparation().arrival_event_posted;++i){const auto status=actor.TickDestinationContinuation(vm,command,ui,bgm,false);if(!status)throw std::runtime_error(status.detail);}
+      w=command.Snapshot(vm);Check(w.event_posted&&!w.event_returned&&!w.failed&&vm.callbacks_posted()==2&&actor.DestinationPreparation().moving_hide_requested
+        &&control->Snapshot().loadman.scene_phase44==4,"real phases1/3/2 -> event17 BEFORE moving hide, no model-ready wake");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"cannot replay event17");
+      // Run the real callback and source write, stop immediately after the
+      // synthetic GAME6 call so source cleanup can poll its actual animation.
+      for(unsigned i=0;i<64&&!source_open;++i){
+        if(return_fault==2&&vm.pc()==abi.field5_store){
+          script::Value ref;ref.kind=script::Value::Kind::Reference;ref.table=script::Table::Ctx28;ref.index=6;ref.context_owner=vm.context_value().context_owner;
+          vm.store_reference(ref,script::Value::integer(99)); // explicit negative component data drift
+          vm.run(1);break;
+        }
+        vm.clock_tick(vm.current_witness().clock_tick+1);
+        const auto step=vm.run(1);if(step.status==script::Status::Stopped)throw std::runtime_error(step.diagnostic.text());
+      }
+      if(return_fault==2){
+        w=command.Snapshot(vm);Check(w.failed&&!w.field5_written&&!w.completed&&vm.callbacks_posted()==2,
+          "a real source51 cannot launder an unrelated earlier copied-field5 write; no blind digest rebase");
+        Check(bool(actor.CloseDestination())&&!target_io->live,"partial event/store effects retain resources until explicit retirement");
+      }else{
+      w=command.Snapshot(vm);Check(source_open&&vm.context_enabled()&&w.event_returned&&w.field5_written&&!w.failed&&!w.completed
+        &&w.restored.deadline_tick==(w.suspended.relative_deadline23>0?w.restored.clock_tick+uint32_t(w.suspended.relative_deadline23):0)&&w.fields[5].word==0,"actual3B/32 then executed field5 writer advances ONLY copied descriptor, original NIL retained");
+      for(unsigned i=0;i<100&&!actor.DestinationPreparation().scene_dispatch_completed;++i){transition.Update();const auto status=actor.TickDestinationContinuation(vm,command,ui,bgm,true);if(!status)throw std::runtime_error(status.detail);}
+      Check(actor.DestinationPreparation().scene_dispatch_completed&&!control->Snapshot().loadman.change40&&!control->Snapshot().loadman.phase28
+        &&control->Snapshot().loadman.cleanup4B8==0&&control->Snapshot().loadman.cleanup54==0,
+        "actual radial poll/loader469 current UI0 selects initialized BGM2 control/cleanup, no fake file request or forced state2");
+      const auto cleanup=bgm.Snapshot().cleanup_control;
+      Check(cleanup&&cleanup->bound&&cleanup->pending&&cleanup->record_index==2&&!cleanup->file_request_bound&&!cleanup->linked_request
+        &&cleanup->handle14==-1&&cleanup->source_owner&&cleanup->source_generation&&cleanup->argument28==0,
+        "actual4AD4C initialized record2/current gain owner independent of file54/bank5C/voice11EC, no playback credit");
+      const auto done=vm.run(100);if(done.status!=script::Status::Complete)throw std::runtime_error(done.diagnostic.text());
+      w=command.Snapshot(vm);Check(w.completed&&w.travel_returned&&!w.live&&!w.failed&&w.field5_sequence<w.completion_sequence&&returned_old.expired(),
+        "actual travel31 -> owning root31 completion, old render owner retired, not a counter certificate");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"completed command cannot rearm old caller");
+      target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
+      Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
+      }
+      }
+    }else{const auto result=vm.run(4096);if(result.status!=script::Status::Complete)throw std::runtime_error(result.diagnostic.text());}
     Check(consumed&&factories==0,"component uses explicit synthetic file, ordinary bound factory has no unearned execution");
     const auto last_store=control->Snapshot().loadman.stored_bgm4BC;
     Check(bool(bgm.Close())&&control->Snapshot().loadman.stored_bgm4BC==last_store,"manager keeps actual last4BC after BGM/file owner retirement");
@@ -2395,6 +2478,7 @@ int main(int argc,char** argv) {
         BgmTransportTests();
         MainSceneDataTests();
         ExecutedDestinationPreparationTests();
+        for(unsigned fault=0;fault<4;++fault)ExecutedDestinationPreparationTests({},true,fault);
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();
