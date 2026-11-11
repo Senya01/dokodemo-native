@@ -31,6 +31,16 @@ std::string Text(const PackageView &image, uint32_t at) {
     throw std::runtime_error("B2A resource name unterminated");
 }
 } // namespace
+void GameResourceSource::ClearTextureCache(){
+    texture_cache_.clear();texture_live_.clear();TrimUnusedTextures();
+    // Old clone-owned generations still count against the decoded budget.
+}
+uint32_t GameResourceSource::TextureResidentImages()const{
+    uint32_t count=0;for(const auto& image:texture_resident_)if(!image.expired())++count;return count;
+}
+uint32_t GameResourceSource::TextureResidentPixels()const{
+    uint32_t pixels=0;for(const auto& weak:texture_resident_)if(const auto image=weak.lock())pixels+=image->Width()*image->Height();return pixels;
+}
 void GameResourceSource::TrimUnusedTextures(){
     // Native cache pressure policy: live resources/clones keep their exact
     // shared image. Only the cache's sole remaining ownership may be retired.
@@ -38,6 +48,8 @@ void GameResourceSource::TrimUnusedTextures(){
         if(i->second.use_count()==1){i=texture_cache_.erase(i);++texture_cache_evictions_;}
         else ++i;
     }
+    for(auto i=texture_live_.begin();i!=texture_live_.end();)if(i->second.expired())i=texture_live_.erase(i);else ++i;
+    texture_resident_.erase(std::remove_if(texture_resident_.begin(),texture_resident_.end(),[](const auto& image){return image.expired();}),texture_resident_.end());
 }
 GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::shared_ptr<GameImage> &out) {
     std::string key = path;
@@ -46,12 +58,16 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
             c = char(c - 'a' + 'A');
     const auto found = texture_cache_.find(key);
     if (found != texture_cache_.end()) {
+        if(!found->second->SourceCurrent())return {GameFsCode::Unavailable,0,"cached texture source retired/changed"};
         out = found->second;
         return {};
     }
+    const auto live=texture_live_.find(key);
+    if(live!=texture_live_.end())if(const auto held=live->second.lock()){
+        if(!held->SourceCurrent())return {GameFsCode::Unavailable,0,"live texture source retired/changed"};
+        out=held;return {}; // actual same live image, not another decode
+    }
     if (texture_cache_.size() >= 512)TrimUnusedTextures();
-    if (texture_cache_.size() >= 512)
-        return {GameFsCode::Bounds, 0, "native texture cache cap512"};
     PackageView image;
     auto status = OpenResource(path, image);
     if (!status)
@@ -61,10 +77,13 @@ GameFsStatus GameResourceSource::TextureResource(const std::string &path, std::s
     if (!status)
         return status;
     const auto pixels=uint64_t(decoded->Width())*decoded->Height();
-    if (uint64_t(TextureCachePixels()) + pixels > 16 * 1024 * 1024)TrimUnusedTextures();
-    if (uint64_t(TextureCachePixels()) + pixels > 16 * 1024 * 1024)
+    if (uint64_t(TextureResidentPixels()) + pixels > 16 * 1024 * 1024)TrimUnusedTextures();
+    if (uint64_t(TextureResidentPixels()) + pixels > 16 * 1024 * 1024)
         return {GameFsCode::Bounds, 0, "native decoded texture budget64MiB"};
-    texture_cache_.emplace(std::move(key), decoded);
+    // Bounded strong write-around cache. All live allocations, including
+    // uncached/old externally held images, obey the SAME64MiB pixel budget.
+    if(texture_cache_.size()<512)texture_cache_.emplace(key,decoded);
+    texture_live_[key]=decoded;texture_resident_.push_back(decoded);
     out = std::move(decoded);
     return {};
 }

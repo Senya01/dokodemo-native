@@ -13,9 +13,11 @@ class GameResourceSource {
     virtual ~GameResourceSource() = default;
     virtual GameFsStatus OpenResource(const std::string &path, PackageView &out) = 0;
     GameFsStatus TextureResource(const std::string &path, std::shared_ptr<GameImage> &out);
-    void ClearTextureCache() { texture_cache_.clear(); }
+    void ClearTextureCache();
     uint32_t TextureCacheSize() const { return uint32_t(texture_cache_.size()); }
     uint64_t TextureCacheEvictions() const { return texture_cache_evictions_; }
+    uint32_t TextureResidentImages() const;
+    uint32_t TextureResidentPixels() const;
     uint32_t TextureCachePixels() const {
         uint32_t pixels = 0;
         for (const auto &item : texture_cache_)
@@ -26,6 +28,11 @@ class GameResourceSource {
   private:
     void TrimUnusedTextures();
     std::map<std::string, std::shared_ptr<GameImage>> texture_cache_;
+    //512 strong cache holds are a cache policy, not a limit on a resource's
+    // live images. Excess images remain owned by their actual templates/UI;
+    // weak lookup preserves sharing without pretending they were retired.
+    std::map<std::string,std::weak_ptr<GameImage>> texture_live_;
+    std::vector<std::weak_ptr<GameImage>> texture_resident_;
     uint64_t texture_cache_evictions_=0;
 };
 struct GameUiTexture {

@@ -256,19 +256,47 @@ struct Resources : GameResourceSource {
 void TextureCacheOwnershipTests(){
     Resources source;std::vector<std::shared_ptr<GameImage>> live(512);
     for(uint32_t i=0;i<512;++i)Check(bool(source.TextureResource("cache"+std::to_string(i)+".GIM",live[i])),"bounded live texture acquisitions");
-    const auto first=live[0];std::weak_ptr<GameImage> retired=live[1];
-    std::shared_ptr<GameImage> replacement;
+    const auto first=live[0];std::weak_ptr<GameImage> retired=live[1];std::shared_ptr<GameImage> extra,replacement;
     const auto requests=source.requests;
-    Check(!source.TextureResource("extra.GIM",replacement)&&!replacement&&source.requests==requests,"full live cache refuses without opening or evicting owners");
+    Check(bool(source.TextureResource("extra.GIM",extra))&&extra&&source.requests==requests+1
+      &&source.TextureCacheSize()==512&&source.TextureResidentImages()==513&&source.TextureResidentPixels()==513*4,
+      "full strong cache does not refuse a valid decoded image still owned by the UI;512 cache limit unchanged");
+    std::shared_ptr<GameImage> hit;const auto after_extra=source.requests;
+    Check(bool(source.TextureResource("EXTRA.GIM",hit))&&hit==extra&&source.requests==after_extra,"uncached live image shares exact current allocation without re-open/decode");
     live[1].reset();
-    Check(bool(source.TextureResource("extra.GIM",replacement))&&retired.expired()&&source.TextureCacheEvictions()==1,"cache-only image retires on pressure");
-    Check(source.TextureCacheSize()==512&&source.TextureCachePixels()==512*4,"caps survive cache-only replacement");
-    const auto after=source.requests;std::shared_ptr<GameImage> hit;
-    Check(bool(source.TextureResource("CACHE0.GIM",hit))&&hit==first&&source.requests==after,"live identity and case-folded cache hit survive trim");
+    Check(bool(source.TextureResource("replacement.GIM",replacement))&&retired.expired()&&source.TextureCacheEvictions()==1,"only cache-owned allocation retires under pressure");
+    Check(source.TextureCacheSize()==512&&source.TextureCachePixels()==512*4&&source.TextureResidentPixels()==513*4,"all live pixels counted including uncached extra");
+    const auto after=source.requests;
+    Check(bool(source.TextureResource("CACHE0.GIM",hit))&&hit==first&&source.requests==after,"case-folded cache hit retains actual live identity");
     live[2].reset();const auto evictions=source.TextureCacheEvictions();
-    Check(!source.TextureResource("absent",hit)&&hit==first&&source.TextureCacheEvictions()==evictions+1,"failed acquisition preserves caller output and all live owners");
+    Check(!source.TextureResource("absent",hit)&&hit==first&&source.TextureCacheEvictions()==evictions+1,"failed acquisition preserves caller output and all external owners");
     Check(live[3]&&live[3]->Pixels().size()==4,"other live image remains decoded");
-    source.ClearTextureCache();Check(source.TextureCacheSize()==0&&first->Pixels().size()==4&&replacement->Pixels().size()==4,"clearing cache does not retire externally owned images");
+    extra.reset(); // weak lookup is not a hidden strong owner
+    const auto resident=source.TextureResidentImages();Check(resident==511,"released uncached texture retires while cached/current owners survive");
+    source.ClearTextureCache();Check(source.TextureCacheSize()==0&&first->Pixels().size()==4&&replacement->Pixels().size()==4
+      &&source.TextureResidentImages()>0,"cache clear does not lose resident accounting or retire clone images");
+    Check(bool(source.TextureResource("fresh.GIM",hit)),"fresh generation actual decode after clear");
+    hit->Close();auto closed=hit;hit=first;const auto before_closed=source.requests;
+    Check(!source.TextureResource("fresh.GIM",hit)&&hit==first&&source.requests==before_closed,"closed cached pixels cannot report successful decode");
+    Resources weak_source;std::vector<std::shared_ptr<GameImage>> held(512);
+    for(unsigned i=0;i<512;++i)Check(bool(weak_source.TextureResource(std::to_string(i)+".GIM",held[i])),"weak branch initial owned cache");
+    std::shared_ptr<GameImage> weak_image;Check(bool(weak_source.TextureResource("weak.GIM",weak_image)),"actual uncached image");weak_image->Close();
+    hit=first;Check(!weak_source.TextureResource("WEAK.GIM",hit)&&hit==first,"weak lookup must not publish closed/retired pixels as successful texture");
+    weak_image.reset();const auto before_reload=weak_source.requests;
+    Check(bool(weak_source.TextureResource("weak.GIM",weak_image))&&weak_source.requests==before_reload+1&&weak_image->SourceCurrent(),"expired weak-only allocation can be decoded anew from current real input");
+    struct Large final:GameResourceSource{
+      GameFsStatus OpenResource(const std::string&,PackageView& out)override{
+        auto b=Gim();const uint32_t pixels=2048u*2048u;b.resize(128+pixels*4,0x5A);
+        for(uint32_t at:{16u,32u})W(b,at+4,uint32_t(b.size()-at));W(b,52,uint32_t(b.size()-48));W(b,56,uint32_t(b.size()-48));
+        H(b,72,2048);H(b,74,2048);W(b,96,64+pixels*4);out=View(std::move(b));return {};
+      }
+    } large;
+    std::vector<std::shared_ptr<GameImage>> full(4);
+    for(unsigned i=0;i<4;++i)Check(bool(large.TextureResource(std::to_string(i),full[i])),"actual synthetic RGBA decode fills unchanged64MiB budget");
+    large.ClearTextureCache();std::shared_ptr<GameImage> refused;
+    Check(large.TextureResidentPixels()==16u*1024*1024&&!large.TextureResource("over",refused)&&!refused&&large.TextureCacheSize()==0,
+      "externally held pixels still enforce64MiB after strong cache is cleared, not merely cached count");
+    full[0].reset();Check(bool(large.TextureResource("retry",refused))&&large.TextureResidentImages()==4,"actual released owner permits real decode retry within same hard budget");
 }
 void ImageTests() {
     GameImage image;
