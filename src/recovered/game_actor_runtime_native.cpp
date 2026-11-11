@@ -253,6 +253,7 @@ bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
 }
 void GameManagerSwitchControl::Retire(){
   state_.live=state_.bound=state_.pending=false;module_.reset();standalone_module_.reset();stored_bgm4BC_.reset();
+    state_.asc6_cell.reset();state_.asc6_writes=0;
   inventory_=nullptr;notebook_=nullptr;wordmemo_=nullptr;diary_=nullptr;options_=nullptr;bgm_=nullptr;bgm_lifetime_.reset();
   loaded_models_.clear();
 }
@@ -1184,6 +1185,12 @@ GameFsStatus GameActorRuntime::PrepareActor() {
     if (!status)
       return status;
     const auto stats = asset->Statistics();
+    // AC60 AE08 binds command-owner30 to24ABC's module cell. Keep the
+    // actual native module/control-block and source inputs, not a PSP address.
+    if(!manager_switch_||!manager_switch_->CurrentBorrow(manager_switch_))
+      throw std::runtime_error("ASC current module cell owner unavailable");
+    actor_asc_digest_=asc.InitializedDigest();asc_selection_digest_=selection_.InitializedDigest();
+    asc_module_owner_=manager_switch_;asc_module_epoch_=manager_switch_->Snapshot().loadman.module_epoch;
     actor_asc_ = std::move(asc);
     actor_motion_names_ = std::move(parsed);
     actor_asset_ = std::move(asset);
@@ -1209,9 +1216,11 @@ GameFsStatus GameActorRuntime::RequestActorEvent(int32_t first,
     if(state_.movement_pending||state_.angular_pending||state_.pending_logical_motion>=0)
       throw std::runtime_error("Actor replacement during an active pose operation is outside the finite native contract");
     auto command = AscRecord(actor_asc_, uint32_t(first));
+    const auto digest=command.InitializedDigest();
     // B1D4 writes the same pending38C/390/394 fields on every call.
     // Validation precedes the replacement; the active24700 owner is untouched.
     pending_command_image_ = std::move(command);
+    pending_command_digest_=digest;
     if(state_.actor_request_pending)++state_.event_pending_replacements;
     state_.requested_command = first;
     state_.actor_request_pending = state_.selected_extension_pending = true;
@@ -1408,6 +1417,8 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame(script::Vm* support_vm) {
       // effect;an unknown instruction stops at its real ordinal/cursor.
       // B774 calls24700 before394 clears;1E824 then copies394 toext20.
       command_image_=std::move(pending_command_image_);
+      command_digest_=pending_command_digest_;
+      state_.asc_operand_valid=false;
       command_loops_.clear();state_.command_loop_depth=0;
       state_.command_repeat_ready258=false;state_.command_wait_motion=false;
       state_.command_flag25A=false; //24730 clears25A only on natural installation
@@ -1524,6 +1535,8 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame(script::Vm* support_vm) {
         throw std::runtime_error("Unimplemented/truncated reached ASC opcode");
       const auto parameter = command_image_.ReadLE32(at + 4);
       const auto value = int32_t(command_image_.ReadLE32(at + 8));
+      state_.asc_operand_valid=true;state_.asc_operand_record=state_.active_command;
+      state_.asc_operand_at=uint32_t(at);state_.asc_operand_parameter=parameter;state_.asc_operand_value=value;
       if (parameter == 3 || parameter == 4 || parameter == 11) {
         if (value < 0)
           throw std::runtime_error("Negative ASC coordinate index");
@@ -1550,6 +1563,20 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame(script::Vm* support_vm) {
         // Do not skip its real motion8/channel handoff to later ASC ops.
         state_.pending_logical_motion = 9;
         state_.command_pc += 12;
+      } else if(parameter==6){
+        const auto module=asc_module_owner_.lock();
+        if(!module||module!=manager_switch_||module.owner_before(manager_switch_)||manager_switch_.owner_before(module)
+           ||!module->CurrentBorrow(module)||module->state_.epoch!=state_.owner_epoch
+           ||module->state_.loadman.module_epoch!=asc_module_epoch_
+           ||selection_.InitializedDigest()!=asc_selection_digest_||actor_asc_.InitializedDigest()!=actor_asc_digest_
+           ||command_image_.InitializedDigest()!=command_digest_)
+          throw std::runtime_error("ASC6 current module/record binding retired/foreign/drifted");
+        // 245FC/24610: unconditional write through the genuine24ABC cell.
+        // Optional current-scene call7094 is exactly JR RA/NOP and reads no
+        // receiver/argument: both presence branches have no further effects.
+        // No scene absence, readiness, wait, motion or completion is inferred.
+        module->state_.asc6_cell=value;++module->state_.asc6_writes;
+        state_.command_pc+=12;
       } else if(parameter==8){
         const auto status=ApplySceneLightToggle(value);if(!status)throw std::runtime_error(status.detail);
         state_.command_pc+=12;
@@ -1842,6 +1869,9 @@ void GameActorRuntime::Close() {
   actor_clone_.Close();
   actor_asset_.reset();
   actor_asc_.Reset();
+  asc_module_owner_.reset();asc_module_epoch_=0;
+  actor_asc_digest_={};asc_selection_digest_={};pending_command_digest_={};command_digest_={};
+  state_.asc_operand_valid=false;
   command_image_.Reset();
   pending_command_image_.Reset();
   command_loops_.clear();state_.command_loop_depth=0;

@@ -106,6 +106,10 @@ struct GameManagerSwitchSnapshot {
   uint32_t publication_phase=0,old_resource=0,new_resource=0;
   bool old_bit_known=false,old_bit=false,new_bit_known=false,new_bit=false;
   std::array<uint32_t,6> publication_order{};
+  // DISTINCT module cell returned by24ABC, not a LoadMan offset/current0.
+  // Unknown until an admitted source writer executes. Native owned layout.
+  std::optional<int32_t> asc6_cell;
+  uint64_t asc6_writes=0;
 };
 // WindowsOrdinarySceneOwners co-owns DISTINCT source1B188 manager and177F8
 // LoadMan fields. Content constructs it once; the actor borrows that instance.
@@ -222,6 +226,10 @@ struct GameActorRuntimeSnapshot {
   bool command_blocked = false, command_flag25A = false, heading_known = false;
   uint32_t command_pc = 0, command_effects = 0, actor_phases = 0,
            actor_math_mode = 0, command_frontier = 0;
+  // Current bounded8030 operands, copied before dispatch; no borrowed Values.
+  bool asc_operand_valid=false;
+  int32_t asc_operand_record=-1,asc_operand_value=0;
+  uint32_t asc_operand_at=0,asc_operand_parameter=0;
   int32_t source_field58 = 0;
   std::array<float, 2> logical_xy{};
   float logical_heading = 0,logical_z=0;
@@ -387,6 +395,9 @@ private:
   std::vector<ContextActorBinding> context_actors_;
   GameFsStatus RequestContextScene(script::Vm&,int32_t);
   PackageView actor_asc_;
+  std::array<uint8_t,32> actor_asc_digest_{},asc_selection_digest_{},pending_command_digest_{},command_digest_{};
+  std::weak_ptr<GameManagerSwitchControl> asc_module_owner_;
+  uint64_t asc_module_epoch_=0;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;
   GameModelClone actor_clone_;
