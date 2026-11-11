@@ -1942,6 +1942,9 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       w=command.Snapshot(vm);Check(w.completed&&w.travel_returned&&!w.live&&!w.failed&&w.field5_sequence<w.completion_sequence&&returned_old.expired(),
         "actual travel31 -> owning root31 completion, old render owner retired, not a counter certificate");
       Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"completed command cannot rearm old caller");
+      script::Vm foreign_after(program);foreign_after.start();GameBackgroundCandidate rejected;const auto seed_after=rng.CurrentSeed64();
+      Check(!command.CurrentRequest(foreign_after,actor,rejected)&&!foreign_after.current_witness().context_registered&&rng.CurrentSeed64()==seed_after,
+        "completed receipt refuses foreign VM BEFORE registering its context or changing RNG/request effects");
       target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
       Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
       }

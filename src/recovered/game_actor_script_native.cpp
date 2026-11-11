@@ -1293,10 +1293,12 @@ GameFsStatus GameOutingCommand::Issue(script::Vm& vm,GameActorRuntime& runtime,i
 GameFsStatus GameOutingCommand::CurrentRequest(script::Vm& vm,const GameActorRuntime& runtime,GameBackgroundCandidate& out)const{
     try{if(!data_||!data_->state.issued||data_->state.failed)throw std::runtime_error("executed outing request absent/failed");
         if(!data_->state.completed)data_->Current(vm,true);
-        else{const auto w=vm.current_witness();const auto context=vm.context_value().context_owner;
-            if(!w.valid||w.stopped||w.run_id!=data_->state.run||w.code_sha256!=data_->module||w.context_word!=data_->state.context
-              ||context.expired()||context.owner_before(data_->context)||data_->context.owner_before(context))
-                throw std::runtime_error("completed outing continuation module/run/context changed");}
+        else{const auto w=vm.current_witness();
+            if(!w.valid||w.stopped||!w.context_registered||w.run_id!=data_->state.run||w.code_sha256!=data_->module||w.context_word!=data_->state.context)
+                throw std::runtime_error("completed outing continuation module/run/context changed");
+            const auto context=vm.context_value().context_owner;
+            if(context.expired()||context.owner_before(data_->context)||data_->context.owner_before(context))
+                throw std::runtime_error("completed outing continuation context owner changed");}
         const auto owner=data_->manager.lock(),current=runtime.manager_switch_;
         if(!owner||!current||owner!=current||owner.owner_before(current)||current.owner_before(owner)||!current->CurrentBorrow(current))
             throw std::runtime_error("outing actual LoadMan owner replaced/retired");
