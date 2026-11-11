@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Ordinary initialization now binds held original main DATA before current BGM/primary placement. Pass --prepared-main-data PATH to your already-prepared original BOOT.BIN, or place it at `USER_ASSET_ROOT/scripts/original/BOOT.BIN`. This is a checked native DATA input, never MIPS execution or ISO import. Initial owning preparation is implemented; target scene adoption, ordinary travel and fullgame remain incomplete.
+Ordinary held original main DATA now supplies current initial BGM and primary placement; region compilation follows BD28. Runtime input: --prepared-main-data PATH, default USER_ASSET_ROOT/scripts/original/BOOT.BIN. Native DATA parsing only; no MIPS execution/import. Target adoption, ordinary travel and fullgame remain incomplete.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
