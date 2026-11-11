@@ -208,13 +208,34 @@ GameFsStatus GameContentBoot::SetBackgroundRuntime(GameBackgroundRuntime::Clock 
     if(!arena_||!title_rng_||background_runtime_)
         return {GameFsCode::Unavailable,0,"background runtime requires current initialized content/RNG owner"};
     auto runtime=std::make_shared<GameBackgroundRuntime>();const auto status=runtime->Initialize(std::move(clock),*title_rng_);
-    if(status)background_runtime_=std::move(runtime);return status;
+    if(status){
+        if(OptionSettings().live){const auto bound=runtime->BindSceneSettings(runtime,*this);if(!bound)return bound;}
+        background_runtime_=std::move(runtime);
+    }return status;
+}
+GameFsStatus GameContentBoot::BindInitialSceneBgm(PackageView lists,PackageView gains,PackageView root,
+    std::function<PackageView(uint32_t)> names,GameBgmFileQueue::Factory factory){
+    if(!background_runtime_||scene_bgm_||actor_runtime_.Snapshot().live||state_.actor_script.started)
+        return {GameFsCode::Unavailable,0,"initial BGM data must bind to current content/settings BEFORE ordinary scene constructor"};
+    auto status=background_runtime_->BindSceneSettings(background_runtime_,*this);if(!status)return status;
+    auto bgm=std::make_unique<GameSceneBgm>();status=bgm->Initialize(background_runtime_,background_runtime_->Identity(),*this,lists,gains,root,std::move(names),std::move(factory));
+    if(status)scene_bgm_=std::move(bgm);return status;
+}
+GameFsStatus GameContentBoot::RequestBgmControlPrefix(const GameOptionSettingsSnapshot& expected,const GameSourceSoundSnapshot& source,
+    PackageView gains,uint32_t index,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
+    const auto current=OptionSettings();
+    if(!current.live||option_settings_lifetime_.use_count()==0||!GameOptionSnapshotExact(current,expected))
+        return {GameFsCode::Unavailable,0,"14834 current owning settings unavailable"};
+    uint32_t gain=0;const auto read=ReadBgmGain14834(current,gains,gain);if(!read)return read;
+    if(!GameOptionSnapshotExact(current,OptionSettings()))return {GameFsCode::Unavailable,0,"14834 settings changed before4AD4C"};
+    return sound_bank_.BgmPrefix(source,index,gain,argument,file,out);
 }
 bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     if (arena_)
         return false;
     static std::atomic<uint64_t> next_diary_io{0};
     diary_io_owner_=++next_diary_io;
+    option_settings_lifetime_=std::make_shared<uint8_t>(0);
     arena_ = &arena;
     manager_ = &manager;
     state_ = {};
@@ -964,6 +985,8 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    if(scene_bgm_){const auto closed=scene_bgm_->Close();if(!closed){state_.status=closed;return false;}scene_bgm_.reset();}
+    option_settings_lifetime_.reset();
     if(background_runtime_){background_runtime_->Close();background_runtime_.reset();}
     main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();system_option_.Abort();state_.system_option=system_option_.Snapshot();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
@@ -1569,10 +1592,16 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.next_resource=std::string(mounts[actor])+"\\"+scripts[actor];
         const auto script_image=actor_directory_.Open(scripts[actor]);
         game_filesystem_=&filesystem;
-        state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this);
+        state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this,background_runtime_);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x19DD4;
-        state_.status=actor_runtime_.InitializeScene0(calendar_);
+        auto scene_calendar=calendar_;
+        if(scene_bgm_){
+            state_.status=scene_bgm_->BeginInitial(background_runtime_,actor_runtime_);
+            if(!state_.status)throw std::runtime_error(state_.status.detail);
+            scene_calendar=scene_bgm_->Snapshot().calendar;
+        }
+        state_.status=actor_runtime_.InitializeScene0(scene_calendar);
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x1A108;
         state_.status=actor_runtime_.CreateOrdinaryContextActor5();

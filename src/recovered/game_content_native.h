@@ -180,6 +180,11 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     }
     GameFsStatus SetBackgroundRuntime(GameBackgroundRuntime::Clock);
     std::weak_ptr<GameBackgroundRuntime> BackgroundRuntime()const{return background_runtime_;}
+    GameFsStatus BindInitialSceneBgm(PackageView lists,PackageView gains,PackageView root,
+        std::function<PackageView(uint32_t)> names,GameBgmFileQueue::Factory);
+    GameSceneBgmSnapshot SceneBgm()const{return scene_bgm_?scene_bgm_->Snapshot():GameSceneBgmSnapshot{};}
+    std::weak_ptr<const void> OptionSettingsLifetime()const override{return option_settings_lifetime_;}
+    GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&)override;
     void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
     void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
     void SetSoundOutput(audio::Game73SelectedSink* sink){sound_bank_.SetSink(sink);}
@@ -291,6 +296,8 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;
     std::shared_ptr<GameBackgroundRuntime> background_runtime_;
+    std::unique_ptr<GameSceneBgm> scene_bgm_;
+    std::shared_ptr<const void> option_settings_lifetime_;
     int32_t calendar_year_=0;
     std::array<uint32_t,7> calendar_{};
     GameResourceSource *platform_ = nullptr;

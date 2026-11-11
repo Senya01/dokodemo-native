@@ -37,6 +37,10 @@ class GameOptionSettings {
   public:
     virtual ~GameOptionSettings()=default;
     virtual GameOptionSettingsSnapshot OptionSettings()const=0;
+    virtual std::weak_ptr<const void> OptionSettingsLifetime()const{return {};}
+    virtual GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&){
+        return {GameFsCode::Unavailable,0,"current BGM settings/control owner unavailable"};
+    }
     virtual GameFsStatus RestoreOptionSettings(const GameOptionSettingsSnapshot&,const std::array<uint32_t,3>&)=0;
     // Readonly providers retain their prior explicit direction refusal. Only
     // the current Content/actor owner may issue actual Right writer receipts.

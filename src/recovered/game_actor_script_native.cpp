@@ -447,7 +447,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         return Value::integer(runtime_->Snapshot().source_field50);
     case 72: {
         Need(runtime_!=nullptr,"Camera72 needs live actor/camera owners");
-        const auto bound=runtime_->BindCamera(Number(arg));Need(bool(bound),bound.detail.c_str());return False();
+        const auto bound=runtime_->BindCamera(*vm_,Number(arg));Need(bool(bound),bound.detail.c_str());return False();
     }
     case 6: {
         Need(runtime_!=nullptr,"Game6 needs live transition owner");

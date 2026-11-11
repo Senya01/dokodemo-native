@@ -135,6 +135,14 @@ GameFsStatus GameBgmFileQueue::BindRegistered(const std::shared_ptr<const void>&
 GameBgmFileRecord GameBgmFileQueue::Read(uint32_t index)const{
     if(index>=25||!records_[index])return {};auto s=records_[index]->state;s.current=RecordCurrent(*records_[index]);return s;
 }
+GameFsStatus GameBgmFileQueue::BindControl(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t index,const GameBgmControlRecord& control){
+    if(!Current(owner,epoch)||index>=25||!records_[index]||!RecordCurrent(*records_[index]))
+        return {GameFsCode::Unavailable,0,"4AD4C requires current owned file record"};
+    auto& r=*records_[index];
+    if(!control.bound||!control.source_owner||!control.source_generation||control.linked_request!=r.state.request)
+        return {GameFsCode::Unavailable,0,"4AD4C typed source control/file link mismatch"};
+    r.state.control=control;return {};
+}
 GameFsStatus GameBgmFileQueue::Close(){
     closing_=true;owner_.reset();factory_={};queue_.clear();
     for(auto& r:records_)if(r){r->image.Reset();r->state.buffer54=false;if(r->file){auto s=r->file->Close();if(!s){r->state.io=s;r->state.cleanup_pending=true;return s;}}r.reset();}
@@ -276,7 +284,7 @@ GameFsStatus GameSourceSoundControl::Initialize17F0(){
     state_.live=state_.cold_initialized=true;state_.owner=owner;state_.generation=generation;
     state_.constructor=0x17F0;state_.cold_receipt=state_.id_writes=1;state_.last_id_writer=0x18E4;
     // Explicit source loops:6 SE records,25 BGM records; sourceD2A04=1.0f.
-    for(uint32_t i=0;i<31;++i){records_[i]={};records_[i].vtable=i<6?0xDD0A0:0xDD0B0;}
+    for(uint32_t i=0;i<31;++i){records_[i]={};records_[i].vtable=i<6?0xDD0A0:0xDD0B0;}bgm_controls_={};
     //18E0/E4/E8/EC/F4, not an inference from zeroed BSS or SGX failure.
     state_.pending_id=state_.current_id=state_.previous_id=-1;state_.automatic=0;state_.automatic_phase=0;
     failure_={};feedback_={};feedback_failure_={};registry_=nullptr;owned_bank_refs_=0;worker_tick_serial_=worker_previous_ns_=worker_current_ns_=0;bank_.Reset();return {};
@@ -295,6 +303,16 @@ GameFsStatus GameSourceSoundControl::BindSe5(PackageView image){
         records_[5].bank_index=5;records_[5].bank_attached=true;
         records_[5].bank_handle_known=records_[5].name_known=false;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameSourceSoundControl::BgmPrefix(const GameSourceSoundSnapshot& expected,uint32_t index,uint32_t gain,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
+    if(!state_.live||state_.failed||!state_.cold_initialized||index>=25||!file||!GameSourceSoundSnapshotExact(expected,Snapshot()))
+        return {GameFsCode::Unavailable,0,"4AD4C current source control/index/file record required"};
+    auto& record=records_[6+index];auto control=bgm_controls_[index];
+    control.bound=true;control.source_owner=state_.owner;control.source_generation=state_.generation;control.handle14=record.handle;
+    if(record.handle>=0){control.wrapper_return=record.handle;out=control;return {};}
+    record.gain=gain;record.position=argument;record.resource_state=0;
+    control.gain0C=record.gain;control.argument28=record.position;control.linked_request=file;control.pending=true;control.wrapper_return=0;
+    bgm_controls_[index]=control;++state_.bgm_attempts;out=control;return {};
 }
 GameSourceSoundSnapshot GameSourceSoundControl::Snapshot()const{
     auto out=state_;out.voice=voices_.Snapshot();out.se_clean_mask=out.bgm_clean_mask=0;

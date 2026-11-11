@@ -226,6 +226,10 @@ struct GameSoundBankSnapshot {
 // image and a real bounded slot; it does not pretend to implement SGX playback.
 class GameSoundBank final {
     friend class GameBgmFileQueue;
+    friend class GameContentBoot;
+    GameFsStatus BgmPrefix(const GameSourceSoundSnapshot& before,uint32_t index,uint32_t gain,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
+        return source_control_.BgmPrefix(before,index,gain,argument,file,out);
+    }
   public:
     GameFsStatus InitializeSource17F0(){return source_control_.Initialize17F0();}
     GameSourceSoundSnapshot SourceControl()const{return source_control_.Snapshot();}

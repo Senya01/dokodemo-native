@@ -8,6 +8,29 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+struct GameActorRuntime::PrimaryCameraTarget {
+  std::weak_ptr<const void> manager;
+  PackageView module;
+  uint64_t epoch=0;
+  std::array<float,4> position{};
+  bool Current(const std::shared_ptr<const void>& parent,uint64_t current_epoch)const{
+    const auto p=manager.lock();
+    if(!p||p!=parent||p.owner_before(parent)||parent.owner_before(p)||epoch!=current_epoch)return false;
+    try{return module.Describe().readable;}catch(...){return false;}
+  }
+};
+namespace {
+float WindowsCameraCurve79D8(float y){
+  // Existing finite native curve adapter: host piecewise interpolation,
+  // not PSP VFPU quantization. The input now comes from actual camera90.
+  constexpr float ys[]{-1000,0,2000,3000},fs[]{23,18,13,11};
+  float result=y<=ys[0]?fs[0]:fs[3];
+  for(unsigned i=0;i<3;++i)if(y>=ys[i]&&y<ys[i+1]){
+    result=fs[i]+(fs[i+1]-fs[i])*(y-ys[i])/(ys[i+1]-ys[i]);break;
+  }
+  return result;
+}
+}
 GameFsStatus RoomModelRootNativeSceneAnchorLocalX(int32_t selector,float x,
     const std::vector<GameModelPose>& scene_pose,GameMatrix& root,int32_t& anchor){
   constexpr std::array<int32_t,9> nodes{{54,55,56,141,61,57,58,59,60}};
@@ -200,6 +223,8 @@ struct GameActorRuntime::ContextActorData {
 };
 GameActorRuntimeSnapshot GameActorRuntime::Snapshot()const{
   auto result=state_;
+  result.camera_target_current=ReadCameraTarget(result.camera_target_position);
+  result.camera_target_epoch=result.camera_target_current?state_.owner_epoch:0;
   if(context_actor_){result.context_actor=context_actor_->state;result.context_actor.current=Live()&&context_actor_->Current();}
   result.context_actor_bindings=uint32_t(context_actors_.size());return result;
 }
@@ -254,7 +279,7 @@ GameFsStatus GameActorRuntime::BindScriptContextActor1C0FC(script::Vm& vm){
     context_actors_.erase(std::remove_if(context_actors_.begin(),context_actors_.end(),[&](const ContextActorBinding& b){return b.context.expired()||b.context.lock()==context.context_owner.lock();}),context_actors_.end());
     if(context_actors_.size()==8)throw std::runtime_error("context actor native registry bound");
     const bool nil=context_actor_&&context_actor_->Current()&&context_actor_->state.presence==GameContextActorPresence::Absent;
-    context_actors_.push_back({context.context_owner,context_actor_,w.run_id,nil,w.code_sha256});return {};
+    context_actors_.push_back({context.context_owner,context_actor_,w.run_id,nil,w.code_sha256,primary_target_});return {};
   }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorRuntime::RequestPendingScene12(script::Vm& vm){return RequestContextScene(vm,12);}
@@ -280,7 +305,7 @@ GameFsStatus GameActorRuntime::RequestContextScene(script::Vm& vm,int32_t select
 }
 GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameTransition &transition,
-                                          GameResourceSource *resources) {
+                                          GameResourceSource *resources,std::shared_ptr<GameBackgroundRuntime> background) {
   Close();
   state_ = {};
   state_.owner_epoch=next_room_owner_epoch.fetch_add(1,std::memory_order_relaxed)+1;
@@ -294,8 +319,12 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
       throw std::runtime_error(
           "Actor control owners need live selected package and transition");
     selection_ = std::move(selection);
+    primary_target_=std::make_shared<PrimaryCameraTarget>();primary_target_->manager=support_manager_;
+    primary_target_->module=selection_;primary_target_->epoch=state_.owner_epoch;
+    primary_target_->position=state_.actor_position; // actual9480 primary+40 initializer
     transition_ = &transition;
     resources_ = resources;
+    background_module_=std::move(background);
     state_.actor = actor;
     // Source9480: actor40=(0,0,600,1);source23FD0:258=1,25E=0,248=-1.
     // The camera7650 vectors and these explicit constructor stores are
@@ -315,6 +344,21 @@ bool GameActorRuntime::Live() const {
     return false;
   }
 }
+bool GameActorRuntime::BackgroundModuleMatches(const std::shared_ptr<GameBackgroundRuntime>& current)const{
+  const auto parent=background_module_.lock();return Live()&&parent&&parent->Live()&&parent==current
+      &&!parent.owner_before(current)&&!current.owner_before(parent);
+}
+GameFsStatus GameActorRuntime::InitializeScene0Clock(const std::array<uint32_t,7>& calendar){
+  if(!Live()||state_.scene_clock_ready||state_.scene_model_live||calendar[5]<1||calendar[5]>12||calendar[4]<1||calendar[4]>31||calendar[3]>=24||calendar[2]>=60||calendar[1]>=60)
+    return {GameFsCode::Unavailable,0,"fresh5D98 scene clock/current calendar required"};
+  scene_calendar_=calendar;state_.scene_period_table52=0;state_.scene_clock_ready=initial_scene_clock_=true;return {};
+}
+GameFsStatus GameActorRuntime::ReadInitialScenePeriod7398(int32_t& result)const{
+  if(!Live()||!initial_scene_clock_||!state_.scene_clock_ready||state_.scene_model_live||state_.scene_period_table52!=0)
+    return {GameFsCode::Unavailable,0,"7398 requires actual fresh5D98 clock before5F58, not GAME36 readiness"};
+  try{result=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),scene_calendar_[3],scene_calendar_[2]);return {};}
+  catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& calendar) {
   if (!Live() || !resources_ || state_.scene_model_live)
     return {GameFsCode::Unavailable, 0,
@@ -322,6 +366,8 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
   if(calendar[5]<1||calendar[5]>12||calendar[4]<1||calendar[4]>31||
      calendar[3]>=24||calendar[2]>=60||calendar[1]>=60)
     return {GameFsCode::Unavailable,0,"Scene seasonal initializer requires valid native civil calendar"};
+  if(state_.scene_clock_ready&&scene_calendar_!=calendar)
+    return {GameFsCode::Unavailable,0,"scene model must consume the SAME initialized clock calendar"};
   // 17C20 requests31/variant1 and explicitly sets selector0. 19DD4/5F58
   // constructs this owner BEFORE script startup. Native typed fields omit
   // unrelated effects owners; no claim of complete5F58/182F4 is made.
@@ -393,6 +439,7 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
     state_.scene_deferred_tracks += c.data.Statistics().deferred_sections;
   state_.scene_controls = uint32_t(scene_controls_.size());
   state_.scene_model_live = true;
+  initial_scene_clock_=false;
   // 68E8 actual selected startup list[10,13,-1]. Stop before start in6D6C.
   status = ApplyScenePair(10);
   if (status)
@@ -500,12 +547,41 @@ GameFsStatus GameActorRuntime::UpdateScene() {
 GameFsStatus GameActorRuntime::BindCamera(int32_t mode) {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Camera72 target owner expired"};
-  // 1CF44/25098: retain raw scalar and link camera90 to LIVE actor40.
-  // The zero branch is a symbolic static131D0 target,never a null vector.
+  if(!mode)return {GameFsCode::Unavailable,0,"GAME72 static84D0 target is outside current primary40 binding"};
+  if(!primary_target_||!primary_target_->Current(support_manager_,state_.owner_epoch))
+    return {GameFsCode::Unavailable,0,"GAME72 current primary40 owner unavailable"};
+  // 1CF44 copies the current context node18 primary+40 into camera90.
+  // The zero branch has a separate static target and remains unbound here.
   state_.camera_mode = mode;
+  camera_target_=mode?primary_target_:std::shared_ptr<PrimaryCameraTarget>{};
   state_.camera_follows_actor = mode != 0;
   state_.pose_dirty = mode != 0;
   ++state_.camera_bindings;
+  return {};
+}
+GameFsStatus GameActorRuntime::BindCamera(script::Vm& vm,int32_t mode){
+  if(!Live())return {GameFsCode::Unavailable,0,"GAME72 current camera manager retired"};
+  try{const auto w=vm.current_witness();const auto ctx=vm.context_value();
+    if(!w.valid||w.stopped||!w.context_registered||!vm.stable_value_owner(ctx))throw std::runtime_error("GAME72 current context/module/run required");
+    bool found=false;for(const auto& b:context_actors_)if(b.context.lock()==ctx.context_owner.lock()&&b.run==w.run_id&&b.module==w.code_sha256){
+      const auto point=b.primary.lock();found=point&&point==primary_target_&&point->Current(support_manager_,state_.owner_epoch);break;}
+    if(!found)throw std::runtime_error("GAME72 context node18 primary owner missing/stale/foreign");
+    return BindCamera(mode);
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+bool GameActorRuntime::ReadCameraTarget(std::array<float,4>& out)const{
+  const auto point=camera_target_.lock();
+  if(!Live()||!point||point!=primary_target_||!point->Current(support_manager_,state_.owner_epoch))return false;
+  for(auto x:point->position)if(!std::isfinite(x))return false;
+  out=point->position;return true;
+}
+GameFsStatus GameActorRuntime::RefreshCamera7980(){
+  if(!Live())return {GameFsCode::Unavailable,0,"7980 camera owner retired"};
+  if(state_.camera_transition_mode1C==1||state_.camera_transition_mode1C==2){
+    if(state_.actor!=0)return {GameFsCode::Unavailable,0,"7980 selected actor curve outside admitted actor0"};
+    std::array<float,4> point;if(!ReadCameraTarget(point))return {GameFsCode::Unavailable,0,"7980 current camera90 control missing"};
+    state_.camera_fov_degrees=WindowsCameraCurve79D8(point[1]);
+  }else if(!state_.camera_transition_mode1C)state_.camera_fov_degrees=30;
   return {};
 }
 GameFsStatus GameActorRuntime::StartTransition() {
@@ -574,6 +650,11 @@ GameFsStatus GameActorRuntime::RequestCamera(int32_t value) {
   return {}; //1C8C4 writes4C only;23488 consumes on a later owner phase
 }
 GameFsStatus GameActorRuntime::UpdateCamera() {
+  std::array<float,4> point;
+  if((state_.manager_camera_request4C!=-1||state_.camera_transition_mode1C)&&!ReadCameraTarget(point))
+    return {GameFsCode::Unavailable,0,"camera update requires current owned camera90 target"};
+  if((state_.manager_camera_request4C==1||state_.camera_transition_mode1C==1)&&state_.actor!=0)
+    return {GameFsCode::Unavailable,0,"79D8 selected actor curve outside admitted actor0"};
   if(state_.manager_camera_request4C!=-1){
     const auto request=state_.manager_camera_request4C;
     //23488 consumes the manager cell BEFORE starting camera7844. Setter
@@ -585,15 +666,7 @@ GameFsStatus GameActorRuntime::UpdateCamera() {
     state_.camera_manager_state28=4;state_.camera_transition_mode1C=request==1?1:2;
     state_.camera_complete2C=false;state_.camera_ratio=request==1?0.0f:1.0f;
     camera_from_fov_=state_.camera_fov_degrees;camera_from_x_=state_.camera_position[0];camera_from_z_=state_.camera_position[2];
-    //79D8 relocation-backed scene curve. Named native direct piecewise
-    //interpolation replaces sourceVFPU quantization. Actual y=-300 lies
-    //exactly on its tenth-unit grid. Actor40 dynamic producer stays unknown.
-    const float y=state_.actor_root[1];
-    constexpr float ys[]{-1000,0,2000,3000},fs[]{23,18,13,11};
-    state_.camera_target_fov=y<=ys[0]?fs[0]:fs[3];
-    for(unsigned i=0;i<3;++i)if(y>=ys[i]&&y<ys[i+1]){
-      state_.camera_target_fov=fs[i]+(fs[i+1]-fs[i])*(y-ys[i])/(ys[i+1]-ys[i]);break;
-    }
+    state_.camera_target_fov=WindowsCameraCurve79D8(point[1]);
     if(request==0){
       state_.camera_target_fov=30; //native semantic endpoint;7EE0 literalD3178
       camera_out_target_x_=(std::clamp)(state_.actor_root[0],-950.0f,950.0f); //7844 captures7C3C once
@@ -1302,6 +1375,9 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
+  initial_scene_clock_=false;
+  background_module_.reset();
+  camera_target_.reset();primary_target_.reset();state_.camera_target_current=false;
   if(context_actor_)context_actor_->Close();context_actor_.reset();context_actors_.clear();
   support_registration_.Close();support_manager_.reset();state_.support_registration=support_registration_.Snapshot();
   manager_switch_.Retire();state_.manager_switch=manager_switch_.Snapshot();

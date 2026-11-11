@@ -2,6 +2,7 @@
 #include "core_hash.h"
 #include "../script_vm.h"
 #include "game_actor_runtime_native.h" // existing709C arithmetic, not a second table
+#include "game_system_option_native.h"
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,115 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+GameFsStatus ReadBgmGain14834(const GameOptionSettingsSnapshot& settings,PackageView table,uint32_t& out){
+    try{if(!settings.live||!settings.owner||!settings.generation||table.Describe().size!=40)throw std::runtime_error("14834 current typed settings/ten copied gain words required");
+        const auto digest=table.InitializedDigest();uint32_t at=settings.words[2]+5u;if(at>=11)at=0;
+        if(at>=10)throw std::runtime_error("14834 index10 is not one of ten initialized copied gain words");
+        const auto value=table.ReadLE32(at*4);if(table.InitializedDigest()!=digest)throw std::runtime_error("14834 gain table drift");out=value;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+bool GameBackgroundRuntime::SettingsCurrent(const std::shared_ptr<GameBackgroundRuntime>& current,const GameOptionSettings& settings)const{
+    const auto parent=settings_runtime_.lock();const auto life=settings_life_.lock();
+    if(!Live()||!parent||parent!=current||parent.owner_before(current)||current.owner_before(parent)||settings_!=&settings||!life)return false;
+    const auto now=settings.OptionSettings();return now.live&&now.owner==settings_owner_&&now.generation==settings_generation_;
+}
+GameFsStatus GameBackgroundRuntime::BindSceneSettings(const std::shared_ptr<GameBackgroundRuntime>& parent,GameOptionSettings& settings){
+    if(settings_)return SettingsCurrent(parent,settings)?GameFsStatus{}:GameFsStatus{GameFsCode::Unavailable,0,"BGM settings cannot replace current constructor binding"};
+    const auto life=settings.OptionSettingsLifetime().lock();const auto current=settings.OptionSettings();
+    if(!parent||parent.get()!=this||!Live()||!life||!current.live||!current.owner||!current.generation)
+        return {GameFsCode::Unavailable,0,"BGM settings current content constructor required"};
+    settings_runtime_=parent;settings_=&settings;settings_life_=life;settings_owner_=current.owner;settings_generation_=current.generation;return {};
+}
+struct GameSceneBgm::Data {
+    std::shared_ptr<const void> lifetime=std::make_shared<uint8_t>(0);
+    uint64_t last_job_request=0,last_cache_consumed=0;
+    std::weak_ptr<GameBackgroundRuntime> runtime;
+    GameOptionSettings* settings=nullptr;
+    std::weak_ptr<const void> settings_lifetime;
+    uint64_t settings_owner=0,settings_generation=0;
+    std::array<PackageView,3> inputs;
+    std::array<std::array<uint8_t,32>,3> hashes;
+    std::function<PackageView(uint32_t)> names;
+    GameBgmFileQueue files;
+    GameSceneBgmSnapshot state;
+    bool closing=false;
+    bool Current()const{
+        const auto r=runtime.lock();const auto life=settings_lifetime.lock();
+        if(closing||!state.initialized||!r||!r->Live()||!life||!settings||!r->SettingsCurrent(r,*settings))return false;
+        const auto now=settings->OptionSettings();if(!now.live||now.owner!=settings_owner||now.generation!=settings_generation)return false;
+        try{for(unsigned i=0;i<3;++i)if(inputs[i].InitializedDigest()!=hashes[i])return false;return true;}catch(...){return false;}
+    }
+    bool Bound(const std::shared_ptr<GameBackgroundRuntime>& current)const{
+        const auto old=runtime.lock();return Current()&&current&&old==current&&!old.owner_before(current)&&!current.owner_before(old);
+    }
+};
+GameSceneBgm::GameSceneBgm()=default;
+GameSceneBgm::~GameSceneBgm(){(void)Close();}
+GameFsStatus GameSceneBgm::Initialize(std::shared_ptr<GameBackgroundRuntime> runtime,uint64_t epoch,GameOptionSettings& settings,
+    PackageView lists,PackageView gains,PackageView root,std::function<PackageView(uint32_t)> names,GameBgmFileQueue::Factory factory){
+    if(data_||!runtime||runtime->bgm_constructor_issued_||!runtime->SettingsCurrent(runtime,settings)||!epoch||!names||!factory)return {GameFsCode::Unavailable,0,"scene BGM fresh owner/current runtime/settings/inputs required"};
+    try{
+        const auto lifetime=settings.OptionSettingsLifetime().lock();if(!lifetime)throw std::runtime_error("BGM settings actual lifetime required");
+        const auto snapshot=settings.OptionSettings();if(!snapshot.live||!snapshot.owner||!snapshot.generation)throw std::runtime_error("BGM current initialized settings required");
+        if(lists.Describe().size!=76||gains.Describe().size!=40)throw std::runtime_error("BGM exact held list/gain extents required");
+        auto d=std::make_unique<Data>();d->runtime=runtime;d->settings=&settings;d->settings_lifetime=lifetime;d->settings_owner=snapshot.owner;d->settings_generation=snapshot.generation;
+        d->inputs={{lists,gains,root}};for(unsigned i=0;i<3;++i)d->hashes[i]=d->inputs[i].InitializedDigest();
+        d->names=std::move(names);auto status=d->files.Initialize(runtime,epoch,std::move(factory));if(!status)return status;
+        d->state.initialized=true;d->state.epoch=epoch;runtime->bgm_constructor_issued_=true;data_=std::move(d);return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameSceneBgm::BeginInitial(const std::shared_ptr<GameBackgroundRuntime>& runtime,GameActorRuntime& actor){
+    if(!data_||!data_->Bound(runtime)||data_->state.attempted||!actor.BackgroundModuleMatches(runtime)||actor.Snapshot().scene_clock_ready)
+        return {GameFsCode::Unavailable,0,"initial BGM requires fresh actual scene clock/runtime owner"};
+    auto& d=*data_;auto& s=d.state;
+    auto status=runtime->Read(s.calendar);if(!status)return status;
+    if(!d.Bound(runtime))return {GameFsCode::Unavailable,0,"BGM input changed during current clock read"};
+    status=actor.InitializeScene0Clock(s.calendar);if(!status)return status;s.actor_epoch=actor.Snapshot().owner_epoch;
+    int32_t period=-1;status=actor.ReadInitialScenePeriod7398(period);if(!status)return status;
+    s.period4B4=uint32_t(period);s.attempted=true;
+    status=SelectBgm19B6C(s.period4B4,s.stored4BC,d.inputs[0],*runtime->rng_,s.selection);if(!status)return status;
+    s.stored4BC=int32_t(s.selection.index);s.selected=true; //19DD4 store BEFORE actual file request
+    try{status=d.files.Request(runtime,s.epoch,s.selection.index,d.inputs[2],d.names(s.selection.index),s.file_result);}
+    catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+    if(status&&!d.Bound(runtime))return {GameFsCode::Unavailable,0,"initial BGM owner changed during file creation"};
+    if(status)s.requested=true;return status; //0/-1 wrapper outcomes are not readiness
+}
+GameFsStatus GameSceneBgm::RefreshCachedPeriod(const std::shared_ptr<GameBackgroundRuntime>& runtime,GameActorRuntime& actor){
+    if(!data_||!data_->Bound(runtime)||!data_->state.requested||!actor.BackgroundModuleMatches(runtime)
+       ||actor.Snapshot().owner_epoch!=data_->state.actor_epoch)
+        return {GameFsCode::Unavailable,0,"1B114 current initialized4DC scene/module owner required"};
+    auto& d=*data_;std::array<uint32_t,7> calendar{};auto status=runtime->Read(calendar);if(!status)return status;
+    if(!d.Bound(runtime)||actor.Snapshot().owner_epoch!=d.state.actor_epoch)
+        return {GameFsCode::Unavailable,0,"19AFC current clock/scene owner drift"};
+    int32_t period=-1;status=actor.QueryScenePeriod(calendar[3],calendar[2],period);if(!status)return status;
+    if(period<0||period>=6)return {GameFsCode::Unavailable,0,"19AFC period outside admitted current scene"};
+    constexpr uint32_t variants[]{0,1,1,2,0,0}; // existing4848 mapping
+    d.state.calendar=calendar;d.state.period4B4=uint32_t(period); //19B50 before19B58
+    d.state.variant4AC=variants[period];d.state.cache_refreshed=true;++d.state.cache_revision;return {};
+}
+GameFsStatus GameSceneBgm::RequestControl(const std::shared_ptr<GameBackgroundRuntime>& runtime,uint32_t argument){
+    if(!data_||!data_->Bound(runtime)||!data_->state.requested)return {GameFsCode::Unavailable,0,"4AD4C current selected request/settings owner required"};
+    try{auto& d=*data_;const auto before=d.settings->OptionSettings();
+    const auto file=d.files.Read(uint32_t(d.state.stored4BC));if(!file.current)return {GameFsCode::Unavailable,0,"4AD4C actual selected file record unavailable"};
+    GameBgmControlRecord control;const auto source=d.settings->OptionSoundOwner();
+    auto status=d.settings->RequestBgmControlPrefix(before,source,d.inputs[1],uint32_t(d.state.stored4BC),argument,file.request,control);if(!status)return status;
+    if(!d.Bound(runtime)||!GameOptionSnapshotExact(before,d.settings->OptionSettings()))return {GameFsCode::Unavailable,0,"14834 actual settings/input drift after prefix"};
+    status=d.files.BindControl(runtime,d.state.epoch,uint32_t(d.state.stored4BC),control);if(status)d.state.control_return=control.wrapper_return;return status;
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameSceneBgm::Pump(const std::shared_ptr<GameBackgroundRuntime>& runtime){
+    if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"BGM current file worker owner required"};
+    return data_->files.Pump(runtime,data_->state.epoch);
+}
+bool GameSceneBgm::CurrentChoice(int32_t& out)const{
+    if(!data_||!data_->Current()||!data_->state.selected)return false;out=data_->state.stored4BC;return true;
+}
+GameSceneBgmSnapshot GameSceneBgm::Snapshot()const{
+    if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected)s.file=data_->files.Read(uint32_t(s.stored4BC));return s;
+}
+GameFsStatus GameSceneBgm::Close(){
+    if(!data_)return {};data_->closing=true;auto status=data_->files.Close();if(!status)return status;data_.reset();return {};
+}
 namespace {
 void Need(bool value, const char *text) {
     if (!value)
@@ -410,6 +520,12 @@ bool GameBackgroundPreparation::BgmCurrent()const {
     const auto runtime=bgm_runtime_.lock();const auto owner=owner_.lock();
     const std::shared_ptr<const void> parent=runtime;
     if(!runtime||!runtime->Live()||!owner||parent!=owner||parent.owner_before(owner)||owner.owner_before(parent))return false;
+    if(scene_bgm_){
+        if(scene_bgm_lifetime_.expired()||!scene_bgm_->data_||!scene_bgm_->data_->Bound(runtime))return false;
+        const auto& data=*scene_bgm_->data_;return data.last_job_request==state_.request&&state_.bgm_requested
+            &&data.state.cache_revision==scene_bgm_cache_revision_&&data.state.period4B4==state_.period&&data.state.variant4AC==state_.variant
+            &&data.state.stored4BC==state_.bgm_choice&&data.files.Read(uint32_t(state_.bgm_choice)).current;
+    }
     try{for(unsigned i=0;i<2;++i)if(bgm_inputs_[i].InitializedDigest()!=bgm_hashes_[i])return false;
         return state_.bgm_requested&&bgm_files_.Read(uint32_t(state_.bgm_choice)).current;
     }catch(...){return false;}
@@ -440,11 +556,33 @@ GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const v
 }
 GameFsStatus GameBackgroundPreparation::PumpBgm(const std::shared_ptr<const void>& owner,uint64_t epoch){
     if(!Current(owner,epoch)||!BgmCurrent())return {GameFsCode::Unavailable,0,"BGM current job/input owner required"};
+    if(scene_bgm_)return scene_bgm_->Pump(bgm_runtime_.lock());
     return bgm_files_.Pump(owner,epoch);
 }
 GameBgmFileRecord GameBackgroundPreparation::BgmFile()const {
     if(state_.bgm_choice<0)return {};
+    if(scene_bgm_){if(scene_bgm_lifetime_.expired()||!BgmCurrent())return {};return scene_bgm_->data_->files.Read(uint32_t(state_.bgm_choice));}
     auto value=bgm_files_.Read(uint32_t(state_.bgm_choice));value.current=value.current&&state_.live&&BgmCurrent();return value;
+}
+GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const void>& owner,uint64_t epoch,
+    const std::shared_ptr<GameBackgroundRuntime>& runtime,GameSceneBgm& current){
+    const std::shared_ptr<const void> parent=runtime;
+    if(!Current(owner,epoch)||!state_.pending||state_.failed||state_.bgm_attempted||!RegistrationsCurrent()
+       ||!runtime||parent!=owner||parent.owner_before(owner)||owner.owner_before(parent)||!current.data_||!current.data_->Bound(runtime))
+        return {GameFsCode::Unavailable,0,"target BGM requires SAME initialized module/scene owner"};
+    auto& data=*current.data_;auto& stored=data.state;
+    if(!stored.requested||!stored.selected||!stored.cache_refreshed||stored.cache_revision<=data.last_cache_consumed
+       ||stored.period4B4!=state_.period||stored.variant4AC!=state_.variant||data.last_job_request>=state_.request)
+        return {GameFsCode::Unavailable,0,"target BGM current stored4B4/4BC/request lineage unavailable"};
+    bgm_runtime_=runtime;scene_bgm_=&current;scene_bgm_lifetime_=data.lifetime;scene_bgm_cache_revision_=stored.cache_revision;
+    state_.bgm_attempted=true;data.last_job_request=state_.request;data.last_cache_consumed=stored.cache_revision;
+    auto status=SelectBgm19B6C(stored.period4B4,stored.stored4BC,data.inputs[0],*runtime->rng_,state_.bgm_selection);
+    if(!status)return status;
+    stored.selection=state_.bgm_selection;stored.stored4BC=int32_t(stored.selection.index);stored.requested=false;state_.bgm_choice=stored.stored4BC; // source store before request
+    try{status=data.files.Request(runtime,stored.epoch,stored.selection.index,data.inputs[2],data.names(stored.selection.index),state_.bgm_result);}
+    catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+    if(status&&!data.Bound(runtime))return {GameFsCode::Unavailable,0,"target BGM producer changed during request"};
+    if(status){stored.file_result=state_.bgm_result;stored.requested=true;state_.bgm_requested=true;}return status;
 }
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
         const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
@@ -860,6 +998,7 @@ GameFsStatus GameBackgroundPreparation::DrawWithSupport(const std::shared_ptr<co
     auto status=clone_->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);if(status)status=support_.DrawGlyphPreview(owner,epoch,vm,graphics,camera);return status;
 }
 GameFsStatus GameBackgroundPreparation::Close() {
+    scene_bgm_=nullptr;scene_bgm_lifetime_.reset(); // manager BGM pool outlives this background job
     // Clone/template/material views die before their backing/file is revoked.
     runtime_.reset();activated_=false;applied_={};
     light_playbacks_.clear();light_motions_.clear();light_format_.Reset();state_.effects_prepared=false;

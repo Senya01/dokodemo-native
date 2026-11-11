@@ -362,6 +362,15 @@ void OwnedCtxReferenceBranchChecks(){
 void RuntimeOwners(){
     Lease owner_input(Dictionary());GameTransition fade;Check(fade.Initialize({{0,0}}),"transition source-produced center");
     GameActorRuntime actor;Check(bool(actor.Initialize(0,owner_input.View(),fade)),"typed actor/camera owners admitted");
+    const auto module=Fixture({0x30,0,0x38});script::Vm camera_vm(module);camera_vm.start();
+    Check(!actor.BindCamera(camera_vm,1)&&bool(actor.BindScriptContextActor1C0FC(camera_vm))
+          &&bool(actor.BindCamera(camera_vm,1))&&actor.Snapshot().camera_target_current
+          &&actor.Snapshot().camera_target_epoch==actor.Snapshot().owner_epoch
+          &&actor.Snapshot().camera_target_position==GameVector4{{0,0,600,1}},"actual context node18 copies current primary40 owner");
+    const auto binds=actor.Snapshot().camera_bindings;camera_vm.start();
+    Check(!actor.BindCamera(camera_vm,1)&&actor.Snapshot().camera_bindings==binds,"restart does not rebase copied context binding");
+    GameActorRuntime foreign;Check(bool(foreign.Initialize(0,owner_input.View(),fade))&&!foreign.BindCamera(camera_vm,1),"foreign live primary manager cannot adopt context node18");foreign.Close();
+    Check(!actor.BindCamera(0)&&actor.Snapshot().camera_bindings==binds,"unbound static84D0 is refused before existing primary link changes");
     Check(actor.WaitReady()&&actor.Snapshot().active_command==-1,"23FD0 actual cold258ready producer");
     Check(bool(actor.BindCamera(1))&&actor.Snapshot().camera_follows_actor&&actor.Snapshot().actor_position[2]==600,
           "72 binds live source actor point,not zero/null");
@@ -1390,7 +1399,7 @@ void Selected(const char* path,bool with_main_flow=false,bool after17=false,bool
           "actual region compilation and Boolean GAME19/GAME28 outputs drive continuation");
     Check(!s.blocked&&s.awaiting_message&&s.messages==1&&s.camera_setter_returns==1
           &&s.camera_setter_result_word==0x10000000&&s.runtime.camera_completions==1
-          &&s.runtime.camera_manager_state28==0&&s.runtime.camera_fov_degrees==19.5f
+          &&s.runtime.camera_manager_state28==0&&s.runtime.camera_fov_degrees==18.0f
           &&s.runtime.intro_requests==1&&s.runtime.intro_closes==1&&!s.runtime.command_blocked,
           "actual setter returnsFalse,independentcamera completes,realintro andcallback reach KSC message");
     Check(s.event_repeat_signals>0&&s.runtime.command_loop_repeats>0,

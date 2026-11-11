@@ -8,6 +8,14 @@
 namespace dokodemo::recovered {
 class GameSoundBank;
 class GameBgmFileQueue;
+class GameSceneBgm;
+struct GameBgmControlRecord {
+    bool bound=false,pending=false;
+    int32_t handle14=-1;
+    int32_t wrapper_return=0;
+    uint32_t gain0C=128,argument28=0;
+    uint64_t linked_request=0,source_owner=0,source_generation=0;
+};
 struct GameSourceBankRegistration {
     bool live=false,attached=false,coherent=false;
     uint64_t registry=0,generation=0,serial=0;
@@ -57,6 +65,7 @@ struct GameBgmFileRecord {
     PackageViewDescription buffer;
     std::array<uint8_t,32> digest{};
     std::string path;
+    GameBgmControlRecord control;
 };
 struct GameBgmFileResult { bool accepted=false,cached=false;int32_t wrapper_return=0;uint64_t request=0; };
 struct GameBgmSelection {uint32_t period=0,index=0,rng_calls=0;int32_t previous=0;uint64_t before=0,after=0,lineage=0;};
@@ -81,6 +90,8 @@ class GameBgmFileQueue final {
     GameBgmFileRecord Read(uint32_t index)const;
     GameFsStatus Close();
   private:
+    friend class GameSceneBgm;
+    GameFsStatus BindControl(const std::shared_ptr<const void>&,uint64_t,uint32_t,const GameBgmControlRecord&);
     struct Record;
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RecordCurrent(const Record&)const;
@@ -205,6 +216,7 @@ class GameSourceSoundControl final {
     void Close()noexcept;
   private:
     friend class GameSoundBank;
+    GameFsStatus BgmPrefix(const GameSourceSoundSnapshot&,uint32_t,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&);
     GameFsStatus StoreRegisteredSe5(GameSourceBankRegistry&,int32_t);
     GameFsStatus Start4AF54(GameSourceFeedbackRead&);
     GameFsStatus Start56930(GameSourceFeedbackRead&,int32_t,int32_t,int32_t,int32_t);
@@ -228,6 +240,7 @@ class GameSourceSoundControl final {
     GameFsStatus feedback_failure_;
     GameSourceSoundSnapshot state_;
     std::array<GameSourceSoundRecord,31> records_{};
+    std::array<GameBgmControlRecord,25> bgm_controls_{}; // native typed file-link sidecars, never PSP addresses
     PackageView bank_;
     GameFsStatus failure_;
 };

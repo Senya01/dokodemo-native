@@ -365,6 +365,9 @@ struct GameBackgroundCandidate {
 enum class GameBackgroundEffectsPolicy { Source5448, WindowsReducedBackgroundEffects };
 // Worker-owned live clock/RNG binding. No default date/seed; Close or seed
 // reinitialization revokes every weak job borrower. Not gameplay authority.
+class GameOptionSettings;
+struct GameOptionSettingsSnapshot;
+GameFsStatus ReadBgmGain14834(const GameOptionSettingsSnapshot&,PackageView ten_words,uint32_t&);
 class GameBackgroundRuntime final {
   public:
     GameBackgroundRuntime()=default;
@@ -377,11 +380,55 @@ class GameBackgroundRuntime final {
     uint64_t Identity()const noexcept{return identity_;}
   private:
     friend class GameBackgroundPreparation;
+    friend class GameSceneBgm;
+    friend class GameContentBoot;
+    GameFsStatus BindSceneSettings(const std::shared_ptr<GameBackgroundRuntime>&,GameOptionSettings&);
+    bool SettingsCurrent(const std::shared_ptr<GameBackgroundRuntime>&,const GameOptionSettings&)const;
+    std::weak_ptr<GameBackgroundRuntime> settings_runtime_;
+    const GameOptionSettings* settings_=nullptr;
+    std::weak_ptr<const void> settings_life_;
+    uint64_t settings_owner_=0,settings_generation_=0;
+    bool bgm_constructor_issued_=false;
     GameFsStatus Read(std::array<uint32_t,7>&);
     Clock clock_;
     RngNativeOwner* rng_=nullptr; // parent closes this binding before its RNG
     std::weak_ptr<const void> rng_lifetime_;
     uint64_t identity_=0,lineage_=0,reads_=0;
+};
+class GameOptionSettings;
+class GameActorRuntime;
+struct GameSceneBgmSnapshot {
+    bool initialized=false,current=false,attempted=false,selected=false,requested=false,cache_refreshed=false;
+    uint64_t epoch=0,actor_epoch=0;
+    uint32_t initial_clock52=0,period4B4=0,variant4AC=1;
+    uint64_t cache_revision=0;
+    int32_t stored4BC=0,control_return=0;
+    std::array<uint32_t,7> calendar{};
+    GameBgmSelection selection;
+    GameBgmFileResult file_result;
+    GameBgmFileRecord file;
+};
+// Native current scene/BGM owner: original static tables are held user data.
+// Fresh scene clock0 ->7398 ->4B4 ->19B6C/store4BC/file BEFORE5F58.
+// The separate4AD4C prefix consumes actual root18 and its held gain table.
+class GameSceneBgm final {
+  public:
+    GameSceneBgm();~GameSceneBgm();
+    GameSceneBgm(const GameSceneBgm&)=delete;
+    GameSceneBgm& operator=(const GameSceneBgm&)=delete;
+    GameFsStatus Initialize(std::shared_ptr<GameBackgroundRuntime>,uint64_t,GameOptionSettings&,
+        PackageView lists,PackageView gains,PackageView root,std::function<PackageView(uint32_t)>,GameBgmFileQueue::Factory);
+    GameFsStatus BeginInitial(const std::shared_ptr<GameBackgroundRuntime>&,GameActorRuntime&);
+    // Selected1B114(flag1): refresh from the SAME current scene before target mapping.
+    GameFsStatus RefreshCachedPeriod(const std::shared_ptr<GameBackgroundRuntime>&,GameActorRuntime&);
+    GameFsStatus RequestControl(const std::shared_ptr<GameBackgroundRuntime>&,uint32_t argument);
+    GameFsStatus Pump(const std::shared_ptr<GameBackgroundRuntime>&);
+    bool CurrentChoice(int32_t&)const;
+    GameSceneBgmSnapshot Snapshot()const;
+    GameFsStatus Close();
+  private:
+    friend class GameBackgroundPreparation;
+    struct Data;std::unique_ptr<Data> data_;
 };
 struct GameBackgroundLightBinding {
     uint32_t slot=0;
@@ -436,6 +483,8 @@ class GameBackgroundPreparation final {
     GameFsStatus RequestBgm(const std::shared_ptr<const void>&,uint64_t epoch,
         const std::shared_ptr<GameBackgroundRuntime>&,PackageView previous4BC,PackageView lists,
         PackageView root,const std::function<PackageView(uint32_t)>& names,GameBgmFileQueue::Factory);
+    GameFsStatus RequestBgm(const std::shared_ptr<const void>&,uint64_t epoch,
+        const std::shared_ptr<GameBackgroundRuntime>&,GameSceneBgm& current);
     GameFsStatus PumpBgm(const std::shared_ptr<const void>&,uint64_t epoch);
     GameBgmFileRecord BgmFile()const;
     // 52AC's selected three (presence,count) pairs, supplied as current owned
@@ -510,6 +559,9 @@ class GameBackgroundPreparation final {
     std::array<uint8_t,32> model_motion_counts_digest_{};
     GameFilesystem filesystem_;
     GameBgmFileQueue bgm_files_;
+    GameSceneBgm* scene_bgm_=nullptr;
+    uint64_t scene_bgm_cache_revision_=0;
+    std::weak_ptr<const void> scene_bgm_lifetime_;
     std::weak_ptr<GameBackgroundRuntime> bgm_runtime_;
     std::array<PackageView,2> bgm_inputs_;
     std::array<std::array<uint8_t,32>,2> bgm_hashes_{};

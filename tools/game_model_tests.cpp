@@ -38,7 +38,7 @@ void Bounds(std::vector<uint8_t> &b) {
     for (unsigned i = 0; i < 4; ++i)
         F(b, 0);
 }
-std::vector<uint8_t> Fixture(bool normals=false,const std::vector<std::array<int16_t,3>>* custom=nullptr,bool textured=false) {
+std::vector<uint8_t> Fixture(bool normals=false,const std::vector<std::array<int16_t,3>>* custom=nullptr,bool textured=false,float scale=1) {
     const std::vector<std::array<int16_t,3>> regular{{{-25000,-25000,0}},{{25000,-25000,0}},{{0,25000,0}}};
     const auto &positions=custom?*custom:regular;
     std::vector<uint8_t> b{'D', 'V', 'S', 0};
@@ -70,7 +70,7 @@ std::vector<uint8_t> Fixture(bool normals=false,const std::vector<std::array<int
     b.push_back(textured?0:255);
     b.push_back(0);
     H(b, int32_t(positions.size()));
-    F(b, 1);
+    F(b, scale);
     for(const auto &p:positions)for(auto v:p)H(b,v);
     while (b.size() % 4)
         b.push_back(0);
@@ -1254,6 +1254,68 @@ struct TitleSource final : GameResourceSource {
         return {};
     }
 };
+void SceneBgmCurrentOwnerTests(){
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    auto lists=std::make_shared<Lease>(std::vector<uint8_t>(76)),gains=std::make_shared<Lease>(std::vector<uint8_t>(40));
+    for(unsigned i=0;i<19;++i)Word(lists->b,i*4,i);for(unsigned i=0;i<10;++i)Word(gains->b,i*4,i*11);
+    auto root=std::make_shared<Lease>(std::vector<uint8_t>{'/','S','Y','N',0});std::array<std::shared_ptr<Lease>,25> names;
+    for(unsigned i=0;i<25;++i){const auto text="sample"+std::to_string(i);std::vector<uint8_t> b(text.begin(),text.end());b.push_back(0);names[i]=std::make_shared<Lease>(b);}
+    std::vector<uint8_t> backing(4*1024*1024);GameArena arena;GameVmBoot manager;
+    Check(arena.Initialize(backing.data(),uint32_t(backing.size()))&&manager.Initialize74EF4(arena)&&manager.InitializeManager93404(),"real native content arena/module");
+    auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,manager)&&content->Reset24994(),"actual owning settings constructor/root18");
+    RngNativeOwner rng;rng.ImportCurrentState64(91,7,"synthetic scene BGM lineage");content->SetTitleRng(rng);
+    unsigned reads=0,names_read=0,factories=0;std::array<uint32_t,7> calendar{{0,0,0,12,12,5,2026}};
+    Check(bool(content->SetBackgroundRuntime([&]{++reads;return calendar;})),"same real initialized clock/RNG/module producer");auto runtime=content->BackgroundRuntime().lock();
+    const auto name=[&](uint32_t i){++names_read;return view(names.at(i));};std::vector<std::shared_ptr<BackgroundFileState>> io;
+    const auto factory=[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{++factories;auto s=std::make_shared<BackgroundFileState>();io.push_back(s);out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,3),s);return {};};
+    auto alias=std::shared_ptr<GameBackgroundRuntime>(runtime.get(),[](GameBackgroundRuntime*){});GameSceneBgm bgm,bad;
+    Check(!bad.Initialize(alias,1,*content,view(lists),view(gains),view(root),name,factory),"same-address foreign controlblock cannot initialize scene BGM");
+    Check(bool(bgm.Initialize(runtime,1,*content,view(lists),view(gains),view(root),name,factory)),"current settings/clock/data BGM owner");int32_t current=-77;
+    Check(!bgm.CurrentChoice(current)&&current==-77,"cold constructor4BC0 is not an already executed initial selection");
+    auto input=std::make_shared<Lease>(std::vector<uint8_t>(16));GameTransition fade;Check(fade.Initialize({{0,0}}),"scene clock transition");TitleSource resources;GameActorRuntime actor,foreign;
+    Check(bool(foreign.Initialize(0,view(input),fade,&resources))&&!bgm.BeginInitial(runtime,foreign)&&!reads&&!names_read&&!factories&&rng.CurrentSeed64()==91,"foreign/unbound actor module refuses BEFORE clock/selection/file effects");
+    Check(bool(actor.Initialize(0,view(input),fade,&resources,runtime))&&!bgm.BeginInitial(alias,actor)&&!reads,"initial source prefix keeps SAME runtime controlblock");
+    Word(gains->b,0,1);Check(!bgm.BeginInitial(runtime,actor)&&!reads&&rng.CurrentSeed64()==91,"aliased held map drift refuses before source effects");Word(gains->b,0,0);
+    {const auto initial_status=bgm.BeginInitial(runtime,actor);if(!initial_status)throw std::runtime_error(initial_status.detail);}const auto initial=bgm.Snapshot();
+    Check(reads==1&&names_read==1&&factories==1&&initial.selected&&initial.requested&&initial.selection.rng_calls==1
+        &&initial.selection.before==91&&initial.selection.after==rng.CurrentSeed64()&&initial.selection.previous==0
+        &&initial.actor_epoch==actor.Snapshot().owner_epoch&&initial.initial_clock52==0&&actor.Snapshot().scene_period_table52==0
+        &&!actor.Snapshot().scene_model_live&&bgm.CurrentChoice(current)&&current==initial.stored4BC,"actual stored period/4BC lineage, not fixture24/static6/late seasonal row");
+    const auto seed=rng.CurrentSeed64();Check(!bgm.BeginInitial(runtime,actor)&&rng.CurrentSeed64()==seed,"initial request cannot replay RNG");
+    io[0]->missing=true;Check(!bgm.Pump(runtime)&&bgm.Snapshot().file.current&&bgm.Snapshot().file.state==1&&bgm.Snapshot().file.selector60>=0,"later genuine missing I/O remains pending, not wrapperfailure");
+    Check(bool(actor.InitializeScene0(initial.calendar)),"background5F58 still runs despite ignored later BGM I/O failure");io[0]->missing=false;
+    Check(bool(bgm.Pump(runtime))&&bool(bgm.Pump(runtime))&&bgm.Snapshot().file.state==5&&bgm.Snapshot().file.bytes==16&&bgm.Snapshot().file.bank5C==-1,"actual file buffer/read completion stays distinct from bank5C");
+    Check(bool(bgm.RequestControl(runtime,7))&&bgm.Snapshot().file.control.pending&&bgm.Snapshot().file.control.gain0C==88
+        &&bgm.Snapshot().file.control.bound&&bgm.Snapshot().file.control.source_owner==content->OptionSoundOwner().owner
+        &&content->OptionSoundOwner().bgm_attempts==1&&bgm.Snapshot().file.control.handle14==-1&&bgm.Snapshot().control_return==0&&bgm.Snapshot().file.control.argument28==7
+        &&bgm.Snapshot().file.control.linked_request==bgm.Snapshot().file.request,"4AD4C actually reads live root18 via14834 and links SAME owned file record; no playback");
+    auto settings=content->OptionSettings();uint32_t word=999;settings.words[2]=5;
+    Check(!ReadBgmGain14834(settings,view(gains),word)&&word==999,"synthetic index10 is not an initialized gain word");settings.words[2]=6;
+    Check(bool(ReadBgmGain14834(settings,view(gains),word))&&word==0,"synthetic unsigned>=11 uses actual source fallback index0");
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));std::vector<std::pair<std::string,std::vector<uint8_t>>> packages;
+    for(unsigned i=0;i<3;++i){const auto n=std::string("SYN_")+char('A'+i);std::copy(n.begin(),n.end(),records->b.begin()+i*20);packages.push_back({n+".BPM",BackgroundArchive({{n+"\\model01.DVS",Fixture()}})});}
+    GameBackgroundPreparation uncached;auto uncached_io=std::make_shared<BackgroundFileState>();
+    Check(bool(uncached.Begin(runtime,2,{20,12,initial.period4B4,8},view(records),std::make_unique<BackgroundFile>(BackgroundArchive(packages),uncached_io)))
+        &&!uncached.RequestBgm(runtime,2,runtime,bgm)&&!uncached.Snapshot().bgm_attempted&&rng.CurrentSeed64()==seed
+        &&factories==1&&bool(uncached.Close()),"initial4B4 is not selected1B114 cache authority; refusal has no BGM effects");
+    const auto cache_reads=reads;
+    Check(!bgm.RefreshCachedPeriod(alias,actor)&&!bgm.RefreshCachedPeriod(runtime,foreign)&&reads==cache_reads&&rng.CurrentSeed64()==seed,"cached-period foreign scene/runtime refuse before clock/RNG");
+    Check(bool(bgm.RefreshCachedPeriod(runtime,actor))&&bgm.Snapshot().cache_refreshed&&bgm.Snapshot().cache_revision==1
+        &&rng.CurrentSeed64()==seed,"selected1B114 reads SAME current4DC clock and caches4B4/4AC without RNG");
+    const auto period=bgm.Snapshot().period4B4;
+    GameBackgroundPreparation job;auto target_io=std::make_shared<BackgroundFileState>();
+    Check(bool(job.Begin(runtime,2,{21,12,period,9},view(records),std::make_unique<BackgroundFile>(BackgroundArchive(packages),target_io))),"pending target current typed packet owner");
+    Check(!job.RequestBgm(runtime,2,alias,bgm)&&rng.CurrentSeed64()==seed,"target same-address foreign runtime refuses without RNG");
+    Check(bool(job.RequestBgm(runtime,2,runtime,bgm))&&job.Snapshot().bgm_selection.previous==initial.stored4BC
+        &&job.Snapshot().bgm_selection.before==seed&&job.Snapshot().bgm_selection.after==rng.CurrentSeed64()
+        &&bool(job.Load(runtime,2)),"target consumes REAL stored4BC/cached4B4 and SAME manager file pool before model stage");
+    Check(bool(job.PumpBgm(runtime,2))&&bool(job.PumpBgm(runtime,2))&&job.BgmFile().current,"target file actual owned buffer completes");
+    Check(bool(bgm.RefreshCachedPeriod(runtime,actor))&&!job.BgmFile().current&&!job.PumpBgm(runtime,2),"later clock-cache publication invalidates older target borrow instead of silently reusing it");
+    Check(bool(job.Close())&&io[0]->live&&io[1]->live,"manager BGM files outlive target job retirement");
+    io[0]->fail_close=true;Check(!bgm.Close()&&!bgm.CurrentChoice(current)&&io[0]->live,"failed file close preserves actual owner for retry");io[0]->fail_close=false;
+    Check(bool(bgm.Close())&&!io[0]->live&&!io[1]->live&&!bad.Initialize(runtime,2,*content,view(lists),view(gains),view(root),name,factory),"cleanup then no second cold constructor in SAME module epoch");
+    actor.Close();foreign.Close();Check(content->Close()&&manager.Close(),"current settings/module teardown after files");
+}
 void RoomAnchorLocalX(){
     //Independent authored-pose literals: a quarter-turn sends local X into Y.
     std::vector<GameModelPose> pose(142);for(auto& p:pose)p.world=ModelIdentity();
@@ -1380,7 +1442,7 @@ void RoomModelLifecycle(){
 }
 struct ActorSource final:GameResourceSource {
     bool fail_motion=false;
-    bool scene_assets=false,season_missing=false;
+    bool scene_assets=false,season_missing=false,camera_triangle=false;
     std::vector<std::string> requests;
     GameFsStatus OpenResource(const std::string& path,PackageView& out) override {
         requests.push_back(path);std::vector<uint8_t> bytes;
@@ -1398,7 +1460,10 @@ struct ActorSource final:GameResourceSource {
                 else {W(payload,0x8010);W(payload,8);W(payload,8);}
                 W(bytes,0);W(bytes,16);W(bytes,uint32_t(payload.size()));W(bytes,0);bytes.insert(bytes.end(),payload.begin(),payload.end());
             }
-        }else if(path.find(".DVS")!=std::string::npos)bytes=Fixture();
+        }else if(path.find(".DVS")!=std::string::npos){
+            const std::vector<std::array<int16_t,3>> triangle{{{-20000,0,0}},{{20000,0,0}},{{0,0,30000}}};
+            bytes=camera_triangle?Fixture(false,&triangle,false,1200):Fixture();
+        }
         else if(path=="DATA\\SEQ\\sequence_coord.bin"){bytes.resize(136);Word(bytes,72,1830);Word(bytes,76,uint32_t(-27));Word(bytes,120,1820);Word(bytes,124,uint32_t(-627));Word(bytes,128,600);Word(bytes,132,uint32_t(-300));}
         else if(scene_assets&&path.find("BG_ROOM\\BG_ROOM\\") == 0){bytes=MotionFixture();}
         else if(path.find("m8.DAK")!=std::string::npos){
@@ -1409,6 +1474,18 @@ struct ActorSource final:GameResourceSource {
         auto lease=std::make_shared<Lease>(std::move(bytes));out=PackageStorage::Attach(lease,lease->b.size());return {};
     }
 };
+void CameraTargetRender(){
+    auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));ActorSource source;source.camera_triangle=true;
+    GameTransition fade;Check(fade.Initialize({{0,0}}),"camera effect actual transition");fade.Open(true);
+    GameActorRuntime runtime;Check(bool(runtime.Initialize(0,PackageStorage::Attach(lease,16),fade,&source))&&bool(runtime.BindCamera(1)),"current primary camera40 owner");
+    int32_t slot=-1;Check(bool(runtime.CreateModel(170,0,0,0,slot))&&bool(runtime.RequestCamera(1))&&bool(runtime.AdvanceActorFrame()),"real camera request consumes current typed primary point");
+    GameGraphics g;Check(g.Initialize({})&&bool(runtime.Draw(g)),"production render before7980");GameGraphicsFrame before,after;Check(g.CopyFront(before),"owned before frame");
+    const auto old=runtime.Snapshot();Check(old.camera_fov_degrees==30&&old.camera_target_current&&old.camera_target_position==GameVector4{{0,0,600,1}}
+        &&bool(runtime.RefreshCamera7980())&&runtime.Snapshot().camera_fov_degrees==18,"7980 modes1/2 read source controlY0, not selected screenshot/render root");
+    Check(bool(runtime.Draw(g))&&g.CopyFront(after)&&before.pixels!=after.pixels&&runtime.Snapshot().model_pixel_writes>0,"same posed owned model actually consumes new FOV in raster");
+    Check(runtime.Snapshot().camera_ratio==old.camera_ratio&&runtime.Snapshot().camera_completions==old.camera_completions,"7980 is not an interpolation/job completion");
+    runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
+}
 void ActorPendingReplacement(){
     // Synthetic ASC/model owners; tests the source single pending slot,
     // not connected gameplay or additional opcode/effect coverage.
@@ -1814,6 +1891,7 @@ int main() {
         ManagerSupportJobTests();
         ContextActorTransactionPrefixTests();
         BgmTransportTests();
+        SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
@@ -1825,6 +1903,7 @@ int main() {
         Motion();
         ActorChannelOrder();
         ActorPendingReplacement();
+        CameraTargetRender();
         PositionRegionTests();
         TitleLifetimeAndFade();
         ArrivalBranchTests();

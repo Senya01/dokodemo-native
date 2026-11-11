@@ -92,6 +92,9 @@ struct GameActorRuntimeSnapshot {
   uint32_t camera_manager_state28=0,camera_transition_mode1C=0;
   bool camera_complete2C=false;
   float camera_fov_degrees=30,camera_target_fov=30,camera_ratio=0;
+  bool camera_target_current=false;
+  uint64_t camera_target_epoch=0;
+  std::array<float,4> camera_target_position{}; // copied readback of current primary+40, not render root
   uint32_t command_loop_depth=0,command_loop_repeats=0;
   bool intro_live=false;uint32_t intro_requests=0,intro_closes=0,intro_state34=3,intro_state38=3;
   uint32_t intro_nodes=0,intro_quads=0,intro_updates=0;
@@ -181,9 +184,14 @@ class GameActorRuntime final {
 public:
   GameFsStatus Initialize(uint32_t actor, PackageView selection,
                           GameTransition &transition,
-                          GameResourceSource *resources = nullptr);
+                         GameResourceSource *resources = nullptr,std::shared_ptr<GameBackgroundRuntime> background={});
+  bool BackgroundModuleMatches(const std::shared_ptr<GameBackgroundRuntime>&)const;
   GameFsStatus BindCamera(int32_t mode);
+  GameFsStatus BindCamera(script::Vm&,int32_t mode);
+  GameFsStatus RefreshCamera7980();
   GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar);
+  GameFsStatus InitializeScene0Clock(const std::array<uint32_t,7>& calendar);
+  GameFsStatus ReadInitialScenePeriod7398(int32_t&)const;
   GameFsStatus QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result);
   GameFsStatus QueryActorPosition(bool& result);
   GameFsStatus StartTransition();
@@ -226,6 +234,7 @@ private:
   PackageView selection_;
   GameTransition *transition_ = nullptr;
   GameResourceSource *resources_ = nullptr;
+  std::weak_ptr<GameBackgroundRuntime> background_module_;
   struct ModelSlot {
     bool active = false;
     int32_t resource = -1, category = 0;
@@ -243,12 +252,17 @@ private:
   struct ContextActorData;
   std::shared_ptr<ContextActorData> context_actor_;
   uint64_t context_actor_serial_=0;
+  struct PrimaryCameraTarget;
+  std::shared_ptr<PrimaryCameraTarget> primary_target_;
+  std::weak_ptr<PrimaryCameraTarget> camera_target_;
+  bool ReadCameraTarget(std::array<float,4>&)const;
   struct ContextActorBinding {
     std::weak_ptr<script::NativeScriptContext> context;
     std::weak_ptr<ContextActorData> actor;
     uint64_t run=0;
     bool captured_nil=false;
     std::array<char,65> module{};
+    std::weak_ptr<PrimaryCameraTarget> primary;
   };
   std::vector<ContextActorBinding> context_actors_;
   GameFsStatus RequestContextScene(script::Vm&,int32_t);
@@ -284,6 +298,7 @@ private:
   std::vector<SceneControl> scene_controls_,season_controls_;
   SceneControl light_on_control_;
   std::array<uint32_t,7> scene_calendar_{};
+  bool initial_scene_clock_=false;
   GameFsStatus ApplySceneLightToggle(int32_t value);
   GameFsStatus ApplyScenePair(uint32_t pair);
   GameFsStatus UpdateScene();
