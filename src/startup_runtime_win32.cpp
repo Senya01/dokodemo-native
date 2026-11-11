@@ -128,6 +128,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
     recovered::GameContentBoot game_content;
     std::unique_ptr<audio::Game73PcmOutput> sound_output;
     std::unique_ptr<recovered::GameFileSource> scene_sound_file;
+    recovered::GameMainSceneData main_scene_data;
     std::unique_ptr<recovered::GameStorage> game_storage;
     uint32_t stored_game_callback_source_pc = 0; // descriptor only; no PSP code-pointer cast
     recovered::NativeModuleManager modules;
@@ -1383,6 +1384,13 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
             return recovered::GameCalendarDE0(current.local_date_bytes);
         });
         if(!background_runtime)throw NativeFailure{};
+        const auto main_data=BindOrdinarySceneInputs();
+        if(!main_data){
+            Emit("GameMainSceneDataFailure","PreparedOriginalData",0,0,false,0,main_data.native_error,0,main_data.detail.c_str());
+            std::lock_guard<std::mutex> lock(metadata);state.game_boot.content=game_content.Snapshot();
+            FailLocked(Failure(StartupRuntimeCode::HostFailure,main_data.native_error?main_data.native_error:ERROR_INVALID_DATA));return StartupFlowStop::HostFailure;
+        }
+        Emit("GameMainSceneDataBound","PreparedOriginalData",0,0,false,0,0,0,"actual held original DATA/list/gain/names/root bound BEFORE actor/Scene0;no selection yet");
         game_content.SetActorClock([this]{
             platform::WindowsRngInitializationSample current;
             if(!platform::CaptureWindowsRngInitialization(current))throw std::runtime_error("Native KSC Windows local RTC read failed");
@@ -1449,6 +1457,24 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
              "real configured root/free-space;AUTOLOAD mode0 UCJS10002/000/DATA.BIN;PSP original format "
              "unsupported;no autoack");
         return StartupFlowStop::Unsupported;
+    }
+    recovered::GameFsStatus BindOrdinarySceneInputs(){
+        // Exactly one immutable main DATA load/identity guard, not execution,
+        // source research, a second archive or an optional success provider.
+        constexpr const char* identity="2b361beb4c55e08af2828713861429e768a1140f284a11f606fba5f580cd483c";
+        std::array<uint8_t,32> expected{};const auto nibble=[](char c){return uint8_t(c<='9'?c-'0':c-'a'+10);};
+        for(unsigned i=0;i<32;++i)expected[i]=uint8_t(nibble(identity[2*i])*16+nibble(identity[2*i+1]));
+        const auto path=options.prepared_main_data.empty()?options.media_root+L"/PSP_GAME/SYSDIR/BOOT.BIN":options.prepared_main_data;
+        auto status=main_scene_data.Load(CreateWindowsGameFileSource(backend,path,0x7B000000),expected);if(!status)return status;
+        status=game_content.BindInitialSceneBgm(main_scene_data.Lists(),main_scene_data.Gains(),main_scene_data.Root(),
+            [this](uint32_t index){return main_scene_data.Name(index);},
+            [this](const std::string& uri,std::unique_ptr<recovered::GameFileSource>& file)->recovered::GameFsStatus{
+                // Source root/name/path are already validated by the owning queue.
+                std::wstring path=options.media_root;for(const unsigned char c:uri)path.push_back(wchar_t(c));
+                file=CreateWindowsGameFileSource(backend,std::move(path),0x7C000000);return {};
+            });
+        if(!status)return status;
+        return game_content.BindInitialScenePlacement(main_scene_data);
     }
     recovered::GameFsStatus OpenResource(const std::string& path,recovered::PackageView& out) override {
         constexpr const char* selected="/PSP_GAME/USRDIR/data/sound/se/SE_SYS.sgd";
@@ -1683,6 +1709,8 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
                 0, 0, 0, "after both joins;font/package views,manager tasks andCVSync/CLoadMan owners retired before VM/scene/filesystem/arenas");
         }
         if (!content_closed) return CleanupFailure(ERROR_BUSY);
+        const auto main_data_closed=main_scene_data.Close();
+        if(!main_data_closed)return CleanupFailure(main_data_closed.native_error);
         if(scene_sound_file) {
             const auto closed=scene_sound_file->Close();
             { std::lock_guard<std::mutex> lock(metadata);state.game_boot.scene_resource_io=scene_sound_file->Snapshot(); }

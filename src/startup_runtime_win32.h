@@ -22,6 +22,8 @@ struct StartupRuntimeStatus {
 struct StartupRuntimeOptions {
     // Actual native directory bound to disc0:, e.g. <workspace>/assets/iso.
     std::wstring media_root;
+    // Already-prepared original main DATA, never an ISO/import/emulator input.
+    std::wstring prepared_main_data;
     bool prepared_codec_envelope = false; // explicit NEW domain, legacy finite prefix stays default
     bool test_controller_input = false; // explicit injected-frame test domain, never physical-input credit
     // Explicit window-fixture civil-clock step AFTER the intro's first clock

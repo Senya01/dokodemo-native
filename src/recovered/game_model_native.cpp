@@ -11,6 +11,66 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+bool GameMainSceneData::Current()const{
+    try{if(!live_||!file_||!file_->Snapshot().file_live||!image_.Describe().readable)return false;
+        for(const auto& part:selected_inputs_)if(part.first.InitializedDigest()!=part.second)return false;return true;
+    }catch(...){return false;}
+}
+GameFsStatus GameMainSceneData::Load(std::unique_ptr<GameFileSource> file,const std::array<uint8_t,32>& expected){
+    if(file_||!file)return {GameFsCode::Unavailable,0,"fresh main DATA file owner required"};file_=std::move(file);
+    try{
+        auto status=file_->Open();if(!status)return status;
+        if(file_->Snapshot().file_bytes!=1341110)throw std::runtime_error("prepared main DATA extent mismatch");
+        status=file_->Read(0,1341110,image_);if(!status)return status;
+        if(image_.Describe().size!=1341110||image_.InitializedDigest()!=expected)throw std::runtime_error("prepared main DATA identity mismatch");
+        digest_=expected;
+        if(image_.ReadLE32(0)!=0x464C457F||image_.ReadU8(4)!=1||image_.ReadU8(5)!=1||image_.ReadLE16(16)!=0xFFA0||image_.ReadLE16(18)!=8)
+            throw std::runtime_error("prepared main DATA ELF32 LE MIPS PRX required");
+        const auto ph=image_.ReadLE32(28),sh=image_.ReadLE32(32);const auto count=image_.ReadLE16(48);
+        if(image_.ReadLE16(42)!=32||image_.ReadLE16(44)<2||image_.ReadLE16(46)!=40||!count||count>128||ph>1341110-64||sh>1341110-uint32_t(count)*40)
+            throw std::runtime_error("prepared main DATA table layout");
+        std::array<uint32_t,2> starts{},sizes{};
+        for(unsigned k=0;k<2;++k){starts[k]=image_.ReadLE32(ph+32*k+4);sizes[k]=image_.ReadLE32(ph+32*k+16);
+            if(image_.ReadLE32(ph+32*k)!=1||!sizes[k]||starts[k]>1341110||sizes[k]>1341110-starts[k])throw std::runtime_error("prepared main DATA segment extent");}
+        const auto part=[&](unsigned segment,uint32_t at,uint32_t n){if(segment>=2||at>sizes[segment]||n>sizes[segment]-at)throw std::runtime_error("selected main DATA unbacked range");return image_.Subview(starts[segment]+at,n);};
+        std::array<int,25> name_segments;name_segments.fill(-1);int position_segment=-1,heading_segment=-1;unsigned selected=0;
+        for(uint32_t k=0;k<count;++k){const auto row=sh+40*k;if(image_.ReadLE32(row+4)!=0x700000A0)continue;
+            const auto at=image_.ReadLE32(row+16),n=image_.ReadLE32(row+20);if(n%8||at>1341110||n>1341110-at)throw std::runtime_error("prepared main DATA relocation bounds");
+            for(uint32_t j=0;j<n;j+=8){const auto off=image_.ReadLE32(at+j),info=image_.ReadLE32(at+j+4);const auto origin=(info>>8)&255,refer=(info>>16)&255,type=info&255;
+                if(origin==1&&off>=0x6808&&off<0x6808+25*4){if(type!=2||off%4||refer>=2)throw std::runtime_error("BGM name relocation kind");auto& dst=name_segments[(off-0x6808)/4];if(dst!=-1)throw std::runtime_error("duplicate BGM name relocation");dst=int(refer);++selected;}
+                if(origin==0&&(off==0xD2D0||off==0xD2D8||off==0xBD44||off==0xBD54)){
+                    const auto want=(off==0xD2D0||off==0xBD44)?5u:6u;if(type!=want||refer>=2)throw std::runtime_error("placement relocation kind");
+                    auto& dst=(off==0xD2D0||off==0xD2D8)?position_segment:heading_segment;
+                    if(dst!=-1&&dst!=int(refer))throw std::runtime_error("placement relocation pair mismatch");dst=int(refer);++selected;
+                }
+            }
+        }
+        if(selected!=29||position_segment<0||heading_segment<0)throw std::runtime_error("selected main DATA relocation set missing");
+        lists_=part(0,0xD8CC8,76);gains_=part(0,0xD85B8,40);
+        const auto token=[&](unsigned segment,uint32_t at){const auto raw=part(segment,at,80);uint32_t n=0;while(n<80&&raw.ReadU8(n)){if(raw.ReadU8(n)<33||raw.ReadU8(n)>126)throw std::runtime_error("selected DATA text outside ASCII token");++n;}if(!n||n==80)throw std::runtime_error("selected DATA text terminator");return raw.Subview(0,n+1);};
+        for(unsigned k=0;k<25;++k)names_[k]=token(unsigned(name_segments[k]),part(1,0x6808+4*k,4).ReadLE32(0));
+        root_=token(0,905276); // exact selected4A9B8 root relocation, held DATA not code string
+        position_file_=starts[unsigned(position_segment)]+0x4180;heading_file_=starts[unsigned(heading_segment)]+0xD7EE0;
+        (void)part(unsigned(position_segment),0x4180,13*16);(void)part(unsigned(heading_segment),0xD7EE0,4);
+        const auto hold=[&](PackageView view){selected_inputs_.emplace_back(view,view.InitializedDigest());};
+        hold(lists_);hold(gains_);hold(root_);for(const auto& name:names_)hold(name);
+        hold(image_.Subview(position_file_,12));hold(image_.Subview(position_file_+12*16,12));hold(image_.Subview(heading_file_,4));
+        live_=true;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+PackageView GameMainSceneData::Lists()const{if(!Current())throw std::runtime_error("main DATA owner retired/drifted");return lists_;}
+PackageView GameMainSceneData::Gains()const{if(!Current())throw std::runtime_error("main DATA owner retired/drifted");return gains_;}
+PackageView GameMainSceneData::Root()const{if(!Current())throw std::runtime_error("main DATA owner retired/drifted");return root_;}
+PackageView GameMainSceneData::Name(uint32_t index)const{if(!Current()||index>=25)throw std::runtime_error("main DATA name owner/index");return names_[index];}
+PackageView GameMainSceneData::PositionRow(uint32_t scene)const{if(!Current()||(scene!=0&&scene!=12))throw std::runtime_error("main DATA selected placement/current owner");return image_.Subview(position_file_+16*scene,12);}
+PackageView GameMainSceneData::PlacementHeading()const{if(!Current())throw std::runtime_error("main DATA heading owner retired");return image_.Subview(heading_file_,4);}
+GameFsStatus GameMainSceneData::Placement(uint32_t scene,std::array<float,4>& out)const{
+    try{if(!Current()||(scene!=0&&scene!=12))throw std::runtime_error("placement current selected DATA/scene0 or12 required");std::array<float,4> values{};
+        for(unsigned k=0;k<4;++k){const auto word=image_.ReadLE32(k==3?heading_file_:position_file_+scene*16+k*4);std::memcpy(&values[k],&word,4);if(!std::isfinite(values[k]))throw std::runtime_error("placement nonfinite field");}out=values;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameMainSceneDataSnapshot GameMainSceneData::Snapshot()const{GameMainSceneDataSnapshot out;out.live=Current();out.identity=digest_;if(out.live){const auto d=image_.Describe();out.owner=d.owner;out.generation=d.generation;out.serial=d.serial;out.names=25;}return out;}
+GameFsStatus GameMainSceneData::Close(){live_=false;selected_inputs_.clear();lists_={};gains_={};root_={};names_={};image_={};if(file_){auto status=file_->Close();if(!status)return status;file_.reset();}return {};}
 GameFsStatus ReadBgmGain14834(const GameOptionSettingsSnapshot& settings,PackageView table,uint32_t& out){
     try{if(!settings.live||!settings.owner||!settings.generation||table.Describe().size!=40)throw std::runtime_error("14834 current typed settings/ten copied gain words required");
         const auto digest=table.InitializedDigest();uint32_t at=settings.words[2]+5u;if(at>=11)at=0;
@@ -111,6 +171,7 @@ GameFsStatus GameSceneBgm::Pump(const std::shared_ptr<GameBackgroundRuntime>& ru
     if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"BGM current file worker owner required"};
     return data_->files.Pump(runtime,data_->state.epoch);
 }
+bool GameSceneBgm::SharesDataBacking(PackageView view)const{return data_&&data_->Current()&&data_->inputs[0].SharesBacking(view);}
 bool GameSceneBgm::CurrentChoice(int32_t& out)const{
     if(!data_||!data_->Current()||!data_->state.selected)return false;out=data_->state.stored4BC;return true;
 }

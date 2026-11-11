@@ -453,6 +453,21 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
   }
   return status;
 }
+GameFsStatus GameActorRuntime::ApplyScenePlacementBD28(const std::shared_ptr<GameBackgroundRuntime>& runtime,uint32_t scene,PackageView row,PackageView heading){
+  if(!BackgroundModuleMatches(runtime)||!state_.scene_model_live||!state_.region_owners_live||scene!=state_.manager_scene14||scene!=0)
+    return {GameFsCode::Unavailable,0,"BD28 requires SAME current initialized scene/primary; target adoption not admitted"};
+  try{if(row.Describe().size!=12||heading.Describe().size!=4)throw std::runtime_error("BD28 exact held XYZ/heading extents");
+    const auto row_hash=row.InitializedDigest(),head_hash=heading.InitializedDigest();std::array<float,4> values{};
+    for(unsigned i=0;i<4;++i){const auto word=i==3?heading.ReadLE32(0):row.ReadLE32(i*4);std::memcpy(&values[i],&word,4);if(!std::isfinite(values[i]))throw std::runtime_error("BD28 nonfinite input");}
+    if(row.InitializedDigest()!=row_hash||heading.InitializedDigest()!=head_hash)throw std::runtime_error("BD28 held DATA drift");
+    const auto prepared=PrepareActor();if(!prepared)return prepared;
+    // Source BD58/5C/60/64: source20,30,24,28 stores. This is NOT
+    // primary40, which has a distinct constructor/update producer.
+    state_.logical_xy[0]=values[0];state_.logical_heading=values[3];state_.logical_xy[1]=values[1];state_.logical_z=values[2];
+    state_.source_placement20=values;state_.source_placement_bound=true;state_.source_placement_scene=scene;++state_.source_placement_writes;
+    return UpdatePrimaryRoot99A8();
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameFsStatus GameActorRuntime::QueryActorPosition(bool& result) {
   if(!Live()||!state_.actor_model_live||!state_.region_owners_live)
     return {GameFsCode::Unavailable,0,"GAME19 requires live actor/root and compiled scene regions"};
@@ -912,8 +927,17 @@ GameFsStatus GameActorRuntime::UpdateActorPose() {
     channel.blend_time = (std::min)(channel.blend, channel.blend_time + 160);
   }
   ++state_.motion_samples;
+  const auto rooted=UpdatePrimaryRoot99A8();if(!rooted)return rooted;
+  const auto prior = state_.actor_control_ready;
+  state_.actor_control_ready = channels_[0].playback.Complete();
+  if (!prior && state_.actor_control_ready && channels_[0].motion == 123)
+    ++state_.motion123_completions;
+  return {};
+}
+GameFsStatus GameActorRuntime::UpdatePrimaryRoot99A8(){
+  if(!state_.actor_model_live)return {GameFsCode::Unavailable,0,"99A8 current primary model required"};
   // 99A8 logical position and wrap(heading+pi),canonical native basis.
-  state_.actor_root = {{state_.logical_xy[0], state_.logical_xy[1], 0, 1}};
+  state_.actor_root = {{state_.logical_xy[0], state_.logical_xy[1], state_.logical_z, 1}};
   const float angle =
       WrapAngle(state_.logical_heading + 3.14159265358979323846f);
   auto root = ModelIdentity();
@@ -927,10 +951,6 @@ GameFsStatus GameActorRuntime::UpdateActorPose() {
   const auto status = actor_clone_.Update(root);
   if (!status)
     return status;
-  const auto prior = state_.actor_control_ready;
-  state_.actor_control_ready = channels_[0].playback.Complete();
-  if (!prior && state_.actor_control_ready && channels_[0].motion == 123)
-    ++state_.motion123_completions;
   return {};
 }
 GameFsStatus GameActorRuntime::AdvanceActorFrame() {
@@ -1274,8 +1294,9 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   // XY as eye offset once a real channel exists. It does NOT manufacture a
   // source actor40 write:state.actor_position retains its cold source value.
   // No asset bounds fit,scale or viewer recenter is performed.
-  const float follow_x = channels_[0].motion >= 0 ? state_.actor_root[0] : 0;
-  const float follow_y = channels_[0].motion >= 0 ? state_.actor_root[1] : 0;
+  const bool primary_visible=state_.actor_model_live&&(channels_[0].motion>=0||state_.source_placement_bound);
+  const float follow_x = primary_visible ? state_.actor_root[0] : 0;
+  const float follow_y = primary_visible ? state_.actor_root[1] : 0;
   const float eye_x=state_.camera_transition_mode1C?camera_x_:follow_x;
   const float eye_z=state_.camera_transition_mode1C?camera_z_:980;
   state_.camera_position = {{eye_x, follow_y - 4400, eye_z, 1}};
@@ -1313,7 +1334,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
       return status;
     ++state_.scene_frames;
   }
-  if (channels_[0].motion >= 0) {
+  if (primary_visible) {
     GameContactFootprint contact;
     auto contact_status=actor_clone_.ContactFootprint(contact);
     if(!contact_status)return contact_status;
@@ -1375,7 +1396,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
-  initial_scene_clock_=false;
+  initial_scene_clock_=false;state_.source_placement_bound=false;
   background_module_.reset();
   camera_target_.reset();primary_target_.reset();state_.camera_target_current=false;
   if(context_actor_)context_actor_->Close();context_actor_.reset();context_actors_.clear();

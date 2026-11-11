@@ -221,6 +221,14 @@ GameFsStatus GameContentBoot::BindInitialSceneBgm(PackageView lists,PackageView 
     auto bgm=std::make_unique<GameSceneBgm>();status=bgm->Initialize(background_runtime_,background_runtime_->Identity(),*this,lists,gains,root,std::move(names),std::move(factory));
     if(status)scene_bgm_=std::move(bgm);return status;
 }
+GameFsStatus GameContentBoot::BindInitialScenePlacement(const GameMainSceneData& input){
+    if(!scene_bgm_||!scene_bgm_->Snapshot().current||actor_runtime_.Snapshot().live||state_.actor_script.started)
+        return {GameFsCode::Unavailable,0,"ordinary placement must bind AFTER data/BGM and BEFORE primary/Scene0"};
+    try{const auto row=input.PositionRow(0),heading=input.PlacementHeading();
+        if(row.Describe().size!=12||heading.Describe().size!=4||!scene_bgm_->SharesDataBacking(row)||!scene_bgm_->SharesDataBacking(heading))throw std::runtime_error("initial placement SAME original DATA backing/extent required");
+        initial_position_hash_=row.InitializedDigest();initial_heading_hash_=heading.InitializedDigest();initial_position_row_=row;initial_position_heading_=heading;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameFsStatus GameContentBoot::RequestBgmControlPrefix(const GameOptionSettingsSnapshot& expected,const GameSourceSoundSnapshot& source,
     PackageView gains,uint32_t index,uint32_t argument,uint64_t file,GameBgmControlRecord& out){
     const auto current=OptionSettings();
@@ -986,6 +994,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
 }
 bool GameContentBoot::Close() {
     if(scene_bgm_){const auto closed=scene_bgm_->Close();if(!closed){state_.status=closed;return false;}scene_bgm_.reset();}
+    initial_position_row_={};initial_position_heading_={};
     option_settings_lifetime_.reset();
     if(background_runtime_){background_runtime_->Close();background_runtime_.reset();}
     main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();system_option_.Abort();state_.system_option=system_option_.Snapshot();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
@@ -1416,7 +1425,41 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     }
     return bool(status);
 }
+GameFsStatus GameContentBoot::InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource& resources,GameTransition& transition){
+    if(actor_runtime_.Snapshot().live||state_.actor_script.started)return {GameFsCode::Unavailable,0,"fresh current primary/scene owners required; replacement is not adoption"};
+    try{
+        state_.status=actor_runtime_.Initialize(actor,module,transition,&resources,background_runtime_);
+        if(!state_.status)return state_.status;
+        state_.frontier_pc=0x19DD4;
+        auto scene_calendar=calendar_;
+        if(scene_bgm_){
+            state_.status=scene_bgm_->BeginInitial(background_runtime_,actor_runtime_);
+            if(!state_.status)return state_.status;
+            scene_calendar=scene_bgm_->Snapshot().calendar;
+        }
+        state_.status=actor_runtime_.InitializeScene0(scene_calendar);
+        if(!state_.status)return state_.status;
+        if(scene_bgm_){
+            if(initial_position_row_.InitializedDigest()!=initial_position_hash_||initial_position_heading_.InitializedDigest()!=initial_heading_hash_)return {GameFsCode::Unavailable,0,"current source placement DATA drift"};
+            state_.status=actor_runtime_.ApplyScenePlacementBD28(background_runtime_,0,initial_position_row_,initial_position_heading_);
+            if(!state_.status)return state_.status;
+        }
+        state_.frontier_pc=0x1A108;
+        state_.status=actor_runtime_.CreateOrdinaryContextActor5();
+        if(!state_.status)return state_.status;
+        state_.actor_script.runtime=actor_runtime_.Snapshot();return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameContentBoot::TickSceneBgmFiles(){
+    if(!scene_bgm_||!scene_bgm_->Snapshot().attempted)return {};
+    const auto status=scene_bgm_->Pump(background_runtime_);
+    // Real opened/requested I/O failures remain in their pending record and
+    // retry on the next native worker step. They are not a scene-ready gate.
+    if(!status&&status.code==GameFsCode::Unavailable)return status;
+    return {};
+}
 bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
+    const auto bgm_io=TickSceneBgmFiles();if(!bgm_io){state_.status=bgm_io;state_.status.detail="Native BGM worker: "+bgm_io.detail;state_.frontier_pc=0;state_.blocked=true;return false;}
     if(!scene_ui_.TickMoving()){state_.status={GameFsCode::Unavailable,0,"current moving UI owner retired"};return false;}
     if(state_.actor_dictionary_requested){
         if(!state_.actor_script.started)return false;
@@ -1592,19 +1635,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.next_resource=std::string(mounts[actor])+"\\"+scripts[actor];
         const auto script_image=actor_directory_.Open(scripts[actor]);
         game_filesystem_=&filesystem;
-        state_.status=actor_runtime_.Initialize(actor,actor_package_,scene_ui_.TitleTransitionOwner(),this,background_runtime_);
-        if(!state_.status)throw std::runtime_error(state_.status.detail);
-        state_.frontier_pc=0x19DD4;
-        auto scene_calendar=calendar_;
-        if(scene_bgm_){
-            state_.status=scene_bgm_->BeginInitial(background_runtime_,actor_runtime_);
-            if(!state_.status)throw std::runtime_error(state_.status.detail);
-            scene_calendar=scene_bgm_->Snapshot().calendar;
-        }
-        state_.status=actor_runtime_.InitializeScene0(scene_calendar);
-        if(!state_.status)throw std::runtime_error(state_.status.detail);
-        state_.frontier_pc=0x1A108;
-        state_.status=actor_runtime_.CreateOrdinaryContextActor5();
+        state_.status=InitializeActorSceneOwners(actor,actor_package_,*this,scene_ui_.TitleTransitionOwner());
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_,&sound_bank_);

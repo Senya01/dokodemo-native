@@ -132,7 +132,9 @@ struct GameActorRuntimeSnapshot {
            actor_math_mode = 0, command_frontier = 0;
   int32_t source_field58 = 0;
   std::array<float, 2> logical_xy{};
-  float logical_heading = 0;
+  float logical_heading = 0,logical_z=0;
+  bool source_placement_bound=false;uint32_t source_placement_scene=0,source_placement_writes=0;
+  std::array<float,4> source_placement20{};
   int32_t pending_logical_motion = -1;
   std::array<int32_t, 2> channel_motion{{-1, -1}};
   std::array<GamePlaybackState, 2> channels{};
@@ -190,6 +192,7 @@ public:
   GameFsStatus BindCamera(script::Vm&,int32_t mode);
   GameFsStatus RefreshCamera7980();
   GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar);
+  GameFsStatus ApplyScenePlacementBD28(const std::shared_ptr<GameBackgroundRuntime>&,uint32_t scene,PackageView row,PackageView heading);
   GameFsStatus InitializeScene0Clock(const std::array<uint32_t,7>& calendar);
   GameFsStatus ReadInitialScenePeriod7398(int32_t&)const;
   GameFsStatus QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result);
@@ -287,6 +290,7 @@ private:
   GameFsStatus BindActorMotion(int32_t motion, uint32_t blend);
   int32_t LogicalMotion(uint32_t record) const;
   GameFsStatus UpdateActorPose();
+  GameFsStatus UpdatePrimaryRoot99A8();
   struct SceneControl {
     bool present=false;
     GameModelMotion data;

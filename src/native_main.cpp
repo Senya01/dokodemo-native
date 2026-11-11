@@ -61,7 +61,7 @@ struct Options {
     bool titleMenuWindowTest=false;
     bool softkeyWindowTest=false,actorWindowTest=false,gameLoopWindowTest=false,actorChannelWindowTest=false,sceneClockWindowTest=false;
     bool actorPositionWindowTest=false,cameraWindowTest=false,conversationWindowFixture=false,inventoryWindowFixture=false,game71WindowFixture=false,manager9WindowFixture=false,post17WindowFixture=false,post19WindowFixture=false,post21WindowFixture=false,post24WindowFixture=false,post25WindowFixture=false,post26WindowFixture=false,post28WindowFixture=false,activationWindowFixture=false,repeatWindowFixture=false,playWindowFixture=false,soundWindowFixture=false,inventoryActionWindowFixture=false,decorateWindowFixture=false,putawayWindowFixture=false,discardWindowFixture=false,kanaWindowFixture=false,gameplayWindowFixture=false,continuationWindowFixture=false,mainMenuWindowFixture=false,menuInventoryWindowFixture=false,menuMarkWindowFixture=false,menuPlaceWindowFixture=false,menuRoomWindowFixture=false,menuRoomOwnerDiagnostic=false,notebookWindowFixture=false,flow5WindowFixture=false,notePreviewWindowFixture=false,noteSelfWindowFixture=false,wordMemoWindowFixture=false,diaryWindowFixture=false,systemOptionWindowFixture=false,optionsRightWindowFixture=false,optionsEditWindowFixture=false,optionsConfirmWindowFixture=false,optionsRow1WindowFixture=false,optionsSe5WindowFixture=false,optionsVoiceWindowFixture=false,optionsSequenceWindowFixture=false,optionsPortWindowFixture=false,optionsProcessorWindowFixture=false,optionsControlWindowFixture=false,optionsWaveWindowFixture=false,optionsPort24WindowFixture=false,optionsChildWindowFixture=false,optionsSlotWindowFixture=false,optionsSfxWindowFixture=false,optionsYesWindowFixture=false;
-    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot,fixtureChoiceHistory;
+    std::filesystem::path assets, evidence, clockSample, rngSample, startupMedia,nativeSaveRoot,fixtureChoiceHistory,preparedMainData;
 };
 Options ParseOptions() {
     Options options;
@@ -107,6 +107,7 @@ Options ParseOptions() {
         else if (arg == L"--clock-sample" && i + 1 < count) options.clockSample = args[++i];
         else if (arg == L"--rng-sample" && i + 1 < count) options.rngSample = args[++i];
         else if (arg == L"--startup-media-root" && i + 1 < count) options.startupMedia = args[++i];
+        else if (arg == L"--prepared-main-data" && i + 1 < count) options.preparedMainData = args[++i];
         else { LocalFree(args); throw std::runtime_error("Unknown or incomplete command line argument"); }
     }
     LocalFree(args);
@@ -4747,6 +4748,7 @@ int ConnectedStartupTest(const Options& options) {
     std::filesystem::create_directories(options.evidence);
     dokodemo::StartupRuntimeStatus createStatus;
     dokodemo::StartupRuntimeOptions startupOptions{options.startupMedia.wstring()};
+    startupOptions.prepared_main_data=options.preparedMainData.empty()?(options.assets/L"scripts/original/BOOT.BIN").wstring():std::filesystem::absolute(options.preparedMainData).wstring();
     startupOptions.native_save_root=options.nativeSaveRoot.wstring();
     startupOptions.native_title_layout=options.nativeTitleMenu?dokodemo::recovered::NativeTitleLayout::Menu5:dokodemo::recovered::NativeTitleLayout::CharacterEntrance;
     startupOptions.storage_unavailable=options.storageUnavailable;
@@ -5070,6 +5072,7 @@ struct Application {
 #ifdef DOKODEMO_FFMPEG_ROOT
         startupOptions.prepared_codec_envelope = true;
 #endif
+        startupOptions.prepared_main_data=options.preparedMainData.empty()?(options.assets/L"scripts/original/BOOT.BIN").wstring():std::filesystem::absolute(options.preparedMainData).wstring();
         startupOptions.native_save_root=options.nativeSaveRoot.wstring();
     startupOptions.native_title_layout=options.nativeTitleMenu?dokodemo::recovered::NativeTitleLayout::Menu5:dokodemo::recovered::NativeTitleLayout::CharacterEntrance;
         startupOptions.test_controller_input=options.storageWindowTest;

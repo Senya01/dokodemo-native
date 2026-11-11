@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 
+namespace dokodemo { struct StartupRuntimeTestAccess; }
 namespace dokodemo::recovered {
 class GameArena;
 class GameVmBoot;
@@ -139,6 +140,7 @@ struct GameContentSnapshot {
 // general CVSync rendering, PSP interrupt delivery and the full loop remain
 // unsupported. No source-PC descriptor is treated as a successful callback.
 class GameContentBoot final : public GameResourceSource, public GameDiaryIo, public GameOptionSettings {
+  friend struct dokodemo::StartupRuntimeTestAccess;
   public:
     GameContentBoot() = default;
     GameContentBoot(const GameContentBoot &) = delete;
@@ -182,6 +184,9 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     std::weak_ptr<GameBackgroundRuntime> BackgroundRuntime()const{return background_runtime_;}
     GameFsStatus BindInitialSceneBgm(PackageView lists,PackageView gains,PackageView root,
         std::function<PackageView(uint32_t)> names,GameBgmFileQueue::Factory);
+    GameFsStatus BindInitialScenePlacement(const GameMainSceneData&);
+    GameFsStatus InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource&,GameTransition&);
+    GameFsStatus TickSceneBgmFiles();
     GameSceneBgmSnapshot SceneBgm()const{return scene_bgm_?scene_bgm_->Snapshot():GameSceneBgmSnapshot{};}
     std::weak_ptr<const void> OptionSettingsLifetime()const override{return option_settings_lifetime_;}
     GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&)override;
@@ -297,6 +302,8 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     RngNativeOwner* title_rng_=nullptr;
     std::shared_ptr<GameBackgroundRuntime> background_runtime_;
     std::unique_ptr<GameSceneBgm> scene_bgm_;
+    PackageView initial_position_row_,initial_position_heading_;
+    std::array<uint8_t,32> initial_position_hash_{},initial_heading_hash_{};
     std::shared_ptr<const void> option_settings_lifetime_;
     int32_t calendar_year_=0;
     std::array<uint32_t,7> calendar_{};

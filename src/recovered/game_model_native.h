@@ -363,11 +363,36 @@ struct GameBackgroundCandidate {
 // Selected5448 names/count are unbound. This explicit Windows visual subset
 // omits that secondary-motion layer; it cannot service6D6C or grant readiness.
 enum class GameBackgroundEffectsPolicy { Source5448, WindowsReducedBackgroundEffects };
-// Worker-owned live clock/RNG binding. No default date/seed; Close or seed
-// reinitialization revokes every weak job borrower. Not gameplay authority.
+// Held main-module DATA only. This never executes/interprets a BOOT instruction.
+// Ordinary coordinator supplies the fixed original identity; synthetic tests use
+// their distinct explicit identity and do not create an original VM/module.
+struct GameMainSceneDataSnapshot {
+    bool live=false;uint64_t owner=0,generation=0,serial=0;uint32_t names=0;
+    std::array<uint8_t,32> identity{};
+};
+class GameMainSceneData final {
+  public:
+    ~GameMainSceneData(){(void)Close();}
+    GameFsStatus Load(std::unique_ptr<GameFileSource>,const std::array<uint8_t,32>& expected);
+    PackageView Lists()const;PackageView Gains()const;PackageView Root()const;PackageView Name(uint32_t)const;
+    PackageView PositionRow(uint32_t scene)const;PackageView PlacementHeading()const;
+    GameFsStatus Placement(uint32_t scene,std::array<float,4>& position_heading)const;
+    GameMainSceneDataSnapshot Snapshot()const;
+    GameFsStatus Close();
+  private:
+    bool Current()const;
+    std::unique_ptr<GameFileSource> file_;PackageView image_,lists_,gains_,root_;
+    std::array<PackageView,25> names_{};
+    uint32_t position_file_=0,heading_file_=0;
+    std::vector<std::pair<PackageView,std::array<uint8_t,32>>> selected_inputs_;
+    std::array<uint8_t,32> digest_{};
+    bool live_=false;
+};
 class GameOptionSettings;
 struct GameOptionSettingsSnapshot;
 GameFsStatus ReadBgmGain14834(const GameOptionSettingsSnapshot&,PackageView ten_words,uint32_t&);
+// Worker-owned live clock/RNG binding. No default date/seed; Close or seed
+// reinitialization revokes every weak job borrower. Not gameplay authority.
 class GameBackgroundRuntime final {
   public:
     GameBackgroundRuntime()=default;
@@ -424,6 +449,7 @@ class GameSceneBgm final {
     GameFsStatus RequestControl(const std::shared_ptr<GameBackgroundRuntime>&,uint32_t argument);
     GameFsStatus Pump(const std::shared_ptr<GameBackgroundRuntime>&);
     bool CurrentChoice(int32_t&)const;
+    bool SharesDataBacking(PackageView)const;
     GameSceneBgmSnapshot Snapshot()const;
     GameFsStatus Close();
   private:

@@ -1,3 +1,4 @@
+#include "core_hash.h"
 #include "recovered/game_boot_native.h"
 #include "recovered/game_model_native.h"
 #include "recovered/game_title_native.h"
@@ -8,6 +9,11 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+namespace dokodemo {
+struct StartupRuntimeTestAccess {
+    static bool ActorTick(recovered::GameContentBoot& content,recovered::GameFilesystem& fs,recovered::GameGraphics& graphics){return content.TickActorDictionary(fs,graphics);}
+};
+}
 using namespace dokodemo::recovered;
 namespace {
 void Check(bool value, const char *text) {
@@ -1254,6 +1260,34 @@ struct TitleSource final : GameResourceSource {
         return {};
     }
 };
+std::vector<uint8_t> SyntheticMainData(){
+    std::vector<uint8_t> b(1341110);Word(b,0,0x464C457F);b[4]=b[5]=1;b[16]=0xA0;b[17]=0xFF;b[18]=8;
+    Word(b,28,52);Word(b,32,1310000);b[42]=32;b[44]=2;b[46]=40;b[48]=1;
+    Word(b,52,1);Word(b,56,128);Word(b,68,932728);Word(b,84,1);Word(b,88,0xE3C00);Word(b,100,1341110-0xE3C00);
+    Word(b,1310004,0x700000A0);Word(b,1310016,1310100);Word(b,1310020,29*8);
+    for(unsigned i=0;i<25;++i){Word(b,1310100+i*8,0x6808+i*4);Word(b,1310104+i*8,0x102);
+        Word(b,0xE3C00+0x6808+i*4,0xDE000+i*80);const auto name="sample"+std::to_string(i);std::copy(name.begin(),name.end(),b.begin()+128+0xDE000+i*80);}
+    unsigned n=25;for(const auto pair:std::array<std::array<uint32_t,2>,4>{{{{0xD2D0,0x10005}},{{0xD2D8,0x10006}},{{0xBD44,5}},{{0xBD54,6}}}}){Word(b,1310100+n*8,pair[0]);Word(b,1310104+n*8,pair[1]);++n;}
+    for(unsigned i=0;i<19;++i)Word(b,128+0xD8CC8+i*4,i);for(unsigned i=0;i<10;++i)Word(b,128+0xD85B8+i*4,i*11);
+    const std::string root="/SYN";std::copy(root.begin(),root.end(),b.begin()+128+905276);
+    for(unsigned row:{0u,12u})for(unsigned k=0;k<3;++k){const float v=float(17*row+3*k);uint32_t word=0;std::memcpy(&word,&v,4);Word(b,0xE3C00+0x4180+16*row+4*k,word);}
+    return b;
+}
+void MainSceneDataTests(){
+    const auto bytes=SyntheticMainData();const auto digest=dokodemo::core::sha256(bytes.data(),bytes.size());auto io=std::make_shared<BackgroundFileState>();GameMainSceneData data;
+    Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,io),digest))&&data.Snapshot().live&&data.Snapshot().names==25,"actual owning file/parser with explicitly synthetic expected identity");
+    Check(data.Lists().ReadLE32(8)==2&&data.Gains().ReadLE32(36)==99&&data.Name(24).ReadU8(0)=='s',"selected DATA names/list/gain use real held views");
+    std::array<float,4> position{};Check(bool(data.Placement(12,position))&&position==std::array<float,4>{{204,207,210,0}},"relocation-resolved PH1 placement distinct from PH0 heading");
+    const auto old=position;Check(!data.Placement(1,position)&&position==old,"unadmitted placement row refuses without output mutation");
+    const auto held=data.Name(0),list=data.Lists();list.WriteLE32(0,77);Check(!data.Snapshot().live,"selected DATA alias drift revokes current readback");
+    try{(void)data.Name(0);Check(false,"drifted DATA getter refusal");}catch(const std::exception&){}list.WriteLE32(0,0);Check(data.Snapshot().live,"restored actual bytes recover unchanged held DATA");io->fail_close=true;Check(!data.Close()&&!data.Snapshot().live&&io->live,"failed close retains file owner; DATA output retired");io->fail_close=false;Check(bool(data.Close())&&!io->live,"main DATA cleanup retries");
+    try{(void)data.Lists();Check(false,"retired DATA getter refusal");}catch(const std::exception&){}
+    auto invalid=bytes;Word(invalid,1310100,0x680C);GameMainSceneData duplicate;auto bad_io=std::make_shared<BackgroundFileState>();
+    Check(!duplicate.Load(std::make_unique<BackgroundFile>(invalid,bad_io),dokodemo::core::sha256(invalid.data(),invalid.size()))&&!duplicate.Snapshot().live&&bool(duplicate.Close()),"duplicate/missing exact selected relocation refuses before binding");
+    auto overflow=bytes;Word(overflow,32,0xFFFFFFF0);GameMainSceneData malformed;auto malformed_io=std::make_shared<BackgroundFileState>();
+    Check(!malformed.Load(std::make_unique<BackgroundFile>(overflow,malformed_io),dokodemo::core::sha256(overflow.data(),overflow.size()))&&bool(malformed.Close()),"overflowing header metadata is refused before arithmetic wraps");
+    GameMainSceneData foreign;auto other=std::make_shared<BackgroundFileState>();Check(!foreign.Load(std::make_unique<BackgroundFile>(bytes,other),{})&&!foreign.Snapshot().live&&bool(foreign.Close()),"actual expected-identity mismatch cannot issue source input");
+}
 void SceneBgmCurrentOwnerTests(){
     const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
     auto lists=std::make_shared<Lease>(std::vector<uint8_t>(76)),gains=std::make_shared<Lease>(std::vector<uint8_t>(40));
@@ -1485,6 +1519,42 @@ void CameraTargetRender(){
     Check(bool(runtime.Draw(g))&&g.CopyFront(after)&&before.pixels!=after.pixels&&runtime.Snapshot().model_pixel_writes>0,"same posed owned model actually consumes new FOV in raster");
     Check(runtime.Snapshot().camera_ratio==old.camera_ratio&&runtime.Snapshot().camera_completions==old.camera_completions,"7980 is not an interpolation/job completion");
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
+}
+void OrdinaryContentDataTests(){
+    const auto bytes=SyntheticMainData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data,foreign;auto data_io=std::make_shared<BackgroundFileState>(),foreign_io=std::make_shared<BackgroundFileState>();
+    Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash))&&bool(foreign.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash)),"explicit synthetic DATA native owners");
+    std::vector<uint8_t> backing(4*1024*1024);GameArena arena;GameVmBoot vm;Check(arena.Initialize(backing.data(),uint32_t(backing.size()))&&vm.Initialize74EF4(arena)&&vm.InitializeManager93404(),"actual Content module parents");
+    auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,vm)&&content->Reset24994(),"ordinary Content owning constructors");
+    RngNativeOwner rng;rng.ImportCurrentState64(81,3,"synthetic ordinary Content data lineage");content->SetTitleRng(rng);content->SetCalendar({{0,0,0,12,3,5,2026}});
+    Check(bool(content->SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};})),"current actual runtime/settings in synthetic clock domain");
+    auto bgm_io=std::make_shared<BackgroundFileState>();unsigned factories=0;
+    Check(!content->BindInitialScenePlacement(data)&&bool(content->BindInitialSceneBgm(data.Lists(),data.Gains(),data.Root(),[&](uint32_t i){return data.Name(i);},[&](const std::string&,std::unique_ptr<GameFileSource>& file)->GameFsStatus{++factories;file=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,7),bgm_io);return {};}))
+        &&!content->BindInitialScenePlacement(foreign)&&bool(content->BindInitialScenePlacement(data))&&!content->SceneBgm().selected,"typed source DATA placement binds only SAME BGM data and BEFORE source selection/actor");
+    ActorSource source;source.scene_assets=true;source.camera_triangle=true;GameTransition transition;Check(transition.Initialize({{0,0}}),"current Content transition");auto module=std::make_shared<Lease>(std::vector<uint8_t>(16));
+    Check(bool(content->InitializeActorSceneOwners(0,PackageStorage::Attach(module,16),source,transition))&&factories==1&&content->SceneBgm().selected
+        &&content->Snapshot().actor_script.runtime.source_placement_bound&&!content->BindInitialScenePlacement(data),"actual same production initialization body consumes data/initialBGM/placement/model before actor context");
+    const auto seed=rng.CurrentSeed64();bgm_io->missing=true;Check(bool(content->TickSceneBgmFiles())&&content->SceneBgm().file.state==1,"genuine later I/O failure stays pending and does not block source scene");bgm_io->missing=false;
+    Check(bool(content->TickSceneBgmFiles())&&bool(content->TickSceneBgmFiles())&&content->SceneBgm().file.state==5&&content->SceneBgm().file.bytes==16
+        &&content->SceneBgm().file.bank5C==-1&&rng.CurrentSeed64()==seed,"ordinary worker hook completes actual file bytes without RNG/playback/ready substitution");
+    content->BackgroundRuntime().lock()->Close();GameFilesystem empty_fs;GameGraphics empty_graphics;
+    Check(!content->TickSceneBgmFiles()&&!dokodemo::StartupRuntimeTestAccess::ActorTick(*content,empty_fs,empty_graphics)&&content->Snapshot().blocked
+        &&content->Snapshot().frontier_pc==0&&content->Snapshot().status.detail.find("Native BGM worker:")==0,"unknown/retired worker is explicit native refusal, not I/O failure or invented source opcode PC");
+    Check(content->Close()&&!bgm_io->live&&bool(data.Close())&&bool(foreign.Close())&&vm.Close(),"Content/BGM retire before user DATA/module");
+}
+void PlacementLiveTests(){
+    auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));ActorSource source;source.scene_assets=true;source.camera_triangle=true;
+    GameTransition fade;Check(fade.Initialize({{0,0}}),"placement transition");fade.Open(true);RngNativeOwner rng;rng.ImportCurrentState64(7,2,"synthetic placement lineage");
+    auto parent=std::make_shared<GameBackgroundRuntime>();Check(bool(parent->Initialize([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};},rng)),"real native parent with explicit synthetic clock");
+    GameActorRuntime actor;Check(bool(actor.Initialize(0,PackageStorage::Attach(lease,16),fade,&source,parent))&&bool(actor.InitializeScene0({{0,0,0,12,3,5,2026}}))&&bool(actor.BindCamera(1)),"actual scene/region/primary owners before BD28");
+    GameGraphics g;Check(g.Initialize({})&&bool(actor.Draw(g)),"before placement render");GameGraphicsFrame before,after;Check(g.CopyFront(before),"before placement frame");const auto point=actor.Snapshot().camera_target_position;
+    std::vector<uint8_t> xyz;for(const float v:{-123.f,456.f,78.f})F(xyz,v);std::vector<uint8_t> heading;F(heading,-3.14159265358979323846f);auto row=std::make_shared<Lease>(xyz),angle=std::make_shared<Lease>(heading);
+    const auto view=[](const std::shared_ptr<Lease>& v){return PackageStorage::Attach(v,v->b.size());};auto alias=std::shared_ptr<GameBackgroundRuntime>(parent.get(),[](GameBackgroundRuntime*){});
+    Check(!actor.ApplyScenePlacementBD28(alias,0,view(row),view(angle))&&!actor.ApplyScenePlacementBD28(parent,12,view(row),view(angle))&&!actor.Snapshot().source_placement_bound,"foreign module and unadopted target refuse before effects");
+    Check(bool(actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle)))&&actor.Snapshot().source_placement20==std::array<float,4>{{-123,456,78,-3.14159265358979323846f}}
+        &&actor.Snapshot().actor_root==GameVector4{{-123,456,78,1}}&&actor.Snapshot().camera_target_position==point,"BD28 logical20 XYZ/heading ->real99A8 model root; separate40 unmodified");
+    Check(bool(actor.Draw(g))&&g.CopyFront(after)&&before.pixels!=after.pixels&&actor.Snapshot().actor_pixel_writes>0,"production actual model/room/follow camera consumes posed primary placement");
+    const auto old=actor.Snapshot();Word(row->b,0,0x7FC00000);Check(!actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle))&&actor.Snapshot().source_placement_writes==old.source_placement_writes&&actor.Snapshot().actor_root==old.actor_root,"nonfinite DATA refusal preserves live pose");
+    actor.Close();Check(!actor.Snapshot().source_placement_bound&&!actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle)),"retired scene/primary placement refuses");parent->Close();g.Close();
 }
 void ActorPendingReplacement(){
     // Synthetic ASC/model owners; tests the source single pending slot,
@@ -1891,6 +1961,7 @@ int main() {
         ManagerSupportJobTests();
         ContextActorTransactionPrefixTests();
         BgmTransportTests();
+        MainSceneDataTests();
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();
@@ -1904,6 +1975,8 @@ int main() {
         ActorChannelOrder();
         ActorPendingReplacement();
         CameraTargetRender();
+        PlacementLiveTests();
+        OrdinaryContentDataTests();
         PositionRegionTests();
         TitleLifetimeAndFade();
         ArrivalBranchTests();
