@@ -230,6 +230,14 @@ struct GameBackgroundCandidate {
     uint32_t id=0, selector=0, period=0;
     uint64_t request=0;
 };
+// Selected5448 names/count are unbound. This explicit Windows visual subset
+// omits that secondary-motion layer; it cannot service6D6C or grant readiness.
+enum class GameBackgroundEffectsPolicy { Source5448, WindowsReducedBackgroundEffects };
+struct GameBackgroundLightBinding {
+    uint32_t slot=0;
+    GamePlaybackState playback;
+    GameMotionStatistics motion;
+};
 struct GameBackgroundPreparationSnapshot {
     bool live=false,pending=false,package_read=false,staged=false,failed=false,model_motions_staged=false;
     uint64_t epoch=0,request=0;
@@ -240,6 +248,8 @@ struct GameBackgroundPreparationSnapshot {
     bool auxiliary_staged=false;
     uint32_t auxiliary_entries=0,auxiliary_children=0,auxiliary_templates=0,auxiliary_bindings=0;
     GameModelStatistics auxiliary_model;
+    bool effects_prepared=false,secondary_motions_omitted=false,special_motion_not_applicable=false;
+    uint32_t light_templates=0,light_bindings=0,light_deferred=0;
     GameFsStatus status;
     GameModelTransformPolicy transform_policy=GameModelTransformPolicy::SourceCommon;
     std::string registration;
@@ -269,6 +279,13 @@ class GameBackgroundPreparation final {
                                const GameAuxiliaryNameResolver& resolve);
     GameFsStatus Auxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
                            std::vector<GameAuxiliaryBindingState>& out)const;
+    // 5610/6A40: real seven template/control bindings to the main clone, still
+    // in constructor state1. Path format is owned user data, not a name table.
+    // No709C/72B8 current-calendar activation or635C selection is issued here.
+    GameFsStatus PrepareEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                GameBackgroundEffectsPolicy,PackageView light_format);
+    GameFsStatus LightBindings(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                std::vector<GameBackgroundLightBinding>& out)const;
     // Explicit component preview of one prepared child; not source visibility.
     GameFsStatus DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t entry,
                                GameGraphics&,const GameMatrix& view_projection)const;
@@ -283,6 +300,7 @@ class GameBackgroundPreparation final {
     bool RegistrationsCurrent()const;
     bool MotionCountsCurrent()const;
     bool AuxiliaryCurrent()const;
+    bool EffectsCurrent()const;
     struct AuxiliaryEntry {
         std::array<uint32_t,3> words{};
         std::array<std::unique_ptr<GameModelMotion>,3> motions;
@@ -308,6 +326,10 @@ class GameBackgroundPreparation final {
     std::shared_ptr<GameModelAsset> asset_;
     GameModelClone clone_;
     std::vector<GameModelMotion> model_motions_;
+    PackageView light_format_;
+    std::array<uint8_t,32> light_format_digest_{};
+    std::vector<GameModelMotion> light_motions_;
+    std::vector<GameModelPlayback> light_playbacks_;
     GameBackgroundPreparationSnapshot state_;
     uint64_t last_epoch_=0,last_request_=0;
 };

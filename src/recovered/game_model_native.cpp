@@ -97,6 +97,14 @@ bool GameBackgroundPreparation::AuxiliaryCurrent()const {
         return true;
     }catch(...){return false;}
 }
+bool GameBackgroundPreparation::EffectsCurrent()const {
+    if(!state_.effects_prepared)return true;
+    try{
+        if(!light_motions_.empty()&&light_format_.InitializedDigest()!=light_format_digest_)return false;
+        for(const auto& motion:light_motions_)if(!motion.Live())return false;
+        return light_motions_.size()==light_playbacks_.size();
+    }catch(...){return false;}
+}
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
         const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
     if(state_.live||state_.failed||!owner||epoch<=last_epoch_||candidate.request<=last_request_
@@ -159,14 +167,14 @@ GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& 
 }
 GameFsStatus GameBackgroundPreparation::Draw(const std::shared_ptr<const void>& owner,uint64_t epoch,
         GameGraphics& graphics,const GameMatrix& camera)const {
-    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_||!asset_->Live())
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background staged draw owner retired/changed"};
     // Explicit component/offline view, never an ordinary game scene publish.
     return clone_.Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
 }
 GameFsStatus GameBackgroundPreparation::AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
         std::vector<GameAreaMarkerState>& out)const {
-    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_)
+    if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_)
         return {GameFsCode::Unavailable,0,"background marker-list owner unavailable"};
     return clone_.AreaMarkers(*asset_,out);
 }
@@ -302,7 +310,7 @@ GameFsStatus GameBackgroundPreparation::LoadAuxiliary(const std::shared_ptr<cons
 GameFsStatus GameBackgroundPreparation::Auxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
         std::vector<GameAuxiliaryBindingState>& out)const {
     if(!Current(owner,epoch)||state_.failed||!state_.staged||!state_.auxiliary_staged
-       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_||!asset_->Live())
+       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background auxiliary readback unavailable"};
     std::vector<GameAuxiliaryBindingState> result;
     for(const auto& b:auxiliary_bindings_){
@@ -316,6 +324,75 @@ GameFsStatus GameBackgroundPreparation::Auxiliary(const std::shared_ptr<const vo
     }
     out=std::move(result);return {};
 }
+GameFsStatus GameBackgroundPreparation::PrepareEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        GameBackgroundEffectsPolicy policy,PackageView format) {
+    if(!Current(owner,epoch)||state_.failed||!state_.staged||state_.effects_prepared
+       ||!state_.model_motions_staged||!state_.auxiliary_staged||!RegistrationsCurrent()
+       ||!MotionCountsCurrent()||!AuxiliaryCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background effects owner/prerequisites unavailable"};
+    // No recipe/count is invented for PH1 row2D8->1316C. The strict source
+    // path refuses before I/O or mutations. The Windows policy omits only
+    // this model-motion layer, not actor/script/job/scene completion effects.
+    if(policy!=GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects)
+        return {GameFsCode::Unavailable,0,"source5448 current recipe unbound"};
+    try{
+        std::vector<GameModelMotion> motions;
+        std::vector<GameModelPlayback> controls;
+        std::array<uint8_t,32> digest{};
+        // 5610 tests signed byte for zero, not for positivity. The SAME owned
+        // count image was consumed by52AC; no independently supplied flag.
+        if(model_motion_counts_.ReadU8(state_.variant*2)!=0){
+            const auto bytes=format.Describe().size;Need(bytes>1&&bytes<=96,"light path format extent");
+            digest=format.InitializedDigest();std::string text;
+            for(uint64_t i=0;i<bytes;++i){const auto c=format.ReadU8(i);
+                if(!c){Need(i+1==bytes,"light format trailing bytes");break;}
+                Need(c>=32&&c<127&&i+1<bytes,"light format encoding/termination");text+=char(c);
+            }
+            const std::string prefix_format="%s\\%s\\";
+            Need(text.compare(0,prefix_format.size(),prefix_format)==0,"light path prefix format");
+            const auto name=text.substr(prefix_format.size());const auto marker=name.find("%02d");
+            Need(marker!=std::string::npos&&name.find('%',marker+1)==std::string::npos
+                 &&name.find('%')==marker,"light path number format");
+            const auto safe=[](const std::string& s){for(auto c:s)
+                if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c=='.'))return false;
+                return true;};
+            const auto before=name.substr(0,marker),after=name.substr(marker+4);
+            Need(safe(before)&&safe(after),"unsafe light path filename");
+            BackgroundPackageSource resources(package_,state_.registration);
+            const auto prefix=state_.registration+"\\"+state_.registration+"\\";
+            for(unsigned i=0;i<7;++i){
+                GameModelMotion motion;
+                const auto status=motion.Load(resources,prefix+before+"0"+char('1'+i)+after,*asset_);
+                // Unlike source2E7C's null branch, a failed native file/parse
+                // operation is not absence authority. Retain failure/cleanup.
+                if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+                const auto stats=motion.Statistics();GameModelPlayback control;
+                control.Configure(stats.duration,stats.loop); // 88918 state1, no72B8 activation
+                motions.push_back(std::move(motion));controls.push_back(std::move(control));
+            }
+            Need(format.InitializedDigest()==digest,"light format drift");
+        }
+        Need(Current(owner,epoch)&&RegistrationsCurrent()&&MotionCountsCurrent()&&AuxiliaryCurrent()
+             &&asset_->Live(),"background effects owner drift");
+        light_format_=motions.empty()?PackageView{}:std::move(format);light_format_digest_=digest;
+        light_motions_=std::move(motions);light_playbacks_=std::move(controls);
+        state_.light_templates=uint32_t(light_motions_.size());state_.light_bindings=uint32_t(light_playbacks_.size());
+        for(const auto& motion:light_motions_)state_.light_deferred+=motion.Statistics().deferred_sections;
+        state_.secondary_motions_omitted=true;
+        // 573C returns immediately for this component's selected selector12.
+        state_.special_motion_not_applicable=true;state_.effects_prepared=true;return {};
+    }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
+}
+GameFsStatus GameBackgroundPreparation::LightBindings(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        std::vector<GameBackgroundLightBinding>& out)const {
+    if(!Current(owner,epoch)||state_.failed||!state_.staged||!state_.effects_prepared
+       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_||!asset_->Live())
+        return {GameFsCode::Unavailable,0,"background light binding owner retired/changed"};
+    std::vector<GameBackgroundLightBinding> result;
+    for(size_t i=0;i<light_motions_.size();++i)
+        result.push_back({uint32_t(i),light_playbacks_[i].Snapshot(),light_motions_[i].Statistics()});
+    out=std::move(result);return {};
+}
 GameFsStatus GameBackgroundPreparation::DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
         uint32_t entry,GameGraphics& graphics,const GameMatrix& camera)const {
     std::vector<GameAuxiliaryBindingState> readback;
@@ -326,12 +403,13 @@ GameFsStatus GameBackgroundPreparation::DrawAuxiliary(const std::shared_ptr<cons
 }
 GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
     auto out=state_;
-    if(owner_.expired()||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
-        out.live=out.pending=out.staged=out.model_motions_staged=out.auxiliary_staged=false;
+    if(owner_.expired()||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||(state_.staged&&(!asset_||!asset_->Live())))
+        out.live=out.pending=out.staged=out.model_motions_staged=out.auxiliary_staged=out.effects_prepared=false;
     return out;
 }
 GameFsStatus GameBackgroundPreparation::Close() {
     // Clone/template/material views die before their backing/file is revoked.
+    light_playbacks_.clear();light_motions_.clear();light_format_.Reset();state_.effects_prepared=false;
     auxiliary_bindings_.clear();
     for(auto& entry:auxiliary_entries_)if(entry.child)entry.child->Close();
     main_template_clone_.Close();auxiliary_entries_.clear();auxiliary_asset_.reset();auxiliary_inputs_.clear();

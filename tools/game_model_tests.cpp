@@ -755,6 +755,68 @@ void BackgroundAuxiliaryTests(){
         &&job.Snapshot().auxiliary_staged&&!job.Snapshot().auxiliary_entries&&io->reads==before,"actual all-zero terminator is the only empty source recipe branch");
     Check(bool(job.Close()),"empty recipe owner retires");graphics.Close();
 }
+void BackgroundEffectsTests(){
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    for(unsigned i=0;i<3;++i){const std::string n="FX_"+std::to_string(i);std::copy(n.begin(),n.end(),records->b.begin()+i*20);}
+    auto counts=std::make_shared<Lease>(std::vector<uint8_t>{1,0,0,0,255,0});
+    auto empty_aux=std::make_shared<Lease>(std::vector<uint8_t>(12));
+    auto format=text("%s\\%s\\SYN_FX%02d.DAK");
+    const auto archive=[&](bool missing){
+        std::vector<std::pair<std::string,std::vector<uint8_t>>> packages;
+        for(unsigned v=0;v<3;++v){const auto n="FX_"+std::to_string(v);
+            std::vector<std::pair<std::string,std::vector<uint8_t>>> entries{{n+"\\model01.DVS",Fixture()}};
+            for(unsigned i=1;i<=7;++i)if(!missing||i!=4)entries.push_back({n+"\\SYN_FX0"+std::to_string(i)+".DAK",MotionFixture(i==7)});
+            packages.push_back({n+".BPM",BackgroundArchive(entries)});
+        }return BackgroundArchive(packages);
+    };
+    const auto file=archive(false);auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);
+    GameBackgroundPreparation job;std::shared_ptr<BackgroundFileState> io;uint64_t epoch=0;
+    const auto begin=[&](const std::vector<uint8_t>& bytes,uint32_t period=0){
+        ++epoch;io=std::make_shared<BackgroundFileState>();
+        Check(bool(job.Begin(owner,epoch,{17,12,period,epoch},view(records),std::make_unique<BackgroundFile>(bytes,io)))
+            &&bool(job.Load(owner,epoch))&&bool(job.LoadModelMotions(owner,epoch,view(counts)))
+            &&bool(job.LoadAuxiliary(owner,epoch,view(empty_aux),{},{})),"effects current main/count/auxiliary owners");
+    };
+    const auto reduced=GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects;
+    begin(file);const auto reads=io->reads;
+    Check(!job.PrepareEffects(owner,epoch,GameBackgroundEffectsPolicy::Source5448,view(format))
+        &&!job.Snapshot().effects_prepared&&!job.Snapshot().failed&&io->reads==reads,"strict unknown5448 never becomes empty or ready");
+    std::shared_ptr<const void> alias(owner.get(),[](const void*){});
+    Check(!job.PrepareEffects(alias,epoch,reduced,view(format))&&!job.PrepareEffects(foreign,epoch,reduced,view(format))
+        &&!job.PrepareEffects(owner,epoch+1,reduced,view(format))&&io->reads==reads,"alias-control-block/foreign/stale effects rejected before I/O");
+    Check(bool(job.PrepareEffects(owner,epoch,reduced,view(format))),"real seven DAK/control construction under explicit reduced policy");
+    const auto state=job.Snapshot();Check(state.effects_prepared&&state.secondary_motions_omitted&&state.special_motion_not_applicable
+        &&state.light_templates==7&&state.light_bindings==7&&state.light_deferred==1&&!state.source_committed,"selected573C absent; inactive deferred templates not activated");
+    std::vector<GameBackgroundLightBinding> out;
+    Check(bool(job.LightBindings(owner,epoch,out))&&out.size()==7,"actual light binding copied readback");
+    for(unsigned i=0;i<7;++i)Check(out[i].slot==i&&out[i].playback.state==1&&out[i].playback.time==0
+        &&out[i].playback.samples==0&&out[i].playback.speed==4800&&out[i].motion.duration==160,"constructor controls no invented72B8 calendar sample");
+    Check(!job.PrepareEffects(owner,epoch,reduced,view(format)),"no effects stage replay");
+    out[0].slot=99;const auto original=format->b[8];format->b[8]='X';GameGraphics g;Check(g.Initialize({}),"effects offscreen guards");
+    Check(!job.LightBindings(owner,epoch,out)&&out[0].slot==99&&!job.Snapshot().effects_prepared
+        &&!job.Draw(owner,epoch,g,ModelIdentity()),"format drift refuses whole current staged owner without rebasing output");format->b[8]=original;
+    io->fail_close=true;Check(!job.Close()&&!job.Snapshot().effects_prepared&&io->live,"control/template teardown retained on file close failure");
+    Check(!job.Begin(owner,epoch+1,{17,12,0,epoch+1},view(records),std::make_unique<BackgroundFile>(file,io)),"failed close cannot restart");
+    io->fail_close=false;Check(bool(job.Close())&&!io->live&&!job.LightBindings(owner,epoch,out),"retry retires backing and copied owner access");
+    // Variant1 really has zero presence, so it consumes no path format or DAK.
+    begin(file,1);const auto no_reads=io->reads;
+    Check(bool(job.PrepareEffects(owner,epoch,reduced,{}))&&job.Snapshot().light_templates==0&&io->reads==no_reads
+        &&bool(job.LightBindings(owner,epoch,out))&&out.empty(),"actual5610 zero branch distinct from unknown5448");Check(bool(job.Close()),"zero-presence retirement");
+    // Signed negative presence is nonzero in source; it also loads all seven.
+    begin(file,3);Check(bool(job.PrepareEffects(owner,epoch,reduced,view(format)))&&job.Snapshot().light_bindings==7,"signed negative presence is not false");
+    counts->b[4]=0;Check(!job.LightBindings(owner,epoch,out)&&!job.Snapshot().staged,"same recipe-byte drift invalidates current bindings");counts->b[4]=255;Check(bool(job.Close()),"presence drift teardown");
+    for(const auto& bad:{std::string("%s\\%s\\../%02d"),std::string("%s\\%s\\X%d"),std::string("%s\\%s\\X%02d%02d")}){
+        begin(file);auto malformed=text(bad);Check(!job.PrepareEffects(owner,epoch,reduced,view(malformed))
+            &&job.Snapshot().failed&&!job.Snapshot().effects_prepared&&!job.Snapshot().staged,"malformed format cannot publish bindings");Check(bool(job.Close()),"bad format cleanup");
+    }
+    begin(archive(true));Check(!job.PrepareEffects(owner,epoch,reduced,view(format))&&job.Snapshot().failed
+        &&!job.Snapshot().effects_prepared&&!job.Snapshot().staged,"failed fourth DAK load never publishes partial controls");Check(bool(job.Close()),"partial-load cleanup");
+    begin(file);Check(bool(job.PrepareEffects(owner,epoch,reduced,view(format))),"new epoch retries real load");
+    format->live=false;Check(!job.LightBindings(owner,epoch,out)&&!job.Snapshot().live,"retired format refuses current binding");format->live=true;
+    owner.reset();Check(!job.LightBindings(foreign,epoch,out)&&!job.Snapshot().live,"expired owner no effects authority");Check(bool(job.Close()),"final effects cleanup");g.Close();
+}
 struct TitleSource final : GameResourceSource {
     bool fail = false;
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -1269,6 +1331,7 @@ int main() {
         AreaMarkerTests();
         BackgroundModelMotionTests();
         BackgroundAuxiliaryTests();
+        BackgroundEffectsTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
