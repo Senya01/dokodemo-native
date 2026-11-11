@@ -2,6 +2,7 @@
 #include "game_ui_resource_native.h"
 #include "game_graphics_native.h"
 #include "model_formats.hpp"
+#include "rng_native.h"
 #include <memory>
 #include <functional>
 
@@ -233,10 +234,40 @@ struct GameBackgroundCandidate {
 // Selected5448 names/count are unbound. This explicit Windows visual subset
 // omits that secondary-motion layer; it cannot service6D6C or grant readiness.
 enum class GameBackgroundEffectsPolicy { Source5448, WindowsReducedBackgroundEffects };
+// Worker-owned live clock/RNG binding. No default date/seed; Close or seed
+// reinitialization revokes every weak job borrower. Not gameplay authority.
+class GameBackgroundRuntime final {
+  public:
+    GameBackgroundRuntime()=default;
+    GameBackgroundRuntime(const GameBackgroundRuntime&)=delete;
+    GameBackgroundRuntime& operator=(const GameBackgroundRuntime&)=delete;
+    using Clock=std::function<std::array<uint32_t,7>()>;
+    GameFsStatus Initialize(Clock,RngNativeOwner&);
+    void Close()noexcept{clock_={};rng_=nullptr;}
+    bool Live()const noexcept;
+    uint64_t Identity()const noexcept{return identity_;}
+  private:
+    friend class GameBackgroundPreparation;
+    GameFsStatus Read(std::array<uint32_t,7>&);
+    Clock clock_;
+    RngNativeOwner* rng_=nullptr; // parent closes this binding before its RNG
+    std::weak_ptr<const void> rng_lifetime_;
+    uint64_t identity_=0,lineage_=0,reads_=0;
+};
 struct GameBackgroundLightBinding {
     uint32_t slot=0;
     GamePlaybackState playback;
     GameMotionStatistics motion;
+};
+struct GameBackgroundAppliedState {
+    uint64_t runtime=0,clock_reads=0,rng_before=0,rng_after=0;
+    uint32_t rng_calls=0,light_slot=0,samples=0;
+    std::array<uint32_t,7> calendar{};
+    std::vector<uint32_t> selected_entries;
+    std::vector<int32_t> child_phases;
+    std::vector<GameModelPose> main_pose;
+    std::vector<std::vector<GameModelPose>> child_poses; // selected order, empty when no child
+    GameModelClone::LightSelection lights;
 };
 struct GameBackgroundPreparationSnapshot {
     bool live=false,pending=false,package_read=false,staged=false,failed=false,model_motions_staged=false;
@@ -286,6 +317,13 @@ class GameBackgroundPreparation final {
                                 GameBackgroundEffectsPolicy,PackageView light_format);
     GameFsStatus LightBindings(const std::shared_ptr<const void>& owner,uint64_t epoch,
                                 std::vector<GameBackgroundLightBinding>& out)const;
+    // Actual635C/61E4 selection plus709C/72B8 activation. Samples are an
+    // explicit Windows scheduling pass, not source job/VM completion.
+    GameFsStatus ActivateEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                 std::weak_ptr<GameBackgroundRuntime> runtime);
+    GameFsStatus SampleEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t delta);
+    GameFsStatus AppliedEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                GameBackgroundAppliedState& out)const;
     // Explicit component preview of one prepared child; not source visibility.
     GameFsStatus DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t entry,
                                GameGraphics&,const GameMatrix& view_projection)const;
@@ -301,6 +339,7 @@ class GameBackgroundPreparation final {
     bool MotionCountsCurrent()const;
     bool AuxiliaryCurrent()const;
     bool EffectsCurrent()const;
+    bool RuntimeCurrent()const;
     struct AuxiliaryEntry {
         std::array<uint32_t,3> words{};
         std::array<std::unique_ptr<GameModelMotion>,3> motions;
@@ -330,6 +369,9 @@ class GameBackgroundPreparation final {
     std::array<uint8_t,32> light_format_digest_{};
     std::vector<GameModelMotion> light_motions_;
     std::vector<GameModelPlayback> light_playbacks_;
+    std::weak_ptr<GameBackgroundRuntime> runtime_;
+    GameBackgroundAppliedState applied_;
+    bool activated_=false;
     GameBackgroundPreparationSnapshot state_;
     uint64_t last_epoch_=0,last_request_=0;
 };

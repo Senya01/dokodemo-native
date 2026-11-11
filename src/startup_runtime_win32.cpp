@@ -1377,6 +1377,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         game_content.SetNativeTitleLayout(options.native_title_layout);
         game_content.SetTitleRng(game_rng);
         game_content.SetCalendar(state.game_boot.calendar_words);
+        const auto background_runtime=game_content.SetBackgroundRuntime([]{
+            platform::WindowsRngInitializationSample current;
+            if(!platform::CaptureWindowsRngInitialization(current))throw std::runtime_error("Native background current RTC read failed");
+            return recovered::GameCalendarDE0(current.local_date_bytes);
+        });
+        if(!background_runtime)throw NativeFailure{};
         game_content.SetActorClock([this]{
             platform::WindowsRngInitializationSample current;
             if(!platform::CaptureWindowsRngInitialization(current))throw std::runtime_error("Native KSC Windows local RTC read failed");

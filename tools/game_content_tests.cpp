@@ -64,6 +64,12 @@ int main() {
         auto boot_owner = std::make_unique<GameContentBoot>();
         auto& boot = *boot_owner;
         Check(boot.InitializeBB8(arena, vm) && boot.Snapshot().registered_records == 6, "two actual typed owners/six records");
+        RngNativeOwner background_rng;background_rng.ImportCurrentState64(7,17,"explicit content component RNG");
+        Check(!boot.SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,1,0,0,7,1,2026}};}),"content cannot bind absent current RNG");
+        boot.SetTitleRng(background_rng);
+        Check(bool(boot.SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,1,0,0,7,1,2026}};})),"production content owns current clock/RNG binding");
+        auto background=boot.BackgroundRuntime().lock();Check(background&&background->Live(),"weak current producer bound");
+        Check(!boot.SetBackgroundRuntime([]{return std::array<uint32_t,7>{};}),"no observer/provider replacement");
         Check(!vm.Close(), "VM cannot retire live loading tasks");
         Check(boot.Reset24994() && boot.ConfigureImportCallback5334C(), "reset and explicit unavailable interrupt policy");
         Check(!boot.Snapshot().import_callback_registered && boot.StateWord(0x10) == 2 && boot.StateWord(0x14) == 3
@@ -86,6 +92,7 @@ int main() {
             && texture->pixels.ReadU8(0) == 0xCD && !boot.Font().Texture(2), "real typed descriptors borrow distinct original spans");
         PackageView stale = texture->pixels;
         Check(boot.Close() && arena.Used() == baseline && !boot.Snapshot().font_ready && !boot.Font().Texture(0), "content retires before parent");
+        Check(!background->Live()&&boot.BackgroundRuntime().expired(),"content retirement revokes external producer borrowers");
         Check(vm.Close() && !arena.Used() && bool(fs.Close()), "all native tasks/allocations/file leases retire");
         bool refused = false;
         try { (void)stale.ReadU8(0); } catch (const PackageStorageError&) { refused = true; }

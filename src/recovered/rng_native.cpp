@@ -1,5 +1,6 @@
 #include "rng_native.h"
 #include <utility>
+#include <atomic>
 
 namespace dokodemo::recovered {
 namespace {
@@ -57,6 +58,8 @@ void RngNativeOwner::ImportCurrentState64(uint64_t state, uint64_t identity,
     storage_->scenario_identity = identity;
     storage_->origin = RngSeedOrigin::VerifiedCurrentState64;
     storage_->provenance = std::move(provenance);
+    static std::atomic<uint64_t> next_lineage{0};
+    lineage_=++next_lineage;
 }
 void RngNativeOwner::ApplyInitializerTimeT32(uint32_t word, uint64_t identity,
                                           std::string provenance) {

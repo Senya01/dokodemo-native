@@ -817,6 +817,82 @@ void BackgroundEffectsTests(){
     format->live=false;Check(!job.LightBindings(owner,epoch,out)&&!job.Snapshot().live,"retired format refuses current binding");format->live=true;
     owner.reset();Check(!job.LightBindings(foreign,epoch,out)&&!job.Snapshot().live,"expired owner no effects authority");Check(bool(job.Close()),"final effects cleanup");g.Close();
 }
+void BackgroundSamplingTests(){
+    {auto seed=std::make_unique<RngNativeOwner>();seed->ImportCurrentState64(1,7,"synthetic retired owner");
+     auto copy=*seed;auto input=std::make_shared<GameBackgroundRuntime>();
+     Check(bool(input->Initialize([]{return std::array<uint32_t,7>{{0,0,0,0,1,1,2026}};},*seed)),"borrow real RNG object lifetime");
+     seed.reset();Check(copy.Available()&&!input->Live(),"COW copy cannot keep destroyed RNG object binding live");}
+
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    for(unsigned i=0;i<3;++i){const std::string n="SAMPLE_"+std::to_string(i);std::copy(n.begin(),n.end(),records->b.begin()+i*20);}
+    auto counts=std::make_shared<Lease>(std::vector<uint8_t>{1,0,1,0,1,0});
+    auto recipe=std::make_shared<Lease>(std::vector<uint8_t>(7*12));
+    for(unsigned i=0;i<6;++i){Word(recipe->b,i*12,101);if(i%2)Word(recipe->b,i*12+8,102);}
+    const auto chars=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    auto aux_format=chars("%s\\%s\\SYN_MODEL.DVS"),light_format=chars("%s\\%s\\FX%02d.DAK"),name=chars("A.dak");
+    const auto resolver=[&](uint32_t token,PackageView& out)->GameFsStatus{if(token!=101&&token!=102)return {GameFsCode::Unavailable,0,"synthetic token"};out=view(name);return {};};
+    std::vector<std::pair<std::string,std::vector<uint8_t>>> entries{{"SAMPLE_0\\model01.DVS",Fixture()},{"SAMPLE_0\\SYN_MODEL.DVS",Fixture()},{"SAMPLE_0\\A.dak",MotionFixture()}};
+    for(unsigned i=1;i<=7;++i)entries.push_back({"SAMPLE_0\\FX0"+std::to_string(i)+".DAK",MotionFixture()});
+    const auto file=BackgroundArchive({{"SAMPLE_0.BPM",BackgroundArchive(entries)}});
+    for(uint64_t seed:{0,1,2,3}){ // fixed synthetic cases, no live seed search
+        RngNativeOwner rng;rng.ImportCurrentState64(seed,91,"synthetic sampling fixture");
+        std::array<uint32_t,7> calendar{{0,0,0,0,1,1,2026}};unsigned reads=0;
+        auto runtime=std::make_shared<GameBackgroundRuntime>();
+        Check(bool(runtime->Initialize([&]{++reads;return calendar;},rng)),"initialize current clock and actual RNG lineage");
+        const std::shared_ptr<const void> owner=runtime;
+        GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();
+        const auto prepare=[&](uint64_t epoch){Check(bool(job.Begin(owner,epoch,{1,12,0,epoch},view(records),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,epoch))
+            &&bool(job.LoadModelMotions(owner,epoch,view(counts)))&&bool(job.LoadAuxiliary(owner,epoch,view(recipe),view(aux_format),resolver))
+            &&bool(job.PrepareEffects(owner,epoch,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,view(light_format))),"real current staged sampling owner");};
+        prepare(1);auto foreign=std::make_shared<GameBackgroundRuntime>();Check(bool(foreign->Initialize([&]{return calendar;},rng)),"other valid producer");
+        Check(!job.ActivateEffects(owner,1,foreign)&&!job.ActivateEffects(owner,2,runtime)&&rng.CurrentSeed64()==seed&&!reads,"foreign/stale activation never reads or advances");
+        calendar[1]=1; // changed since initialization: Read must use CURRENT producer, not a saved date
+        Check(bool(job.ActivateEffects(owner,1,runtime))&&reads==1,"current clock read and source selection");
+        uint64_t expected=seed;unsigned calls=0;const auto next=[&](){++calls;expected=expected*UINT64_C(0x5851f42d4c957f2d)+1;return uint32_t(expected>>32)&0x7fffffff;};
+        const auto n=next()%4;std::vector<uint32_t> pool{0,1,2,3,4,5},selected;
+        for(unsigned k=0;k<n;++k){const auto at=next()%pool.size();selected.push_back(pool[at]);pool.erase(pool.begin()+at);}
+        std::vector<int32_t> phases;for(unsigned k=0;k<n;++k)phases.push_back(int32_t(next()%6));
+        GameBackgroundAppliedState applied;Check(bool(job.AppliedEffects(owner,1,applied))&&applied.selected_entries==selected&&applied.child_phases==phases
+            &&applied.rng_calls==calls&&applied.rng_before==seed&&applied.rng_after==expected&&rng.CurrentSeed64()==expected,"exact61E4 compaction and child-only extra RNG call order");
+        Check(applied.calendar==calendar&&applied.light_slot==0&&!applied.samples,"month1 before day7 selects previous month row0, unsampled activation");
+        Check(!job.ActivateEffects(owner,1,runtime)&&rng.CurrentSeed64()==expected&&reads==1,"activation cannot replay RNG or clock");
+        Check(bool(job.SampleEffects(owner,1,4800))&&bool(job.AppliedEffects(owner,1,applied))&&applied.samples==1
+            &&applied.main_pose[0].position[0]!=0&&applied.child_poses.size()==n,"actual main/child pose consumers sampled");
+        for(const auto& poses:applied.child_poses)Check(!poses.empty()&&poses[0].position[0]==10,"selected child actual time0 DAK translation");
+        const auto pose=applied.main_pose[0].position;
+        Check(bool(job.SampleEffects(owner,1,4800))&&bool(job.AppliedEffects(owner,1,applied))&&applied.main_pose[0].position!=pose
+            &&rng.CurrentSeed64()==expected&&reads==1,"speed30 advances real seasonal pose, no extra random or RTC reads");
+        std::vector<GameBackgroundLightBinding> lights;Check(bool(job.LightBindings(owner,1,lights))&&lights[0].playback.speed==30
+            &&lights[0].playback.sampled_time==90&&lights[0].playback.time==120,"source clock60 plus native30-per-frame sampling");
+        for(unsigned i=1;i<7;++i)Check(lights[i].playback.state==1&&!lights[i].playback.samples,"unselected seasonal controls stay inactive");
+        std::vector<GameAuxiliaryBindingState> bindings;Check(bool(job.Auxiliary(owner,1,bindings)),"selected auxiliary readback");
+        for(const auto& b:bindings){const bool active=b.target!=GameAuxiliaryTarget::MainTemplate&&std::find(selected.begin(),selected.end(),b.entry)!=selected.end();
+            Check(b.playback.samples==(active?2u:0u),"only source-selected non-template controls execute");}
+        const auto oldlineage=rng.Lineage();rng.ImportCurrentState64(expected,91,"synthetic sampling fixture");
+        Check(rng.Lineage()!=oldlineage&&!runtime->Live()&&!job.SampleEffects(owner,1,4800)&&!job.Snapshot().live,"same bytes reseed still revokes lineage and job");
+        Check(bool(job.Close()),"retired producer controls/template cleanup");
+    }
+    // Bad current clock and producer retirement before/during sampling are refusals.
+    for(unsigned failure=0;failure<4;++failure){
+        RngNativeOwner rng;rng.ImportCurrentState64(2,92,"synthetic failure fixture");auto runtime=std::make_shared<GameBackgroundRuntime>();
+        std::array<uint32_t,7> date{{0,1,0,0,7,1,2026}};
+        Check(bool(runtime->Initialize([&]{if(failure==1)runtime->Close();return date;},rng)),"failure current runtime");
+        const std::shared_ptr<const void> owner=runtime;GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();
+        auto bad_entries=entries;if(failure==3)bad_entries.back().second=MotionFixture(true);
+        const auto input=BackgroundArchive({{"SAMPLE_0.BPM",BackgroundArchive(bad_entries)}});
+        Check(bool(job.Begin(owner,1,{1,12,0,1},view(records),std::make_unique<BackgroundFile>(input,io)))&&bool(job.Load(owner,1))
+            &&bool(job.LoadModelMotions(owner,1,view(counts)))&&bool(job.LoadAuxiliary(owner,1,view(recipe),view(aux_format),resolver))
+            &&bool(job.PrepareEffects(owner,1,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,view(light_format))),"failure prepared real job");
+        if(failure==0)date[5]=0;
+        if(failure<2)Check(!job.ActivateEffects(owner,1,runtime)&&rng.CurrentSeed64()==2,"invalid/revoked clock never consumes seed");
+        else if(failure==3){date[5]=6;Check(!job.ActivateEffects(owner,1,runtime)&&job.Snapshot().failed
+            &&rng.CurrentSeed64()!=2&&!job.Snapshot().staged,"selected deferred consumer fails after actual source RNG effects, no success rollback");}
+        else{Check(bool(job.ActivateEffects(owner,1,runtime)),"valid current activation before input drift");light_format->b[6]='Q';
+            Check(!job.SampleEffects(owner,1,4800),"post-activation format drift refuses sampling");light_format->b[6]='F';}
+        Check(bool(job.Close()),"failed current sampling owner closes");
+    }
+}
 struct TitleSource final : GameResourceSource {
     bool fail = false;
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -1332,6 +1408,7 @@ int main() {
         BackgroundModelMotionTests();
         BackgroundAuxiliaryTests();
         BackgroundEffectsTests();
+        BackgroundSamplingTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();

@@ -174,7 +174,12 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameFsStatus BeginStorage(GameStorage &storage, bool test_missing_device_prompt = false);
     bool TickInteractive(GameFilesystem &filesystem, GameStorage &storage, GameGraphics &graphics);
     void SetNativeTitleLayout(NativeTitleLayout value){title_layout_=value;}
-    void SetTitleRng(RngNativeOwner& rng){title_rng_=&rng;}
+    void SetTitleRng(RngNativeOwner& rng){
+        if(title_rng_!=&rng&&background_runtime_){background_runtime_->Close();background_runtime_.reset();}
+        title_rng_=&rng;
+    }
+    GameFsStatus SetBackgroundRuntime(GameBackgroundRuntime::Clock);
+    std::weak_ptr<GameBackgroundRuntime> BackgroundRuntime()const{return background_runtime_;}
     void SetCalendar(const std::array<uint32_t,7>& value){calendar_=value;calendar_year_=int32_t(value[6]);}
     void SetActorClock(GameActorScript::ClockWord clock){actor_clock_=std::move(clock);}
     void SetSoundOutput(audio::Game73SelectedSink* sink){sound_bank_.SetSink(sink);}
@@ -282,6 +287,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool TickActorDictionary(GameFilesystem&,GameGraphics&);
     NativeTitleLayout title_layout_=NativeTitleLayout::CharacterEntrance;
     RngNativeOwner* title_rng_=nullptr;
+    std::shared_ptr<GameBackgroundRuntime> background_runtime_;
     int32_t calendar_year_=0;
     std::array<uint32_t,7> calendar_{};
     GameResourceSource *platform_ = nullptr;

@@ -29,8 +29,15 @@ public:
 // the same RngNativeOwner object. No process-global RNG is installed here.
 class RngNativeOwner {
 public:
+    RngNativeOwner()=default;
+    RngNativeOwner(const RngNativeOwner& other):storage_(other.storage_),lineage_(other.lineage_){}
+    RngNativeOwner& operator=(const RngNativeOwner& other){storage_=other.storage_;lineage_=other.lineage_;return *this;}
     bool Available() const noexcept;
     uint64_t CurrentSeed64()const noexcept{return storage_?storage_->seed:0;}
+    // Native seed-owner lifetime, unchanged by draws; re-import invalidates
+    // borrowers even if seed/identity/provenance text happen to be equal.
+    uint64_t Lineage()const noexcept{return lineage_;}
+    std::weak_ptr<const void> Lifetime()const noexcept{return lifetime_;}
     RngSnapshot Snapshot() const;
     void ImportCurrentState64(uint64_t state, uint64_t scenario_identity,
                               std::string provenance);
@@ -47,6 +54,9 @@ public:
 private:
     void Detach();
     std::shared_ptr<RngSnapshot> storage_;
+    uint64_t lineage_=0;
+    // Object lifetime, not shared COW seed storage. Copies get distinct tokens.
+    std::shared_ptr<const void> lifetime_=std::make_shared<uint8_t>(uint8_t(0));
 };
 // Words include the header at[0]. Borrowed views preserve list/ring aliases;
 // the caller proves their mapped writable/readable extent and lifetime.

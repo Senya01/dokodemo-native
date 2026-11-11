@@ -1,5 +1,7 @@
 #include "game_model_native.h"
 #include "core_hash.h"
+#include "game_actor_runtime_native.h" // existing709C arithmetic, not a second table
+#include <atomic>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -72,6 +74,26 @@ class BackgroundPackageSource final:public GameResourceSource {
     std::string mount_;
 };
 }
+GameFsStatus GameBackgroundRuntime::Initialize(Clock clock,RngNativeOwner& rng){
+    if(identity_||!clock||!rng.Available()||!rng.Lineage())
+        return {GameFsCode::Unavailable,0,"background live runtime producer unavailable/replaced"};
+    const auto seed=rng.Snapshot();
+    if(!seed.scenario_identity||seed.provenance.empty()||seed.origin==RngSeedOrigin::InitialImageModel)
+        return {GameFsCode::Unavailable,0,"background requires current initialized RNG lineage"};
+    static std::atomic<uint64_t> next{0};identity_=++next;clock_=std::move(clock);rng_=&rng;rng_lifetime_=rng.Lifetime();lineage_=rng.Lineage();return {};
+}
+bool GameBackgroundRuntime::Live()const noexcept {
+    return identity_&&clock_&&rng_&&!rng_lifetime_.expired()&&rng_->Available()&&rng_->Lineage()==lineage_;
+}
+GameFsStatus GameBackgroundRuntime::Read(std::array<uint32_t,7>& out){
+    if(!Live())return {GameFsCode::Unavailable,0,"background runtime retired/reseeded"};
+    try{const auto read=clock_;const auto value=read();
+        Need(Live(),"background producer changed during read");
+        Need(value[5]>=1&&value[5]<=12&&value[4]>=1&&value[4]<=31
+             &&value[3]<24&&value[2]<60&&value[1]<60,"background current civil date/time unavailable");
+        out=value;++reads_;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 bool GameBackgroundPreparation::Current(const std::shared_ptr<const void>& owner,uint64_t epoch)const {
     const auto current=owner_.lock();
     return owner&&current&&state_.live&&epoch&&epoch==state_.epoch&&current==owner
@@ -98,12 +120,17 @@ bool GameBackgroundPreparation::AuxiliaryCurrent()const {
     }catch(...){return false;}
 }
 bool GameBackgroundPreparation::EffectsCurrent()const {
+    if(!RuntimeCurrent())return false;
     if(!state_.effects_prepared)return true;
     try{
         if(!light_motions_.empty()&&light_format_.InitializedDigest()!=light_format_digest_)return false;
         for(const auto& motion:light_motions_)if(!motion.Live())return false;
         return light_motions_.size()==light_playbacks_.size();
     }catch(...){return false;}
+}
+bool GameBackgroundPreparation::RuntimeCurrent()const {
+    if(!activated_)return true;
+    const auto runtime=runtime_.lock();return runtime&&runtime->Live()&&runtime->Identity()==applied_.runtime;
 }
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
         const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
@@ -386,11 +413,94 @@ GameFsStatus GameBackgroundPreparation::PrepareEffects(const std::shared_ptr<con
 GameFsStatus GameBackgroundPreparation::LightBindings(const std::shared_ptr<const void>& owner,uint64_t epoch,
         std::vector<GameBackgroundLightBinding>& out)const {
     if(!Current(owner,epoch)||state_.failed||!state_.staged||!state_.effects_prepared
-       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_||!asset_->Live())
+       ||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!RuntimeCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background light binding owner retired/changed"};
     std::vector<GameBackgroundLightBinding> result;
     for(size_t i=0;i<light_motions_.size();++i)
         result.push_back({uint32_t(i),light_playbacks_[i].Snapshot(),light_motions_[i].Statistics()});
+    out=std::move(result);return {};
+}
+GameFsStatus GameBackgroundPreparation::ActivateEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        std::weak_ptr<GameBackgroundRuntime> input){
+    std::vector<GameBackgroundLightBinding> check;
+    const auto runtime=input.lock();
+    const std::shared_ptr<const void> parent=runtime;
+    if(activated_||!runtime||!runtime->Live()||parent!=owner||parent.owner_before(owner)||owner.owner_before(parent)
+       ||!LightBindings(owner,epoch,check))
+        return {GameFsCode::Unavailable,0,"background activation owner/runtime/replay refused"};
+    // 61E4 has eight physical candidate/output slots. Preparation's larger
+    // Windows storage bound does not widen this source selection domain.
+    if(auxiliary_entries_.size()>8)return {GameFsCode::Unavailable,0,"unimplemented61E4 candidate extent"};
+    std::array<uint32_t,7> calendar;auto status=runtime->Read(calendar);if(!status)return status;
+    if(!Current(owner,epoch)||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent())
+        return {GameFsCode::Unavailable,0,"background input drift during current clock read"};
+    try{
+        GameBackgroundAppliedState result;result.runtime=runtime->Identity();result.clock_reads=runtime->reads_;result.calendar=calendar;
+        result.light_slot=SceneSeason709C(calendar[5],calendar[4]);
+        auto& rng=*runtime->rng_;result.rng_before=rng.CurrentSeed64();
+        const auto draw=[&](){++result.rng_calls;return rng.NextC3234();};
+        const auto count=uint32_t(auxiliary_entries_.size());const auto n=draw()%(count>=3?4:count+1);
+        std::vector<uint32_t> remaining;for(uint32_t i=0;i<count;++i)remaining.push_back(i);
+        for(uint32_t i=0;i<n;++i){const auto at=draw()%uint32_t(remaining.size());
+            result.selected_entries.push_back(remaining[at]);remaining.erase(remaining.begin()+at);}
+        // Source still consumes61E4's draw before this special overwrite.
+        if(n==1&&count==1)result.selected_entries[0]=0;
+        for(auto& binding:auxiliary_bindings_)binding.playback.Stop();
+        for(const auto selected:result.selected_entries){
+            auto& entry=auxiliary_entries_.at(selected);bool present=false;
+            for(const auto& motion:entry.motions)present|=bool(motion); // exact5BFC any-template presence
+            int32_t phase=-1;
+            if(present){
+                for(unsigned slot=0;slot<3;++slot){
+                    for(auto& binding:auxiliary_bindings_)if(binding.entry==selected&&binding.slot==slot){
+                        Need(!entry.motions[slot]->Statistics().deferred_sections,"unimplemented selected auxiliary motion");
+                        if(binding.target!=GameAuxiliaryTarget::MainTemplate)binding.playback.Start(0);
+                    }
+                    if(slot==0&&entry.child)phase=int32_t(draw()%6); // source662C, before slots1/2
+                }
+            }
+            result.child_phases.push_back(phase);
+        }
+        for(auto& control:light_playbacks_)control.Stop();
+        if(!light_playbacks_.empty()){
+            Need(result.light_slot<light_playbacks_.size(),"background seasonal slot outside bindings");
+            Need(!light_motions_[result.light_slot].Statistics().deferred_sections,"unimplemented selected light motion");
+            auto& control=light_playbacks_[result.light_slot];control.SetSpeed(30);
+            control.Start(calendar[3]*216000+calendar[2]*3600+calendar[1]*60);
+        }
+        Need(runtime->Live()&&Current(owner,epoch),"background producer retired during activation");
+        result.rng_after=rng.CurrentSeed64();runtime_=runtime;applied_=std::move(result);activated_=true;
+        return {};
+    }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
+}
+GameFsStatus GameBackgroundPreparation::SampleEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t delta){
+    std::vector<GameBackgroundLightBinding> check;
+    if(!activated_||!LightBindings(owner,epoch,check))
+        return {GameFsCode::Unavailable,0,"background sample current owner unavailable"};
+    try{
+        // Windows scheduling boundary: sample the admitted controls in source
+        // construction order, then recompute actual world/marker transforms.
+        for(auto& binding:auxiliary_bindings_){
+            auto& entry=auxiliary_entries_[binding.entry];
+            auto* target=binding.target==GameAuxiliaryTarget::Child?entry.child.get():
+                binding.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:&clone_;
+            const auto status=binding.playback.Apply(*entry.motions[binding.slot],*target,delta);
+            if(!status)throw std::runtime_error(status.detail);
+        }
+        for(size_t i=0;i<light_playbacks_.size();++i){const auto status=light_playbacks_[i].Apply(light_motions_[i],clone_,delta);
+            if(!status)throw std::runtime_error(status.detail);}
+        for(auto& entry:auxiliary_entries_)if(entry.child){const auto status=entry.child->Update(ModelIdentity());if(!status)throw std::runtime_error(status.detail);}
+        auto status=clone_.Update(ModelIdentity());if(!status)throw std::runtime_error(status.detail);
+        ++applied_.samples;return {};
+    }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
+}
+GameFsStatus GameBackgroundPreparation::AppliedEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        GameBackgroundAppliedState& out)const {
+    std::vector<GameBackgroundLightBinding> check;
+    if(!activated_||!LightBindings(owner,epoch,check))return {GameFsCode::Unavailable,0,"background applied readback unavailable"};
+    auto result=applied_;result.main_pose=static_cast<const GameModelClone&>(clone_).Pose();result.lights=clone_.Lights();
+    for(auto i:result.selected_entries){const auto& child=auxiliary_entries_[i].child;
+        result.child_poses.push_back(child?static_cast<const GameModelClone&>(*child).Pose():std::vector<GameModelPose>{});}
     out=std::move(result);return {};
 }
 GameFsStatus GameBackgroundPreparation::DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
@@ -409,6 +519,7 @@ GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
 }
 GameFsStatus GameBackgroundPreparation::Close() {
     // Clone/template/material views die before their backing/file is revoked.
+    runtime_.reset();activated_=false;applied_={};
     light_playbacks_.clear();light_motions_.clear();light_format_.Reset();state_.effects_prepared=false;
     auxiliary_bindings_.clear();
     for(auto& entry:auxiliary_entries_)if(entry.child)entry.child->Close();

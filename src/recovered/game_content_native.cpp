@@ -204,6 +204,12 @@ GameFsStatus GameFontResource::RasterizeCp932(const std::vector<std::string> &li
 GameContentBoot::~GameContentBoot() {
     (void)Close();
 }
+GameFsStatus GameContentBoot::SetBackgroundRuntime(GameBackgroundRuntime::Clock clock){
+    if(!arena_||!title_rng_||background_runtime_)
+        return {GameFsCode::Unavailable,0,"background runtime requires current initialized content/RNG owner"};
+    auto runtime=std::make_shared<GameBackgroundRuntime>();const auto status=runtime->Initialize(std::move(clock),*title_rng_);
+    if(status)background_runtime_=std::move(runtime);return status;
+}
 bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     if (arena_)
         return false;
@@ -949,6 +955,7 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    if(background_runtime_){background_runtime_->Close();background_runtime_.reset();}
     main_menu_entry_gate_.Stop();main_menu_.Close();notebook_.Close();wordmemo_.Close();diary_.Close();system_option_.Abort();state_.system_option=system_option_.Snapshot();state_.diary=diary_.Snapshot();state_.wordmemo=wordmemo_.Snapshot();state_.main_menu=main_menu_.Snapshot();state_.notebook=notebook_.Snapshot();
     main_menu_target_={};main_menu_lease_={};state_.main_menu_available=false;state_.main_menu_phase=0;
     returned_interaction_.Close();state_.returned_interaction=returned_interaction_.Snapshot();
