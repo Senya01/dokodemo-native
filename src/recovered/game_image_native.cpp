@@ -1,6 +1,8 @@
 #include "game_image_native.h"
 #include "game_graphics_native.h"
 #include <algorithm>
+#include "../core_hash.h"
+#include <atomic>
 #include <stdexcept>
 
 namespace dokodemo::recovered {
@@ -134,10 +136,14 @@ uint32_t Value(const PackageView &image, const Raster &h, uint32_t x, uint32_t y
     return image.ReadLE32(at);
 }
 } // namespace
+bool GameImage::SourceCurrent()const noexcept {
+    try{return generation_&&width_&&height_&&pixels_.size()==uint64_t(width_)*height_&&image_.InitializedDigest()==source_digest_;}catch(...){return false;}
+}
 GameFsStatus GameImage::DecodeGim(PackageView image) {
     Close();
     try {
         const auto size = image.Describe().size;
+        const auto digest=image.InitializedDigest();
         constexpr uint8_t magic[16] = {'M', 'I', 'G', '.', '0', '0', '.', '1', 'P', 'S', 'P', 0, 0, 0, 0, 0};
         Require(size >= 32 && size <= UINT32_MAX, "GIM image size");
         for (unsigned i = 0; i < 16; ++i)
@@ -185,6 +191,8 @@ GameFsStatus GameImage::DecodeGim(PackageView image) {
                 } else
                     decoded[size_t(y) * h.width + x] = Direct(value, h.format);
             }
+        Require(image.InitializedDigest()==digest,"GIM source changed during decode");
+        source_digest_=digest;static std::atomic<uint64_t> next{0};generation_=++next;
         image_ = std::move(image);
         pixels_ = std::move(decoded);
         width_ = h.width;

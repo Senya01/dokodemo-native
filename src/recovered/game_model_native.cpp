@@ -88,6 +88,17 @@ std::vector<std::string> SupportUnits(const std::string& text){
         else{if(c>32)out.push_back(text.substr(i,1));++i;}}
     return out;
 }
+std::string SupportGlyphPath(const std::string& format,GameSupportGlyph glyph){
+    std::string path;unsigned slot=0;
+    for(size_t i=0;i<format.size();){
+        if(format[i]!='%'){const auto c=uint8_t(format[i++]);Need(c>=33&&c<127&&c!=':',"support glyph path literal");path+=char(c);continue;}
+        Need(slot<3&&i+4<=format.size()&&format[i+1]=='0'&&(format[i+2]=='3'||format[i+2]=='5')&&format[i+3]=='d',"unimplemented glyph path format");
+        const auto width=size_t(format[i+2]-'0');const int value=slot<2?int(glyph.style):int(glyph.code);++slot;i+=4;
+        auto digits=std::to_string(value<0?-value:value);const size_t sign=value<0?1:0;
+        if(digits.size()+sign<width)digits.insert(0,width-digits.size()-sign,'0');if(sign)path+='-';path+=digits;
+    }
+    Need(slot==3&&!path.empty()&&path.size()<256&&path[0]!='/'&&uint8_t(path[0])!=92&&path.find("..")==path.npos,"support glyph path extent/domain");return path;
+}
 void SupportGlyphs(std::vector<GameSupportGlyph>& queue,bool& capped,const std::string& text,int32_t style){
     const auto low=uint32_t(style)&255;const auto signed_style=int8_t(low<128?int(low):int(low)-256);
     for(size_t i=0;i<text.size();){const auto c=uint8_t(text[i++]);uint16_t code=c;
@@ -105,7 +116,8 @@ GameSupportTextOwner::Atom GameSupportTextOwner::Capture(script::Vm& vm,const sc
 }
 bool GameSupportTextOwner::InputsCurrent()const{
     try{for(const auto& r:inputs_)if(r.view.InitializedDigest()!=r.digest)return false;
-        for(const auto& a:templates_)if(!a->SourceCurrent())return false;return true;}catch(...){return false;}
+        for(const auto& a:templates_)if(!a->SourceCurrent())return false;
+        for(const auto& image:glyph_images_)if(!image->SourceCurrent())return false;return true;}catch(...){return false;}
 }
 bool GameSupportTextOwner::Current(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm)const{
     try{const auto held=owner_.lock();const auto w=vm.current_witness();
@@ -219,15 +231,69 @@ GameFsStatus GameSupportTextOwner::Read(const std::shared_ptr<const void>& owner
         std::vector<GameAreaMarkerState> markers;if(!parent->AreaMarkers(*parent->Asset(),markers))return {GameFsCode::Unavailable,0,"support parent pose stale"};
         for(const auto& b:state_.placements){const auto m=std::find_if(markers.begin(),markers.end(),[&](const GameAreaMarkerState& m){return m.node==b.node;});
             if(m==markers.end()||m->world!=b.parent_world)return {GameFsCode::Unavailable,0,"support child update required"};}}
+    if(state_.glyph_pixels_ready){uint32_t count=0;for(const auto& child:children_){if(!child.DiffuseTexturesCurrent())return {GameFsCode::Unavailable,0,"support glyph binding retired"};count+=child.DiffuseTextureCount();}
+        if(count!=state_.bound_texture_nodes)return {GameFsCode::Unavailable,0,"support glyph binding drift"};}
     out=state_;return {};
+}
+GameFsStatus GameSupportTextOwner::PrepareGlyphTextures(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,GameResourceSource& source,PackageView format){
+    GameSupportSnapshot check;
+    if(!Read(owner,epoch,vm,check)||!state_.attached||state_.glyph_pixels_ready)
+        return {GameFsCode::Unavailable,0,"support glyph current owner/replay"};
+    try{
+        const auto held_parent=parent_.lock();Need(held_parent&&held_parent->Asset(),"support glyph parent retired");
+        for(const auto& bind:state_.placements)Need(held_parent->Asset()->Data().nodes[bind.node].areaMarker.material==255,"unimplemented marker glyph descriptor-copy domain");
+        inputs_.push_back({format,format.InitializedDigest()});const auto pattern=SupportText(format);(void)SupportGlyphPath(pattern,{});
+        for(const auto glyph:state_.glyph_requests){
+            const auto path=SupportGlyphPath(pattern,glyph);PackageView bytes;auto status=source.OpenResource(path,bytes);
+            if(!status){state_.failed=true;return status;}
+            Need(bytes.Describe().size<=8*1024*1024,"support glyph encoded budget");inputs_.push_back({bytes,bytes.InitializedDigest()});
+            auto image=std::make_shared<GameImage>();status=image->DecodeGim(bytes);if(!status){state_.failed=true;return status;}
+            Need(image->Width()<=512&&image->Height()<=512,"support native glyph texture budget");
+            glyph_images_.push_back(image);++state_.glyph_decoded;
+            state_.textures.push_back({glyph,image->Width(),image->Height(),image->Generation(),core::sha256(reinterpret_cast<const uint8_t*>(image->Pixels().data()),image->Pixels().size()*sizeof(uint32_t))});
+        }
+        // WindowsSynchronousGlyphResources: stage every decoded image and all
+        // per-clone bindings before publication. No async poll/ready provider.
+        const auto parent=parent_.lock();Need(parent&&bool(Read(owner,epoch,vm,check)),"support glyph parent retired before staging");
+        auto staged=children_;std::vector<bool> visible(staged.size(),false);uint32_t bound=0;
+        for(size_t i=0;i<staged.size();++i){
+            const auto& bind=state_.placements[i];const auto& params=parent->Asset()->Data().nodes[bind.node].areaMarker;
+            const std::string text(reinterpret_cast<const char*>(state_.cells[bind.text_cell].data()));const auto units=SupportUnits(text);
+            int32_t style=int32_t(params.field214)-1;std::vector<std::string> selected;
+            if(bind.mode==1||bind.mode==2){if(bind.mode==2)style=int32_t(params.field214)+499;
+                selected.assign(units.begin(),units.begin()+(std::min)(units.size(),size_t(8)));}
+            else{const bool first=bind.mode>=3&&bind.mode<=10;const auto at=int32_t(bind.mode)-(first?3:11);if(!first)style=int32_t(params.field214)+499;
+                if(at>=0&&size_t(at)<units.size())selected.push_back(units[size_t(at)]);}
+            // Source29444 disables a clone when the selected unit is absent.
+            if(selected.empty())continue;
+            std::vector<uint32_t> nodes;const auto* asset=staged[i].Asset();Need(asset,"support glyph clone retired");
+            for(size_t n=0;n<asset->Data().nodes.size();++n){const auto& node=asset->Data().nodes[n];if(node.type==1||node.hasGeometry){
+                Need(node.type==1&&node.hasGeometry&&node.geometry.vertexCount,"unimplemented support glyph geometry type/empty node");nodes.push_back(uint32_t(n));}}
+            // Refuse extra/missing geometry instead of guessing a glyph slot,
+            // background texture, UV layout or one-past source pointer domain.
+            Need(nodes.size()==selected.size(),"unimplemented support glyph node/unit cardinality");
+            std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>> textures;
+            for(size_t n=0;n<selected.size();++n){std::vector<GameSupportGlyph> key;bool capped=false;SupportGlyphs(key,capped,selected[n],style);
+                Need(key.size()==1&&!capped,"support selected raw glyph unit");size_t at=0;
+                for(;at<state_.glyph_requests.size();++at)if(state_.glyph_requests[at].code==key[0].code&&state_.glyph_requests[at].style==key[0].style)break;
+                Need(at<glyph_images_.size(),"support selected glyph absent from decoded queue");textures.emplace_back(nodes[n],glyph_images_[at]);}
+            const auto status=staged[i].BindDiffuseTextures(staged[i].Generation(),textures);if(!status){state_.failed=true;return status;}
+            bound+=uint32_t(textures.size());visible[i]=true;
+        }
+        Need(bool(Read(owner,epoch,vm,check)),"support glyph owner/parent/input changed before publication");
+        children_=std::move(staged);glyph_visible_=std::move(visible);state_.bound_texture_nodes=bound;state_.glyph_pixels_ready=true;return {};
+    }catch(const std::exception& e){state_.failed=true;return Error(e);}
+}
+GameFsStatus GameSupportTextOwner::DrawGlyphPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,GameGraphics& graphics,const GameMatrix& camera)const{
+    if(!state_.glyph_pixels_ready)return {GameFsCode::Unavailable,0,"support glyph pixels not bound"};return DrawPreview(owner,epoch,vm,graphics,camera);
 }
 GameFsStatus GameSupportTextOwner::DrawPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
         GameGraphics& graphics,const GameMatrix& camera)const{
     GameSupportSnapshot check;const auto valid=Read(owner,epoch,vm,check);if(!valid||!state_.attached)return {GameFsCode::Unavailable,0,"support preview unavailable"};
-    for(const auto& child:children_){const auto status=child.Draw(graphics,camera);if(!status)return status;}return {};
+    for(size_t i=0;i<children_.size();++i){if(state_.glyph_pixels_ready&&!glyph_visible_[i])continue;const auto status=children_[i].Draw(graphics,camera);if(!status)return status;}return {};
 }
 void GameSupportTextOwner::Close(){
-    for(auto& c:children_)c.Close();children_.clear();parent_.reset();templates_.clear();inputs_.clear();owner_.reset();context_.reset();state_={};
+    for(auto& c:children_)c.Close();children_.clear();glyph_images_.clear();glyph_visible_.clear();parent_.reset();templates_.clear();inputs_.clear();owner_.reset();context_.reset();state_={};
 }
 GameFsStatus GameBackgroundRuntime::Initialize(Clock clock,RngNativeOwner& rng){
     if(identity_||!clock||!rng.Available()||!rng.Lineage())
@@ -1195,11 +1261,26 @@ GameFsStatus DrawWindowsContactShadow(GameGraphics &graphics,const GameMatrix &c
         footprint.radius_y,.28f*footprint.opacity*fade*fade))return {GameFsCode::Unavailable,0,"native contact decal rejected"};
     return {};
 }
+bool GameModelClone::DiffuseTexturesCurrent()const noexcept{
+    try{if(!asset_||!asset_->SourceCurrent())return false;for(const auto& b:diffuse_)
+        if(!b.image||!b.image->SourceCurrent()||b.image->Generation()!=b.generation)return false;return true;}catch(...){return false;}
+}
+GameFsStatus GameModelClone::BindDiffuseTextures(uint64_t generation,const std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>>& input){
+    if(!generation||generation!=generation_||!asset_||!asset_->SourceCurrent())return {GameFsCode::Unavailable,0,"clone texture generation/source"};
+    try{std::vector<DiffuseBinding> result;
+        for(const auto& b:input){Need(b.first<asset_->Data().nodes.size()&&b.second&&b.second->SourceCurrent(),"clone texture node/image");
+            const auto& n=asset_->Data().nodes[b.first];Need(n.type==1&&n.hasGeometry&&n.geometry.vertexCount&&n.geometry.uv.size()==n.geometry.vertexCount,"clone texture geometry/UV");
+            for(const auto& uv:n.geometry.uv)Need(std::isfinite(uv.x)&&std::isfinite(uv.y),"nonfinite clone texture UV");
+            for(const auto& old:result)Need(old.node!=b.first,"duplicate clone texture node");result.push_back({b.first,b.second,b.second->Generation()});}
+        diffuse_=std::move(result);return {};
+    }catch(const std::exception& e){return Error(e);}
+}
 GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view_projection,
                                  GameModelColorPolicy color_policy,GameModelLightingPolicy lighting_policy) const {
     if (!asset_ || !asset_->Live())
         return {GameFsCode::Unavailable, 0, "draw source lease retired"};
     try {
+        Need(diffuse_.empty()||DiffuseTexturesCurrent(),"clone glyph texture retired/drifted");
         for (size_t node = 0; node < pose_.size(); ++node) {
             const auto &n = asset_->Data().nodes[node];
             if (!n.hasGeometry || !n.geometry.vertexCount)
@@ -1210,10 +1291,9 @@ GameFsStatus GameModelClone::Draw(GameGraphics &graphics, const GameMatrix &view
             Need(material >= -1 && material < int32_t(asset_->Materials().size()), "clone material index");
             const auto *m = material >= 0 ? &asset_->Materials()[size_t(material)] : nullptr;
             GameTextureSpan texture;
-            if (m && m->texture) {
-                texture = {m->texture->Pixels().data(), m->texture->Width(), m->texture->Height(),
-                           m->texture->Pixels().size()};
-            }
+            const GameImage* image=m&&m->texture?m->texture.get():nullptr;
+            for(const auto& binding:diffuse_)if(binding.node==node){image=binding.image.get();break;}
+            if(image)texture={image->Pixels().data(),image->Width(),image->Height(),image->Pixels().size()};
             const auto space=GeometryTransforms(uint32_t(node));
             const auto &palette=space.palette;
             const auto &rigid=space.rigid;

@@ -117,6 +117,10 @@ struct GameContactFootprint {
 class GameModelClone final {
   public:
     uint64_t Generation()const noexcept{return generation_;}
+    // Per-geometry native binding; immutable shared asset/materials are untouched.
+    GameFsStatus BindDiffuseTextures(uint64_t generation,const std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>>&);
+    bool DiffuseTexturesCurrent()const noexcept;
+    uint32_t DiffuseTextureCount()const noexcept{return uint32_t(diffuse_.size());}
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
     GameFsStatus Update(const GameMatrix &root);
     // Current typed copy only. No pointer/lease/issuer escapes; expected asset
@@ -143,7 +147,7 @@ class GameModelClone final {
     const LightSelection& Lights() const noexcept { return lights_; }
     void SetLightColor14(uint32_t color) { if(lights_.present){lights_.packed_color14=color;++lights_.color_writes;} }
     void Close() {
-        generation_=0;
+        generation_=0;diffuse_.clear();
         marker_pose_current_=false;
         lights_={};
         pose_.clear();
@@ -162,6 +166,8 @@ class GameModelClone final {
                                         bool &found,float &height) const;
 
   private:
+    struct DiffuseBinding {uint32_t node=0;std::shared_ptr<const GameImage> image;uint64_t generation=0;};
+    std::vector<DiffuseBinding> diffuse_;
     uint64_t generation_=0;
     struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
     GeometrySpace GeometryTransforms(uint32_t node) const;
@@ -243,6 +249,10 @@ struct GameSupportTemplatePaths {
     PackageView textures;
 };
 struct GameSupportGlyph {uint16_t code=0;int8_t style=0;};
+struct GameSupportTextureState {
+    GameSupportGlyph glyph;uint32_t width=0,height=0;uint64_t generation=0;
+    std::array<uint8_t,32> pixels_sha256{};
+};
 struct GameSupportPlacement {
     uint32_t node=0,text_cell=0,characters=0,model=0;
     uint16_t mode=0;
@@ -256,8 +266,11 @@ struct GameSupportSnapshot {
     std::vector<GameSupportPlacement> placements;
     std::vector<GameSupportGlyph> glyph_requests;
     bool glyph_capacity_reached=false;
-    // Native text/model preparation only; glyph worker/current field20 bind
-    // and actual game/scene completion remain unimplemented.
+    bool glyph_pixels_ready=false; // Windows synchronous resource stage, never source readiness
+    uint32_t glyph_decoded=0,bound_texture_nodes=0;
+    std::vector<GameSupportTextureState> textures;
+    // Windows glyph image/binding preparation only; current source field20
+    // bind and actual game/scene completion remain unimplemented.
     bool source_current_bound=false;
 };
 class GameSupportTextOwner final {
@@ -275,6 +288,10 @@ class GameSupportTextOwner final {
     GameFsStatus Attach(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
         std::shared_ptr<const GameModelClone> parent);
     GameFsStatus Update(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&);
+    // Actual282D4/283B4 tuple -> held GIM -> owned pixels -> clone texture.
+    // Supplied path format has exactly three integer slots: style,style,code.
+    GameFsStatus PrepareGlyphTextures(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameResourceSource&,PackageView path_format);
+    GameFsStatus DrawGlyphPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameGraphics&,const GameMatrix&)const;
     GameFsStatus DrawPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
         GameGraphics&,const GameMatrix&)const;
     GameFsStatus Read(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameSupportSnapshot&)const;
@@ -296,6 +313,8 @@ class GameSupportTextOwner final {
     std::string fallback_,integer_format_;
     std::vector<std::shared_ptr<GameModelAsset>> templates_;
     std::vector<GameModelClone> children_;
+    std::vector<std::shared_ptr<const GameImage>> glyph_images_;
+    std::vector<bool> glyph_visible_;
     script::Table table_{};
     uint16_t index_=0;
     uint64_t frame_=0,last_epoch_=0;

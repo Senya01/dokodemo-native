@@ -3,6 +3,7 @@
 #include "recovered/game_title_native.h"
 #include "recovered/game_actor_runtime_native.h"
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -990,6 +991,81 @@ void SupportConsumerTests(){
     ++epoch;Check(bool(init()),"current owner reset after failed text");module->b[8]=1;Check(!consumer.Read(owner,epoch,vm,snap),"module alias drift refuses");module->b[8]=0;
     (void)vm.start();Check(!consumer.Read(owner,epoch,vm,snap),"VM restart revokes current run even if context remains registered");consumer.Close();graphics.Close();parent->Close();
 }
+std::vector<uint8_t> GlyphTestGim(uint32_t color){
+    ContactTextureSource source;source.alpha=255;PackageView view;Check(bool(source.OpenResource("CONTACT_TEST.GIM",view)),"existing synthetic GIM builder");
+    std::vector<uint8_t> b(size_t(view.Describe().size));for(size_t i=0;i<b.size();++i)b[i]=view.ReadU8(i);
+    for(size_t at=128;at<144;at+=4)Word(b,at,color);return b;
+}
+std::vector<uint8_t> GlyphTestModel(unsigned count,bool uv=true){
+    auto b=Fixture(false,nullptr,uv);const auto p=dokodemo::model::parseDvs(b);const auto start=p.nodes[0].source.offset;
+    std::vector<uint8_t> node(b.begin()+start,b.end());b.resize(start);b[p.bounds.source.offset+p.bounds.source.bytes]=uint8_t(count);
+    for(unsigned i=0;i<count;++i){const auto at=b.size();b.insert(b.end(),node.begin(),node.end());Word(b,at,uint32_t(b.size()/4));
+        const float x=(float(i)-float(count-1)/2)*2;uint32_t word;std::memcpy(&word,&x,4);Word(b,at+16,word);}
+    return b;
+}
+void SupportGlyphTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
+    std::vector<uint8_t> bytes(28+3+9*4);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,3);bytes[24]=9;bytes[28]=0x30;bytes[30]=0x38;Word(bytes,31,0x90000008);
+    auto module=std::make_shared<Lease>(bytes);Program program;Diagnostic error;Check(program.load_test_fixture(bytes,error),"glyph synthetic module");Vm vm(program);(void)vm.start();const auto context=vm.context_value();
+    const auto put=[&](unsigned i,std::string value){Value r;r.kind=Value::Kind::Reference;r.table=Table::Global;r.index=uint16_t(i+1);vm.store_reference(r,Value::string(value));};
+    for(unsigned i=0;i<8;++i)put(i,i?"":"AB");
+    auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));keys->b[0]='A';keys->b[1]='B';GameSupportTextMap map;map.keys=view(keys);
+    std::vector<std::shared_ptr<Lease>> data;for(unsigned i=0;i<96;++i){data.push_back(text(i==0?"x":i==1?"y":""));map.expansions[i]=view(data.back());}
+    auto fallback=text(""),number=text("%d"),format=text("SYN%03d_%03d_%05d.GIM");map.fallback=view(fallback);map.integer_format=view(number);
+    GameSupportTemplatePaths paths;for(unsigned i=0;i<18;++i){data.push_back(text("PANEL_"+std::to_string(i)+".DVS"));paths.models[i]=view(data.back());}data.push_back(text("SYN/"));paths.textures=view(data.back());
+    struct Source final:GameResourceSource{
+        unsigned glyph_calls=0,fail=0;bool uv=true,malformed=false,style_missing=false;std::function<void()> during;
+        std::vector<std::shared_ptr<Lease>> glyph_leases;
+        GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
+            std::vector<uint8_t> b;
+            if(path.find(".DVS")!=path.npos){const auto index=unsigned(std::stoul(path.substr(6)));const auto n=index<2?1:index<10?index-1:index-9;b=GlyphTestModel(n,uv);}
+            else if(path=="SYN/CONTACT_TEST.GIM")b=GlyphTestGim(0xFFFFFFFF);
+            else{++glyph_calls;if(during)during();if(glyph_calls==fail||style_missing)return {GameFsCode::NotFound,0,"synthetic missing actual glyph/style resource"};
+                Check(path=="SYN000_000_00120.GIM"||path=="SYN000_000_00121.GIM"||path=="SYN-12_-12_00120.GIM"||path=="SYN-12_-12_00121.GIM"||path=="SYN000_000_41306.GIM","source tuple -> exact synthetic file request");
+                b=GlyphTestGim(path.find("00121")!=path.npos?0xFFFF0000:0xFF0000FF);if(malformed&&glyph_calls==2)b[0]=0;
+                auto lease=std::make_shared<Lease>(b);glyph_leases.push_back(lease);out=PackageStorage::Attach(lease,b.size());return {};}
+            auto lease=std::make_shared<Lease>(b);out=PackageStorage::Attach(lease,b.size());return {};
+        }
+    } source;
+    auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);uint64_t epoch=0;GameSupportTextOwner worker;std::shared_ptr<GameModelClone> parent;
+    const auto begin=[&](uint16_t mode,bool material=false){worker.Close();++epoch;source.glyph_calls=0;source.glyph_leases.clear();
+        auto b=AreaMarkerFixture(0,material);auto p=dokodemo::model::parseDvs(b);const auto end=p.nodes[0].source.offset+p.nodes[0].source.bytes;
+        b[end-12]=1;b[end-11]=0;b[end-10]=uint8_t(mode);b[end-9]=0;b[end-8]=1;b[end-7]=0;
+        auto lease=std::make_shared<Lease>(b);auto asset=std::make_shared<GameModelAsset>();Check(bool(asset->Decode(view(lease))),"glyph actual parent source");parent=std::make_shared<GameModelClone>();Check(bool(parent->Initialize(asset)),"glyph actual parent clone");
+        Check(bool(worker.Initialize(owner,epoch,vm,context,Table::Global,0,view(module),map))&&bool(worker.LoadTemplates(owner,epoch,vm,source,paths))&&bool(worker.Attach(owner,epoch,vm,parent)),"production glyph prerequisites");};
+    GameGraphics graphics;Check(graphics.Initialize({}),"offscreen glyph raster");auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.1f;camera[12]=-.6f;camera[13]=-.8f;camera[14]=-1.1f;GameSupportSnapshot snap;
+    begin(1);Check(!worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera),"allocation/queue alone is not glyph completion");
+    Check(!worker.PrepareGlyphTextures(foreign,epoch,vm,source,view(format))&&source.glyph_calls==0,"foreign worker refused before I/O");
+    Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap))&&snap.glyph_pixels_ready&&snap.glyph_decoded==2&&snap.bound_texture_nodes==2&&!snap.source_current_bound,"actual decode -> owned pixels -> two clone-node bindings, no source authority");
+    Check(snap.textures.size()==2&&snap.textures[0].pixels_sha256!=snap.textures[1].pixels_sha256&&source.glyph_calls==2,"two real pixel digests; dedup only once per tuple");
+    Check(graphics.Clear(0xFF000000)&&bool(worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera))&&graphics.SwapBuffers(),"bound clone consumes decoded pixels");GameGraphicsFrame frame;Check(graphics.CopyFront(frame),"actual component frame");
+    Check(std::count(frame.pixels.begin(),frame.pixels.end(),0xFFFF0000)>0&&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF0000FF)>0,"both selected glyph textures reach actual raster");
+    Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&source.glyph_calls==2,"worker replay does not load twice");
+    format->b[0]='Q';Check(!worker.Read(owner,epoch,vm,snap),"format drift revokes current stage");format->b[0]='S';
+    source.glyph_leases[0]->b[128]^=1;Check(!worker.Read(owner,epoch,vm,snap)&&!worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera),"pixel backing drift prevents rendering");source.glyph_leases[0]->b[128]^=1;
+    auto root=ModelIdentity();root[12]=1;Check(bool(parent->Update(root))&&!worker.Read(owner,epoch,vm,snap)&&bool(worker.Update(owner,epoch,vm))&&bool(worker.Read(owner,epoch,vm,snap))&&snap.glyph_pixels_ready,"parent world update keeps actual pixel bindings after explicit update");
+    for(uint16_t mode:{uint16_t(2),uint16_t(4),uint16_t(12),uint16_t(13)}){begin(mode);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap)),"whole/unit/signedstyle/absent branch actual worker");
+        Check(snap.bound_texture_nodes==(mode==2?2u:mode==13?0u:1u),"selected glyph cardinality, no placeholder for absent unit");}
+    put(0,"AA");begin(1);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap))&&source.glyph_calls==1&&snap.bound_texture_nodes==2,"same tuple reuses one decoded image in two nodes");put(0,"AB");
+    begin(1,true);Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&source.glyph_calls==0,"unclosed nonnull marker descriptor refuses before I/O");
+    begin(1);source.fail=2;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&worker.Progress().glyph_decoded==1&&!worker.Progress().glyph_pixels_ready&&worker.Progress().bound_texture_nodes==0,"partial load cannot publish textures");source.fail=0;
+    begin(1);source.malformed=true;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&worker.Progress().glyph_decoded==1&&!worker.Progress().glyph_pixels_ready,"partial decode cannot publish textures");source.malformed=false;
+    begin(1);source.style_missing=true;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)),"unsupported code/style has no success fallback");source.style_missing=false;
+    begin(1);source.during=[&]{parent->Close();};Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&!worker.Progress().glyph_pixels_ready,"retired parent during decode prevents late binding");source.during={};
+    begin(1);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))),"retry under fresh current epoch");source.glyph_leases[0]->live=false;Check(!worker.Read(owner,epoch,vm,snap),"retired pixel input revokes worker");
+    put(0,std::string("\xA1Z",2));begin(1);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap))&&snap.textures[0].glyph.code==0xA15A,"raw pair lookup is not generic CP932 rewriting");put(0,"AB");
+    source.uv=false;begin(1);Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&!worker.Progress().glyph_pixels_ready,"missing authored UV refuses material binding");source.uv=true;
+    begin(1);auto bad=text("SYN%03d_%05d.GIM");Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(bad))&&source.glyph_calls==0,"malformed format refuses before file I/O");
+    worker.Close();Check(!worker.Read(owner,epoch,vm,snap)&&!worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera),"retired worker cannot reuse old texture receipt");parent->Close();graphics.Close();
+    // Two clones share the immutable material; only one receives the override.
+    auto ml=std::make_shared<Lease>(GlyphTestModel(1));auto asset=std::make_shared<GameModelAsset>();Check(bool(asset->Decode(view(ml),&source,"SYN/")),"material alias test template");GameModelClone a,b;Check(bool(a.Initialize(asset))&&bool(b.Initialize(asset)),"two clones same asset");
+    auto gl=std::make_shared<Lease>(GlyphTestGim(0xFF0000FF));auto image=std::make_shared<GameImage>();Check(bool(image->DecodeGim(view(gl))),"owned glyph image");
+    Check(!a.BindDiffuseTextures(a.Generation()+1,{{0,image}})&&bool(a.BindDiffuseTextures(a.Generation(),{{0,image}}))&&a.DiffuseTextureCount()==1&&b.DiffuseTextureCount()==0&&asset->Materials()[0].texture->Pixels()[0]==0xFFFFFFFF,"node binding never mutates shared material");
+    Check(!a.BindDiffuseTextures(a.Generation(),{{0,image},{0,image}})&&a.DiffuseTextureCount()==1,"invalid upload preserves previous binding");const auto old=image->Generation();image->Close();Check(!a.DiffuseTexturesCurrent()&&b.DiffuseTexturesCurrent(),"image retirement isolated to bound clone");
+    Check(bool(image->DecodeGim(view(gl)))&&image->Generation()!=old&&!a.DiffuseTexturesCurrent(),"same image allocation new decode cannot revive old generation");a.Close();b.Close();
+}
 struct TitleSource final : GameResourceSource {
     bool fail = false;
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -1507,6 +1583,7 @@ int main() {
         BackgroundEffectsTests();
         BackgroundSamplingTests();
         SupportConsumerTests();
+        SupportGlyphTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();
