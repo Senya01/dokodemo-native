@@ -729,7 +729,65 @@ void EventEnable3BChecks(){
     auto outside=Fixture({0x30,0,0x3B,0x38});script::Vm invalid(outside);invalid.start();
     Check(invalid.run().status==script::Status::Stopped,"finite3B requires an actual event envelope; no generic wake permission");
 }
+
+void ExecutedOutingCommandTests(){
+    // Construct and copy via executed VM instructions. These short synthetic
+    // bodies are not the game's KSC bytes or a fabricated transition receipt.
+    auto fixture=[](bool producer_true,bool malformed,bool nil_operand,bool travel_flag){
+        std::vector<uint8_t> code;
+        auto emit=[&](std::initializer_list<uint8_t> bytes){code.insert(code.end(),bytes);};
+        auto slot=[&](uint8_t op,uint16_t i){emit({op,uint8_t(i),uint8_t(i>>8)});};
+        auto call=[&](uint8_t n){const auto at=uint32_t(code.size());emit({0x20,n,0,0,0});return at;};
+        emit({0x30,24,0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,uint8_t(nil_operand?0x84:0x85)});
+        GameOutingCommandAbi abi;abi.root=0;abi.candidates=0;abi.stored=0;abi.produce_call=call(3);
+        slot(0x91,13);slot(0x99,0);abi.copy_call=call(2);
+        emit({0x80,12,0x80,uint8_t(travel_flag?1:0)});abi.travel_call=call(2);emit({0x31});
+        abi.producer=uint32_t(code.size());emit({0x30,3});
+        for(unsigned i=0;i<6;++i){slot(0x90,0);emit({0x80,uint8_t(i),0xF5});
+            if(i==0)slot(0x90,1);
+            else if(i==1){slot(0x95,0);slot(0x90,1);emit({0xF4});}
+            else if(i==2)emit({0x80,7});
+            else if(i==3)emit({0x8E,'p','l','a','c','e',0});
+            else if(i==4)emit({0x8E,0});
+            else emit({0x84});
+            emit({0x51});
+        }
+        emit({uint8_t(producer_true?0x87:0x86),0x70,0x31});
+        abi.copier=uint32_t(code.size());emit({0x30,2});slot(0x90,1);slot(0x90,0);emit({0x57,0x31});
+        abi.travel=uint32_t(code.size());emit({0x30,2});slot(0x90,0);abi.game12=uint32_t(code.size());emit({0x8B,0x7E,1,0x31});
+        const auto fix=[&](uint32_t at,uint32_t target){for(unsigned i=0;i<3;++i)code[at+2+i]=uint8_t(target>>(i*8));};
+        fix(abi.produce_call,abi.producer);fix(abi.copy_call,abi.copier);fix(abi.travel_call,abi.travel);
+        std::vector<uint32_t> globals(13);globals[0]=0x90000002;globals[2]=0xB0000003;
+        globals[3]=malformed?0x90000008:0x90000009;globals[4]=0x2000000C;
+        std::vector<uint32_t> context(7);context[0]=0x90000006;
+        return std::make_pair(Fixture(code,globals,context),abi);
+    };
+    for(unsigned mode=0;mode<8;++mode){
+        auto f=fixture(mode!=1,mode==2,mode!=6,mode!=7);script::Vm vm(f.first);vm.native_reserved_local_nil(true);vm.start();
+        (void)vm.context_value();GameOutingCommand command;Check(bool(command.Begin(vm,f.second)),"executed outing root owner");
+        vm.frame_observer([&](const script::FrameTransition& t){command.Observe(vm,t);});
+        uint64_t accesses=0;vm.access_observer([&](const script::Value&,bool){++accesses;});
+        bool consumed=false;vm.host_service([&](uint8_t id,const std::vector<script::Value>& args){
+            Check(id==0x7E&&args.size()==1,"synthetic travel's real host operand");
+            if(mode==3){script::Value ref;ref.kind=script::Value::Kind::Reference;ref.table=script::Table::Global;ref.index=4;vm.store_reference(ref,script::Value::integer(13));}
+            if(mode==4){script::Value ref;ref.kind=script::Value::Kind::Reference;ref.table=script::Table::Ctx28;ref.index=3;ref.context_owner=vm.context_value().context_owner;vm.store_reference(ref,script::Value::integer(8));}
+            const auto access_before=accesses;const auto status=command.ValidateGame12(vm,args[0].signed_integer());
+            Check(accesses==access_before,"command current readback preserves executed-access observer");
+            Check(bool(status)==(mode==0||mode==5),"producer/copy/current record drift vs actual command validation");
+            if(status){const auto state=command.Snapshot(vm);Check(state.current&&state.produced&&state.stored&&state.candidate==1&&state.word==7&&state.selector==12
+                &&state.fields[3].cp932_bytes==5&&state.fields[4].cp932_bytes==0,"actual executed typed descriptor and empty owned copy");consumed=true;
+                if(mode==5){script::Vm foreign(f.first);foreign.start();Check(!command.ValidateGame12(foreign,12)&&!foreign.current_witness().context_registered,"foreign run/context cannot borrow current command");}}
+            return script::Value::integer(0);
+        });
+        auto event=vm.run(1024);Check(event.status==script::Status::Complete,"synthetic outing whole producer-copy-travel return");
+        Check(consumed==(mode==0||mode==5),"no completion supplied for false/malformed/drifted producer");
+        vm.start();Check(!command.Snapshot(vm).current&&!command.ValidateGame12(vm,12),"restart invalidates old weak descriptor/root/run");command.Close();
+        Check(!command.Snapshot(vm).live,"explicit command teardown");
+    }
+}
+
 void Focused(){
+    ExecutedOutingCommandTests();
     EventEnable3BChecks();
     IntegerReferenceSwap78();
     OutingComponents();

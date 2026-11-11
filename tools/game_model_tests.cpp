@@ -3,10 +3,12 @@
 #include "recovered/game_model_native.h"
 #include "recovered/game_title_native.h"
 #include "recovered/game_actor_runtime_native.h"
+#include "recovered/game_actor_script_native.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
 #include <iostream>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
 namespace dokodemo {
@@ -15,6 +17,22 @@ struct StartupRuntimeTestAccess {
     static bool RequestApplication(recovered::GameContentBoot& content,int32_t scene){return content.RequestApplicationScene(scene);}
     static bool CommitApplication(recovered::GameContentBoot& content){return content.CommitApplicationScene();}
     static recovered::GameActorRuntime& Actor(recovered::GameContentBoot& content){return content.actor_runtime_;}
+    static recovered::GameFsStatus DrawPrepared(recovered::GameActorRuntime& actor,script::Vm& vm,recovered::GameGraphics& g){
+        // Explicit synthetic component view includes this fixture's authored
+        // motion translation(10,20,30). This is not the travel camera.
+        const auto owner=actor.background_module_.lock();auto camera=recovered::ModelIdentity();camera[0]=camera[5]=camera[10]=0.02f;
+        return actor.destination_->DrawSelected(owner,actor.destination_state_.epoch,vm,g,camera);
+    }
+    static bool SelectedComposition(recovered::GameActorRuntime& actor,const recovered::GameGraphics& graphics){
+        const auto owner=actor.background_module_.lock();recovered::GameBackgroundAppliedState applied;
+        if(!actor.destination_->AppliedEffects(owner,actor.destination_state_.epoch,applied))return false;
+        const auto model=actor.destination_->Snapshot();const auto g=graphics.Snapshot();
+        if(!g.mesh_pixels||g.mesh_triangles!=model.model.triangles+applied.selected_entries.size()*model.auxiliary_model.triangles)
+            std::cerr<<"selected-composition pixels="<<g.mesh_pixels<<" triangles="<<g.mesh_triangles<<" main="<<model.model.triangles
+                <<" selected="<<applied.selected_entries.size()<<" child="<<model.auxiliary_model.triangles<<'\n';
+        return model.auxiliary_entries==6&&applied.selected_entries.size()<model.auxiliary_entries&&g.mesh_pixels>0
+            &&g.mesh_triangles==model.model.triangles+applied.selected_entries.size()*model.auxiliary_model.triangles;
+    }
     static recovered::GameInventory& Inventory(recovered::GameContentBoot& content){return content.inventory_;}
     static recovered::GameSceneBgm& Bgm(recovered::GameContentBoot& content){return *content.scene_bgm_;}
     static std::shared_ptr<recovered::GameManagerSwitchControl> Manager(recovered::GameContentBoot& content){return content.loadman_->control;}
@@ -22,6 +40,7 @@ struct StartupRuntimeTestAccess {
 };
 }
 using namespace dokodemo::recovered;
+namespace script=dokodemo::script;
 namespace {
 void Check(bool value, const char *text) {
     if (!value)
@@ -1280,7 +1299,49 @@ std::vector<uint8_t> SyntheticMainData(){
     for(unsigned row:{0u,12u})for(unsigned k=0;k<3;++k){const float v=float(17*row+3*k);uint32_t word=0;std::memcpy(&word,&v,4);Word(b,0xE3C00+0x4180+16*row+4*k,word);}
     return b;
 }
+
+std::vector<uint8_t> SyntheticOutingData(){
+    auto b=SyntheticMainData();unsigned reloc=29;
+    auto text=[&](unsigned segment,uint32_t offset,const std::string& value){const auto at=(segment?0xE3C00:128)+offset;
+        std::copy(value.begin(),value.end(),b.begin()+at);b[at+value.size()]=0;};
+    auto pointer=[&](uint32_t site,uint32_t value,unsigned segment){
+        Word(b,0xE3C00+site,value);Word(b,1310100+reloc*8,site);Word(b,1310104+reloc*8,(segment<<16)|0x102);++reloc;};
+    text(0,0xDC000,"motion");text(0,0xDC010,"panel");text(0,0xDC020,"x");
+    for(unsigned i=0;i<18;++i)pointer(0x488+i*4,0xDC000,0);
+    pointer(0x9B0,0x488,1);for(unsigned i=0;i<18;++i)pointer(0x4ACC+i*4,0xDC010,0);
+    for(unsigned i=0;i<96;++i){b[0xE3C00+0x4B14+i]=uint8_t(i);pointer(0x4B74+i*4,0xDC020,0);}
+    Word(b,1310020,reloc*8);
+    for(unsigned i=0;i<3;++i)text(1,0x43C4+(66+i)*20,"SYN_"+std::to_string(i));
+    text(1,0x43C4+29*20,"TEXT");text(0,0xD3058,"%s\\%s\\model02.DVS");text(0,0xD307C,"%s\\light%d.DAK");
+    text(0,0xD9C50,"F%03d\\F%03d\\F%05d.GIM");text(0,0xD9C68,"panels");
+    text(0,0xD9C74,"%s\\%s\\%s");text(0,0xD9C80,"%s\\%s\\");text(0,0xE075C,"%d");text(0,0xE0760,"?");
+    return b;
+}
+void OutingDataPacketTests(){
+    const auto bytes=SyntheticOutingData();const auto digest=dokodemo::core::sha256(bytes.data(),bytes.size());auto io=std::make_shared<BackgroundFileState>();GameMainSceneData data;
+    Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,io),digest)),"synthetic held DATA parser");
+    std::shared_ptr<const GameOutingData> packet;Check(bool(data.Outing12(packet))&&packet&&packet->Current(),"selected DATA packet from actual relocations and held file");
+    Check(packet->registrations.Describe().size==60&&packet->motion_counts.Describe().size==6&&packet->triplets.Describe().size==84
+        &&packet->auxiliary_names.size()==1&&packet->support_paths.models[0].ReadU8(0)=='T',"recipe, eighteen paths, map and current DATA provenance");
+    Check(bool(data.Close())&&!packet->Current(),"DATA retirement revokes generated text packet even while bytes retained");
+    auto missing=bytes;Word(missing,1310100+29*8,0x4D0);GameMainSceneData bad;auto bad_io=std::make_shared<BackgroundFileState>();
+    const auto hash=dokodemo::core::sha256(missing.data(),missing.size());Check(bool(bad.Load(std::make_unique<BackgroundFile>(missing,bad_io),hash)),"parser separates BGM and outing selected input domains");
+    std::shared_ptr<const GameOutingData> unchanged=packet;Check(!bad.Outing12(unchanged)&&unchanged==packet,"missing selected relocation refuses without replacing output");Check(bool(bad.Close()),"bad packet cleanup");
+}
+int OutingPacketCli(const char* path,const char* identity){
+    std::ifstream file(path,std::ios::binary);Check(bool(file),"prepared DATA file unavailable");
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),{});std::array<uint8_t,32> expected{};
+    const std::string hex(identity);Check(hex.size()==64,"explicit expected DATA identity required");
+    const auto nibble=[](char c){if(c>='0'&&c<='9')return unsigned(c-'0');if(c>='a'&&c<='f')return unsigned(c-'a'+10);throw std::runtime_error("DATA hex identity");};
+    for(unsigned i=0;i<32;++i)expected[i]=uint8_t(nibble(hex[2*i])*16+nibble(hex[2*i+1]));
+    GameMainSceneData data;auto io=std::make_shared<BackgroundFileState>();auto status=data.Load(std::make_unique<BackgroundFile>(std::move(bytes),io),expected);
+    if(!status)throw std::runtime_error(status.detail);std::shared_ptr<const GameOutingData> packet;status=data.Outing12(packet);
+    std::cout<<"OUTING_PACKET current="<<(status&&packet&&packet->Current())<<" detail="<<status.detail<<'\n';
+    const bool ok=bool(status);Check(bool(data.Close()),"prepared DATA close");return ok?0:2;
+}
+
 void MainSceneDataTests(){
+    OutingDataPacketTests();
     const auto bytes=SyntheticMainData();const auto digest=dokodemo::core::sha256(bytes.data(),bytes.size());auto io=std::make_shared<BackgroundFileState>();GameMainSceneData data;
     Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,io),digest))&&data.Snapshot().live&&data.Snapshot().names==25,"actual owning file/parser with explicitly synthetic expected identity");
     Check(data.Lists().ReadLE32(8)==2&&data.Gains().ReadLE32(36)==99&&data.Name(24).ReadU8(0)=='s',"selected DATA names/list/gain use real held views");
@@ -1527,6 +1588,86 @@ void CameraTargetRender(){
     Check(runtime.Snapshot().camera_ratio==old.camera_ratio&&runtime.Snapshot().camera_completions==old.camera_completions,"7980 is not an interpolation/job completion");
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
 }
+
+void ExecutedDestinationPreparationTests(){
+  static_assert(!std::is_copy_constructible<GameOutingData>::value,"selected DATA packet is not an editable copied receipt");
+  for(unsigned failure=0;failure<2;++failure){
+    const auto bytes=SyntheticOutingData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data;
+    auto data_io=std::make_shared<BackgroundFileState>();Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash)),"vertical current held DATA");
+    std::shared_ptr<const GameOutingData> packet;Check(bool(data.Outing12(packet)),"vertical selected packet");
+    std::vector<uint8_t> memory(4*1024*1024);GameArena arena;GameVmBoot module_owner;
+    Check(arena.Initialize(memory.data(),uint32_t(memory.size()))&&module_owner.Initialize74EF4(arena)&&module_owner.InitializeManager93404(),"vertical ordinary module constructors");
+    auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,module_owner)&&content->Reset24994(),"vertical actual Content/LoadMan constructors");
+    RngNativeOwner rng;rng.ImportCurrentState64(81,3,"synthetic executed-destination component");content->SetTitleRng(rng);
+    Check(bool(content->SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};})),"vertical same clock/RNG initialized producer");
+    auto audio_io=std::make_shared<BackgroundFileState>();std::weak_ptr<GameManagerSwitchControl> observed_manager;bool observed_store=false;
+    Check(bool(content->BindInitialSceneBgm(data.Lists(),data.Gains(),data.Root(),[&](uint32_t i){return data.Name(i);},
+      [&](const std::string&,std::unique_ptr<GameFileSource>& file)->GameFsStatus{
+        if(const auto m=observed_manager.lock()){Check(m->Snapshot().loadman.stored_bgm4BC==content->SceneBgm().stored4BC,
+          "real4BC write is visible to file factory BEFORE request effects, not at final preparation readback");observed_store=true;}
+        file=std::make_unique<BackgroundFile>(std::vector<uint8_t>(8,4),audio_io);return {};}))
+      &&bool(content->BindInitialScenePlacement(data)),"vertical ordinary initialization DATA before actor");
+    unsigned factories=0;Check(bool(content->BindDestinationData(packet,[&](){++factories;return std::unique_ptr<GameFileSource>{};})),"same DATA/fresh factory binder, not selection");
+    ActorSource resources;resources.scene_assets=true;GameTransition transition;Check(transition.Initialize({{0,0}}),"vertical live transition");
+    auto selection=std::make_shared<Lease>(std::vector<uint8_t>(16));Check(bool(content->InitializeActorSceneOwners(0,PackageStorage::Attach(selection,16),resources,transition)),"vertical actual ordinary initial model/actor5 owner");
+    Check(dokodemo::StartupRuntimeTestAccess::RequestApplication(*content,3)&&dokodemo::StartupRuntimeTestAccess::CommitApplication(*content)
+      &&dokodemo::StartupRuntimeTestAccess::RequestApplication(*content,4)&&dokodemo::StartupRuntimeTestAccess::CommitApplication(*content),"vertical actual application history, no field injection");
+    auto& actor=dokodemo::StartupRuntimeTestAccess::Actor(*content);auto& bgm=dokodemo::StartupRuntimeTestAccess::Bgm(*content);const auto control=dokodemo::StartupRuntimeTestAccess::Manager(*content);observed_manager=control;
+    std::vector<uint8_t> code;auto emit=[&](std::initializer_list<uint8_t> b){code.insert(code.end(),b);};
+    auto slot=[&](uint8_t op,uint16_t i){emit({op,uint8_t(i),uint8_t(i>>8)});};
+    auto call=[&](uint8_t n){const auto pc=uint32_t(code.size());emit({0x20,n,0,0,0});return pc;};
+    emit({0x30,24});for(unsigned i=0;i<8;++i){slot(0x99,uint16_t(17+i));emit({0x8E,'A',0,0x51});}slot(0x99,16);emit({0x8B,0x70,1});
+    emit({0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,0x84});GameOutingCommandAbi abi;abi.root=0;abi.candidates=abi.stored=0;abi.produce_call=call(3);
+    slot(0x91,13);slot(0x99,0);abi.copy_call=call(2);emit({0x80,12,0x80,1});abi.travel_call=call(2);emit({0x31});
+    abi.producer=uint32_t(code.size());emit({0x30,3});for(unsigned i=0;i<6;++i){slot(0x90,0);emit({0x80,uint8_t(i),0xF5});
+      if(i==0)slot(0x90,1);else if(i==1){slot(0x95,0);slot(0x90,1);emit({0xF4});}else if(i==2)emit({0x80,7});else if(i==3||i==4)emit({0x8E,'T',0});else emit({0x84});emit({0x51});}emit({0x87,0x70,0x31});
+    abi.copier=uint32_t(code.size());emit({0x30,2});slot(0x90,1);slot(0x90,0);emit({0x57,0x31});abi.travel=uint32_t(code.size());emit({0x30,2});slot(0x90,0);abi.game12=uint32_t(code.size());emit({0x8B,0x7E,1,0x31});
+    const auto patch=[&](uint32_t at,uint32_t target){for(unsigned i=0;i<3;++i)code[at+2+i]=uint8_t(target>>(8*i));};patch(abi.produce_call,abi.producer);patch(abi.copy_call,abi.copier);patch(abi.travel_call,abi.travel);
+    std::vector<uint8_t> ksc(28+code.size()+4*(25+13));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[24]=13;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
+    const auto ctx_at=uint32_t(28+code.size());Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
+    const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);
+    script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());script::Vm vm(program);vm.native_reserved_local_nil(true);vm.start();
+    Check(bool(actor.BindScriptContextActor1C0FC(vm)),"actual constructor context captures this actor5 owner");auto image=std::make_shared<Lease>(ksc);const auto image_view=PackageStorage::Attach(image,image->b.size());
+    GameOutingCommand command;Check(bool(command.Begin(vm,abi)),"vertical command actual VM root");vm.frame_observer([&](const script::FrameTransition& t){command.Observe(vm,t);});
+    auto target_io=std::make_shared<BackgroundFileState>();bool consumed=false;
+    vm.host_service([&](uint8_t id,const std::vector<script::Value>& args){
+      if(id==0x70){Check(args.size()==1&&bool(actor.RegisterSupportData16(vm,args[0])),"actual eight typed current texts producer registration");return script::Value::integer(0);}
+      Check(id==0x7E&&args.size()==1&&bool(command.Issue(vm,actor,args[0].signed_integer())),"executed producer/copy/operand issues same real context request");
+      Check(!command.Issue(vm,actor,12)&&bool(actor.PublishPendingScene1B238(bgm)),"no issue replay; actual source request publication");
+      GameMainSceneData foreign_data;auto foreign_io=std::make_shared<BackgroundFileState>();std::shared_ptr<const GameOutingData> foreign_packet;
+      Check(bool(foreign_data.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash))&&bool(foreign_data.Outing12(foreign_packet)),"independent live identical DATA is not this BGM owner");
+      const auto seed_before_foreign=rng.CurrentSeed64();auto refused_io=std::make_shared<BackgroundFileState>();
+      Check(!actor.PreparePendingDestination(vm,command,image_view,foreign_packet,bgm,std::make_unique<BackgroundFile>(std::vector<uint8_t>(4),refused_io))
+        &&!actor.DestinationPreparation().attempted&&rng.CurrentSeed64()==seed_before_foreign&&!refused_io->live&&!refused_io->reads,
+        "foreign identical DATA refuses before job/file/selection/RNG effects");Check(bool(foreign_data.Close()),"foreign packet retirement");
+      std::vector<std::pair<std::string,std::vector<uint8_t>>> packages;
+      for(unsigned i=0;i<3;++i){const auto name="SYN_"+std::to_string(i);packages.push_back({name+".BPM",BackgroundArchive({{name+"\\model01.DVS",Fixture()},
+        {name+"\\model02.DVS",Fixture()},{name+"\\motion",MotionFixture()}})});}
+      if(!failure)packages.push_back({"TEXT.BPM",BackgroundArchive({{"panels\\panel",Fixture()}})});
+      const auto before=rng.CurrentSeed64();auto status=actor.PreparePendingDestination(vm,command,image_view,packet,bgm,std::make_unique<BackgroundFile>(BackgroundArchive(packages),target_io));
+      const auto state=actor.DestinationPreparation();
+      if(bool(status)!=(failure==0))throw std::runtime_error("vertical stage: "+status.detail);
+      Check(state.attempted&&state.prepared==(failure==0)&&state.failed==(failure!=0)&&state.candidate==1&&state.request==control->Snapshot().requests
+        &&state.epoch==actor.Snapshot().owner_epoch&&state.phase==(failure?8u:9u)&&rng.CurrentSeed64()!=before,"real current request stages actual selected job/aux/RNG/support, failure preserves effects");
+      Check(control->Snapshot().loadman.stored_bgm4BC==bgm.Snapshot().stored4BC&&control->Snapshot().loadman.rendered_selector4DC==0
+        &&control->Snapshot().current14==12&&vm.callbacks_posted()==0&&observed_store,"actual4BC source store, old render retained, no fabricated adoption/wake");
+      const auto after=rng.CurrentSeed64();auto replay_io=std::make_shared<BackgroundFileState>();
+      Check(!actor.PreparePendingDestination(vm,command,image_view,packet,bgm,std::make_unique<BackgroundFile>(BackgroundArchive(packages),replay_io))
+        &&rng.CurrentSeed64()==after&&!replay_io->live&&replay_io->reads==0,"attempt cannot replay RNG/selection/open");
+      if(!failure){GameGraphics graphics;Check(graphics.Initialize({})&&graphics.Clear(0xFF808080),"selected composed renderer");
+        Check(bool(dokodemo::StartupRuntimeTestAccess::DrawPrepared(actor,vm,graphics))&&dokodemo::StartupRuntimeTestAccess::SelectedComposition(actor,graphics),
+          "production selected-only composition has real pixels and exact main+selected-child triangles, not six eager children");graphics.Close();}
+      target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"failed close retains actual owned target for retry");target_io->fail_close=false;
+      Check(bool(actor.CloseDestination())&&!target_io->live&&control->Snapshot().loadman.rendered_selector4DC==0,"target retirement preserves old scene, not arrival");consumed=true;return script::Value::integer(0);
+    });
+    const auto result=vm.run(4096);if(result.status!=script::Status::Complete)throw std::runtime_error(result.diagnostic.text());
+    Check(consumed&&factories==0,"component uses explicit synthetic file, ordinary bound factory has no unearned execution");
+    const auto last_store=control->Snapshot().loadman.stored_bgm4BC;
+    Check(bool(bgm.Close())&&control->Snapshot().loadman.stored_bgm4BC==last_store,"manager keeps actual last4BC after BGM/file owner retirement");
+    command.Close();Check(content->Close()&&module_owner.Close()&&bool(data.Close()),"vertical target/script/current module/data cleanup");transition.Retire();
+  }
+}
+
 void OrdinaryContentDataTests(bool failed_clock=false){
     const auto bytes=SyntheticMainData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data,foreign;auto data_io=std::make_shared<BackgroundFileState>(),foreign_io=std::make_shared<BackgroundFileState>();
     Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash))&&bool(foreign.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash)),"explicit synthetic DATA native owners");
@@ -1607,7 +1748,7 @@ void OrdinaryContentDataTests(bool failed_clock=false){
             &&!control->Snapshot().loadman.current,"partial owner/requests/resources cleanly retire");return;
     }
     const auto result=content->TickPendingSceneRequest();const auto published=control->Snapshot();
-    Check(!result&&result.detail.find("current133B7/13402")!=std::string::npos&&published.publication_phase==3
+    Check(!result&&result.detail.find("destination DATA/file owner absent")!=std::string::npos&&published.publication_phase==3
         &&published.old_resource==31&&published.new_resource==66+published.loadman.staged_variant4AC
         &&published.old_bit_known&&!published.old_bit&&published.new_bit_known&&published.new_bit
         &&published.current14==12&&!published.pending&&published.requested18==12&&published.consumed==2
@@ -2047,8 +2188,9 @@ void TitleMenuLifecycle() {
     Check(manager.Close() && !arena.Used(), "all borrowed and owned state retires");
 }
 } // namespace
-int main() {
+int main(int argc,char** argv) {
     try {
+        if(argc==4&&std::string(argv[1])=="--outing-data")return OutingPacketCli(argv[2],argv[3]);
         AreaMarkerTests();
         BackgroundModelMotionTests();
         BackgroundAuxiliaryTests();
@@ -2060,6 +2202,7 @@ int main() {
         ContextActorTransactionPrefixTests();
         BgmTransportTests();
         MainSceneDataTests();
+        ExecutedDestinationPreparationTests();
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();

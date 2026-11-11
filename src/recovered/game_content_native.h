@@ -186,6 +186,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameFsStatus BindInitialSceneBgm(PackageView lists,PackageView gains,PackageView root,
         std::function<PackageView(uint32_t)> names,GameBgmFileQueue::Factory);
     GameFsStatus BindInitialScenePlacement(const GameMainSceneData&);
+    GameFsStatus BindDestinationData(std::shared_ptr<const GameOutingData>,std::function<std::unique_ptr<GameFileSource>()>);
     GameFsStatus InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource&,GameTransition&);
     GameFsStatus TickSceneBgmFiles();
     GameFsStatus TickPendingSceneRequest();
@@ -310,6 +311,8 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     RngNativeOwner* title_rng_=nullptr;
     std::shared_ptr<GameBackgroundRuntime> background_runtime_;
     std::unique_ptr<GameSceneBgm> scene_bgm_;
+    std::shared_ptr<const GameOutingData> destination_data_;
+    std::function<std::unique_ptr<GameFileSource>()> destination_file_;
     PackageView initial_position_row_,initial_position_heading_;
     std::array<uint8_t,32> initial_position_hash_{},initial_heading_hash_{};
     std::shared_ptr<const void> option_settings_lifetime_;

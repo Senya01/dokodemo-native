@@ -38,6 +38,11 @@ GameFsStatus GameMainSceneData::Load(std::unique_ptr<GameFileSource> file,const 
             const auto at=image_.ReadLE32(row+16),n=image_.ReadLE32(row+20);if(n%8||at>1341110||n>1341110-at)throw std::runtime_error("prepared main DATA relocation bounds");
             for(uint32_t j=0;j<n;j+=8){const auto off=image_.ReadLE32(at+j),info=image_.ReadLE32(at+j+4);const auto origin=(info>>8)&255,refer=(info>>16)&255,type=info&255;
                 if(origin==1&&off>=0x6808&&off<0x6808+25*4){if(type!=2||off%4||refer>=2)throw std::runtime_error("BGM name relocation kind");auto& dst=name_segments[(off-0x6808)/4];if(dst!=-1)throw std::runtime_error("duplicate BGM name relocation");dst=int(refer);++selected;}
+                if(origin==1&&((off>=0x4ACC&&off<0x4B14)||(off>=0x4B74&&off<0x4CF4)
+                    ||(off>=0x488&&off<0x4D0)||off==0x9B0)){
+                    if(type!=2||off%4||refer>=2||!outing_relocations_.emplace(off,uint8_t(refer)).second)
+                        throw std::runtime_error("selected outing R32 relocation kind/duplicate");
+                }
                 if(origin==0&&(off==0xD2D0||off==0xD2D8||off==0xBD44||off==0xBD54)){
                     const auto want=(off==0xD2D0||off==0xBD44)?5u:6u;if(type!=want||refer>=2)throw std::runtime_error("placement relocation kind");
                     auto& dst=(off==0xD2D0||off==0xD2D8)?position_segment:heading_segment;
@@ -55,7 +60,7 @@ GameFsStatus GameMainSceneData::Load(std::unique_ptr<GameFileSource> file,const 
         const auto hold=[&](PackageView view){selected_inputs_.emplace_back(view,view.InitializedDigest());};
         hold(lists_);hold(gains_);hold(root_);for(const auto& name:names_)hold(name);
         hold(image_.Subview(position_file_,12));hold(image_.Subview(position_file_+12*16,12));hold(image_.Subview(heading_file_,4));
-        live_=true;return {};
+        segment_files_=starts;segment_sizes_=sizes;lifetime_=std::make_shared<uint8_t>(0);live_=true;return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 PackageView GameMainSceneData::Lists()const{if(!Current())throw std::runtime_error("main DATA owner retired/drifted");return lists_;}
@@ -70,7 +75,69 @@ GameFsStatus GameMainSceneData::Placement(uint32_t scene,std::array<float,4>& ou
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameMainSceneDataSnapshot GameMainSceneData::Snapshot()const{GameMainSceneDataSnapshot out;out.live=Current();out.identity=digest_;if(out.live){const auto d=image_.Describe();out.owner=d.owner;out.generation=d.generation;out.serial=d.serial;out.names=25;}return out;}
-GameFsStatus GameMainSceneData::Close(){live_=false;selected_inputs_.clear();lists_={};gains_={};root_={};names_={};image_={};if(file_){auto status=file_->Close();if(!status)return status;file_.reset();}return {};}
+GameFsStatus GameMainSceneData::Close(){live_=false;lifetime_.reset();outing_relocations_.clear();selected_inputs_.clear();lists_={};gains_={};root_={};names_={};image_={};if(file_){auto status=file_->Close();if(!status)return status;file_.reset();}return {};}
+namespace {
+struct OutingTextLease final:PackageStorageLease {
+    std::vector<uint8_t> bytes,known;
+    bool Span(PackageStorageSpan& out,std::string&)const override{
+        out={const_cast<uint8_t*>(bytes.data()),const_cast<uint8_t*>(known.data()),bytes.size(),
+            uint64_t(reinterpret_cast<uintptr_t>(bytes.data())),uint64_t(reinterpret_cast<uintptr_t>(this)),1,1,0,true,false};return true;
+    }
+};
+PackageView OutingText(const std::string& text){
+    auto p=std::make_shared<OutingTextLease>();p->bytes.assign(text.begin(),text.end());p->bytes.push_back(0);p->known.assign(p->bytes.size(),1);
+    return PackageStorage::Attach(p,p->bytes.size());
+}
+std::string OutingTextBytes(const PackageView& v){
+    std::string out;for(uint64_t i=0;i<v.Describe().size;++i){const auto c=v.ReadU8(i);if(!c){if(i+1!=v.Describe().size)throw std::runtime_error("outing text trailing extent");return out;}out+=char(c);}
+    throw std::runtime_error("outing text terminator");
+}
+std::string OutingStringFormat(const PackageView& format,const std::vector<std::string>& args){
+    const auto text=OutingTextBytes(format);std::string out;size_t arg=0;
+    for(size_t i=0;i<text.size();++i){if(text[i]!='%')out+=text[i];else{
+        if(++i==text.size()||text[i]!='s'||arg==args.size())throw std::runtime_error("selected outing string format");out+=args[arg++];}
+        if(out.size()>255)throw std::runtime_error("selected outing path extent");}
+    if(arg!=args.size()||out.empty()||out.find("..")!=out.npos||out.find(':')!=out.npos||out[0]=='/'||out[0]=='\\')throw std::runtime_error("selected outing path domain");return out;
+}
+}
+bool GameOutingData::Current()const{
+    try{if(lifetime.expired()||pins.empty())return false;for(const auto& p:pins)if(p.first.InitializedDigest()!=p.second)return false;return true;}catch(...){return false;}
+}
+GameFsStatus GameMainSceneData::Outing12(std::shared_ptr<const GameOutingData>& out)const{
+    if(!Current())return {GameFsCode::Unavailable,0,"current main DATA outing packet required"};
+    try{
+        auto data=std::shared_ptr<GameOutingData>(new GameOutingData);data->lifetime=lifetime_;
+        const auto part=[&](unsigned seg,uint32_t at,uint32_t n){if(seg>=2||at>segment_sizes_[seg]||n>segment_sizes_[seg]-at)throw std::runtime_error("selected outing DATA extent");return image_.Subview(segment_files_[seg]+at,n);};
+        const auto text=[&](unsigned seg,uint32_t at,uint32_t cap){auto v=part(seg,at,cap);uint32_t n=0;while(n<cap&&v.ReadU8(n))++n;if(n==cap)throw std::runtime_error("selected outing DATA string bound");return v.Subview(0,n+1);};
+        const auto pointer=[&](uint32_t site,uint32_t cap){const auto r=outing_relocations_.find(site);if(r==outing_relocations_.end())throw std::runtime_error("selected outing R32 missing");return text(r->second,part(1,site,4).ReadLE32(0),cap);};
+        data->origin=image_.Subview(0,64);data->registrations=part(1,0x43C4+66*20,60);data->motion_counts=part(1,0xA18,6);
+        const auto row=outing_relocations_.find(0x9B0);
+        if(row==outing_relocations_.end()||row->second!=1||part(1,0x9B0,4).ReadLE32(0)!=0x488)throw std::runtime_error("selected50AC row lineage");
+        data->triplets=part(1,0x488,84);bool sentinel=false;
+        for(unsigned i=0;i<7;++i){std::array<uint32_t,3> words{};for(unsigned j=0;j<3;++j)words[j]=data->triplets.ReadLE32(i*12+j*4);
+            if(!words[0]&&!words[1]&&!words[2]){if(i!=6)throw std::runtime_error("selected50AC recipe domain");sentinel=true;break;}
+            if(i==6)throw std::runtime_error("selected50AC terminator");
+            for(unsigned j=0;j<3;++j)if(words[j]){auto v=pointer(0x488+i*12+j*4,32);const auto prior=data->auxiliary_names.find(words[j]);
+                if(prior!=data->auxiliary_names.end()&&OutingTextBytes(prior->second)!=OutingTextBytes(v))throw std::runtime_error("selected auxiliary token alias");data->auxiliary_names[words[j]]=v;}}
+        if(!sentinel)throw std::runtime_error("selected50AC sentinel");
+        data->model_format=text(0,0xD3058,32);data->light_format=text(0,0xD307C,32);data->glyph_format=text(0,0xD9C50,64);
+        data->text_map.keys=part(1,0x4B14,96);for(unsigned i=0;i<96;++i)data->text_map.expansions[i]=pointer(0x4B74+i*4,64);
+        data->text_map.fallback=text(0,0xE0760,64);data->text_map.integer_format=text(0,0xE075C,64);
+        const auto registry=part(1,0x43C4+29*20,20);uint32_t n=0;while(n<20&&registry.ReadU8(n))++n;if(!n||n==20)throw std::runtime_error("source29 registration");
+        const auto directory_view=text(0,0xD9C68,32);
+        const auto mount=OutingTextBytes(registry.Subview(0,n+1)),directory=OutingTextBytes(directory_view);
+        const auto models=text(0,0xD9C74,64),textures=text(0,0xD9C80,64);
+        for(unsigned i=0;i<18;++i)data->support_paths.models[i]=OutingText(OutingStringFormat(models,{mount,directory,OutingTextBytes(pointer(0x4ACC+i*4,64))}));
+        data->support_paths.textures=OutingText(OutingStringFormat(textures,{mount,directory}));
+        const auto hold=[&](PackageView v){data->pins.emplace_back(v,v.InitializedDigest());};
+        hold(data->origin);hold(data->registrations);hold(data->motion_counts);hold(data->triplets);hold(data->model_format);hold(data->light_format);hold(data->glyph_format);
+        hold(data->text_map.keys);hold(data->text_map.fallback);hold(data->text_map.integer_format);hold(registry);hold(models);hold(textures);hold(directory_view);
+        hold(part(1,0x9B0,4));hold(part(1,0x4ACC,18*4));hold(part(1,0x4B74,96*4));
+        for(const auto& v:data->text_map.expansions)hold(v);for(const auto& v:data->support_paths.models)hold(v);hold(data->support_paths.textures);
+        for(const auto& v:data->auxiliary_names)hold(v.second);
+        if(!data->Current()||!Current())throw std::runtime_error("outing packet drift");out=std::move(data);return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
 GameFsStatus ReadBgmGain14834(const GameOptionSettingsSnapshot& settings,PackageView table,uint32_t& out){
     try{if(!settings.live||!settings.owner||!settings.generation||table.Describe().size!=40)throw std::runtime_error("14834 current typed settings/ten copied gain words required");
         const auto digest=table.InitializedDigest();uint32_t at=settings.words[2]+5u;if(at>=11)at=0;
@@ -94,6 +161,9 @@ struct GameSceneBgm::Data {
     std::shared_ptr<const void> lifetime=std::make_shared<uint8_t>(0);
     uint64_t last_job_request=0,last_cache_consumed=0;
     std::weak_ptr<GameBackgroundRuntime> runtime;
+    std::weak_ptr<GameManagerSwitchControl> manager;
+    std::weak_ptr<int32_t> manager_selection;
+    bool selection_bound=false;
     GameOptionSettings* settings=nullptr;
     std::weak_ptr<const void> settings_lifetime;
     uint64_t settings_owner=0,settings_generation=0;
@@ -106,6 +176,8 @@ struct GameSceneBgm::Data {
     bool Current()const{
         const auto r=runtime.lock();const auto life=settings_lifetime.lock();
         if(closing||!state.initialized||!r||!r->Live()||!life||!settings||!r->SettingsCurrent(r,*settings))return false;
+        if(selection_bound){const auto m=manager.lock();const auto cell=manager_selection.lock();
+            if(!m||!cell||!m->CurrentBorrow(m)||m->Snapshot().epoch!=state.actor_epoch||*cell!=state.stored4BC)return false;}
         const auto now=settings->OptionSettings();if(!now.live||now.owner!=settings_owner||now.generation!=settings_generation)return false;
         try{for(unsigned i=0;i<3;++i)if(inputs[i].InitializedDigest()!=hashes[i])return false;return true;}catch(...){return false;}
     }
@@ -113,6 +185,13 @@ struct GameSceneBgm::Data {
         const auto old=runtime.lock();return Current()&&current&&old==current&&!old.owner_before(current)&&!current.owner_before(old);
     }
 };
+GameFsStatus GameSceneBgm::BindSelectionCell(const std::shared_ptr<GameManagerSwitchControl>& manager,uint64_t epoch){
+    if(!data_||!data_->Current()||data_->selection_bound||!manager||!manager->CurrentBorrow(manager)
+        ||manager->state_.epoch!=epoch||data_->state.actor_epoch!=epoch||!data_->state.selected||!manager->stored_bgm4BC_)
+        return {GameFsCode::Unavailable,0,"actual initial BGM/current LoadMan selection cell required"};
+    data_->manager=manager;data_->manager_selection=manager->stored_bgm4BC_;
+    *manager->stored_bgm4BC_=data_->state.stored4BC;data_->selection_bound=true;return {};
+}
 GameSceneBgm::GameSceneBgm()=default;
 GameSceneBgm::~GameSceneBgm(){(void)Close();}
 GameFsStatus GameSceneBgm::Initialize(std::shared_ptr<GameBackgroundRuntime> runtime,uint64_t epoch,GameOptionSettings& settings,
@@ -640,7 +719,12 @@ GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const v
     state_.bgm_attempted=true;data.last_job_request=state_.request;data.last_cache_consumed=stored.cache_revision;
     auto status=SelectBgm19B6C(stored.period4B4,stored.stored4BC,data.inputs[0],*runtime->rng_,state_.bgm_selection);
     if(!status)return status;
-    stored.selection=state_.bgm_selection;stored.stored4BC=int32_t(stored.selection.index);stored.requested=false;state_.bgm_choice=stored.stored4BC; // source store before request
+    if(!data.Bound(runtime))return {GameFsCode::Unavailable,0,"current BGM/LoadMan retired during selection; RNG effects retained"};
+    const auto cell=data.manager_selection.lock();
+    if(data.selection_bound&&!cell)return {GameFsCode::Unavailable,0,"current LoadMan selection cell retired after RNG"};
+    stored.selection=state_.bgm_selection;stored.stored4BC=int32_t(stored.selection.index);
+    if(cell)*cell=stored.stored4BC; // SAME owned manager field, at source store BEFORE file/provider
+    stored.requested=false;state_.bgm_choice=stored.stored4BC;
     try{status=data.files.Request(runtime,stored.epoch,stored.selection.index,data.inputs[2],data.names(stored.selection.index),state_.bgm_result);}
     catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
     if(status&&!data.Bound(runtime))return {GameFsCode::Unavailable,0,"target BGM producer changed during request"};
@@ -1059,6 +1143,50 @@ GameFsStatus GameBackgroundPreparation::DrawWithSupport(const std::shared_ptr<co
     GameSupportSnapshot support;const auto checked=ReadSupport(owner,epoch,vm,support);if(!checked)return checked;
     auto status=clone_->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);if(status)status=support_.DrawGlyphPreview(owner,epoch,vm,graphics,camera);return status;
 }
+namespace {
+// Own parsed nested packages in this job; shared templates never receive a
+// mutable material or a borrow from a separately retired scene.
+class OutingPackageResources final:public GameResourceSource {
+public:
+    explicit OutingPackageResources(GameFilesystem& files):files_(files){}
+    GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
+        try{
+            const auto slash=path.find('\\');
+            if(slash==std::string::npos||!slash||slash>64||path.find("..")!=path.npos||path.find(':')!=path.npos)
+                throw std::runtime_error("outing nested resource path");
+            const auto mount=path.substr(0,slash);auto found=packages_.find(mount);
+            if(found==packages_.end()){
+                if(packages_.size()>=64)throw std::runtime_error("outing nested package capacity");
+                PackageView bytes;auto status=files_.LoadMember(mount+".BPM",bytes);if(!status)return status;
+                found=packages_.emplace(mount,BpDirectory::Parse(bytes,bytes.Describe().size)).first;
+            }
+            out=found->second.Open(path.substr(slash+1));return {};
+        }catch(const std::exception& e){return Error(e);}
+    }
+private:
+    GameFilesystem& files_;std::map<std::string,BpDirectory> packages_;
+};
+}
+GameFsStatus GameBackgroundPreparation::PrepareOwnedSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        const GameSupportRegistration& registration,PackageView module,const GameOutingData& packet){
+    if(!packet.Current()||support_resources_)return {GameFsCode::Unavailable,0,"current outing support DATA/fresh resources required"};
+    support_resources_=std::make_shared<OutingPackageResources>(filesystem_);
+    auto status=PrepareSupport(owner,epoch,vm,registration,std::move(module),packet.text_map,*support_resources_,packet.support_paths,packet.glyph_format);
+    if(status&&!packet.Current())return {GameFsCode::Unavailable,0,"outing support DATA changed during consumption"};
+    return status;
+}
+GameFsStatus GameBackgroundPreparation::DrawSelected(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        GameGraphics& graphics,const GameMatrix& camera)const{
+    if(!RuntimeCurrent()||!activated_)return {GameFsCode::Unavailable,0,"selected current auxiliary activation required"};
+    auto status=DrawWithSupport(owner,epoch,vm,graphics,camera);if(!status)return status;
+    for(const auto index:applied_.selected_entries){
+        if(index>=auxiliary_entries_.size()||!auxiliary_entries_[index].child)
+            return {GameFsCode::Unavailable,0,"selected auxiliary child owner missing"};
+        status=auxiliary_entries_[index].child->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+        if(!status)return status;
+    }
+    return {};
+}
 GameFsStatus GameBackgroundPreparation::Close() {
     scene_bgm_=nullptr;scene_bgm_lifetime_.reset(); // manager BGM pool outlives this background job
     // Clone/template/material views die before their backing/file is revoked.
@@ -1069,7 +1197,7 @@ GameFsStatus GameBackgroundPreparation::Close() {
     main_template_clone_.Close();auxiliary_entries_.clear();auxiliary_asset_.reset();auxiliary_inputs_.clear();
     state_.auxiliary_staged=false;
     model_motions_.clear();model_motion_counts_.Reset();
-    support_.Close();support_prepared_=false;
+    support_.Close();support_prepared_=false;support_resources_.reset();
     if(clone_)clone_->Close();clone_.reset();asset_.reset();package_.Reset();
     const auto bgm_closed=bgm_files_.Close();
     if(!bgm_closed){state_.live=state_.pending=state_.staged=false;state_.failed=true;state_.status=bgm_closed;return bgm_closed;}

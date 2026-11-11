@@ -151,6 +151,38 @@ struct GameMenuOutingSnapshot {
 };
 // Selected argument3 can confirm only the genuine appended cancellation row.
 bool GameOutingChoiceShape(int32_t destinations,uint32_t rows,uint32_t pc)noexcept;
+
+// WindowsExecutedOutingDescriptor: source calls, not an observer/probe cache,
+// establish this command. Stored refs remain weak; no retired VM frame is kept
+// alive. A captured descriptor grants no destination/effect/completion authority.
+struct GameOutingCommandAbi {
+    uint32_t root=0x13219,produce_call=0x133B7,producer=0x2C61;
+    uint32_t copy_call=0x13402,copier=0x20DA,travel_call=0x1340C,travel=0x1264E,game12=0x1269F;
+    uint16_t candidates=0x59DA,stored=0x243F;
+};
+struct GameOutingCommandSnapshot {
+    bool live=false,produced=false,stored=false,current=false,failed=false;
+    uint64_t run=0,root=0,producer_frame=0,copy_frame=0,request=0,actor_epoch=0;
+    bool issued=false;
+    uint32_t context=0,candidate=0,word=0,selector=0,record_table=0,record_index=0,record_header=0;
+    std::array<script::ValueWitness,6> fields{};
+};
+class GameOutingCommand final {
+public:
+    GameOutingCommand();~GameOutingCommand();
+    GameOutingCommand(const GameOutingCommand&)=delete;
+    GameOutingCommand& operator=(const GameOutingCommand&)=delete;
+    GameFsStatus Begin(script::Vm&,const GameOutingCommandAbi& = {});
+    void Observe(script::Vm&,const script::FrameTransition&)noexcept;
+    GameFsStatus ValidateGame12(script::Vm&,int32_t selector)const;
+    GameFsStatus Issue(script::Vm&,GameActorRuntime&,int32_t selector);
+    GameFsStatus CurrentRequest(script::Vm&,const GameActorRuntime&,GameBackgroundCandidate&)const;
+    GameOutingCommandSnapshot Snapshot(script::Vm&)const;
+    void Close();
+private:
+    struct Data;std::unique_ptr<Data> data_;
+};
+
 struct GameActorScriptSnapshot {
     std::vector<GameNotebookStoreWitness> notebook_slot0_stores;
     uint32_t notebook_slot0_stores_dropped=0;
@@ -200,6 +232,7 @@ struct GameActorScriptSnapshot {
     GameOrdinaryControlObservation ordinary_controls;
     GameMenuCallbackSnapshot menu_callback,menu_open_return,menu_close_return,menu_pause_return,menu_teach_return,menu_outing_return;
     GameMenuOutingSnapshot outing;
+    GameOutingCommandSnapshot outing_command;
     GameInventoryRowsObservation menu_inventory_before,menu_inventory_after,menu_inventory_verified;
     GameInventoryMarkSnapshot menu_mark;
     GameInventoryPlacementSnapshot menu_placement;
@@ -340,6 +373,7 @@ class GameActorScript final {
     GameFsStatus CompleteChoice(const GameChoiceTarget&,uint32_t result);
     uint32_t OutingChoiceOnlyRow()const;
     bool MenuOutingCapable()const noexcept;
+    GameFsStatus PreparePendingDestination(const std::shared_ptr<const GameOutingData>&,GameSceneBgm&,const std::function<std::unique_ptr<GameFileSource>()>&);
     GameChoiceTarget InputTarget()const;
     GameFsStatus CompleteInput(const GameChoiceTarget&,std::string text,std::string auxiliary,bool timed_out);
     GameInventoryActionAdmission PostInventoryAction(uint64_t inventory_generation,uint32_t event,int32_t row);
@@ -412,6 +446,7 @@ class GameActorScript final {
     GameActorDictionary dictionary_;
     GameAsciiClass70Owner ascii_class70_;
     GameOwnedConversation owned_conversation_;
+    GameOutingCommand outing_command_;
     GameInventoryMarkChain menu_mark_;
     GameInventoryPlacementProof menu_placement_;
     GameNotebookSelfImage notebook_self_before_;

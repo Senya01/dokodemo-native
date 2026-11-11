@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 
+namespace dokodemo {struct StartupRuntimeTestAccess;}
 namespace dokodemo::recovered {
 // A690 receives actor+10, so its +44 source is the actor's field54.
 int32_t GameActorMotionSelectorA690(int32_t field54) noexcept;
@@ -52,6 +53,13 @@ class GameNotebook;
 class GameWordMemo;
 class GameDiary;
 class GameSystemOptionFrontier;
+class GameOutingCommand;
+struct GameDestinationPreparationSnapshot {
+  bool attempted=false,prepared=false,failed=false;
+  uint64_t request=0,epoch=0;
+  uint32_t candidate=0,selector=0,period=0,resource=0,phase=0;
+  GameFsStatus status;
+};
 struct GameLoadManSnapshot {
   bool current=false,ui_current=false,rendered_current=false;
   uint64_t module_epoch=0,dispatches=0;
@@ -96,6 +104,7 @@ public:
 private:
   friend class GameContentBoot;
   friend class GameActorRuntime;
+  friend class GameSceneBgm;
   bool Current()const;
   bool BindActor(uint64_t epoch);
   void ReleaseActor(uint64_t epoch);
@@ -115,6 +124,7 @@ private:
   const GameSystemOptionFrontier* options_=nullptr;
   const GameSceneBgm* bgm_=nullptr;
   std::weak_ptr<const void> bgm_lifetime_;
+  std::shared_ptr<int32_t> stored_bgm4BC_;
   std::map<uint32_t,bool> resource_requests_; // only genuinely published bits known
   GameManagerSwitchSnapshot state_;
 };
@@ -274,6 +284,10 @@ public:
   GameFsStatus BindInitialSceneBgmOwner(GameSceneBgm&);
   // Source1B238 publication ONLY. Target4A8/4DC/adoption/wake still refuse.
   GameFsStatus PublishPendingScene1B238(GameSceneBgm&);
+  GameFsStatus PreparePendingDestination(script::Vm&,const GameOutingCommand&,PackageView module,
+      const std::shared_ptr<const GameOutingData>&,GameSceneBgm&,std::unique_ptr<GameFileSource>);
+  GameDestinationPreparationSnapshot DestinationPreparation()const{return destination_state_;}
+  GameFsStatus CloseDestination();
   GameFsStatus ClearManager8();
   GameFsStatus ClearManager9();
   bool OwnersLive()const{return Live();}
@@ -290,6 +304,11 @@ public:
   void Close();
 
 private:
+  friend class GameOutingCommand;
+  friend struct ::dokodemo::StartupRuntimeTestAccess;
+  std::shared_ptr<GameBackgroundPreparation> destination_;
+  std::shared_ptr<const GameOutingData> destination_inputs_;
+  GameDestinationPreparationSnapshot destination_state_;
   bool Live() const;
   PackageView selection_;
   GameTransition *transition_ = nullptr;

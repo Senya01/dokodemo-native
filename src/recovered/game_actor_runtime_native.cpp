@@ -1,4 +1,5 @@
 #include "game_actor_runtime_native.h"
+#include "game_actor_script_native.h"
 #include "game_inventory_native.h"
 #include "game_notebook_native.h"
 #include "game_wordmemo_native.h"
@@ -156,7 +157,7 @@ bool GameManagerSwitchControl::Initialize(uint64_t epoch,std::shared_ptr<const v
   state_.loadman.module_epoch=epoch;state_.loadman.transition50=0;state_.loadman.ui464=0;
   state_.loadman.application20=state_.loadman.next24=-1;state_.loadman.phase28=1;
   state_.loadman.current_variant4A8=state_.loadman.staged_variant4AC=1;
-  state_.loadman.cached_period4B4=2;state_.loadman.stored_bgm4BC=0;
+  state_.loadman.cached_period4B4=2;state_.loadman.stored_bgm4BC=0;stored_bgm4BC_=std::make_shared<int32_t>(0);
   state_.loadman.transition50_writer=0x17938;
   state_.loadman.ui464_writer=0x17908;
   if(!module){standalone_module_=std::make_shared<uint64_t>(epoch);module=standalone_module_;}
@@ -177,6 +178,7 @@ GameManagerSwitchSnapshot GameManagerSwitchControl::Snapshot()const{
   out.old_bit_known=ResourceRequest(out.old_resource,out.old_bit);
   out.new_bit_known=ResourceRequest(out.new_resource,out.new_bit);
   if(!out.live)return out; // never dereference Content members after parent retirement
+  if(stored_bgm4BC_)out.loadman.stored_bgm4BC=*stored_bgm4BC_;
   const bool any=inventory_||notebook_||wordmemo_||diary_||options_;
   if(any&&!(inventory_&&notebook_&&wordmemo_&&diary_&&options_)){out.loadman.ui_current=false;return out;}
   // The actual native owners are registered by Content, never supplied by a
@@ -243,7 +245,7 @@ bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
   state_.pending=false;++state_.consumed;return true; //1B2C8/CC, no resource calls
 }
 void GameManagerSwitchControl::Retire(){
-  state_.live=state_.bound=state_.pending=false;module_.reset();standalone_module_.reset();
+  state_.live=state_.bound=state_.pending=false;module_.reset();standalone_module_.reset();stored_bgm4BC_.reset();
   inventory_=nullptr;notebook_=nullptr;wordmemo_=nullptr;diary_=nullptr;options_=nullptr;bgm_=nullptr;bgm_lifetime_.reset();
 }
 
@@ -390,6 +392,7 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameResourceSource *resources,std::shared_ptr<GameBackgroundRuntime> background,
                                           std::shared_ptr<GameManagerSwitchControl> ordinary_owners) {
   Close();
+  if(destination_)return {GameFsCode::Unavailable,0,"prior destination close still pending"};
   state_ = {};
   state_.owner_epoch=next_room_owner_epoch.fetch_add(1,std::memory_order_relaxed)+1;
   try {
@@ -741,6 +744,7 @@ GameFsStatus GameActorRuntime::BindInitialSceneBgmOwner(GameSceneBgm& bgm){
   const auto current=bgm.Snapshot();const auto life=bgm.Lifetime().lock();
   if(!life||!current.current||!current.selected||!current.requested||current.actor_epoch!=state_.owner_epoch)
     return {GameFsCode::Unavailable,0,"actual initial19DD4 current BGM selection required"};
+  const auto bound=bgm.BindSelectionCell(manager_switch_,state_.owner_epoch);if(!bound)return bound;
   manager_switch_->bgm_=&bgm;manager_switch_->bgm_lifetime_=life;
   manager_switch_->state_.loadman.cached_period4B4=current.period4B4;
   manager_switch_->state_.loadman.stored_bgm4BC=current.stored4BC;
@@ -756,7 +760,7 @@ GameFsStatus GameActorRuntime::PublishPendingScene1B238(GameSceneBgm& bgm){
       ||s.loadman.rendered_selector4DC!=0||s.loadman.current_variant4A8>2)
     return {GameFsCode::Unavailable,0,"1B238 actual request/LoadMan/BGM/UI lineage or phase unavailable"};
   const auto before=bgm.Snapshot();
-  if(!before.current||before.actor_epoch!=state_.owner_epoch||before.stored4BC!=s.loadman.stored_bgm4BC)
+  if(!before.current||before.actor_epoch!=state_.owner_epoch||!owner.stored_bgm4BC_||before.stored4BC!=*owner.stored_bgm4BC_)
     return {GameFsCode::Unavailable,0,"1B238 current initial BGM data owner drift"};
   // WindowsTypedResourceRequests owns independently known bits; all other
   // source bits remain UNKNOWN. This is not a zero-filled PSP/profile byte map.
@@ -783,6 +787,42 @@ GameFsStatus GameActorRuntime::PublishPendingScene1B238(GameSceneBgm& bgm){
   // No staged resource is adopted: old4A8/4DC/clones/regions remain owned.
   // No target RNG/BGM/aux sampling, context completion or source event17.
 }
+
+GameFsStatus GameActorRuntime::PreparePendingDestination(script::Vm& vm,const GameOutingCommand& command,PackageView module,
+        const std::shared_ptr<const GameOutingData>& packet,GameSceneBgm& bgm,std::unique_ptr<GameFileSource> source){
+  GameBackgroundCandidate candidate;auto status=command.CurrentRequest(vm,*this,candidate);if(!status)return status;
+  const auto runtime=background_module_.lock();const auto manager=manager_switch_->Snapshot();bool bit=false;
+  if(!packet||!packet->Current()||!bgm.SharesDataBacking(packet->origin)||!runtime||!BackgroundModuleMatches(runtime)||manager.publication_phase!=3
+      ||manager.current14!=12||manager.loadman.rendered_selector4DC!=0||!manager_switch_->ResourceRequest(manager.new_resource,bit)||!bit
+      ||manager.new_resource!=66+manager.loadman.staged_variant4AC)
+    return {GameFsCode::Unavailable,0,"outing selected command/published resource/current DATA owner required"};
+  if(destination_)return {GameFsCode::Unavailable,0,"existing destination attempt requires explicit retirement; no request/RNG replay"};
+  destination_=std::make_shared<GameBackgroundPreparation>();destination_inputs_=packet;
+  auto& state=destination_state_;state={};state.attempted=true;state.request=candidate.request;state.epoch=state_.owner_epoch;
+  state.candidate=candidate.id;state.selector=candidate.selector;state.period=candidate.period;state.resource=manager.new_resource;
+  const std::shared_ptr<const void> owner=runtime;
+  const auto check=[&](){GameBackgroundCandidate current;return packet->Current()&&bool(command.CurrentRequest(vm,*this,current))
+      &&current.id==candidate.id&&current.request==candidate.request&&current.period==candidate.period&&runtime->Live();};
+  status=destination_->Begin(owner,state.epoch,candidate,packet->registrations,std::move(source),GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis);
+  if(status){state.phase=1;status=destination_->RequestBgm(owner,state.epoch,runtime,bgm);}
+  if(status&&check()){state.phase=2;status=destination_->Load(owner,state.epoch);}
+  if(status&&check()){state.phase=3;status=destination_->LoadModelMotions(owner,state.epoch,packet->motion_counts);}
+  if(status&&check()){state.phase=4;status=destination_->LoadAuxiliary(owner,state.epoch,packet->triplets,packet->model_format,
+      [&](uint32_t token,PackageView& out)->GameFsStatus{const auto found=packet->auxiliary_names.find(token);
+          if(found==packet->auxiliary_names.end())return {GameFsCode::Unavailable,0,"current outing auxiliary token absent"};out=found->second;return {};});}
+  if(status&&check()){state.phase=5;status=destination_->PrepareEffects(owner,state.epoch,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,packet->light_format);}
+  if(status&&check()){state.phase=6;status=destination_->ActivateEffects(owner,state.epoch,runtime);}
+  if(status&&check()){state.phase=7;status=destination_->SampleEffects(owner,state.epoch,0);}
+  if(status&&check()){state.phase=8;status=destination_->PrepareOwnedSupport(owner,state.epoch,vm,support_registration_,std::move(module),*packet);}
+  if(status&&!check())status={GameFsCode::Unavailable,0,"outing command/DATA/job owner changed during preparation; effects retained"};
+  state.status=status;state.failed=!status;state.prepared=bool(status);if(status)state.phase=9;
+  return status; // actual preparation only: no4A8/4DC/adoption/event17 publication
+}
+GameFsStatus GameActorRuntime::CloseDestination(){
+  if(destination_){auto status=destination_->Close();if(!status)return status;destination_.reset();}
+  destination_inputs_.reset();destination_state_={};return {};
+}
+
 GameFsStatus GameActorRuntime::ClearManager8(){
   if(!Live())return {GameFsCode::Unavailable,0,"Manager8 clear owner retired"};
   state_.manager_request8=false;return {};
@@ -1536,6 +1576,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
+  if(!CloseDestination())return;
   initial_scene_clock_=false;state_.source_placement_bound=false;
   background_module_.reset();
   camera_target_.reset();primary_target_.reset();state_.camera_target_current=false;

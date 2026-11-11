@@ -316,6 +316,11 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     }
     case 12: {
         const auto w=vm_->current_witness();auto& o=state_.outing;
+        if(w.code_entry==0x1264E&&w.current_pc==0x1269F){
+            const auto command=outing_command_.ValidateGame12(*vm_,Number(arg));Need(bool(command),command.detail.c_str());
+            throw std::runtime_error("validated outing command: target adoption/18568 continuation not yet admitted");
+        }
+
         Need(runtime_&&o.entered&&!o.returned&&!o.failed&&w.frame_id==o.frame&&w.code_entry==0x13219
              &&(w.current_pc==0x13249||w.current_pc==0x133A3)&&Number(arg)==0,
              "GAME12 outside selected outing same-selector0 cancellation");
@@ -859,7 +864,7 @@ GameFsStatus GameActorScript::PostMenuEvent(const GameOwnerEventTarget& expected
         queue=event==0?vm_->post_owner_event(target.callback,0,argument):vm_->post_owner_nil_event(target.callback,int32_t(event));
         state_.owner_event_callback_word=target.callback.word;state_.owner_event_result=queue;++state_.owner_event_calls;
         if(queue==0){
-            if(event==0&&argument==3)state_.outing={};
+            if(event==0&&argument==3){state_.outing={};outing_command_.Close();state_.outing_command={};}
             auto& c=state_.menu_callback;c={};c.pending=true;c.event=event;c.menu_generation=generation;
             c.argument=event==0?argument:0;
             c.receipt=vm_->last_callback_receipt();c.callback_frame=vm_->current_witness().frame_id;c.suspended=saved;
@@ -1013,15 +1018,177 @@ uint32_t GameActorScript::OutingChoiceOnlyRow()const{
          &&GameOutingChoiceShape(o.destinations,uint32_t(state_.choice_options.size()),o.choice_pc),"Outing choice owner replaced");
     return uint32_t(o.destinations);
 }
+
+struct GameOutingCommand::Data {
+    struct Ref {
+        script::Table table{};uint16_t index=0;uint32_t word=0;
+        std::weak_ptr<std::vector<script::Value>> frame;
+        std::weak_ptr<script::NativeScriptContext> context;
+        static Ref From(const script::Value& v){
+            if(v.kind!=script::Value::Kind::Reference)throw std::runtime_error("outing typed reference required");
+            return {v.table,v.index,v.word,v.frame_owner,v.context_owner};
+        }
+        script::Value Value()const{script::Value v;v.kind=script::Value::Kind::Reference;v.table=table;v.index=index;v.word=word;v.frame_owner=frame;v.context_owner=context;return v;}
+        bool Same(const script::Value& v)const{return v.kind==script::Value::Kind::Reference&&v.table==table&&v.index==index&&v.word==word
+            &&!frame.owner_before(v.frame_owner)&&!v.frame_owner.owner_before(frame)
+            &&!context.owner_before(v.context_owner)&&!v.context_owner.owner_before(context);}
+    };
+    GameOutingCommandAbi abi;GameOutingCommandSnapshot state;
+    std::array<char,65> module{};std::weak_ptr<script::NativeScriptContext> context;
+    Ref descriptor,destination,record;std::array<script::ValueWitness,6> fields{};
+    int32_t candidate=-1;bool copied=false;
+    std::weak_ptr<GameManagerSwitchControl> manager;
+    static uint32_t Int(const script::Value& v){if(v.kind!=script::Value::Kind::Scalar||v.word>>28!=2||v.signed_integer()<0)
+        throw std::runtime_error("outing current nonnegative typed integer required");return uint32_t(v.signed_integer());}
+    static script::Value Cell(script::Vm& vm,script::Value ref,uint32_t index){
+        const auto header=vm.peek_reference(ref);
+        if(header.kind!=script::Value::Kind::ArrayHeader||header.word>>28!=9||index>=(header.word&0xFFF)
+            ||uint32_t(ref.index)+1+index>UINT16_MAX)throw std::runtime_error("outing array header/index extent");
+        ref.index=uint16_t(uint32_t(ref.index)+1+index);(void)vm.peek_reference(ref);return ref;
+    }
+    static script::ValueWitness Digest(script::Vm& vm,const script::Value& v){
+        script::ValueWitness d;d.kind=v.kind;d.word=v.word;d.table=uint32_t(v.table);d.index=v.index;
+        if(v.kind==script::Value::Kind::Unknown||v.kind==script::Value::Kind::Opaque)throw std::runtime_error("outing unknown descriptor field");
+        if(v.kind==script::Value::Kind::String){
+            // Copy association only, never String branch authority. Other
+            // admitted VM text producers own cp932 bytes without Inline8E.
+            if(v.word>>28!=5&&v.word>>28!=6)throw std::runtime_error("outing string representation");
+            if(v.owned_string.bound()&&!vm.owned_string_receipt(v).live)throw std::runtime_error("outing retired string field");
+            d.cp932_bytes=v.cp932.size();d.cp932_sha256=core::sha256(reinterpret_cast<const uint8_t*>(v.cp932.data()),v.cp932.size());
+        }
+        return d;
+    }
+    static bool Equal(const script::ValueWitness& a,const script::ValueWitness& b){
+        if(a.kind!=b.kind)return false;
+        if(a.kind==script::Value::Kind::String)return a.cp932_bytes==b.cp932_bytes&&a.cp932_sha256==b.cp932_sha256;
+        return a.word==b.word&&(a.kind!=script::Value::Kind::Reference||(a.table==b.table&&a.index==b.index));
+    }
+    void Current(script::Vm& vm,bool stored)const{
+        const auto w=vm.current_witness();
+        if(!state.live||state.failed||!w.valid||!w.context_registered||w.run_id!=state.run||w.context_word!=state.context||w.code_sha256!=module
+            ||!vm.owns_active_frame(state.root,abi.root))throw std::runtime_error("outing command module/run/context/root retired or foreign");
+        const auto ctx=vm.context_value().context_owner.lock();
+        if(!ctx||context.lock()!=ctx||context.owner_before(ctx)||ctx.owner_before(context))throw std::runtime_error("outing weak context owner changed");
+        const auto header=vm.peek_reference(descriptor.Value());
+        if(header.kind!=script::Value::Kind::ArrayHeader||header.word!=0x90000006)throw std::runtime_error("outing six-field descriptor header");
+        std::array<script::Value,6> values;
+        for(unsigned i=0;i<6;++i){values[i]=vm.peek_reference(Data::Cell(vm,descriptor.Value(),i));
+            if(state.produced&&!Equal(fields[i],Digest(vm,values[i])))throw std::runtime_error("outing produced descriptor drift");}
+        if(!state.produced)return;
+        if(Int(values[0])!=uint32_t(candidate)||!record.Same(values[1])||Int(values[2])!=state.word)
+            throw std::runtime_error("outing candidate/word/record drift");
+        script::Value root;root.kind=script::Value::Kind::Reference;root.table=script::Table::Global;root.index=abi.candidates;root.word=0xB2000000u|root.index;
+        const auto selected=vm.peek_reference(Data::Cell(vm,root,uint32_t(candidate)));
+        if(!record.Same(selected))throw std::runtime_error("outing current candidate registry replaced");
+        const auto rh=vm.peek_reference(record.Value());
+        if(rh.kind!=script::Value::Kind::ArrayHeader||rh.word!=state.record_header||rh.word!=0x90000009
+            ||Int(vm.peek_reference(Data::Cell(vm,record.Value(),0)))!=state.selector)
+            throw std::runtime_error("outing current record/schema/selector drift");
+        if(stored){
+            if(!state.stored||!copied||destination.table!=script::Table::Ctx28||destination.index!=abi.stored)
+                throw std::runtime_error("outing executed current-context copy absent");
+            const auto bound=destination.context.lock();
+            if(!bound||bound!=ctx||bound.owner_before(ctx)||ctx.owner_before(bound))throw std::runtime_error("outing copied context reference foreign/retired");
+            const auto h=vm.peek_reference(destination.Value());
+            if(h.kind!=script::Value::Kind::ArrayHeader||h.word!=0x90000006)throw std::runtime_error("outing current-context descriptor header");
+            for(unsigned i=0;i<6;++i)if(!Equal(fields[i],Digest(vm,vm.peek_reference(Data::Cell(vm,destination.Value(),i)))))
+                throw std::runtime_error("outing current-context copied descriptor drift");
+        }
+    }
+};
+GameOutingCommand::GameOutingCommand()=default;
+GameOutingCommand::~GameOutingCommand()=default;
+void GameOutingCommand::Close(){data_.reset();}
+GameFsStatus GameOutingCommand::Begin(script::Vm& vm,const GameOutingCommandAbi& abi){
+    try{if(data_)throw std::runtime_error("outing command already owns an invocation");(void)vm.context_value();const auto w=vm.current_witness();
+        if(!w.valid||w.code_entry!=abi.root||!vm.owns_active_frame(w.frame_id,abi.root))throw std::runtime_error("outing actual root frame required");
+        auto d=std::make_unique<Data>();d->abi=abi;d->state.live=true;d->state.run=w.run_id;d->state.root=w.frame_id;d->state.context=w.context_word;
+        d->module=w.code_sha256;d->context=vm.context_value().context_owner;data_=std::move(d);return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)noexcept{
+    if(!data_||data_->state.failed)return;
+    try{auto& d=*data_;auto& s=d.state;const auto& a=d.abi;
+        if(t.before.run_id!=s.run||t.after.run_id!=s.run||t.after.context_word!=s.context)throw std::runtime_error("outing transition owner drift");
+        if(t.before.frame_id==s.root&&t.before.current_pc==a.produce_call&&t.opcode==0x20){
+            if(s.producer_frame||t.after.code_entry!=a.producer||t.after.caller_frame_id!=s.root)throw std::runtime_error("outing producer call replaced/replayed");
+            d.descriptor=Data::Ref::From(vm.read_slot(script::Table::Frame,0));
+            if(!vm.reference_belongs_to_frame(d.descriptor.Value(),s.root))throw std::runtime_error("outing descriptor is not root-owned");
+            const auto optional=vm.read_slot(script::Table::Frame,2);
+            if(optional.kind!=script::Value::Kind::Scalar||optional.word!=0)throw std::runtime_error("outing selected optional word operand is not canonical NIL");
+            d.candidate=int32_t(Data::Int(vm.read_slot(script::Table::Frame,1)));s.producer_frame=t.after.frame_id;d.Current(vm,false);
+        }
+        if(s.producer_frame&&t.before.frame_id==s.producer_frame&&t.opcode==0x31){
+            if(t.after.frame_id!=s.root||t.before.code_entry!=a.producer||t.after.result.kind!=script::Value::Kind::Scalar||t.after.result.word!=0x10000001)
+                throw std::runtime_error("outing producer did not return source TRUE");
+            const auto ref=d.descriptor.Value();for(unsigned i=0;i<6;++i)d.fields[i]=Data::Digest(vm,vm.peek_reference(Data::Cell(vm,ref,i)));
+            d.record=Data::Ref::From(vm.peek_reference(Data::Cell(vm,ref,1)));
+            s.word=Data::Int(vm.peek_reference(Data::Cell(vm,ref,2)));s.candidate=uint32_t(d.candidate);
+            const auto header=vm.peek_reference(d.record.Value());s.record_header=header.word;
+            s.record_table=uint32_t(d.record.table);s.record_index=d.record.index;s.selector=Data::Int(vm.peek_reference(Data::Cell(vm,d.record.Value(),0)));
+            s.produced=true;s.fields=d.fields;d.Current(vm,false);
+        }
+        if(t.before.frame_id==s.root&&t.before.current_pc==a.copy_call&&t.opcode==0x20){
+            if(!s.produced||s.copy_frame||t.after.code_entry!=a.copier||!d.descriptor.Same(vm.read_slot(script::Table::Frame,0)))
+                throw std::runtime_error("outing copy input/call owner replaced");
+            d.Current(vm,false);d.destination=Data::Ref::From(vm.read_slot(script::Table::Frame,1));s.copy_frame=t.after.frame_id;
+        }
+        if(s.copy_frame&&t.before.frame_id==s.copy_frame&&t.opcode==0x31){
+            if(t.after.frame_id!=s.root||t.before.code_entry!=a.copier)throw std::runtime_error("outing copy return owner replaced");
+            d.copied=true;s.stored=true;d.Current(vm,true);
+        }
+    }catch(...){data_->state.failed=true;}
+}
+GameFsStatus GameOutingCommand::ValidateGame12(script::Vm& vm,int32_t selector)const{
+    try{if(!data_)throw std::runtime_error("executed outing descriptor missing");const auto& d=*data_;d.Current(vm,true);const auto w=vm.current_witness();
+        if(selector!=12||uint32_t(selector)!=d.state.selector||w.code_entry!=d.abi.travel||w.current_pc!=d.abi.game12
+            ||w.caller_frame_id!=d.state.root||w.caller_call_pc!=d.abi.travel_call||Data::Int(vm.read_slot(script::Table::Frame,0))!=uint32_t(selector)||Data::Int(vm.read_slot(script::Table::Frame,1))!=1)
+            throw std::runtime_error("outing GAME12 actual travel call/operand/supported selector mismatch");
+        return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+
+GameFsStatus GameOutingCommand::Issue(script::Vm& vm,GameActorRuntime& runtime,int32_t selector){
+    auto status=ValidateGame12(vm,selector);if(!status)return status;
+    if(data_->state.issued)return {GameFsCode::Unavailable,0,"outing command request already issued"};
+    status=runtime.RequestPendingScene12(vm);if(!status)return status;
+    const auto current=runtime.manager_switch_;const auto request=current->Snapshot();
+    data_->manager=current;data_->state.request=request.requests;data_->state.actor_epoch=request.epoch;data_->state.issued=true;return {};
+}
+GameFsStatus GameOutingCommand::CurrentRequest(script::Vm& vm,const GameActorRuntime& runtime,GameBackgroundCandidate& out)const{
+    try{if(!data_||!data_->state.issued)throw std::runtime_error("executed outing request absent");data_->Current(vm,true);
+        const auto owner=data_->manager.lock(),current=runtime.manager_switch_;
+        if(!owner||!current||owner!=current||owner.owner_before(current)||current.owner_before(owner)||!current->CurrentBorrow(current))
+            throw std::runtime_error("outing actual LoadMan owner replaced/retired");
+        const auto state=current->Snapshot();const auto& s=data_->state;
+        if(!runtime.Live()||state.epoch!=s.actor_epoch||state.requests!=s.request||state.requested18!=12
+            ||(state.current14!=0&&state.current14!=12)||state.loadman.cached_period4B4>=6)
+            throw std::runtime_error("outing actual request/actor/current cache changed");
+        out={s.candidate,s.selector,state.loadman.cached_period4B4,s.request};return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::PreparePendingDestination(const std::shared_ptr<const GameOutingData>& packet,GameSceneBgm& bgm,const std::function<std::unique_ptr<GameFileSource>()>& factory){
+    if(!vm_||!runtime_)return {GameFsCode::Unavailable,0,"outing current script/runtime absent"};
+    GameBackgroundCandidate candidate;const auto command=outing_command_.CurrentRequest(*vm_,*runtime_,candidate);if(!command)return command;
+    if(!factory||runtime_->DestinationPreparation().attempted)return {GameFsCode::Unavailable,0,"outing file factory absent or attempt already owned"};
+    auto source=factory();return runtime_->PreparePendingDestination(*vm_,outing_command_,script_image_,packet,bgm,std::move(source));
+}
+
+GameOutingCommandSnapshot GameOutingCommand::Snapshot(script::Vm& vm)const{
+    if(!data_)return {};auto out=data_->state;try{data_->Current(vm,out.stored);out.current=out.produced;}catch(...){out.current=false;}return out;
+}
+
 void GameActorScript::ObserveOutingTransition(const script::FrameTransition& t)noexcept{
     try{
         auto& o=state_.outing;const auto& c=state_.menu_outing_return;
         if(!o.entered&&c.returned&&c.phase_written&&!c.failed&&c.argument==3
            &&t.before.current_pc==0x8DF88&&t.after.code_entry==0x13219&&t.opcode==0x21){
             o.entered=true;o.run=t.after.run_id;o.frame=t.after.frame_id;o.caller=t.before.frame_id;
+            const auto command=outing_command_.Begin(*vm_);if(!command)o.failed=true;
             o.context=t.after.context_word;o.receipt=c.receipt;o.menu_generation=c.menu_generation;o.call_pc=t.before.current_pc;
         }
         if(!o.entered||o.failed||o.cleanup_returned)return;
+        outing_command_.Observe(*vm_,t);state_.outing_command=outing_command_.Snapshot(*vm_);
         if(t.before.run_id!=o.run||t.after.run_id!=o.run||t.after.context_word!=o.context){o.failed=true;return;}
         if(!o.returned&&t.opcode==0x31&&t.before.frame_id==o.frame&&t.before.code_entry==0x13219){
             const bool empty=t.before.current_pc==0x13252;
@@ -2266,7 +2433,7 @@ void GameActorScript::Close() {
     notebook_self_before_={};notebook_self_registration_=0;
     menu_mark_.End();
     menu_placement_.End();
-    owned_conversation_.Close();
+    owned_conversation_.Close();outing_command_.Close();
     ascii_class70_.Close();state_.ascii_class70_live=false;state_.ascii_class70_generation=0;
     state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
     state_=Snapshot();

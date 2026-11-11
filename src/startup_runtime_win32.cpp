@@ -1474,7 +1474,12 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
                 file=CreateWindowsGameFileSource(backend,std::move(path),0x7C000000);return {};
             });
         if(!status)return status;
-        return game_content.BindInitialScenePlacement(main_scene_data);
+        status=game_content.BindInitialScenePlacement(main_scene_data);if(!status)return status;
+        std::shared_ptr<const recovered::GameOutingData> destination;
+        status=main_scene_data.Outing12(destination);if(!status)return status;
+        return game_content.BindDestinationData(std::move(destination),[this](){
+            return CreateWindowsGameFileSource(backend,options.media_root+L"/PSP_GAME/USRDIR/data/DATA.BP",0x7D000000);
+        });
     }
     recovered::GameFsStatus OpenResource(const std::string& path,recovered::PackageView& out) override {
         constexpr const char* selected="/PSP_GAME/USRDIR/data/sound/se/SE_SYS.sgd";

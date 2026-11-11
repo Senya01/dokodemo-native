@@ -221,6 +221,13 @@ GameFsStatus GameContentBoot::BindInitialSceneBgm(PackageView lists,PackageView 
     auto bgm=std::make_unique<GameSceneBgm>();status=bgm->Initialize(background_runtime_,background_runtime_->Identity(),*this,lists,gains,root,std::move(names),std::move(factory));
     if(status)scene_bgm_=std::move(bgm);return status;
 }
+
+GameFsStatus GameContentBoot::BindDestinationData(std::shared_ptr<const GameOutingData> packet,std::function<std::unique_ptr<GameFileSource>()> factory){
+    if(!scene_bgm_||destination_data_||actor_runtime_.Snapshot().live||!packet||!packet->Current()||!factory||!scene_bgm_->SharesDataBacking(packet->origin))
+        return {GameFsCode::Unavailable,0,"destination packet requires SAME held initial BGM DATA before ordinary actor construction"};
+    destination_data_=std::move(packet);destination_file_=std::move(factory);return {};
+}
+
 GameFsStatus GameContentBoot::BindInitialScenePlacement(const GameMainSceneData& input){
     if(!scene_bgm_||!scene_bgm_->Snapshot().current||actor_runtime_.Snapshot().live||state_.actor_script.started)
         return {GameFsCode::Unavailable,0,"ordinary placement must bind AFTER data/BGM and BEFORE primary/Scene0"};
@@ -1015,6 +1022,8 @@ GameFsStatus GameContentBoot::ShowUnavailableMemoryStick(uint32_t native_error) 
     return status;
 }
 bool GameContentBoot::Close() {
+    const auto destination_closed=actor_runtime_.CloseDestination();if(!destination_closed){state_.status=destination_closed;return false;}
+    destination_data_.reset();destination_file_={};
     if(scene_bgm_){const auto closed=scene_bgm_->Close();if(!closed){state_.status=closed;return false;}scene_bgm_.reset();}
     initial_position_row_={};initial_position_heading_={};
     option_settings_lifetime_.reset();
@@ -1500,7 +1509,11 @@ GameFsStatus GameContentBoot::TickPendingSceneRequest(){
         bool requested=false;
         if(pending.publication_phase!=3||!loadman_->control->ResourceRequest(pending.new_resource,requested)||!requested)
             return {GameFsCode::Unavailable,0,"partial source resource request not an adopted scene"};
-        return {GameFsCode::Unavailable,0,"source1B238 published; current133B7/13402 descriptor-to-target adoption command not implemented"};
+        if(!destination_data_||!destination_data_->Current()||!destination_file_)
+            return {GameFsCode::Unavailable,0,"source1B238 selected destination DATA/file owner absent"};
+        const auto prepared=actor_script_.PreparePendingDestination(destination_data_,*scene_bgm_,destination_file_);
+        if(!prepared)return prepared;
+        return {GameFsCode::Unavailable,0,"target owners prepared; source19DD4 adoption/18568 owning continuation not implemented"};
     }
     return {};
 }

@@ -370,6 +370,21 @@ struct GameMainSceneDataSnapshot {
     bool live=false;uint64_t owner=0,generation=0,serial=0;uint32_t names=0;
     std::array<uint8_t,32> identity{};
 };
+// Held selected source DATA, never current VM strings or readiness.
+struct GameOutingData {
+    GameOutingData(const GameOutingData&)=delete;
+    GameOutingData& operator=(const GameOutingData&)=delete;
+    std::weak_ptr<const void> lifetime;
+    PackageView origin,registrations,motion_counts,triplets,model_format,light_format,glyph_format;
+    GameSupportTextMap text_map;
+    GameSupportTemplatePaths support_paths;
+    std::map<uint32_t,PackageView> auxiliary_names;
+    std::vector<std::pair<PackageView,std::array<uint8_t,32>>> pins;
+    bool Current()const;
+private:
+    friend class GameMainSceneData;
+    GameOutingData()=default;
+};
 class GameMainSceneData final {
   public:
     ~GameMainSceneData(){(void)Close();}
@@ -377,6 +392,7 @@ class GameMainSceneData final {
     PackageView Lists()const;PackageView Gains()const;PackageView Root()const;PackageView Name(uint32_t)const;
     PackageView PositionRow(uint32_t scene)const;PackageView PlacementHeading()const;
     GameFsStatus Placement(uint32_t scene,std::array<float,4>& position_heading)const;
+    GameFsStatus Outing12(std::shared_ptr<const GameOutingData>&)const;
     GameMainSceneDataSnapshot Snapshot()const;
     GameFsStatus Close();
   private:
@@ -384,9 +400,12 @@ class GameMainSceneData final {
     std::unique_ptr<GameFileSource> file_;PackageView image_,lists_,gains_,root_;
     std::array<PackageView,25> names_{};
     uint32_t position_file_=0,heading_file_=0;
+    std::array<uint32_t,2> segment_files_{},segment_sizes_{};
+    std::map<uint32_t,uint8_t> outing_relocations_;
     std::vector<std::pair<PackageView,std::array<uint8_t,32>>> selected_inputs_;
     std::array<uint8_t,32> digest_{};
     bool live_=false;
+    std::shared_ptr<const void> lifetime_;
 };
 class GameOptionSettings;
 struct GameOptionSettingsSnapshot;
@@ -422,6 +441,7 @@ class GameBackgroundRuntime final {
 };
 class GameOptionSettings;
 class GameActorRuntime;
+class GameManagerSwitchControl;
 struct GameSceneBgmSnapshot {
     bool initialized=false,current=false,attempted=false,selected=false,requested=false,cache_refreshed=false;
     uint64_t epoch=0,actor_epoch=0;
@@ -457,6 +477,7 @@ class GameSceneBgm final {
     struct Data;std::unique_ptr<Data> data_;
     friend class GameActorRuntime;
     std::weak_ptr<const void> Lifetime()const;
+    GameFsStatus BindSelectionCell(const std::shared_ptr<GameManagerSwitchControl>&,uint64_t);
 };
 struct GameBackgroundLightBinding {
     uint32_t slot=0;
@@ -555,9 +576,13 @@ class GameBackgroundPreparation final {
     GameFsStatus UpdateSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&);
     GameFsStatus ReadSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameSupportSnapshot&)const;
     GameFsStatus DrawWithSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameGraphics&,const GameMatrix&)const;
+    GameFsStatus DrawSelected(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameGraphics&,const GameMatrix&)const;
+    GameFsStatus PrepareOwnedSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
+        const GameSupportRegistration&,PackageView module,const GameOutingData&);
     GameFsStatus Close();
     GameBackgroundPreparationSnapshot Snapshot()const;
   private:
+    friend class GameActorRuntime;
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RegistrationsCurrent()const;
     bool MotionCountsCurrent()const;
@@ -597,6 +622,7 @@ class GameBackgroundPreparation final {
     std::shared_ptr<GameModelAsset> asset_;
     std::shared_ptr<GameModelClone> clone_;
     GameSupportTextOwner support_;
+    std::shared_ptr<GameResourceSource> support_resources_;
     bool support_prepared_=false;
     bool SupportJobCurrent(const std::shared_ptr<const void>& owner,uint64_t epoch)const;
     std::vector<GameModelMotion> model_motions_;
