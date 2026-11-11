@@ -6,6 +6,8 @@
 #include <memory>
 #include <functional>
 
+namespace dokodemo::script {class Vm;struct Value;struct NativeScriptContext;enum class Table:uint8_t;}
+
 namespace dokodemo::recovered {
 using GameVector4 = std::array<float, 4>;
 GameMatrix ModelIdentity() noexcept;
@@ -65,6 +67,9 @@ class GameModelAsset final {
             return false;
         }
     }
+    bool SourceCurrent()const noexcept {
+        try{return Live()&&image_.InitializedDigest()==source_digest_;}catch(...){return false;}
+    }
 
   private:
     PackageView image_;
@@ -72,6 +77,7 @@ class GameModelAsset final {
     std::vector<GameModelMaterial> materials_;
     GameModelStatistics stats_;
     uint32_t header_color_=0;
+    std::array<uint8_t,32> source_digest_{};
     GameModelTransformPolicy transform_policy_=GameModelTransformPolicy::SourceCommon;
 };
 struct GameModelPose {
@@ -110,6 +116,7 @@ struct GameContactFootprint {
 };
 class GameModelClone final {
   public:
+    uint64_t Generation()const noexcept{return generation_;}
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
     GameFsStatus Update(const GameMatrix &root);
     // Current typed copy only. No pointer/lease/issuer escapes; expected asset
@@ -136,6 +143,7 @@ class GameModelClone final {
     const LightSelection& Lights() const noexcept { return lights_; }
     void SetLightColor14(uint32_t color) { if(lights_.present){lights_.packed_color14=color;++lights_.color_writes;} }
     void Close() {
+        generation_=0;
         marker_pose_current_=false;
         lights_={};
         pose_.clear();
@@ -154,6 +162,7 @@ class GameModelClone final {
                                         bool &found,float &height) const;
 
   private:
+    uint64_t generation_=0;
     struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
     GeometrySpace GeometryTransforms(uint32_t node) const;
     std::array<uint8_t,32> MarkerPoseDigest()const;
@@ -221,6 +230,78 @@ struct GameAuxiliaryBindingState {
     GamePlaybackState playback;
     GameMotionStatistics motion;
     GameModelStatistics model;
+};
+// Conditional consumer of current VM table coordinates, NOT a source field20
+// issuer. No runtime entry/callback or scene readiness is granted by this API.
+struct GameSupportTextMap {
+    PackageView keys; // exact96 signed lookup bytes, first match wins
+    std::array<PackageView,96> expansions;
+    PackageView fallback,integer_format;
+};
+struct GameSupportTemplatePaths {
+    std::array<PackageView,18> models;
+    PackageView textures;
+};
+struct GameSupportGlyph {uint16_t code=0;int8_t style=0;};
+struct GameSupportPlacement {
+    uint32_t node=0,text_cell=0,characters=0,model=0;
+    uint16_t mode=0;
+    GameMatrix parent_world{};
+};
+struct GameSupportSnapshot {
+    bool live=false,failed=false,templates_loaded=false,attached=false;
+    uint64_t epoch=0,run=0;
+    uint32_t converted=0,loaded=0;
+    std::array<std::array<uint8_t,32>,8> cells{};
+    std::vector<GameSupportPlacement> placements;
+    std::vector<GameSupportGlyph> glyph_requests;
+    bool glyph_capacity_reached=false;
+    // Native text/model preparation only; glyph worker/current field20 bind
+    // and actual game/scene completion remain unimplemented.
+    bool source_current_bound=false;
+};
+class GameSupportTextOwner final {
+  public:
+    GameSupportTextOwner()=default;
+    GameSupportTextOwner(const GameSupportTextOwner&)=delete;
+    GameSupportTextOwner& operator=(const GameSupportTextOwner&)=delete;
+    GameFsStatus Initialize(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm&,
+        const script::Value& current_context,script::Table,uint16_t header_index,
+        PackageView module,const GameSupportTextMap&);
+    GameFsStatus LoadTemplates(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
+        GameResourceSource&,const GameSupportTemplatePaths&);
+    // WindowsSupportMarkerWorld: real same-marker parent world as clone root;
+    // optional geometry matrices are not applied a second time.
+    GameFsStatus Attach(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
+        std::shared_ptr<const GameModelClone> parent);
+    GameFsStatus Update(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&);
+    GameFsStatus DrawPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
+        GameGraphics&,const GameMatrix&)const;
+    GameFsStatus Read(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameSupportSnapshot&)const;
+    GameSupportSnapshot Progress()const{return state_;} // diagnostic partial state, never readiness
+    void Close();
+  private:
+    struct Input {PackageView view;std::array<uint8_t,32> digest{};};
+    struct Atom {uint32_t kind=0,word=0;uint64_t owner=0,epoch=0,serial=0;std::string text;bool operator==(const Atom& b)const{return kind==b.kind&&word==b.word&&owner==b.owner&&epoch==b.epoch&&serial==b.serial&&text==b.text;}};
+    Atom Capture(script::Vm&,const script::Value&)const;
+    bool Current(const std::shared_ptr<const void>&,uint64_t,script::Vm&)const;
+    bool InputsCurrent()const;
+    std::weak_ptr<const void> owner_;
+    std::weak_ptr<script::NativeScriptContext> context_;
+    std::weak_ptr<const GameModelClone> parent_;
+    std::vector<Input> inputs_;
+    std::array<Atom,9> atoms_{};
+    std::array<std::string,96> expansions_;
+    std::array<uint8_t,96> keys_{};
+    std::string fallback_,integer_format_;
+    std::vector<std::shared_ptr<GameModelAsset>> templates_;
+    std::vector<GameModelClone> children_;
+    script::Table table_{};
+    uint16_t index_=0;
+    uint64_t frame_=0,last_epoch_=0;
+    uint64_t parent_generation_=0;
+    std::array<char,65> module_sha_{};
+    GameSupportSnapshot state_;
 };
 // WindowsBackgroundPreparation: a separately owned, read-only background
 // package/model staging job. It grants NO manager, scene or script readiness.

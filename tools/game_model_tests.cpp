@@ -893,6 +893,103 @@ void BackgroundSamplingTests(){
         Check(bool(job.Close()),"failed current sampling owner closes");
     }
 }
+void SupportConsumerTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    // Same public KSC format, entirely generated module/current values.
+    std::vector<uint8_t> bytes(28+3+9*4);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,3);bytes[24]=9;
+    bytes[28]=0x30;bytes[29]=0;bytes[30]=0x38;Word(bytes,31,0x90000008);
+    auto module=std::make_shared<Lease>(bytes);Program program;Diagnostic error;Check(program.load_test_fixture(bytes,error),"synthetic support module");
+    Vm vm(program),foreign(program);Check(vm.start().status==Status::Running&&foreign.start().status==Status::Running,"actual two VM contexts");
+    const auto context=vm.context_value(),other=foreign.context_value();
+    const auto put=[&](unsigned i,Value value){Value r;r.kind=Value::Kind::Reference;r.table=Table::Global;r.index=uint16_t(i+1);vm.store_reference(r,std::move(value));};
+    Value nil;nil.kind=Value::Kind::Scalar;nil.word=0;
+    const std::array<Value,8> values{{Value::string("AB"),Value::string("C"),Value::string("?"),nil,Value::integer(-3),Value::string(""),Value::string(std::string("\xA1Z",2)),Value::string(" x")}};
+    for(unsigned i=0;i<8;++i)put(i,values[i]);
+    auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));
+    std::array<std::shared_ptr<Lease>,96> expansions;GameSupportTextMap map;map.keys=view(keys);
+    for(unsigned i=0;i<96;++i){expansions[i]=text("");map.expansions[i]=view(expansions[i]);}
+    const std::array<std::pair<char,std::string>,7> entries{{{'A',"x"},{'B',"y"},{'Z',"N"},{'-',"-"},{'3',"3"},{'x',"x"},{'C',""}}};
+    for(unsigned i=0;i<entries.size();++i){keys->b[i]=uint8_t(entries[i].first);expansions[i]=text(entries[i].second);map.expansions[i]=view(expansions[i]);}
+    auto fallback=text("Z"),format=text("%d");map.fallback=view(fallback);map.integer_format=view(format);
+    auto owner=std::make_shared<int>(7),wrong=std::make_shared<int>(8);GameSupportTextOwner consumer;uint64_t epoch=1;
+    const auto init=[&](){return consumer.Initialize(owner,epoch,vm,context,Table::Global,0,view(module),map);};
+    Check(!consumer.Initialize(owner,epoch,vm,other,Table::Global,0,view(module),map),"foreign context not a current reference issuer");
+    Check(bool(init()),"production current-reference/owned-map normalization");GameSupportSnapshot snap;
+    Check(bool(consumer.Read(owner,epoch,vm,snap))&&snap.converted==8&&!snap.source_current_bound,"consumer success is not source field20 readiness");
+    const auto cell=[&](unsigned n){return std::string(reinterpret_cast<const char*>(snap.cells[n].data()));};
+    Check(cell(0)=="xy"&&cell(1).empty()&&cell(2).empty()&&cell(3)=="N"&&cell(4)=="-3"&&cell(5).empty()
+        &&cell(6)==std::string("\xA1Z",2)&&cell(7)=="x","mapping first-match/drop, actual fallback/numeric and raw signed-byte-pair semantics");
+    snap.converted=99;Check(!consumer.Read(wrong,epoch,vm,snap)&&!consumer.Read(owner,epoch+1,vm,snap)
+        &&!consumer.Read(owner,epoch,foreign,snap)&&snap.converted==99,"foreign/stale/current-module readback remains unchanged");
+    keys->b[0]='a';Check(!consumer.Read(owner,epoch,vm,snap),"current map drift refuses");keys->b[0]='A';
+    put(0,Value::string("B"));Check(!consumer.Read(owner,epoch,vm,snap),"current VM value drift refuses without expected rebase");put(0,values[0]);
+    struct Source final:GameResourceSource {
+        unsigned calls=0,fail=0;std::vector<std::shared_ptr<Lease>> leases;
+        GameFsStatus OpenResource(const std::string&,PackageView& out)override{
+            ++calls;if(fail&&calls==fail)return {GameFsCode::NotFound,0,"synthetic real template load failure"};
+            auto l=std::make_shared<Lease>(Fixture());leases.push_back(l);out=PackageStorage::Attach(l,l->b.size());return {};
+        }
+    } source;
+    GameSupportTemplatePaths paths;std::array<std::shared_ptr<Lease>,18> names;
+    for(unsigned i=0;i<18;++i){names[i]=text("SUPPORT_SYN_"+std::to_string(i)+".DVS");paths.models[i]=view(names[i]);}
+    auto prefix=text("SUPPORT_SYN\\textures\\");paths.textures=view(prefix);
+    Check(bool(consumer.LoadTemplates(owner,epoch,vm,source,paths))&&source.calls==18,"actual eighteen model parse/ownership consumers");
+    auto parent_bytes=AreaMarkerFixture(0,false);auto parsed=dokodemo::model::parseDvs(parent_bytes);const auto end=parsed.nodes[0].source.offset+parsed.nodes[0].source.bytes;
+    // Synthetic marker: text0, whole-label key1, style0. No original marker bytes.
+    parent_bytes[end-12]=1;parent_bytes[end-11]=0;parent_bytes[end-10]=1;parent_bytes[end-9]=0;parent_bytes[end-8]=1;parent_bytes[end-7]=0;
+    auto parent_source=std::make_shared<Lease>(parent_bytes);auto parent_asset=std::make_shared<GameModelAsset>();
+    Check(bool(parent_asset->Decode(view(parent_source))),"actual synthetic marker template");auto parent=std::make_shared<GameModelClone>();Check(bool(parent->Initialize(parent_asset)),"actual parent clone");
+    Check(bool(consumer.Attach(owner,epoch,vm,parent))&&bool(consumer.Read(owner,epoch,vm,snap))&&snap.placements.size()==1
+        &&snap.placements[0].model==3&&snap.placements[0].characters==2&&snap.glyph_requests.size()==2,"length2/key1 selects template3 and queues actual two glyphs");
+    Check(snap.glyph_requests[0].code=='x'&&snap.glyph_requests[0].style==0&&snap.glyph_requests[1].code=='y',"actual dedup request bytes/style");
+    GameGraphics graphics;auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.1f;camera[12]=-.6f;camera[13]=-.8f;camera[14]=-1.1f;
+    Check(graphics.Initialize({})&&graphics.Clear(0xFF000000)&&bool(consumer.DrawPreview(owner,epoch,vm,graphics,camera))
+        &&graphics.Snapshot().mesh_pixels>0,"actual attached child clone raster, no glyph-worker success stub");
+    const auto original=snap.placements[0].parent_world;auto root=ModelIdentity();root[12]=2;Check(bool(parent->Update(root)),"actual parent update");
+    Check(!consumer.Read(owner,epoch,vm,snap)&&bool(consumer.Update(owner,epoch,vm))&&bool(consumer.Read(owner,epoch,vm,snap))
+        &&Near(snap.placements[0].parent_world[12],original[12]+2)&&snap.glyph_requests.size()==2,"same-marker world update and request dedup");
+    auto& alias=parent->Pose();Check(bool(parent->Update(root)),"retained pose alias baseline");alias[0].world[12]+=1;
+    Check(!consumer.Update(owner,epoch,vm)&&!consumer.Read(owner,epoch,vm,snap),"stale parent alias cannot attach fabricated world");Check(bool(parent->Update(root)),"explicit update restores valid pose");
+    parent->Close();Check(bool(parent->Initialize(parent_asset))&&!consumer.Read(owner,epoch,vm,snap),"same allocation parent reinitialize has different clone generation");
+    consumer.Close();++epoch;Check(bool(init()),"fresh epoch consumes real current data");source.calls=0;source.fail=6;
+    Check(!consumer.LoadTemplates(owner,epoch,vm,source,paths)&&consumer.Progress().failed&&consumer.Progress().loaded==5&&!consumer.Progress().templates_loaded,"partial load retained, never ready");
+    consumer.Close();++epoch;source.calls=0;source.fail=0;Check(bool(init())&&bool(consumer.LoadTemplates(owner,epoch,vm,source,paths)),"actual retry after explicit retirement");
+    source.leases.back()->live=false;Check(!consumer.Read(owner,epoch,vm,snap),"retired actual template refuses");consumer.Close();
+    ++epoch;put(3,Value{});Check(!init()&&consumer.Progress().failed&&consumer.Progress().converted==3
+        &&consumer.Progress().cells[0][0]=='x',"native Unknown differs from source nil; source-sequential partial cells retained");consumer.Close();put(3,nil);
+    ++epoch;put(2,Value::string(std::string(32,'A')));Check(!init()&&consumer.Progress().converted==2,"explicit bounded32-byte overflow refusal");consumer.Close();put(2,values[2]);
+    ++epoch;put(2,Value::string(std::string(1,'\x81')));Check(!init()&&consumer.Progress().converted==2,"truncated source negative-byte pair refuses");consumer.Close();put(2,values[2]);
+    // Traverse every selected template/glyph branch through real parse/clone consumers.
+    for(const auto mode:std::array<uint16_t,8>{{0,1,2,3,4,11,12,13}}){
+        ++epoch;Check(bool(init())&&bool(consumer.LoadTemplates(owner,epoch,vm,source,paths)),"fresh actual mode consumer");
+        auto b=parent_bytes;b[end-10]=uint8_t(mode);b[end-9]=0;
+        auto l=std::make_shared<Lease>(b);auto a=std::make_shared<GameModelAsset>();auto p=std::make_shared<GameModelClone>();
+        Check(bool(a->Decode(view(l)))&&bool(p->Initialize(a))&&bool(consumer.Attach(owner,epoch,vm,p))&&bool(consumer.Read(owner,epoch,vm,snap)),"actual marker mode attachment");
+        const uint32_t selected=mode==1?3:mode==2?11:(mode>=3&&mode<=10?0:1);
+        const size_t glyphs=mode==1||mode==2?2:(mode==0||mode==13?0:1);
+        Check(snap.placements[0].model==selected&&snap.glyph_requests.size()==glyphs,"mode key is not direct model ordinal");
+        if(glyphs){const char expected=mode==4||mode==12?'y':'x';const int style=mode==2||mode>=11?-12:0;
+            Check(snap.glyph_requests[0].code==uint16_t(expected)&&snap.glyph_requests[0].style==style,"selected whole/one-unit bytes and signed-low8 style");}
+        consumer.Close();p->Close();
+    }
+    ++epoch;put(0,Value::string(std::string(9,'A')));Check(bool(init())&&bool(consumer.LoadTemplates(owner,epoch,vm,source,paths)),"nine text units remain owned, not truncated");
+    parent->Close();Check(bool(parent->Initialize(parent_asset))&&bool(consumer.Attach(owner,epoch,vm,parent))&&bool(consumer.Read(owner,epoch,vm,snap))
+        &&snap.placements[0].characters==8&&snap.placements[0].model==9&&snap.cells[0][8]=='x',"source count clamps8 without truncating normalized data");
+    Check(!consumer.LoadTemplates(owner,epoch,vm,source,paths),"template replay refused");
+    std::shared_ptr<const void> owner_alias(owner.get(),[](const void*){});Check(!consumer.Read(owner_alias,epoch,vm,snap),"same address foreign shared-control-block refuses");
+    consumer.Close();parent->Close();put(0,values[0]);
+    ++epoch;Check(bool(init())&&bool(consumer.LoadTemplates(owner,epoch,vm,source,paths)),"current data before invalid marker");
+    auto bad_bytes=parent_bytes;bad_bytes[end-12]=9;auto bad_lease=std::make_shared<Lease>(bad_bytes);auto bad_asset=std::make_shared<GameModelAsset>();auto bad_parent=std::make_shared<GameModelClone>();
+    Check(bool(bad_asset->Decode(view(bad_lease)))&&bool(bad_parent->Initialize(bad_asset))&&!consumer.Attach(owner,epoch,vm,bad_parent)
+        &&consumer.Progress().failed&&!consumer.Progress().attached,"text-cell key9 refuses before attachment");consumer.Close();bad_parent->Close();
+    ++epoch;auto short_keys=std::make_shared<Lease>(std::vector<uint8_t>(95,255));auto bad_map=map;bad_map.keys=view(short_keys);
+    Check(!consumer.Initialize(owner,epoch,vm,context,Table::Global,0,view(module),bad_map),"exact map extent refuses malformed packet");consumer.Close();
+    ++epoch;Check(bool(init()),"current data before user-input retirement");fallback->live=false;Check(!consumer.Read(owner,epoch,vm,snap),"retired fallback owner revokes consumer");fallback->live=true;consumer.Close();
+    ++epoch;Check(bool(init()),"current owner reset after failed text");module->b[8]=1;Check(!consumer.Read(owner,epoch,vm,snap),"module alias drift refuses");module->b[8]=0;
+    (void)vm.start();Check(!consumer.Read(owner,epoch,vm,snap),"VM restart revokes current run even if context remains registered");consumer.Close();graphics.Close();parent->Close();
+}
 struct TitleSource final : GameResourceSource {
     bool fail = false;
     GameFsStatus OpenResource(const std::string &path, PackageView &out) override {
@@ -1409,6 +1506,7 @@ int main() {
         BackgroundAuxiliaryTests();
         BackgroundEffectsTests();
         BackgroundSamplingTests();
+        SupportConsumerTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();

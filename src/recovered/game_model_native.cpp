@@ -1,5 +1,6 @@
 #include "game_model_native.h"
 #include "core_hash.h"
+#include "../script_vm.h"
 #include "game_actor_runtime_native.h" // existing709C arithmetic, not a second table
 #include <atomic>
 #include <algorithm>
@@ -73,6 +74,160 @@ class BackgroundPackageSource final:public GameResourceSource {
     BpDirectory directory_;
     std::string mount_;
 };
+}
+namespace {
+std::string SupportText(const PackageView& view){
+    const auto n=view.Describe().size;Need(n&&n<=256,"support text input extent");std::string s;
+    for(uint64_t i=0;i<n;++i){const auto c=view.ReadU8(i);if(!c){Need(i+1==n,"support text trailing bytes");return s;}s+=char(c);}
+    throw std::runtime_error("support text missing terminator");
+}
+std::vector<std::string> SupportUnits(const std::string& text){
+    std::vector<std::string> out;
+    for(size_t i=0;i<text.size();){const auto c=uint8_t(text[i]);Need(c,"support embedded NUL");
+        if(c>=128){Need(i+1<text.size()&&text[i+1],"support truncated source byte pair");out.push_back(text.substr(i,2));i+=2;}
+        else{if(c>32)out.push_back(text.substr(i,1));++i;}}
+    return out;
+}
+void SupportGlyphs(std::vector<GameSupportGlyph>& queue,bool& capped,const std::string& text,int32_t style){
+    const auto low=uint32_t(style)&255;const auto signed_style=int8_t(low<128?int(low):int(low)-256);
+    for(size_t i=0;i<text.size();){const auto c=uint8_t(text[i++]);uint16_t code=c;
+        if(c>=128){Need(i<text.size()&&text[i],"support glyph truncated byte pair");code=uint16_t((uint16_t(c)<<8)|uint8_t(text[i++]));}
+        bool found=false;for(const auto& q:queue)found|=q.code==code&&q.style==signed_style;
+        if(found)continue;if(queue.size()==64){capped=true;break;}queue.push_back({code,signed_style});
+    }
+}
+}
+GameSupportTextOwner::Atom GameSupportTextOwner::Capture(script::Vm& vm,const script::Value& v)const{
+    Atom a;a.kind=uint32_t(v.kind);a.word=v.word;
+    if(v.kind==script::Value::Kind::String){a.text=v.cp932;if(v.owned_string.bound()){
+        const auto r=vm.owned_string_receipt(v);Need(r.live,"support owned string retired");a.owner=r.owner;a.epoch=r.epoch;a.serial=r.serial;}}
+    return a;
+}
+bool GameSupportTextOwner::InputsCurrent()const{
+    try{for(const auto& r:inputs_)if(r.view.InitializedDigest()!=r.digest)return false;
+        for(const auto& a:templates_)if(!a->SourceCurrent())return false;return true;}catch(...){return false;}
+}
+bool GameSupportTextOwner::Current(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm)const{
+    try{const auto held=owner_.lock();const auto w=vm.current_witness();
+        if(!state_.live||state_.failed||state_.converted!=8||!held||held!=owner||held.owner_before(owner)||owner.owner_before(held)
+           ||epoch!=state_.epoch||!w.valid||!w.context_registered||w.run_id!=state_.run||w.code_sha256!=module_sha_
+           ||(table_==script::Table::Frame&&w.frame_id!=frame_)||!InputsCurrent())return false;
+        const auto expected=context_.lock();if(!expected||vm.context_value().context_owner.lock()!=expected)return false;
+        for(unsigned i=0;i<9;++i)if(!(Capture(vm,vm.read_slot(table_,uint16_t(index_+i)))==atoms_[i]))return false;
+        return true;
+    }catch(...){return false;}
+}
+GameFsStatus GameSupportTextOwner::Initialize(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm& vm,
+        const script::Value& context,script::Table table,uint16_t index,PackageView module,const GameSupportTextMap& map){
+    using V=script::Value;
+    if(state_.live||state_.failed||!owner||epoch<=last_epoch_||index>UINT16_MAX-8)
+        return {GameFsCode::Unavailable,0,"support consumer owner/epoch/extent"};
+    try{const auto w=vm.current_witness();
+        Need(w.valid&&w.context_registered&&w.run_id&&context.kind==V::Kind::Context,"support existing current context required");
+        const auto ctx=context.context_owner.lock(),current=vm.context_value().context_owner.lock();
+        Need(ctx&&ctx==current,"support foreign context");
+        Need(table==script::Table::Global||table==script::Table::Local||table==script::Table::Ctx28||table==script::Table::Frame,"support current table domain");
+        const auto sha=core::hex_digest(module.InitializedDigest());Need(sha==std::string(w.code_sha256.data()),"support module/VM identity mismatch");
+        state_={};state_.live=true;state_.epoch=epoch;state_.run=w.run_id;last_epoch_=epoch;owner_=owner;context_=ctx;
+        table_=table;index_=index;frame_=w.frame_id;module_sha_=w.code_sha256;
+        const auto remember=[&](const PackageView& v){inputs_.push_back({v,v.InitializedDigest()});};remember(module);
+        Need(map.keys.Describe().size==96,"support exact96-key map required");remember(map.keys);
+        for(unsigned i=0;i<96;++i){keys_[i]=map.keys.ReadU8(i);remember(map.expansions[i]);expansions_[i]=SupportText(map.expansions[i]);}
+        remember(map.fallback);fallback_=SupportText(map.fallback);remember(map.integer_format);integer_format_=SupportText(map.integer_format);
+        const auto header=vm.read_slot(table,index);atoms_[0]=Capture(vm,header);
+        Need(header.kind==V::Kind::ArrayHeader&&header.word>>28==9&&(header.word&4095)>=8,"support current eight-cell header required");
+        // Actual sequential conversion after256B clear. Failure retains only
+        // completed cells in diagnostic Progress; it never publishes success.
+        for(unsigned i=0;i<8;++i){const auto value=vm.read_slot(table,uint16_t(index+1+i));atoms_[i+1]=Capture(vm,value);std::string text;
+            if(value.kind==V::Kind::String&&(value.word>>28==5||value.word>>28==6))text=value.cp932;
+            else if(value.kind==V::Kind::Scalar&&value.word>>28<2)text=fallback_;
+            else if(value.kind==V::Kind::Scalar&&value.word>>28==2){Need(integer_format_=="%d","unimplemented support numeric format");text=std::to_string(value.signed_integer());}
+            else throw std::runtime_error("unimplemented support75778 value domain");
+            Need(text.find('\0')==std::string::npos,"support value embedded NUL");std::string normalized;
+            for(size_t at=0;at<text.size();){const auto c=uint8_t(text[at]);std::string append;
+                // Source tests signed byte, NOT a generic CP932 lead table.
+                if(c>=128){Need(at+1<text.size()&&text[at+1],"support truncated source byte pair");append=text.substr(at,2);at+=2;}
+                else{for(unsigned k=0;k<96;++k)if(keys_[k]==c){append=expansions_[k];break;}++at;}
+                Need(normalized.size()+append.size()<=31,"support Windows32-byte cell overflow");normalized+=append;
+            }
+            std::copy(normalized.begin(),normalized.end(),state_.cells[i].begin());++state_.converted;
+        }
+        Need(Current(owner,epoch,vm),"support input changed during conversion");return {};
+    }catch(const std::exception& e){if(state_.live)state_.failed=true;return Error(e);}
+}
+GameFsStatus GameSupportTextOwner::LoadTemplates(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        GameResourceSource& source,const GameSupportTemplatePaths& paths){
+    if(!Current(owner,epoch,vm)||state_.templates_loaded)return {GameFsCode::Unavailable,0,"support template current owner/replay"};
+    try{
+        const auto input=[&](const PackageView& v){inputs_.push_back({v,v.InitializedDigest()});return SupportText(v);};
+        const auto safe=[](const std::string& s){return !s.empty()&&s.find(':')==s.npos&&s[0]!='/'&&s[0]!='\\'&&s.find("..") ==s.npos;};
+        const auto prefix=input(paths.textures);Need(safe(prefix),"support texture prefix");
+        struct CaptureSource:GameResourceSource {
+            GameResourceSource& source;std::vector<Input>& inputs;
+            CaptureSource(GameResourceSource& s,std::vector<Input>& i):source(s),inputs(i){}
+            GameFsStatus OpenResource(const std::string& p,PackageView& out)override{
+                const auto status=source.OpenResource(p,out);if(status)inputs.push_back({out,out.InitializedDigest()});return status;
+            }
+        } capture(source,inputs_);
+        for(unsigned i=0;i<18;++i){const auto path=input(paths.models[i]);Need(safe(path),"support model path");
+            auto asset=std::make_shared<GameModelAsset>();const auto status=asset->Load(capture,path,prefix);
+            if(!status){state_.failed=true;return status;}templates_.push_back(std::move(asset));++state_.loaded;
+        }
+        Need(Current(owner,epoch,vm),"support template input drift");state_.templates_loaded=true;return {};
+    }catch(const std::exception& e){state_.failed=true;return Error(e);}
+}
+GameFsStatus GameSupportTextOwner::Attach(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        std::shared_ptr<const GameModelClone> parent){
+    if(!Current(owner,epoch,vm)||!state_.templates_loaded||state_.attached||!parent||!parent->Asset()||!parent->Asset()->SourceCurrent())
+        return {GameFsCode::Unavailable,0,"support actual parent/templates unavailable"};
+    try{std::vector<GameAreaMarkerState> markers;auto status=parent->AreaMarkers(*parent->Asset(),markers);if(!status)return status;
+        Need(markers.size()<=64,"support marker source64 bound");parent_=parent;parent_generation_=parent->Generation();
+        for(const auto& marker:markers){Need(marker.parameters.field208>=1&&marker.parameters.field208<=8,"support marker text-cell key");
+            const uint32_t cell=marker.parameters.field208-1;const std::string text(reinterpret_cast<const char*>(state_.cells[cell].data()));
+            const auto units=SupportUnits(text);const auto count=uint32_t((std::min)(units.size(),size_t(8)));if(!count)continue;
+            const auto mode=marker.parameters.field20C;const uint32_t model=mode==1?count+1:mode==2?count+9:(mode>=3&&mode<=10?0:1);
+            GameModelClone child;status=child.Initialize(templates_.at(model));if(status)status=child.Update(marker.world);
+            if(!status){state_.failed=true;return status;}
+            children_.push_back(std::move(child));state_.placements.push_back({marker.node,cell,count,model,mode,marker.world});
+        }
+        state_.attached=true;return Update(owner,epoch,vm);
+    }catch(const std::exception& e){state_.failed=true;return Error(e);}
+}
+GameFsStatus GameSupportTextOwner::Update(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm){
+    const auto parent=parent_.lock();
+    if(!Current(owner,epoch,vm)||!state_.attached||!parent||parent->Generation()!=parent_generation_||!parent->Asset()||!parent->Asset()->SourceCurrent())
+        return {GameFsCode::Unavailable,0,"support current parent/data retired"};
+    try{std::vector<GameAreaMarkerState> markers;auto status=parent->AreaMarkers(*parent->Asset(),markers);if(!status)return status;
+        for(size_t i=0;i<state_.placements.size();++i){auto& bind=state_.placements[i];
+            const auto found=std::find_if(markers.begin(),markers.end(),[&](const GameAreaMarkerState& m){return m.node==bind.node;});
+            Need(found!=markers.end()&&found->parameters.field208==bind.text_cell+1&&found->parameters.field20C==bind.mode,"support marker alias changed");
+            status=children_[i].Update(found->world);if(!status){state_.failed=true;return status;}bind.parent_world=found->world;
+            const std::string text(reinterpret_cast<const char*>(state_.cells[bind.text_cell].data()));const auto units=SupportUnits(text);
+            std::string request;int32_t style=int32_t(found->parameters.field214)-1;
+            if(bind.mode==1||bind.mode==2){request=text;if(bind.mode==2)style=int32_t(found->parameters.field214)+499;}
+            else{const int32_t at=int32_t(bind.mode)-(bind.mode>=3&&bind.mode<=10?3:11);
+                if(!(bind.mode>=3&&bind.mode<=10))style=int32_t(found->parameters.field214)+499;
+                if(at>=0&&size_t(at)<units.size())request=units[size_t(at)];}
+            SupportGlyphs(state_.glyph_requests,state_.glyph_capacity_reached,request,style);
+        }
+        Need(Current(owner,epoch,vm),"support data changed during update");return {};
+    }catch(const std::exception& e){state_.failed=true;return Error(e);}
+}
+GameFsStatus GameSupportTextOwner::Read(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,GameSupportSnapshot& out)const{
+    if(!Current(owner,epoch,vm))return {GameFsCode::Unavailable,0,"support current readback unavailable"};
+    if(state_.attached){const auto parent=parent_.lock();if(!parent||parent->Generation()!=parent_generation_||!parent->Asset()||!parent->Asset()->SourceCurrent())return {GameFsCode::Unavailable,0,"support parent retired"};
+        std::vector<GameAreaMarkerState> markers;if(!parent->AreaMarkers(*parent->Asset(),markers))return {GameFsCode::Unavailable,0,"support parent pose stale"};
+        for(const auto& b:state_.placements){const auto m=std::find_if(markers.begin(),markers.end(),[&](const GameAreaMarkerState& m){return m.node==b.node;});
+            if(m==markers.end()||m->world!=b.parent_world)return {GameFsCode::Unavailable,0,"support child update required"};}}
+    out=state_;return {};
+}
+GameFsStatus GameSupportTextOwner::DrawPreview(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        GameGraphics& graphics,const GameMatrix& camera)const{
+    GameSupportSnapshot check;const auto valid=Read(owner,epoch,vm,check);if(!valid||!state_.attached)return {GameFsCode::Unavailable,0,"support preview unavailable"};
+    for(const auto& child:children_){const auto status=child.Draw(graphics,camera);if(!status)return status;}return {};
+}
+void GameSupportTextOwner::Close(){
+    for(auto& c:children_)c.Close();children_.clear();parent_.reset();templates_.clear();inputs_.clear();owner_.reset();context_.reset();state_={};
 }
 GameFsStatus GameBackgroundRuntime::Initialize(Clock clock,RngNativeOwner& rng){
     if(identity_||!clock||!rng.Available()||!rng.Lineage())
@@ -731,6 +886,9 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
             }
             materials.push_back(std::move(material));
         }
+        const auto decoded_digest=core::sha256(bytes.data(),bytes.size());
+        Need(image.InitializedDigest()==decoded_digest,"model source changed during decode");
+        source_digest_=decoded_digest;
         header_color_=image.ReadLE32(8);
         transform_policy_=policy;
         data_ = std::move(parsed);
@@ -745,6 +903,7 @@ GameFsStatus GameModelAsset::Decode(PackageView image, GameResourceSource *sourc
 GameFsStatus GameModelClone::Initialize(std::shared_ptr<const GameModelAsset> asset) {
     if (asset_ || !asset || !asset->Live())
         return {GameFsCode::Unavailable, 0, "model clone owner not available"};
+    static std::atomic<uint64_t> next_generation{0};generation_=++next_generation;
     asset_ = std::move(asset);
     pose_.resize(asset_->Data().nodes.size());
     for (size_t i = 0; i < pose_.size(); ++i) {
