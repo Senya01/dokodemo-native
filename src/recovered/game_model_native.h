@@ -377,6 +377,7 @@ struct GameOutingData {
     GameOutingData& operator=(const GameOutingData&)=delete;
     std::weak_ptr<const void> lifetime;
     PackageView origin,registrations,motion_counts,triplets,model_format,light_format,glyph_format;
+    PackageView position_row,placement_heading; // SAME DATA, selected BD28 inputs
     GameSupportTextMap text_map;
     GameSupportTemplatePaths support_paths;
     std::map<uint32_t,PackageView> auxiliary_names;
@@ -445,6 +446,8 @@ class GameActorRuntime;
 class GameManagerSwitchControl;
 struct GameSceneBgmSnapshot {
     bool initialized=false,current=false,attempted=false,selected=false,requested=false,cache_refreshed=false;
+    bool source_scene_retired=false;
+    uint32_t selection_writer=0;
     uint64_t epoch=0,actor_epoch=0;
     uint32_t initial_clock52=0,period4B4=0,variant4AC=1;
     uint64_t cache_revision=0;
@@ -479,6 +482,8 @@ class GameSceneBgm final {
     friend class GameActorRuntime;
     std::weak_ptr<const void> Lifetime()const;
     GameFsStatus BindSelectionCell(const std::shared_ptr<GameManagerSwitchControl>&,uint64_t);
+    GameFsStatus DepartureControlCurrent(const std::shared_ptr<GameBackgroundRuntime>&)const;
+    GameFsStatus RetireSceneRecord(const std::shared_ptr<GameBackgroundRuntime>&);
 };
 struct GameBackgroundLightBinding {
     uint32_t slot=0;

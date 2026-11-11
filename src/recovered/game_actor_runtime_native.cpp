@@ -153,6 +153,7 @@ int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
 bool GameManagerSwitchControl::Initialize(uint64_t epoch,std::shared_ptr<const void> module){
   if(!epoch||epoch<=last_module_epoch_||state_.live)return false;
   state_={};resource_requests_.clear();state_.live=true;state_.epoch=epoch;last_module_epoch_=epoch;
+  loaded_models_.clear();
   // Execute177F8, not an adoption-time default or a PSP RAM observation.
   state_.loadman.module_epoch=epoch;state_.loadman.transition50=0;state_.loadman.ui464=0;
   state_.loadman.application20=state_.loadman.next24=-1;state_.loadman.phase28=1;
@@ -160,6 +161,7 @@ bool GameManagerSwitchControl::Initialize(uint64_t epoch,std::shared_ptr<const v
   state_.loadman.cached_period4B4=2;state_.loadman.stored_bgm4BC=0;stored_bgm4BC_=std::make_shared<int32_t>(0);
   state_.loadman.transition50_writer=0x17938;
   state_.loadman.ui464_writer=0x17908;
+  state_.loadman.load_writer=0x17860;state_.loadman.change_writer=0x17874;
   if(!module){standalone_module_=std::make_shared<uint64_t>(epoch);module=standalone_module_;}
   module_=module;return true;
 }
@@ -214,12 +216,17 @@ bool GameManagerSwitchControl::BindActor(uint64_t epoch){
 void GameManagerSwitchControl::ReleaseActor(uint64_t epoch){
   if(Current()&&state_.epoch==epoch)state_.bound=false; // preserve pending/source history
 }
-bool GameManagerSwitchControl::RequestApplication(int32_t scene){
-  if(!Current()||scene<1||scene>4)return false;
-  state_.loadman.next24=scene;state_.loadman.phase28=2;++state_.loadman.dispatches;return true; //19AA8
+bool GameManagerSwitchControl::RequestApplication(int32_t scene,std::optional<uint32_t> flag){
+  if(!Current()||scene<1||(scene>4&&scene!=6))return false;
+  auto& l=state_.loadman;l.phase28=2;l.application_request_order={{0x19AB0,0,0}};
+  // Legacy Windows startup callers without a recovered a2 remain explicitly
+  // unbound. Only an executed, admitted source call supplies this byte.
+  l.application_flag_known=bool(flag);
+  if(flag){l.application_flagEA0=uint8_t(*flag);l.application_request_order[1]=0x19AB4;}
+  l.next24=scene;l.application_request_order[2]=0x19ABC;++l.dispatches;return true;
 }
 bool GameManagerSwitchControl::CommitApplication(){
-  if(!Current()||state_.loadman.phase28!=2||state_.loadman.next24<1||state_.loadman.next24>4)return false;
+  if(!Current()||state_.loadman.phase28!=2||state_.loadman.next24<1||(state_.loadman.next24>4&&state_.loadman.next24!=6))return false;
   state_.loadman.application20=state_.loadman.next24;++state_.loadman.dispatches;return true; //17B84
 }
 bool GameManagerSwitchControl::Phase(uint32_t phase){
@@ -247,6 +254,7 @@ bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
 void GameManagerSwitchControl::Retire(){
   state_.live=state_.bound=state_.pending=false;module_.reset();standalone_module_.reset();stored_bgm4BC_.reset();
   inventory_=nullptr;notebook_=nullptr;wordmemo_=nullptr;diary_=nullptr;options_=nullptr;bgm_=nullptr;bgm_lifetime_.reset();
+  loaded_models_.clear();
 }
 
 namespace {
@@ -533,6 +541,12 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
     state_.scene_deferred_tracks += c.data.Statistics().deferred_sections;
   state_.scene_controls = uint32_t(scene_controls_.size());
   state_.scene_model_live = true;
+  manager_switch_->state_.loadman.source_selector4DC=0;
+  manager_switch_->state_.loadman.source_scene_generation=scene_clone_.Generation();
+  manager_switch_->loaded_models_.emplace(31,scene_asset_);
+  manager_switch_->state_.loadman.render_state20=uint8_t(1);manager_switch_->state_.loadman.render_state21=uint8_t(1);
+  world_selector_=0; // actual19E6C/24AA4, distinct from early manager.current14
+  old_scene_visible_=true;old_source_retired_=false;
   initial_scene_clock_=false;
   // 68E8 actual selected startup list[10,13,-1]. Stop before start in6D6C.
   status = ApplyScenePair(10);
@@ -544,13 +558,16 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
 GameFsStatus GameActorRuntime::CompileSceneRegions26B80(){
   if(!Live()||!state_.scene_model_live||state_.region_owners_live)
     return {GameFsCode::Unavailable,0,"26B80 current fresh scene clone/region owner required"};
-  const auto status=regions_.Build(scene_clone_);if(status){state_.region_owners_live=true;
+  const auto* model=adopting_destination_&&destination_?destination_->clone_.get():&scene_clone_;
+  if(!model)return {GameFsCode::Unavailable,0,"26B80 current adopted model absent"};
+  const auto status=regions_.Build(*model);if(status){state_.region_owners_live=true;
     for(size_t i=0;i<3;++i)state_.region_counts[i]=uint32_t(regions_.Lists()[i].size());}
   return status;
 }
 GameFsStatus GameActorRuntime::ApplyScenePlacementBD28(const std::shared_ptr<GameBackgroundRuntime>& runtime,uint32_t scene,PackageView row,PackageView heading){
-  if(!BackgroundModuleMatches(runtime)||!state_.scene_model_live||scene!=state_.manager_scene14||scene!=0)
-    return {GameFsCode::Unavailable,0,"BD28 requires SAME current initialized scene/primary; target adoption not admitted"};
+  if(!BackgroundModuleMatches(runtime)||!state_.scene_model_live||scene!=state_.manager_scene14||!world_selector_||*world_selector_!=scene
+      ||(scene!=0&&!(scene==12&&adopting_destination_&&destination_&&destination_state_.prepared)))
+    return {GameFsCode::Unavailable,0,"BD28 requires SAME current scene/primary and owning adoption"};
   try{if(row.Describe().size!=12||heading.Describe().size!=4)throw std::runtime_error("BD28 exact held XYZ/heading extents");
     const auto row_hash=row.InitializedDigest(),head_hash=heading.InitializedDigest();std::array<float,4> values{};
     for(unsigned i=0;i<4;++i){const auto word=i==3?heading.ReadLE32(0):row.ReadLE32(i*4);std::memcpy(&values[i],&word,4);if(!std::isfinite(values[i]))throw std::runtime_error("BD28 nonfinite input");}
@@ -705,6 +722,11 @@ GameFsStatus GameActorRuntime::StartTransition() {
   ++state_.transition_requests;
   return {};
 }
+GameFsStatus GameActorRuntime::FinishTransitionGame7() {
+  if(!Live()||!transition_||!transition_->FinishGameOpen())
+    return {GameFsCode::Unavailable,0,"GAME7 current radial owner unavailable"};
+  return {}; // source dispatcher1C284 ignores its argument, not a ready result
+}
 bool GameActorRuntime::WaitReady() const {
   if (!Live())
     return false;
@@ -788,23 +810,86 @@ GameFsStatus GameActorRuntime::PublishPendingScene1B238(GameSceneBgm& bgm){
   // No target RNG/BGM/aux sampling, context completion or source event17.
 }
 
+GameFsStatus GameActorRuntime::AdvanceDestinationLoad(script::Vm& vm,const GameOutingCommand& command,GameSceneUiBootstrap& ui,GameSceneBgm& bgm){
+  GameBackgroundCandidate candidate;auto status=command.CurrentRequest(vm,*this,candidate);if(!status)return status;
+  auto& owner=*manager_switch_;auto& l=owner.state_.loadman;const auto runtime=background_module_.lock();
+  const auto snapshot=owner.Snapshot();
+  if(!runtime||!BackgroundModuleMatches(runtime)||snapshot.publication_phase!=3||snapshot.current14!=12
+      ||!l.initial_scene6_handoff||l.application20!=6||!l.application_flag_known||l.application_flagEA0!=0
+      ||!l.initial_state188||*l.initial_state188!=1||l.transition50!=0||!snapshot.loadman.ui_current||snapshot.loadman.ui464!=0)
+    return {GameFsCode::Unavailable,0,"17D90 current scene6 constructor/request/history/UI domain required"};
+  if(!transition_||!transition_->Snapshot().live||&ui.TitleTransitionOwner()!=transition_)
+    return {GameFsCode::Unavailable,0,"17D90 current SAME bootstrap radial/moving owners required"};
+  if(l.phase28==4&&old_source_retired_)return {}; // actual dispatch reached next constructor
+  if(destination_)return {GameFsCode::Unavailable,0,"17D90 cannot restart an existing target job"};
+  const auto phase=[&](uint32_t value,uint32_t pc){l.load_phase2C=value;l.load_writer=pc;++l.dispatches;};
+  switch(l.load_phase2C){
+  case 0:{
+    bool requested=false;
+    //17C98: the genuinely loaded source31 owner with a cleared desired bit
+    // is a sufficient TRUE witness; no unknown source bits are defaulted.
+    if(l.source_selector4DC!=0||!state_.scene_model_live||!scene_asset_||!scene_asset_->SourceCurrent()
+        ||owner.loaded_models_.find(31)==owner.loaded_models_.end()||owner.loaded_models_.at(31)!=scene_asset_
+        ||owner.loaded_models_.at(31).owner_before(scene_asset_)||scene_asset_.owner_before(owner.loaded_models_.at(31))
+        ||!owner.ResourceRequest(31,requested)||requested)
+      return {GameFsCode::Unavailable,0,"17C98 actual old loaded31/cleared request witness missing"};
+    phase(1,0x17E74);l.change40=true;l.change_writer=0x17E78;
+    if(transition_->Snapshot().state&&!transition_->BeginLoadClose())return {GameFsCode::Unavailable,0,"17E94 current radial owner retired"};
+    return {};
+  }
+  case 1:
+    if(!transition_||!transition_->Snapshot().live)return {GameFsCode::Unavailable,0,"17ED8 radial owner retired"};
+    if(transition_->Snapshot().state)return {}; // actual radial poll, no completion certificate
+    if(!l.change40)return {GameFsCode::Unavailable,0,"17F04 selected replacement byte40 not published"};
+    if(!ui.BeginMoving(true))return {GameFsCode::Unavailable,0,"17F14 actual moving receiver unavailable"};
+    l.render_state21=uint8_t(0);l.game_interval2C=20000;l.render_state20=uint8_t(0);
+    old_scene_visible_=false; //6D28/29AD0/498A8 visibility, NOT motion activation
+    phase(2,0x17DEC);return {};
+  case 2:phase(3,0x17F80);return {};
+  case 3:
+    status=bgm.DepartureControlCurrent(runtime);if(!status)return status;
+    phase(4,0x17FD4);return {};
+  case 4:
+    status=bgm.RetireSceneRecord(runtime);if(!status)return status;
+    //19F6C logical old scene/support/regions retire in source order. Explicit
+    // WindowsRetainedOldScene keeps their render assets allocated until a
+    // replacement is usable, without exposing them as current source4DC.
+    l.source_selector4DC=-1;l.source_scene_generation=0;
+    regions_.Close();state_.region_owners_live=false;state_.region_counts={};
+    old_source_retired_=true;phase(5,0x180F0);return {};
+  case 5:
+    //18144/253E8 removes the actual old31 registration. Native render assets
+    // remain separate retained owners; no new resource bit becomes ready here.
+    if(owner.loaded_models_.erase(31)!=1)return {GameFsCode::Unavailable,0,"18150 old31 registration not current"};
+    l.phase28=4;phase(0,0x18140);return {};
+  default:return {GameFsCode::Unavailable,0,"17D90 unsupported load dispatcher phase"};
+  }
+}
 GameFsStatus GameActorRuntime::PreparePendingDestination(script::Vm& vm,const GameOutingCommand& command,PackageView module,
         const std::shared_ptr<const GameOutingData>& packet,GameSceneBgm& bgm,std::unique_ptr<GameFileSource> source){
   GameBackgroundCandidate candidate;auto status=command.CurrentRequest(vm,*this,candidate);if(!status)return status;
   const auto runtime=background_module_.lock();const auto manager=manager_switch_->Snapshot();bool bit=false;
   if(!packet||!packet->Current()||!bgm.SharesDataBacking(packet->origin)||!runtime||!BackgroundModuleMatches(runtime)||manager.publication_phase!=3
       ||manager.current14!=12||manager.loadman.rendered_selector4DC!=0||!manager_switch_->ResourceRequest(manager.new_resource,bit)||!bit
-      ||manager.new_resource!=66+manager.loadman.staged_variant4AC)
+      ||manager.new_resource!=66+manager.loadman.staged_variant4AC||!old_source_retired_
+      ||manager.loadman.phase28!=4||manager.loadman.source_selector4DC!=-1||manager_switch_->loaded_models_.count(manager.new_resource)
+      ||candidate.request<=last_destination_request_)
     return {GameFsCode::Unavailable,0,"outing selected command/published resource/current DATA owner required"};
   if(destination_)return {GameFsCode::Unavailable,0,"existing destination attempt requires explicit retirement; no request/RNG replay"};
+  last_destination_request_=candidate.request;
   destination_=std::make_shared<GameBackgroundPreparation>();destination_inputs_=packet;
   auto& state=destination_state_;state={};state.attempted=true;state.request=candidate.request;state.epoch=state_.owner_epoch;
   state.candidate=candidate.id;state.selector=candidate.selector;state.period=candidate.period;state.resource=manager.new_resource;
+  state.old_source_retired=old_source_retired_;
   const std::shared_ptr<const void> owner=runtime;
   const auto check=[&](){GameBackgroundCandidate current;return packet->Current()&&bool(command.CurrentRequest(vm,*this,current))
       &&current.id==candidate.id&&current.request==candidate.request&&current.period==candidate.period&&runtime->Live();};
   status=destination_->Begin(owner,state.epoch,candidate,packet->registrations,std::move(source),GameModelTransformPolicy::WindowsAreaMarkerCanonicalBasis);
-  if(status){state.phase=1;status=destination_->RequestBgm(owner,state.epoch,runtime,bgm);}
+  if(status){
+    state.source_scene_allocated=true;manager_switch_->state_.loadman.source_selector4DC=12;
+    manager_switch_->state_.loadman.source_scene_generation=candidate.request;
+    state.phase=1;status=destination_->RequestBgm(owner,state.epoch,runtime,bgm);
+  }
   if(status&&check()){state.phase=2;status=destination_->Load(owner,state.epoch);}
   if(status&&check()){state.phase=3;status=destination_->LoadModelMotions(owner,state.epoch,packet->motion_counts);}
   if(status&&check()){state.phase=4;status=destination_->LoadAuxiliary(owner,state.epoch,packet->triplets,packet->model_format,
@@ -813,14 +898,86 @@ GameFsStatus GameActorRuntime::PreparePendingDestination(script::Vm& vm,const Ga
   if(status&&check()){state.phase=5;status=destination_->PrepareEffects(owner,state.epoch,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,packet->light_format);}
   if(status&&check()){state.phase=6;status=destination_->ActivateEffects(owner,state.epoch,runtime);}
   if(status&&check()){state.phase=7;status=destination_->SampleEffects(owner,state.epoch,0);}
-  if(status&&check()){state.phase=8;status=destination_->PrepareOwnedSupport(owner,state.epoch,vm,support_registration_,std::move(module),*packet);}
+  if(status&&check()){
+    //19E54 ->6D28: source variant publication precedes support construction;
+    // the old Windows rendered owner is still retained independently.
+    manager_switch_->state_.loadman.current_variant4A8=manager.loadman.staged_variant4AC;
+    state.source_variant_committed=true;
+    manager_switch_->loaded_models_.emplace(state.resource,destination_->asset_);
+    destination_registration_=destination_->asset_;
+    world_selector_=candidate.selector;state.current_selector24AA4=*world_selector_;state.current_selector_writer=0x19E6C;
+    state.phase=8;status=destination_->PrepareOwnedSupport(owner,state.epoch,vm,support_registration_,std::move(module),*packet);
+  }
   if(status&&!check())status={GameFsCode::Unavailable,0,"outing command/DATA/job owner changed during preparation; effects retained"};
   state.status=status;state.failed=!status;state.prepared=bool(status);if(status)state.phase=9;
-  return status; // actual preparation only: no4A8/4DC/adoption/event17 publication
+  return status; // partial source4DC/4A8 are NOT rendered adoption/event17
 }
 GameFsStatus GameActorRuntime::CloseDestination(){
-  if(destination_){auto status=destination_->Close();if(!status)return status;destination_.reset();}
-  destination_inputs_.reset();destination_state_={};return {};
+  if(destination_){
+    const auto registered=destination_registration_.lock();
+    auto status=destination_->Close();if(!status)return status;
+    if(manager_switch_&&manager_switch_->Current()){
+      const auto found=manager_switch_->loaded_models_.find(destination_state_.resource);
+      if(found!=manager_switch_->loaded_models_.end()&&registered&&found->second==registered
+          &&!found->second.owner_before(registered)&&!registered.owner_before(found->second))manager_switch_->loaded_models_.erase(found);
+      if(destination_state_.source_scene_allocated&&manager_switch_->state_.loadman.source_selector4DC==int32_t(destination_state_.selector)
+          &&manager_switch_->state_.loadman.source_scene_generation==destination_state_.request){
+        manager_switch_->state_.loadman.source_selector4DC=-1;manager_switch_->state_.loadman.source_scene_generation=0;
+      }
+      if(destination_state_.adopted){manager_switch_->state_.loadman.rendered_selector4DC=-1;state_.scene_model_live=false;regions_.Close();state_.region_owners_live=false;}
+    }
+    destination_.reset();
+  }
+  destination_registration_.reset();destination_inputs_.reset();destination_state_={};return {};
+}
+
+GameFsStatus GameActorRuntime::AdoptPreparedDestination(script::Vm& vm,const GameOutingCommand& command){
+  GameBackgroundCandidate candidate;auto status=command.CurrentRequest(vm,*this,candidate);if(!status)return status;
+  const auto runtime=background_module_.lock();const auto& d=destination_state_;
+  if(!runtime||!BackgroundModuleMatches(runtime)||!destination_||!destination_inputs_||!destination_inputs_->Current()
+      ||!d.prepared||d.failed||d.adopted||!d.old_source_retired||!d.source_scene_allocated||!d.source_variant_committed
+      ||d.request!=candidate.request||d.candidate!=candidate.id||d.period!=candidate.period||!destination_->Current(runtime,d.epoch)
+      ||!destination_->clone_||!destination_->asset_->SourceCurrent()
+      ||manager_switch_->state_.loadman.source_selector4DC!=12||manager_switch_->state_.loadman.source_scene_generation!=d.request)
+    return {GameFsCode::Unavailable,0,"19DD4 current prepared job/command/source publication required; no adopt/replay"};
+  GameSupportSnapshot support;status=destination_->ReadSupport(runtime,d.epoch,vm,support);if(!status)return status;
+  const auto registration=manager_switch_->loaded_models_.find(d.resource);
+  if(registration==manager_switch_->loaded_models_.end()||registration->second!=destination_->asset_
+      ||registration->second.owner_before(destination_->asset_)||destination_->asset_.owner_before(registration->second))
+    return {GameFsCode::Unavailable,0,"19DD4 current target registration replaced/foreign"};
+  // No clone duplication: support/glyph children keep the exact prepared
+  // main-clone generation and marker aliases. Source placement does not write
+  // primary40 or invent a camera90 point/FOV.
+  struct Scope {bool& value;explicit Scope(bool& v):value(v){value=true;}~Scope(){value=false;}} scope(adopting_destination_);
+  if(!destination_state_.placement_pc){
+    status=ApplyScenePlacementBD28(runtime,12,destination_inputs_->position_row,destination_inputs_->placement_heading);
+    if(!status)return status;destination_state_.placement_pc=0x19E94;
+  }
+  if(!destination_state_.regions_pc){
+    status=CompileSceneRegions26B80();if(!status)return status;destination_state_.regions_pc=0x19EA0;
+  }
+  const auto stats=destination_->asset_->Statistics();
+  const auto& applied=destination_->applied_;
+  scene_calendar_=applied.calendar;state_.scene_clock_ready=true;
+  state_.scene_nodes=stats.nodes;state_.scene_vertices=stats.vertices;state_.scene_triangles=stats.triangles;
+  //80F14's consumed output is a light-model borrow. WindowsReducedBackgroundEffects
+  // retains the actual adopted model's typed light records; unknown839A8
+  // source210/20C primary selection is NOT reported as source zero/absent.
+  state_.scene_light_nodes=uint32_t(destination_->clone_->Lights().type5_nodes.size());
+  state_.scene_light_color14=destination_->clone_->Lights().packed_color14;
+  auto& l=manager_switch_->state_.loadman;l.render_state20=uint8_t(1);l.render_state21=uint8_t(1);
+  l.rendered_selector4DC=12;l.scene_phase44=1;
+  destination_state_.adoption_pc=0x185FC;destination_state_.adopted=true;
+  // Actual old render owners now retire. Existing room slots use their real
+  // deferred disable/destroy protocol; all target frames exclude those slots.
+  scene_clone_.Close();scene_asset_.reset();scene_controls_.clear();season_controls_.clear();light_on_control_={};
+  state_.scene_controls=state_.season_controls=0;state_.scene_playback={};state_.season_present={};state_.season_playback={};
+  state_.light_on_control_present=false;state_.light_on_playback={};
+  for(size_t i=0;i<models_.size();++i)if(models_[i].active&&!state_.room_models[i].retirement){
+    status=RetireModel(int32_t(i));if(!status)return status;
+  }
+  destination_state_.old_render_retired=std::none_of(models_.begin(),models_.end(),[](const auto& m){return m.active;});
+  return {}; // display/adoption only; actual18568 context/event17 still required
 }
 
 GameFsStatus GameActorRuntime::ClearManager8(){
@@ -1133,9 +1290,15 @@ GameFsStatus GameActorRuntime::UpdatePrimaryRoot99A8(){
     return status;
   return {};
 }
-GameFsStatus GameActorRuntime::AdvanceActorFrame() {
+GameFsStatus GameActorRuntime::AdvanceActorFrame(script::Vm* support_vm) {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Actor phase owner expired"};
+  if(destination_state_.adopted){
+    const auto runtime=background_module_.lock();GameSupportSnapshot support;
+    if(!support_vm||!runtime||!destination_||!destination_inputs_||!destination_inputs_->Current())
+      return {GameFsCode::Unavailable,0,"adopted update current scoped VM/DATA owner required"};
+    const auto checked=destination_->ReadSupport(runtime,destination_state_.epoch,*support_vm,support);if(!checked)return checked;
+  }
   //490E0/499F8: request,disable on one owner phase,release on the next.
   //The clone and its borrowed assets stay owned until this second phase.
   ++state_.room_owner_phases;
@@ -1164,7 +1327,14 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame() {
       record->clone_owner_cleared=slot.clone.Asset()==nullptr&&slot.motions.empty();
     }
   }
-  const auto scene = UpdateScene();
+  if(destination_state_.adopted)destination_state_.old_render_retired=std::none_of(models_.begin(),models_.end(),[](const auto& m){return m.active;});
+  auto scene=GameFsStatus{};
+  if(destination_state_.adopted){
+    const auto runtime=background_module_.lock();
+    if(!support_vm||!runtime)return {GameFsCode::Unavailable,0,"adopted scene update requires current scoped VM/support owner"};
+    scene=destination_->SampleEffects(runtime,destination_state_.epoch,160);
+    if(scene)scene=destination_->UpdateSupport(runtime,destination_state_.epoch,*support_vm);
+  }else scene=UpdateScene();
   if (!scene)
     return scene;
   const auto room=UpdateRoomModels();if(!room)return room;
@@ -1457,9 +1627,15 @@ GameFsStatus GameActorRuntime::RetireModel(int32_t id){
   }
   return {};
 }
-GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay) {
+GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay,script::Vm* support_vm) {
   if (!Live())
     return {GameFsCode::Unavailable, 0, "Actor render owners expired"};
+  if(destination_state_.adopted){
+    const auto runtime=background_module_.lock();GameSupportSnapshot support;
+    if(!support_vm||!runtime||!destination_||!destination_inputs_||!destination_inputs_->Current())
+      return {GameFsCode::Unavailable,0,"adopted target render requires current scoped VM/DATA owners"};
+    const auto checked=destination_->ReadSupport(runtime,destination_state_.epoch,*support_vm,support);if(!checked)return checked;
+  }
   //Before the first room/camera publication this owner is only bootstrapped.
   //After any model publication,zero remaining slots must still draw/present.
   if(!state_.model_publications&&!state_.camera_bindings)return {};
@@ -1495,7 +1671,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
     return {GameFsCode::Unavailable, 0, "Room clear failed"};
   const auto prior_pixels = graphics.Snapshot().mesh_pixels;
   for (size_t i=0;i<models_.size();++i)
-    if (const auto& slot=models_[i];slot.active&&state_.room_models[i].retirement<2) {
+    if (const auto& slot=models_[i];!destination_state_.adopted&&old_scene_visible_&&slot.active&&state_.room_models[i].retirement<2) {
       const auto pixels=graphics.Snapshot().mesh_pixels;
       // Same named Windows DVS colour convention as the actor: neutral128
       // diffuse vertex colours should not halve the owned texture. This is
@@ -1507,7 +1683,10 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
       ++state_.room_models[i].draw_frames;
       state_.room_models[i].draw_pixel_writes+=graphics.Snapshot().mesh_pixels-pixels;
     }
-  if (state_.scene_model_live) {
+  if(destination_state_.adopted){
+    const auto status=destination_->DrawSelected(background_module_.lock(),destination_state_.epoch,*support_vm,graphics,camera);
+    if(!status)return status;++state_.scene_frames;
+  }else if (state_.scene_model_live&&old_scene_visible_) {
     const auto status = scene_clone_.Draw(graphics, camera,
         GameModelColorPolicy::WindowsDvsTexturedModulation2x);
     if (!status)
@@ -1578,6 +1757,9 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
 void GameActorRuntime::Close() {
   if(!CloseDestination())return;
   initial_scene_clock_=false;state_.source_placement_bound=false;
+  old_scene_visible_=true;old_source_retired_=false;adopting_destination_=false;
+  last_destination_request_=0;
+  world_selector_.reset();
   background_module_.reset();
   camera_target_.reset();primary_target_.reset();state_.camera_target_current=false;
   if(context_actor_)context_actor_->Close();context_actor_.reset();context_actors_.clear();

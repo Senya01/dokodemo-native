@@ -127,7 +127,19 @@ void GameTransition::Open(bool immediate) {
 }
 bool GameTransition::StartGameOpen() {
     if(!state_.live||!SetCenter({{0,0}}))return false;
-    state_.group=5;Open(false);return true;
+    state_.source_mode20=uint8_t(0);state_.group=5;Open(false);return true;
+}
+bool GameTransition::FinishGameOpen() {
+    if(!state_.live)return false;
+    // DA20(flag0) is conditional. In particular a cold/closed radial is not
+    // restarted, and an already contracting radial keeps its current radius.
+    if(state_.state!=0&&state_.state!=3)state_.state=3;
+    return true;
+}
+bool GameTransition::BeginLoadClose() {
+    if(!state_.live)return false;
+    state_.source_mode20=uint8_t(0);state_.group=5; // DAA8(0,5) before DA20(flag0).
+    return FinishGameOpen();
 }
 void GameTransition::CloseWipe(bool immediate) {
     if (!state_.live)

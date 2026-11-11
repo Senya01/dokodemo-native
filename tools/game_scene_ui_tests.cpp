@@ -596,6 +596,25 @@ void UiDrawTests() {
     resource->Close();
     Check(!instance.Draw(graphics, stats, error), "retired UI cannot draw");
 }
+void SelectedRadialCloseTests(){
+    GameTransition radial;Check(radial.Initialize({{0,0}}),"GAME7 same radial constructor");
+    const auto cold=radial.Snapshot();Check(radial.FinishGameOpen()&&radial.Snapshot().state==0
+      &&radial.Snapshot().radius==cold.radius,"DA20 flag0 leaves state0 unchanged");
+    Check(radial.StartGameOpen(),"source GAME6 starts same radial");
+    for(unsigned i=0;i<10;++i)radial.Update();const auto opening=radial.Snapshot();
+    Check(opening.state==1&&radial.FinishGameOpen()&&radial.Snapshot().state==3
+      &&radial.Snapshot().radius==opening.radius,"GAME7 closes active1 without resetting current radius");
+    Check(radial.FinishGameOpen()&&radial.BeginLoadClose()&&radial.Snapshot().radius==opening.radius&&radial.Snapshot().source_mode20==0,
+      "already contracting DA20/DAA8 preserve radius and same owner");
+    for(unsigned i=0;i<100;++i)radial.Update();Check(radial.Snapshot().state==0,"actual contracting update reaches source0");
+    radial.Open(true);Check(radial.Snapshot().state==2&&radial.FinishGameOpen()&&radial.Snapshot().state==3,"state2 closes too");
+    GameGraphics g;Check(g.Initialize({})&&g.Clear(0xFF808080)&&radial.Draw(g)&&g.SwapBuffers(),"actual radial draw at open radius");
+    GameGraphicsFrame before,after;Check(g.CopyFront(before),"radial first owned frame");
+    for(unsigned i=0;i<100;++i)radial.Update();
+    Check(g.Clear(0xFF808080)&&radial.Draw(g)&&g.SwapBuffers()&&g.CopyFront(after)&&before.pixels!=after.pixels,
+      "DA20 selected close produces actual changed pixels without a completion provider");
+    radial.Retire();Check(!radial.FinishGameOpen()&&!radial.BeginLoadClose(),"retired radial refuses before mutation");g.Close();
+}
 void DialogInputTests() {
     GameDialogController dialog;
     Check(dialog.Begin(), "source TRC prompt begins opening");
@@ -646,6 +665,7 @@ int main() {
         FontDrawTests();
         ChoiceDrawTests();
         DialogInputTests();
+        SelectedRadialCloseTests();
         UiDrawTests();
         std::cout << "scene UI resources,decoded pixels,source XFT text,fade,NJ "
                      "and partial retirement PASS\n";

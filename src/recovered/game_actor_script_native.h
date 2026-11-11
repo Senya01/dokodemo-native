@@ -365,6 +365,9 @@ class GameActorScript final {
                             const GameProfileRecord& profile,ClockWord clock = {},RngNativeOwner* rng=nullptr,
                             GameActorRuntime* runtime=nullptr,GameRecordStore* records=nullptr,GameSoundBank* sound=nullptr);
     GameFsStatus Tick();
+    GameFsStatus DrawRuntime(GameGraphics&,const std::function<GameFsStatus(GameGraphics&)>& overlay={});
+    GameFsStatus AdvancePendingDestinationLoad(GameSceneUiBootstrap&,GameSceneBgm&);
+    GameFsStatus AdoptPendingDestination();
     GameFsStatus TickMenuOwner();
     GameFsStatus PostMenuEvent(const GameOwnerEventTarget&,uint32_t event,uint64_t menu_generation,int32_t& queue_result,int32_t argument=1);
     bool AcknowledgeMessage(const GameMessageTarget* expected=nullptr);

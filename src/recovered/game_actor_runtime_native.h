@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include "game_filesystem_native.h"
 #include "game_model_native.h"
 #include "game_position_native.h"
@@ -56,6 +57,11 @@ class GameSystemOptionFrontier;
 class GameOutingCommand;
 struct GameDestinationPreparationSnapshot {
   bool attempted=false,prepared=false,failed=false;
+  bool adopted=false,source_scene_allocated=false,source_variant_committed=false;
+  std::optional<uint32_t> current_selector24AA4;
+  uint32_t current_selector_writer=0;
+  bool old_source_retired=false,old_render_retired=false;
+  uint32_t placement_pc=0,regions_pc=0,adoption_pc=0;
   uint64_t request=0,epoch=0;
   uint32_t candidate=0,selector=0,period=0,resource=0,phase=0;
   GameFsStatus status;
@@ -68,6 +74,20 @@ struct GameLoadManSnapshot {
   uint64_t ui_generation=0;
   int32_t application20=-1,next24=-1;
   uint32_t phase28=1;
+  uint32_t load_phase2C=0,scene_phase44=0; //177F8, DISTINCT from phase28
+  int16_t counter42=0;
+  bool change40=false,ui_change461=false;
+  bool application_flag_known=false;
+  uint8_t application_flagEA0=0; //19AA8 sb a2: byte, not a bool/gate
+  std::array<uint32_t,3> application_request_order{};
+  uint32_t load_writer=0,change_writer=0;
+  bool initial_scene6_handoff=false;
+  uint32_t initial_store188_pc=0;
+  std::optional<uint8_t> initial_state188;
+  std::optional<uint8_t> render_state20,render_state21;
+  std::optional<uint32_t> game_interval2C; // other owner, NOT load_phase2C/VM time
+  int32_t source_selector4DC=-1; // logical source lifetime vs retained Windows render
+  uint64_t source_scene_generation=0;
   uint32_t current_variant4A8=1,staged_variant4AC=1,cached_period4B4=2;
   int32_t stored_bgm4BC=0,rendered_selector4DC=-1;
   uint32_t transition50_writer=0,ui464_writer=0;
@@ -84,7 +104,8 @@ struct GameManagerSwitchSnapshot {
 };
 // WindowsOrdinarySceneOwners co-owns DISTINCT source1B188 manager and177F8
 // LoadMan fields. Content constructs it once; the actor borrows that instance.
-// This native layout is not PSP layout. UI15, adoption and completion refuse.
+// This native layout is not PSP layout. UI15 and ordinary continuation refuse;
+// target adoption is conditional on the actual issued command and owned job.
 class GameManagerSwitchControl : public std::enable_shared_from_this<GameManagerSwitchControl> {
 public:
   GameManagerSwitchControl()=default;
@@ -103,12 +124,13 @@ public:
   GameManagerSwitchSnapshot Snapshot()const;
 private:
   friend class GameContentBoot;
+  friend struct ::dokodemo::StartupRuntimeTestAccess;
   friend class GameActorRuntime;
   friend class GameSceneBgm;
   bool Current()const;
   bool BindActor(uint64_t epoch);
   void ReleaseActor(uint64_t epoch);
-  bool RequestApplication(int32_t scene);
+  bool RequestApplication(int32_t scene,std::optional<uint32_t> flag={});
   bool CommitApplication();
   bool Phase(uint32_t phase);
   bool OrdinaryUiIdle()const;
@@ -127,6 +149,7 @@ private:
   std::shared_ptr<int32_t> stored_bgm4BC_;
   std::map<uint32_t,bool> resource_requests_; // only genuinely published bits known
   GameManagerSwitchSnapshot state_;
+  std::map<uint32_t,std::shared_ptr<const GameModelAsset>> loaded_models_;
 };
 enum class GameContextActorPresence:uint32_t { Unknown, Absent, Present };
 struct GameContextActorSnapshot {
@@ -262,6 +285,9 @@ public:
   GameFsStatus QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result);
   GameFsStatus QueryActorPosition(bool& result);
   GameFsStatus StartTransition();
+  GameFsStatus FinishTransitionGame7();
+  GameFsStatus AdvanceDestinationLoad(script::Vm&,const GameOutingCommand&,GameSceneUiBootstrap&,GameSceneBgm&);
+  GameFsStatus AdoptPreparedDestination(script::Vm&,const GameOutingCommand&);
   bool WaitReady() const;
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();
@@ -294,12 +320,12 @@ public:
   GameFsStatus RequestCamera(int32_t value);
   GameFsStatus ShowIntro(int32_t value);
   GameFsStatus RequestActorEvent(int32_t first, int32_t second);
-  GameFsStatus AdvanceActorFrame();
+  GameFsStatus AdvanceActorFrame(script::Vm* support_vm=nullptr);
   GameFsStatus CreateModel(int32_t resource, int32_t category, int32_t motion,
                            float x, int32_t &slot);
   GameFsStatus UpdateModel(int32_t slot,int32_t selector,float x);
   GameFsStatus RetireModel(int32_t slot);
-  GameFsStatus Draw(GameGraphics &,const std::function<GameFsStatus(GameGraphics&)>& overlay={});
+  GameFsStatus Draw(GameGraphics &,const std::function<GameFsStatus(GameGraphics&)>& overlay={},script::Vm* support_vm=nullptr);
   GameActorRuntimeSnapshot Snapshot() const;
   void Close();
 
@@ -308,7 +334,13 @@ private:
   friend struct ::dokodemo::StartupRuntimeTestAccess;
   std::shared_ptr<GameBackgroundPreparation> destination_;
   std::shared_ptr<const GameOutingData> destination_inputs_;
+  std::weak_ptr<const GameModelAsset> destination_registration_;
   GameDestinationPreparationSnapshot destination_state_;
+  bool old_scene_visible_=true;
+  bool old_source_retired_=false;
+  bool adopting_destination_=false;
+  uint64_t last_destination_request_=0;
+  std::optional<uint32_t> world_selector_;
   bool Live() const;
   PackageView selection_;
   GameTransition *transition_ = nullptr;

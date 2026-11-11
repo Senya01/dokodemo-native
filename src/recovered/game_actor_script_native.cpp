@@ -318,7 +318,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         const auto w=vm_->current_witness();auto& o=state_.outing;
         if(w.code_entry==0x1264E&&w.current_pc==0x1269F){
             const auto command=outing_command_.ValidateGame12(*vm_,Number(arg));Need(bool(command),command.detail.c_str());
-            throw std::runtime_error("validated outing command: target adoption/18568 continuation not yet admitted");
+            throw std::runtime_error("validated outing command: actual18568 paused-context/event17 continuation not implemented; positive travel refused before request");
         }
 
         Need(runtime_&&o.entered&&!o.returned&&!o.failed&&w.frame_id==o.frame&&w.code_entry==0x13219
@@ -457,6 +457,10 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     case 6: {
         Need(runtime_!=nullptr,"Game6 needs live transition owner");
         const auto begun=runtime_->StartTransition();Need(bool(begun),begun.detail.c_str());return False();
+    }
+    case 7: {
+        Need(runtime_!=nullptr,"GAME7 needs SAME live radial owner as GAME6");
+        const auto ended=runtime_->FinishTransitionGame7();Need(bool(ended),ended.detail.c_str());return False();
     }
     case 10:case 11:case 16:case 29:case 35:
         Need(arg.kind==Value::Kind::Reference,"Game registration requires typed live table reference");
@@ -708,7 +712,7 @@ GameFsStatus GameActorScript::Tick() {
     // an immediate same-phase acknowledgement of a newly reached8031.
     const bool event_eligible=vm_->waiting_for_event()&&runtime_&&runtime_->WaitReady();
     const bool repeat_eligible=event_eligible&&runtime_->Snapshot().command_repeat_ready258;
-    if(runtime_){const auto phase=runtime_->AdvanceActorFrame();if(!phase)return phase;}
+    if(runtime_){const auto phase=runtime_->AdvanceActorFrame(vm_.get());if(!phase)return phase;}
     if(state_.blocked)return {GameFsCode::Unavailable,0,state_.error};
     if(state_.completed||state_.awaiting_message||state_.awaiting_choice||state_.awaiting_input)return {};
     try {
@@ -932,7 +936,7 @@ GameFsStatus GameActorScript::TickMenuOwner(){
             }
         };
         vm_->clock_tick(++state_.native_clock_ticks);
-        if(runtime_){const auto status=runtime_->AdvanceActorFrame();Need(bool(status),status.detail.c_str());}
+        if(runtime_){const auto status=runtime_->AdvanceActorFrame(vm_.get());Need(bool(status),status.detail.c_str());}
         auto& c=state_.menu_callback;
         if(c.pending){
             for(uint32_t i=0;i<256&&!c.returned&&!c.failed;++i){
@@ -1166,6 +1170,18 @@ GameFsStatus GameOutingCommand::CurrentRequest(script::Vm& vm,const GameActorRun
             throw std::runtime_error("outing actual request/actor/current cache changed");
         out={s.candidate,s.selector,state.loadman.cached_period4B4,s.request};return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorScript::DrawRuntime(GameGraphics& graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay){
+    if(!runtime_)return {GameFsCode::Unavailable,0,"current actor runtime absent"};
+    return runtime_->Draw(graphics,overlay,vm_.get());
+}
+GameFsStatus GameActorScript::AdvancePendingDestinationLoad(GameSceneUiBootstrap& ui,GameSceneBgm& bgm){
+    if(!vm_||!runtime_)return {GameFsCode::Unavailable,0,"current destination script/runtime absent"};
+    return runtime_->AdvanceDestinationLoad(*vm_,outing_command_,ui,bgm);
+}
+GameFsStatus GameActorScript::AdoptPendingDestination(){
+    if(!vm_||!runtime_)return {GameFsCode::Unavailable,0,"current destination script/runtime absent"};
+    return runtime_->AdoptPreparedDestination(*vm_,outing_command_);
 }
 GameFsStatus GameActorScript::PreparePendingDestination(const std::shared_ptr<const GameOutingData>& packet,GameSceneBgm& bgm,const std::function<std::unique_ptr<GameFileSource>()>& factory){
     if(!vm_||!runtime_)return {GameFsCode::Unavailable,0,"outing current script/runtime absent"};

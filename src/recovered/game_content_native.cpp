@@ -415,8 +415,8 @@ bool GameContentBoot::ConfigureImportCallback5334C() {
     state_.import_callback_registered = false; // explicitly unavailable, not a successful service result
     return true;
 }
-bool GameContentBoot::RequestApplicationScene(int32_t scene){
-    if(!loadman_||!loadman_->control||!loadman_->control->RequestApplication(scene)){
+bool GameContentBoot::RequestApplicationScene(int32_t scene,std::optional<uint32_t> flag){
+    if(!loadman_||!loadman_->control||!loadman_->control->RequestApplication(scene,flag)){
         state_.status={GameFsCode::Unavailable,0,"current LoadMan19AA8 request refused"};state_.blocked=true;return false;
     }
     const auto current=loadman_->control->Snapshot().loadman;
@@ -469,7 +469,7 @@ bool GameContentBoot::TickLoading(GameFilesystem &filesystem) {
         }
         switch (state_.load_state) {
         case 1: // 17B4C ->19AA8(next1,flag1)
-            if(!RequestApplicationScene(1))return false;
+            if(!RequestApplicationScene(1,1))return false; //17B4C actual a2=1
             break;
         case 2: // 17B84's cold17BCC branch
             if(!CommitApplicationScene())return false;
@@ -1436,7 +1436,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.notebook=notebook_.Snapshot();
     state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
     state_.system_option=system_option_.Snapshot();state_.system_option.woken=actor_script_.Snapshot().menu_option_completions!=0;
-    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+    if(status)status=actor_script_.DrawRuntime(graphics,[&](GameGraphics& surface)->GameFsStatus{
         const auto draw_ui=[&]()->GameFsStatus{
         if(system_option_.Modal())return system_option_.Draw(surface,font_);
         if(diary_.Modal())return diary_.Draw(surface,font_);
@@ -1485,6 +1485,19 @@ GameFsStatus GameContentBoot::InitializeActorSceneOwners(uint32_t actor,PackageV
         state_.frontier_pc=0x1A108;
         state_.status=actor_runtime_.CreateOrdinaryContextActor5();
         if(!state_.status)return state_.status;
+        if(state_.current_scene==4&&scene_bgm_){
+            // Completed actual source4 initialization ->183E4/19AA8(6,0).
+            // Windows still pumps this room in its historical host case4;
+            // source application20 is the SAME LoadMan's scene6, not a shadow
+            // manager or an adoption-time default. The unconditional183FC
+            // byte188 write has no inferred input/readiness meaning here.
+            auto& control=*loadman_->control;
+            control.state_.loadman.initial_store188_pc=0x183FC;
+            control.state_.loadman.initial_state188=uint8_t(1); // caller delay slot BEFORE19AA8
+            if(!control.RequestApplication(6,0)||!control.CommitApplication())
+                return {GameFsCode::Unavailable,0,"183F8 ordinary scene6 handoff refused"};
+            control.state_.loadman.initial_scene6_handoff=true;
+        }
         state_.actor_script.runtime=actor_runtime_.Snapshot();return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
@@ -1500,6 +1513,9 @@ GameFsStatus GameContentBoot::TickPendingSceneRequest(){
     if(state_.closed||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
         return {GameFsCode::Unavailable,0,"current ordinary LoadMan module unavailable"};
     auto pending=actor_runtime_.Snapshot().manager_switch;
+    const auto destination=actor_runtime_.DestinationPreparation();
+    if(destination.failed)return destination.status;
+    if(destination.adopted)return {GameFsCode::Unavailable,0,"18568 actual paused-context/event17 continuation not implemented; no arrival or wake"};
     if(pending.pending&&pending.requested18!=0){
         if(!scene_bgm_)return {GameFsCode::Unavailable,0,"ordinary pending request has no current BGM owner"};
         auto status=actor_runtime_.PublishPendingScene1B238(*scene_bgm_);if(!status)return status;
@@ -1511,9 +1527,13 @@ GameFsStatus GameContentBoot::TickPendingSceneRequest(){
             return {GameFsCode::Unavailable,0,"partial source resource request not an adopted scene"};
         if(!destination_data_||!destination_data_->Current()||!destination_file_)
             return {GameFsCode::Unavailable,0,"source1B238 selected destination DATA/file owner absent"};
-        const auto prepared=actor_script_.PreparePendingDestination(destination_data_,*scene_bgm_,destination_file_);
-        if(!prepared)return prepared;
-        return {GameFsCode::Unavailable,0,"target owners prepared; source19DD4 adoption/18568 owning continuation not implemented"};
+        if(!actor_runtime_.DestinationPreparation().attempted){
+            const auto advanced=actor_script_.AdvancePendingDestinationLoad(scene_ui_,*scene_bgm_);if(!advanced)return advanced;
+            if(loadman_->control->Snapshot().loadman.phase28!=4)return {};
+            const auto prepared=actor_script_.PreparePendingDestination(destination_data_,*scene_bgm_,destination_file_);if(!prepared)return prepared;
+        }
+        const auto adopted=actor_script_.AdoptPendingDestination();if(!adopted)return adopted;
+        return {GameFsCode::Unavailable,0,"target owners adopted; actual18568 paused-context/event17 continuation not implemented"};
     }
     return {};
 }
@@ -1611,7 +1631,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         state_.sound_bank=sound_bank_.Snapshot();
         //Publish ONCE,after both room and text. CopyGameFrame must never see
         //an intermediate room-only front whileFONT is still being decoded.
-        const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+        const auto rendered=actor_script_.DrawRuntime(graphics,[&](GameGraphics& surface)->GameFsStatus{
             const auto draw_ui=[&]()->GameFsStatus{
             if(inventory_.Modal())return inventory_.Draw(surface,font_);
             if(state_.actor_script.awaiting_input){

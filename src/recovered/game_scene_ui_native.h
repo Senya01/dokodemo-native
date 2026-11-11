@@ -7,11 +7,14 @@
 #include "game_sound_control_native.h"
 #include "game_trc_prompt_native.h"
 #include <array>
+#include <optional>
 #include "../game73_audio_request.h"
 
+namespace dokodemo { struct StartupRuntimeTestAccess; }
 namespace dokodemo::recovered {
 struct GameTransitionSnapshot {
     bool live = false;
+    std::optional<uint8_t> source_mode20; // only actual DA64/DAA8 producers bind it
     uint32_t state = 0, group = 5, duration = 30;
     float x = 0, y = 0, radius = -50, maximum_radius = 0, increment = 0;
 };
@@ -23,6 +26,8 @@ class GameTransition final {
     void SetDuration(uint32_t ticks);
     void Open(bool immediate = false);      // D9E4; source state1 expands to2
     bool StartGameOpen(); // source1C258 -> DA64(0,5,produced zero point)
+    bool FinishGameOpen(); // source1C284 -> DA20(flag0), state0/3 unchanged
+    bool BeginLoadClose(); // source17E94 -> DAA8(0,5), SAME radial owner
     void CloseWipe(bool immediate = false); // contracting state3 to0
     void Update();
     bool Draw(GameGraphics &graphics) const;
@@ -143,6 +148,7 @@ struct GameSceneUiSnapshot {
 // 18EE8..18F38: grouped typed native owners. Immutable views borrow DATA.BPM;
 // mutable NJ/text/control state is owned and retired before that package/font.
 class GameSceneUiBootstrap final : private GameUiCallbacks {
+    friend struct ::dokodemo::StartupRuntimeTestAccess;
   public:
     GameFsStatus Initialize(GameResourceSource &source, GameArena &arena, GameVmBoot &manager,
                             const GameFontResource &font);

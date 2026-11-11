@@ -111,6 +111,7 @@ GameFsStatus GameMainSceneData::Outing12(std::shared_ptr<const GameOutingData>& 
         const auto text=[&](unsigned seg,uint32_t at,uint32_t cap){auto v=part(seg,at,cap);uint32_t n=0;while(n<cap&&v.ReadU8(n))++n;if(n==cap)throw std::runtime_error("selected outing DATA string bound");return v.Subview(0,n+1);};
         const auto pointer=[&](uint32_t site,uint32_t cap){const auto r=outing_relocations_.find(site);if(r==outing_relocations_.end())throw std::runtime_error("selected outing R32 missing");return text(r->second,part(1,site,4).ReadLE32(0),cap);};
         data->origin=image_.Subview(0,64);data->registrations=part(1,0x43C4+66*20,60);data->motion_counts=part(1,0xA18,6);
+        data->position_row=PositionRow(12);data->placement_heading=PlacementHeading();
         const auto row=outing_relocations_.find(0x9B0);
         if(row==outing_relocations_.end()||row->second!=1||part(1,0x9B0,4).ReadLE32(0)!=0x488)throw std::runtime_error("selected50AC row lineage");
         data->triplets=part(1,0x488,84);bool sentinel=false;
@@ -131,6 +132,7 @@ GameFsStatus GameMainSceneData::Outing12(std::shared_ptr<const GameOutingData>& 
         data->support_paths.textures=OutingText(OutingStringFormat(textures,{mount,directory}));
         const auto hold=[&](PackageView v){data->pins.emplace_back(v,v.InitializedDigest());};
         hold(data->origin);hold(data->registrations);hold(data->motion_counts);hold(data->triplets);hold(data->model_format);hold(data->light_format);hold(data->glyph_format);
+        hold(data->position_row);hold(data->placement_heading);
         hold(data->text_map.keys);hold(data->text_map.fallback);hold(data->text_map.integer_format);hold(registry);hold(models);hold(textures);hold(directory_view);
         hold(part(1,0x9B0,4));hold(part(1,0x4ACC,18*4));hold(part(1,0x4B74,96*4));
         for(const auto& v:data->text_map.expansions)hold(v);for(const auto& v:data->support_paths.models)hold(v);hold(data->support_paths.textures);
@@ -217,7 +219,7 @@ GameFsStatus GameSceneBgm::BeginInitial(const std::shared_ptr<GameBackgroundRunt
     int32_t period=-1;status=actor.ReadInitialScenePeriod7398(period);if(!status)return status;
     s.period4B4=uint32_t(period);s.attempted=true;
     status=SelectBgm19B6C(s.period4B4,s.stored4BC,d.inputs[0],*runtime->rng_,s.selection);if(!status)return status;
-    s.stored4BC=int32_t(s.selection.index);s.selected=true; //19DD4 store BEFORE actual file request
+    s.stored4BC=int32_t(s.selection.index);s.selected=true;s.selection_writer=0x19E20; // BEFORE actual file request
     try{status=d.files.Request(runtime,s.epoch,s.selection.index,d.inputs[2],d.names(s.selection.index),s.file_result);}
     catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
     if(status&&!d.Bound(runtime))return {GameFsCode::Unavailable,0,"initial BGM owner changed during file creation"};
@@ -250,12 +252,36 @@ GameFsStatus GameSceneBgm::Pump(const std::shared_ptr<GameBackgroundRuntime>& ru
     if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"BGM current file worker owner required"};
     return data_->files.Pump(runtime,data_->state.epoch);
 }
+GameFsStatus GameSceneBgm::DepartureControlCurrent(const std::shared_ptr<GameBackgroundRuntime>& runtime)const{
+    if(!data_||!data_->Bound(runtime))return {GameFsCode::Unavailable,0,"17FC0 same current sound/settings/file owner required"};
+    const auto sound=data_->settings->OptionSoundOwner();
+    if(!sound.live||!sound.cold_initialized||!sound.owner||!sound.generation||!sound.id_writes)
+        return {GameFsCode::Unavailable,0,"17FC0 actual initialized source sound control unavailable"};
+    // 4B530 and4B400 both read CURRENT11EC. A genuine negative value takes
+    // their local no-voice branches. Neither pending file I/O nor a failed
+    // bank registration supplies that value. Positive voice consumers remain
+    // outside this finite file/scene implementation (deep audio stays paused).
+    if(sound.current_id>=0)return {GameFsCode::Unavailable,0,"17FC0 current voice requires unimplemented4B62C; no false pending/result"};
+    return {};
+}
+GameFsStatus GameSceneBgm::RetireSceneRecord(const std::shared_ptr<GameBackgroundRuntime>& runtime){
+    if(!data_||!data_->Bound(runtime)||!data_->state.selected||!data_->state.requested||data_->state.source_scene_retired)
+        return {GameFsCode::Unavailable,0,"19F88 actual current scene BGM record required"};
+    auto& d=*data_;const auto file=d.files.Read(uint32_t(d.state.stored4BC));
+    if(!file.current)return {GameFsCode::Unavailable,0,"4ABC8 current selected FILE-RECORD unknown"};
+    if(file.bank5C>=0)return {GameFsCode::Unavailable,0,"4ABF8 registered FILE-RECORD release5560C not admitted"};
+    // Actual4ABF0 negative registrar branch does NOT clear/free the record.
+    // Its native pending/read allocation stays in the SAME module file pool.
+    // 19F94 subsequently clears the scene selection, regardless of I/O phase.
+    const auto cell=d.manager_selection.lock();if(!cell)return {GameFsCode::Unavailable,0,"19F94 current LoadMan cell retired"};
+    d.state.stored4BC=0;*cell=0;d.state.source_scene_retired=true;d.state.selection_writer=0x19F94;return {};
+}
 bool GameSceneBgm::SharesDataBacking(PackageView view)const{return data_&&data_->Current()&&data_->inputs[0].SharesBacking(view);}
 bool GameSceneBgm::CurrentChoice(int32_t& out)const{
     if(!data_||!data_->Current()||!data_->state.selected)return false;out=data_->state.stored4BC;return true;
 }
 GameSceneBgmSnapshot GameSceneBgm::Snapshot()const{
-    if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected)s.file=data_->files.Read(uint32_t(s.stored4BC));return s;
+    if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected&&!s.source_scene_retired)s.file=data_->files.Read(uint32_t(s.stored4BC));return s;
 }
 std::weak_ptr<const void> GameSceneBgm::Lifetime()const{return data_?data_->lifetime:std::weak_ptr<const void>{};}
 GameFsStatus GameSceneBgm::Close(){
@@ -723,6 +749,7 @@ GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const v
     const auto cell=data.manager_selection.lock();
     if(data.selection_bound&&!cell)return {GameFsCode::Unavailable,0,"current LoadMan selection cell retired after RNG"};
     stored.selection=state_.bgm_selection;stored.stored4BC=int32_t(stored.selection.index);
+    stored.source_scene_retired=false;stored.selection_writer=0x19E20;
     if(cell)*cell=stored.stored4BC; // SAME owned manager field, at source store BEFORE file/provider
     stored.requested=false;state_.bgm_choice=stored.stored4BC;
     try{status=data.files.Request(runtime,stored.epoch,stored.selection.index,data.inputs[2],data.names(stored.selection.index),state_.bgm_result);}

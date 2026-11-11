@@ -226,7 +226,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameVmBoot *manager_ = nullptr;
     Vsync *vsync_ = nullptr;
     LoadMan *loadman_ = nullptr;
-    bool RequestApplicationScene(int32_t);
+    bool RequestApplicationScene(int32_t,std::optional<uint32_t> flag={});
     bool CommitApplicationScene();
     bool SetLoadPhase(uint32_t);
     uint32_t vsync_task_ = UINT32_MAX, load_task_ = UINT32_MAX;
