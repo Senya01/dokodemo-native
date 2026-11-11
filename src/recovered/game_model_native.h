@@ -8,6 +8,7 @@
 #include <functional>
 
 namespace dokodemo::script {class Vm;struct Value;struct NativeScriptContext;enum class Table:uint8_t;}
+namespace dokodemo {struct StartupRuntimeTestAccess;}
 
 namespace dokodemo::recovered {
 using GameVector4 = std::array<float, 4>;
@@ -583,6 +584,7 @@ class GameBackgroundPreparation final {
     GameBackgroundPreparationSnapshot Snapshot()const;
   private:
     friend class GameActorRuntime;
+    friend struct ::dokodemo::StartupRuntimeTestAccess;
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RegistrationsCurrent()const;
     bool MotionCountsCurrent()const;

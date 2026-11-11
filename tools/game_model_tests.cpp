@@ -27,12 +27,26 @@ struct StartupRuntimeTestAccess {
         const auto owner=actor.background_module_.lock();recovered::GameBackgroundAppliedState applied;
         if(!actor.destination_->AppliedEffects(owner,actor.destination_state_.epoch,applied))return false;
         const auto model=actor.destination_->Snapshot();const auto g=graphics.Snapshot();
-        if(!g.mesh_pixels||g.mesh_triangles!=model.model.triangles+applied.selected_entries.size()*model.auxiliary_model.triangles)
+        size_t selected_children=0;
+        for(size_t i=0;i<applied.selected_entries.size();++i){
+            const bool child=applied.selected_entries[i]%2==0; // this synthetic recipe's producer
+            if(child==applied.child_poses[i].empty()||(child?(applied.child_phases[i]<0):(applied.child_phases[i]!=-1)))return false;
+            selected_children+=child;
+        }
+        if(!g.mesh_pixels||g.mesh_triangles!=model.model.triangles+selected_children*model.auxiliary_model.triangles)
             std::cerr<<"selected-composition pixels="<<g.mesh_pixels<<" triangles="<<g.mesh_triangles<<" main="<<model.model.triangles
                 <<" selected="<<applied.selected_entries.size()<<" child="<<model.auxiliary_model.triangles<<'\n';
-        return model.auxiliary_entries==6&&applied.selected_entries.size()<model.auxiliary_entries&&g.mesh_pixels>0
-            &&g.mesh_triangles==model.model.triangles+applied.selected_entries.size()*model.auxiliary_model.triangles;
+        return model.auxiliary_entries==6&&model.auxiliary_children==3&&applied.selected_entries.size()<model.auxiliary_entries&&g.mesh_pixels>0
+            &&g.mesh_triangles==model.model.triangles+selected_children*model.auxiliary_model.triangles;
     }
+
+    static void RetireAuxChild(recovered::GameBackgroundPreparation& job,uint32_t index,bool drop){
+        if(drop)job.auxiliary_entries_.at(index).child.reset();else job.auxiliary_entries_.at(index).child->Close();
+    }
+    static void AuxBadSelected(recovered::GameBackgroundPreparation& job,bool set){
+        if(set)job.applied_.selected_entries.push_back(uint32_t(job.auxiliary_entries_.size()));else job.applied_.selected_entries.pop_back();
+    }
+
     static recovered::GameInventory& Inventory(recovered::GameContentBoot& content){return content.inventory_;}
     static recovered::GameSceneBgm& Bgm(recovered::GameContentBoot& content){return *content.scene_bgm_;}
     static std::shared_ptr<recovered::GameManagerSwitchControl> Manager(recovered::GameContentBoot& content){return content.loadman_->control;}
@@ -1021,6 +1035,67 @@ void BackgroundSamplingTests(){
         Check(bool(job.Close()),"failed current sampling owner closes");
     }
 }
+
+void SelectedOptionalAuxiliaryTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
+    for(unsigned i=0;i<3;++i){const std::string name="MIX_"+std::to_string(i);std::copy(name.begin(),name.end(),records->b.begin()+i*20);}
+    auto counts=std::make_shared<Lease>(std::vector<uint8_t>(6));auto recipe=std::make_shared<Lease>(std::vector<uint8_t>(84));
+    for(unsigned i=0;i<6;++i){if(i%2)Word(recipe->b,i*12+8,11);else{Word(recipe->b,i*12,11);Word(recipe->b,i*12+4,11);}}
+    auto model_format=text("%s\\%s\\CHILD.DVS"),motion_name=text("A.DAK"),glyph_format=text("F%03d\\F%03d\\F%05d.GIM");
+    const auto archive=BackgroundArchive({{"MIX_0.BPM",BackgroundArchive({{"MIX_0\\model01.DVS",Fixture()},
+        {"MIX_0\\CHILD.DVS",Fixture()},{"MIX_0\\A.DAK",MotionFixture()}})}});
+    struct Templates:GameResourceSource {GameFsStatus OpenResource(const std::string&,PackageView& out)override{
+        auto held=std::make_shared<Lease>(Fixture());out=PackageStorage::Attach(held,held->b.size());return {};}} templates;
+    GameSupportTextMap map;auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));auto empty=text(""),integer=text("%d");
+    map.keys=view(keys);for(auto& entry:map.expansions)entry=view(empty);map.fallback=view(empty);map.integer_format=view(integer);
+    GameSupportTemplatePaths paths;auto model=text("SYN\\model.DVS"),prefix=text("SYN\\gim\\");for(auto& path:paths.models)path=view(model);paths.textures=view(prefix);
+    std::vector<uint8_t> bytes(28+3+9*4);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,3);bytes[24]=9;
+    bytes[28]=0x30;bytes[30]=0x38;Word(bytes,31,0x90000008);auto module=std::make_shared<Lease>(bytes);
+    Program program;Diagnostic error;Check(program.load_test_fixture(bytes,error),"synthetic mixed auxiliary module");
+    for(uint64_t seed:{1,2}){ // fixed component cases: main-only; main-only plus child
+        RngNativeOwner rng;rng.ImportCurrentState64(seed,7,"synthetic mixed optional child");unsigned clocks=0;
+        auto runtime=std::make_shared<GameBackgroundRuntime>();Check(bool(runtime->Initialize([&]{++clocks;return std::array<uint32_t,7>{{0,0,0,0,1,1,2026}};},rng)),"mixed actual clock/RNG owner");
+        const std::shared_ptr<const void> owner=runtime;auto io=std::make_shared<BackgroundFileState>();GameBackgroundPreparation job;
+        Check(bool(job.Begin(owner,1,{8,12,0,1},view(records),std::make_unique<BackgroundFile>(archive,io)))&&bool(job.Load(owner,1))
+            &&bool(job.LoadModelMotions(owner,1,view(counts)))&&bool(job.LoadAuxiliary(owner,1,view(recipe),view(model_format),[&](uint32_t token,PackageView& out)->GameFsStatus{
+                if(token!=11)return {GameFsCode::Unavailable,0,"synthetic token"};out=view(motion_name);return {};}))
+            &&bool(job.PrepareEffects(owner,1,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,{}))&&bool(job.ActivateEffects(owner,1,runtime)),"real mixed producer/control construction");
+        uint64_t expected=seed;unsigned calls=0;const auto next=[&](){++calls;expected=expected*UINT64_C(0x5851f42d4c957f2d)+1;return uint32_t(expected>>32)&0x7fffffff;};
+        const auto n=next()%4;std::vector<uint32_t> pool{0,1,2,3,4,5},selected;std::vector<int32_t> phases;
+        for(unsigned k=0;k<n;++k){const auto at=next()%pool.size();selected.push_back(pool[at]);pool.erase(pool.begin()+at);}
+        for(const auto i:selected)phases.push_back(i%2?-1:int32_t(next()%6));
+        Check(selected==(seed==1?std::vector<uint32_t>{3}:std::vector<uint32_t>{1,2}),"fixed synthetic cases cover selected main-only and selected child");
+        Check(bool(job.SampleEffects(owner,1,0)),"sample genuine slot2 main and optional child");GameBackgroundAppliedState applied;
+        Check(bool(job.AppliedEffects(owner,1,applied))&&applied.selected_entries==selected&&applied.child_phases==phases
+            &&applied.rng_calls==calls&&rng.CurrentSeed64()==expected&&clocks==1&&applied.main_pose[0].position==GameVector4{{10,20,30,1}},
+            "main-only slot2 changes actual main pose; child-only phase draws preserve source order/state");
+        for(size_t i=0;i<selected.size();++i)Check(applied.child_poses[i].empty()==bool(selected[i]%2),"optional child absent only for real main-only producer");
+        std::vector<GameAuxiliaryBindingState> bindings;Check(bool(job.Auxiliary(owner,1,bindings)),"mixed control readback");
+        for(const auto& b:bindings){const bool active=b.target!=GameAuxiliaryTarget::MainTemplate&&std::find(selected.begin(),selected.end(),b.entry)!=selected.end();
+            Check(b.playback.samples==(active?1u:0u),"slot2 visible-main sampled, template/unselected controls not sampled");}
+        Vm vm(program);vm.start();const auto context=vm.context_value();Value ref;ref.kind=Value::Kind::Reference;ref.table=Table::Global;
+        for(unsigned i=1;i<=8;++i){auto cell=ref;cell.index=uint16_t(i);vm.store_reference(cell,Value::string(""));}
+        GameSupportRegistration registered;Check(bool(registered.Initialize(owner,1))&&bool(registered.Register16(vm,ref))
+            &&bool(job.PrepareSupport(owner,1,vm,registered,view(module),map,templates,paths,view(glyph_format))),"real registered support stage before selected draw");
+        // Retire an UNSELECTED child: draw must not visit it or add its triangles.
+        dokodemo::StartupRuntimeTestAccess::RetireAuxChild(job,0,false);
+        GameGraphics graphics;Check(graphics.Initialize({})&&graphics.Clear(0xFF555555),"mixed component surface");auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.02f;
+        Check(bool(job.DrawSelected(owner,1,vm,graphics,camera))&&graphics.Snapshot().mesh_pixels>0
+            &&graphics.Snapshot().mesh_triangles==(seed==1?1u:2u),"main-only succeeds; selected child only contributes its actual triangle/pixels");
+        const auto drawn=graphics.Snapshot().mesh_triangles;
+        dokodemo::StartupRuntimeTestAccess::AuxBadSelected(job,true);Check(!job.DrawSelected(owner,1,vm,graphics,camera)&&graphics.Snapshot().mesh_triangles==drawn,"out-of-range selection refuses before raster effects");dokodemo::StartupRuntimeTestAccess::AuxBadSelected(job,false);
+        if(seed==2){dokodemo::StartupRuntimeTestAccess::RetireAuxChild(job,2,false);
+            Check(!job.DrawSelected(owner,1,vm,graphics,camera)&&graphics.Snapshot().mesh_triangles==drawn,"selected required RETIRED child refuses, not optional skip");
+            dokodemo::StartupRuntimeTestAccess::RetireAuxChild(job,2,true);
+            Check(!job.DrawSelected(owner,1,vm,graphics,camera)&&graphics.Snapshot().mesh_triangles==drawn,"selected required MISSING child refuses");}
+        Check(rng.CurrentSeed64()==expected&&clocks==1,"all rendering/refusals preserve intrinsic RNG and clock");
+        Check(bool(job.Close())&&!io->live,"mixed owner retirement");registered.Close();graphics.Close();runtime->Close();
+    }
+}
+
 void SupportConsumerTests(){
     using namespace dokodemo::script;
     const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
@@ -1307,7 +1382,10 @@ std::vector<uint8_t> SyntheticOutingData(){
     auto pointer=[&](uint32_t site,uint32_t value,unsigned segment){
         Word(b,0xE3C00+site,value);Word(b,1310100+reloc*8,site);Word(b,1310104+reloc*8,(segment<<16)|0x102);++reloc;};
     text(0,0xDC000,"motion");text(0,0xDC010,"panel");text(0,0xDC020,"x");
-    for(unsigned i=0;i<18;++i)pointer(0x488+i*4,0xDC000,0);
+    for(unsigned row=0;row<6;++row){
+        if(row%2)pointer(0x488+row*12+8,0xDC000,0); // main-only, no child producer
+        else {pointer(0x488+row*12,0xDC000,0);pointer(0x488+row*12+4,0xDC000,0);}
+    }
     pointer(0x9B0,0x488,1);for(unsigned i=0;i<18;++i)pointer(0x4ACC+i*4,0xDC010,0);
     for(unsigned i=0;i<96;++i){b[0xE3C00+0x4B14+i]=uint8_t(i);pointer(0x4B74+i*4,0xDC020,0);}
     Word(b,1310020,reloc*8);
@@ -2196,6 +2274,7 @@ int main(int argc,char** argv) {
         BackgroundAuxiliaryTests();
         BackgroundEffectsTests();
         BackgroundSamplingTests();
+        SelectedOptionalAuxiliaryTests();
         SupportConsumerTests();
         SupportGlyphTests();
         ManagerSupportJobTests();

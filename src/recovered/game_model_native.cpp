@@ -1178,11 +1178,20 @@ GameFsStatus GameBackgroundPreparation::PrepareOwnedSupport(const std::shared_pt
 GameFsStatus GameBackgroundPreparation::DrawSelected(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
         GameGraphics& graphics,const GameMatrix& camera)const{
     if(!RuntimeCurrent()||!activated_)return {GameFsCode::Unavailable,0,"selected current auxiliary activation required"};
+    for(const auto index:applied_.selected_entries){
+        if(index>=auxiliary_entries_.size())return {GameFsCode::Unavailable,0,"selected auxiliary index outside current recipe"};
+        const auto& entry=auxiliary_entries_[index];
+        if(entry.words[0]){
+            if(!entry.motions[0]||!entry.child||!entry.child->Asset()||!entry.child->Asset()->SourceCurrent())
+                return {GameFsCode::Unavailable,0,"selected required auxiliary child owner missing/retired"};
+        }else if(entry.child||entry.words[1]||!entry.words[2]||!entry.motions[2])
+            return {GameFsCode::Unavailable,0,"selected absent-child row is not an admitted main-only producer"};
+    }
     auto status=DrawWithSupport(owner,epoch,vm,graphics,camera);if(!status)return status;
     for(const auto index:applied_.selected_entries){
-        if(index>=auxiliary_entries_.size()||!auxiliary_entries_[index].child)
-            return {GameFsCode::Unavailable,0,"selected auxiliary child owner missing"};
-        status=auxiliary_entries_[index].child->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+        const auto& entry=auxiliary_entries_[index];
+        if(!entry.child)continue; // legitimate {0,0,slot2}: main motion already sampled
+        status=entry.child->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
         if(!status)return status;
     }
     return {};
