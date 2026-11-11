@@ -1201,8 +1201,8 @@ void SupportConsumerTests(){
         const uint32_t selected=mode==1?3:mode==2?11:(mode>=3&&mode<=10?0:1);
         const size_t glyphs=mode==1||mode==2?2:(mode==0||mode==13?0:1);
         Check(snap.placements[0].model==selected&&snap.glyph_requests.size()==glyphs,"mode key is not direct model ordinal");
-        if(glyphs){const char expected=mode==4||mode==12?'y':'x';const int style=mode==2||mode>=11?-12:0;
-            Check(snap.glyph_requests[0].code==uint16_t(expected)&&snap.glyph_requests[0].style==style,"selected whole/one-unit bytes and signed-low8 style");}
+        if(glyphs){const char expected=mode==4||mode==12?'y':'x';const int style=mode==2||mode>=11?500:0;
+            Check(snap.glyph_requests[0].code==uint16_t(expected)&&snap.glyph_requests[0].style==style,"selected whole/one-unit bytes and signed-halfword style");}
         consumer.Close();p->Close();
     }
     ++epoch;put(0,Value::string(std::string(9,'A')));Check(bool(init())&&bool(consumer.LoadTemplates(owner,epoch,vm,source,paths)),"nine text units remain owned, not truncated");
@@ -1235,13 +1235,14 @@ std::vector<uint8_t> GlyphTestModel(unsigned count,bool uv=true){
 }
 struct GlyphFixtureSource final:GameResourceSource{
         unsigned glyph_calls=0,fail=0;bool uv=true,malformed=false,style_missing=false;std::function<void()> during;
-        std::vector<std::shared_ptr<Lease>> glyph_leases;
+        std::vector<std::shared_ptr<Lease>> glyph_leases;std::vector<std::string> requested;
         GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
             std::vector<uint8_t> b;
             if(path.find(".DVS")!=path.npos){const auto index=unsigned(std::stoul(path.substr(6)));const auto n=index<2?1:index<10?index-1:index-9;b=GlyphTestModel(n,uv);}
             else if(path=="SYN/CONTACT_TEST.GIM")b=GlyphTestGim(0xFFFFFFFF);
-            else{++glyph_calls;if(during)during();if(glyph_calls==fail||style_missing)return {GameFsCode::NotFound,0,"synthetic missing actual glyph/style resource"};
-                Check(path=="SYN000_000_00120.GIM"||path=="SYN000_000_00121.GIM"||path=="SYN-12_-12_00120.GIM"||path=="SYN-12_-12_00121.GIM"||path=="SYN000_000_41306.GIM","source tuple -> exact synthetic file request");
+            else{++glyph_calls;requested.push_back(path);if(during)during();if(glyph_calls==fail||style_missing)return {GameFsCode::NotFound,0,"synthetic missing actual glyph/style resource"};
+                Check(path=="SYN000_000_00120.GIM"||path=="SYN000_000_00121.GIM"||path=="SYN500_500_00120.GIM"||path=="SYN500_500_00121.GIM"||path=="SYN000_000_41306.GIM"
+                    ||path=="SYN256_256_00120.GIM"||path=="SYN256_256_00121.GIM"||path=="SYN-01_-01_00120.GIM"||path=="SYN-01_-01_00121.GIM","source tuple -> exact synthetic file request");
                 b=GlyphTestGim(path.find("00121")!=path.npos?0xFFFF0000:0xFF0000FF);if(malformed&&glyph_calls==2)b[0]=0;
                 auto lease=std::make_shared<Lease>(b);glyph_leases.push_back(lease);out=PackageStorage::Attach(lease,b.size());return {};}
             auto lease=std::make_shared<Lease>(b);out=PackageStorage::Attach(lease,b.size());return {};
@@ -1261,10 +1262,13 @@ void SupportGlyphTests(){
     GameSupportTemplatePaths paths;for(unsigned i=0;i<18;++i){data.push_back(text("PANEL_"+std::to_string(i)+".DVS"));paths.models[i]=view(data.back());}data.push_back(text("SYN/"));paths.textures=view(data.back());
     GlyphFixtureSource source;
     auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);uint64_t epoch=0;GameSupportTextOwner worker;std::shared_ptr<GameModelClone> parent;
-    const auto begin=[&](uint16_t mode,bool material=false){worker.Close();++epoch;source.glyph_calls=0;source.glyph_leases.clear();
+    std::shared_ptr<Lease> parent_bytes_owner;uint8_t material34=0;uint16_t marker_style=1;
+    const auto begin=[&](uint16_t mode,bool material=false){worker.Close();++epoch;source.glyph_calls=0;source.glyph_leases.clear();source.requested.clear();
         auto b=AreaMarkerFixture(0,material);auto p=dokodemo::model::parseDvs(b);const auto end=p.nodes[0].source.offset+p.nodes[0].source.bytes;
-        b[end-12]=1;b[end-11]=0;b[end-10]=uint8_t(mode);b[end-9]=0;b[end-8]=1;b[end-7]=0;
-        auto lease=std::make_shared<Lease>(b);auto asset=std::make_shared<GameModelAsset>();Check(bool(asset->Decode(view(lease))),"glyph actual parent source");parent=std::make_shared<GameModelClone>();Check(bool(parent->Initialize(asset)),"glyph actual parent clone");
+        if(material){const auto at=p.materials[0].source.offset;Word(b,at+4,0x8060A040);Word(b,at+8,0x8060A040);
+            Word(b,at+12,0x80123456);b[at+23]=9;b[at+21]=material34;}
+        b[end-12]=1;b[end-11]=0;b[end-10]=uint8_t(mode);b[end-9]=0;b[end-8]=uint8_t(marker_style);b[end-7]=uint8_t(marker_style>>8);
+        auto lease=std::make_shared<Lease>(b);parent_bytes_owner=lease;auto asset=std::make_shared<GameModelAsset>();Check(bool(asset->Decode(view(lease))),"glyph actual parent source");parent=std::make_shared<GameModelClone>();Check(bool(parent->Initialize(asset)),"glyph actual parent clone");
         Check(bool(worker.Initialize(owner,epoch,vm,context,Table::Global,0,view(module),map))&&bool(worker.LoadTemplates(owner,epoch,vm,source,paths))&&bool(worker.Attach(owner,epoch,vm,parent)),"production glyph prerequisites");};
     GameGraphics graphics;Check(graphics.Initialize({}),"offscreen glyph raster");auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.1f;camera[12]=-.6f;camera[13]=-.8f;camera[14]=-1.1f;GameSupportSnapshot snap;
     begin(1);Check(!worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera),"allocation/queue alone is not glyph completion");
@@ -1280,7 +1284,42 @@ void SupportGlyphTests(){
     for(uint16_t mode:{uint16_t(2),uint16_t(4),uint16_t(12),uint16_t(13)}){begin(mode);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap)),"whole/unit/signedstyle/absent branch actual worker");
         Check(snap.bound_texture_nodes==(mode==2?2u:mode==13?0u:1u),"selected glyph cardinality, no placeholder for absent unit");}
     put(0,"AA");begin(1);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap))&&source.glyph_calls==1&&snap.bound_texture_nodes==2,"same tuple reuses one decoded image in two nodes");put(0,"AB");
-    begin(1,true);Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&source.glyph_calls==0,"unclosed nonnull marker descriptor refuses before I/O");
+    for(uint16_t style:{uint16_t(257),uint16_t(0)}){marker_style=style;begin(1);
+        Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap))
+            &&snap.glyph_requests[0].style==(style?256:-1)&&source.requested[0]==(style?"SYN256_256_00120.GIM":"SYN-01_-01_00120.GIM"),
+            "signed16 queue/lookup/worker path preserves 256 and -1 without low-byte alias");}marker_style=1;
+    begin(1,true);Check(bool(worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)))&&bool(worker.Read(owner,epoch,vm,snap)),"nonnull descriptor copy reaches actual owned texture bindings");
+    const auto& parsed_material=parent->Asset()->Data().materials[0];
+    Check(parsed_material.colorWords==std::array<uint32_t,4>{{0x8060A040,0x8060A040,0x80123456,0}}&&parsed_material.field30==9&&parsed_material.field34==0,
+        "four exact typed copy words and two selected descriptor parameters decoded");
+    Check(graphics.Clear(0xFF000000)&&bool(worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera))&&graphics.SwapBuffers()&&graphics.CopyFront(frame)
+        &&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF400000)>0&&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF000060)>0,
+        "nonnull copied material RGB modulates two actual decoded glyph images through production raster");
+    auto independent=std::make_shared<GameModelClone>();auto shared_asset=std::make_shared<GameModelAsset>();auto model_bytes=std::make_shared<Lease>(GlyphTestModel(1));
+    const auto uv_at=dokodemo::model::parseDvs(model_bytes->b).nodes[0].geometry.bounds.source.offset-24;
+    const std::array<float,6> uvs{{.05f,.05f,.95f,.05f,.05f,.95f}};
+    for(unsigned i=0;i<uvs.size();++i){uint32_t word;std::memcpy(&word,&uvs[i],4);Word(model_bytes->b,uv_at+4*i,word);}
+    Check(bool(shared_asset->Decode(view(model_bytes),&source,"SYN/"))&&bool(independent->Initialize(shared_asset)),"independent shared-template clone");
+    GameModelClone colored,plain;Check(bool(colored.Initialize(shared_asset))&&bool(plain.Initialize(shared_asset)),"same immutable template two clones");
+    auto texture=std::make_shared<GameImage>();auto texture_bytes=std::make_shared<Lease>(GlyphTestGim(0xFFFFFFFF));Check(bool(texture->DecodeGim(view(texture_bytes))),"actual alternate owned pixels");
+    const std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>> binding{{0,texture}};
+    Check(bool(colored.BindGlyphTextures(colored.Generation(),parent,0,binding))&&plain.DiffuseTextureCount()==0
+        &&shared_asset->Data().materials[0].colorWords[1]==0&&shared_asset->Materials()[0].texture->Pixels()[0]==0xFFFFFFFF,
+        "copy is per selected clone; shared asset/material/image and other clone unchanged");
+    auto simple_camera=ModelIdentity();Check(graphics.Clear(0xFF000000)&&bool(colored.Draw(graphics,simple_camera))&&graphics.SwapBuffers()&&graphics.CopyFront(frame)
+        &&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF40A060)>0,"actual white decoded pixels expose copied RGB, not placeholder texture");
+    Check(!colored.BindGlyphTextures(colored.Generation()+1,parent,0,binding)&&colored.DiffuseTexturesCurrent()
+        &&!colored.BindGlyphTextures(colored.Generation(),parent,1,binding)&&colored.DiffuseTexturesCurrent(),"stale clone generation and nonmarker do not replace valid material");
+    texture_bytes->b[128]^=1;Check(!colored.DiffuseTexturesCurrent()&&!colored.Draw(graphics,simple_camera),"bound copied descriptor cannot outlive actual pixel provenance");texture_bytes->b[128]^=1;
+    auto gradient_bytes=std::make_shared<Lease>(GlyphTestGim(0xFFFFFFFF));Word(gradient_bytes->b,128,0xFFFF0000);Word(gradient_bytes->b,132,0xFF00FF00);Word(gradient_bytes->b,136,0xFF0000FF);
+    auto gradient=std::make_shared<GameImage>();Check(bool(gradient->DecodeGim(view(gradient_bytes)))
+        &&bool(colored.BindGlyphTextures(colored.Generation(),parent,0,{{0,gradient}}))&&graphics.Clear(0xFF000000)
+        &&bool(colored.Draw(graphics,simple_camera))&&graphics.SwapBuffers()&&graphics.CopyFront(frame)
+        &&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF400000)>0&&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF00A000)>0
+        &&std::count(frame.pixels.begin(),frame.pixels.end(),0xFF000060)>0,"authored UV selects distinct decoded texels with copied material RGB");
+    parent_bytes_owner->b[28]^=1;Check(!worker.Read(owner,epoch,vm,snap)&&!colored.DiffuseTexturesCurrent(),"parent material data drift revokes copied descriptor, never detached success");parent_bytes_owner->b[28]^=1;
+    parent->Close();Check(!colored.DiffuseTexturesCurrent()&&!worker.DrawGlyphPreview(owner,epoch,vm,graphics,camera),"parent retirement revokes child copy");
+    material34=1;begin(1,true);Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&!worker.Progress().glyph_pixels_ready,"unadmitted nonzero lighting term refuses before publication");material34=0;
     begin(1);source.fail=2;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&worker.Progress().glyph_decoded==1&&!worker.Progress().glyph_pixels_ready&&worker.Progress().bound_texture_nodes==0,"partial load cannot publish textures");source.fail=0;
     begin(1);source.malformed=true;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format))&&worker.Progress().glyph_decoded==1&&!worker.Progress().glyph_pixels_ready,"partial decode cannot publish textures");source.malformed=false;
     begin(1);source.style_missing=true;Check(!worker.PrepareGlyphTextures(owner,epoch,vm,source,view(format)),"unsupported code/style has no success fallback");source.style_missing=false;

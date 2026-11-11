@@ -14,7 +14,14 @@ struct Range { std::size_t offset=0, bytes=0; };
 struct Vec2 { float x=0,y=0; };
 struct Vec3 { float x=0,y=0,z=0; };
 struct TextureReference { Range source; unsigned roleBit=0; std::string name; };
-struct Material { Range source; std::uint16_t flags=0; std::vector<TextureReference> textures; };
+struct Material {
+    Range source; std::uint16_t flags=0;
+    // 7E068 -> descriptor+4/8/C/10, byte23 -> +30, byte21 -> +34.
+    // Only the reached glyph descriptor-copy consumer interprets these here.
+    std::array<std::uint32_t,4> colorWords{};
+    std::uint8_t field30=0,field34=0;
+    std::vector<TextureReference> textures;
+};
 struct Bounds { Range source; float boxScale=0; std::array<Vec3,8> box{}; std::array<float,4> sphere{}; };
 enum class Topology { TriangleStrip, TriangleFan, Triangles, LineStrip, Lines, Points };
 struct Primitive { Range source; unsigned opcode=0; Topology topology{}; std::vector<std::uint16_t> indices; };

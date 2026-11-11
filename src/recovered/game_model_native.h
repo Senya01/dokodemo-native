@@ -122,6 +122,9 @@ class GameModelClone final {
     uint64_t Generation()const noexcept{return generation_;}
     // Per-geometry native binding; immutable shared asset/materials are untouched.
     GameFsStatus BindDiffuseTextures(uint64_t generation,const std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>>&);
+    // 2925C/28DD4: per-clone descriptor copy, never shared-template mutation.
+    GameFsStatus BindGlyphTextures(uint64_t generation,const std::shared_ptr<const GameModelClone>& parent,uint32_t marker,
+                                  const std::vector<std::pair<uint32_t,std::shared_ptr<const GameImage>>>&);
     bool DiffuseTexturesCurrent()const noexcept;
     uint32_t DiffuseTextureCount()const noexcept{return uint32_t(diffuse_.size());}
     GameFsStatus Initialize(std::shared_ptr<const GameModelAsset> asset);
@@ -150,7 +153,7 @@ class GameModelClone final {
     const LightSelection& Lights() const noexcept { return lights_; }
     void SetLightColor14(uint32_t color) { if(lights_.present){lights_.packed_color14=color;++lights_.color_writes;} }
     void Close() {
-        generation_=0;diffuse_.clear();
+        generation_=0;diffuse_.clear();glyph_material_.reset();
         marker_pose_current_=false;
         lights_={};
         pose_.clear();
@@ -171,6 +174,15 @@ class GameModelClone final {
   private:
     struct DiffuseBinding {uint32_t node=0;std::shared_ptr<const GameImage> image;uint64_t generation=0;};
     std::vector<DiffuseBinding> diffuse_;
+    struct GlyphMaterialBinding {
+        std::weak_ptr<const GameModelClone> parent;
+        uint64_t generation=0;
+        uint32_t marker=0;
+        int32_t material=-1;
+        model::Material descriptor;
+        std::vector<int32_t> child_materials;
+    };
+    std::optional<GlyphMaterialBinding> glyph_material_;
     uint64_t generation_=0;
     struct GeometrySpace {GameMatrix rigid;std::vector<GameMatrix> palette;};
     GeometrySpace GeometryTransforms(uint32_t node) const;
@@ -251,7 +263,7 @@ struct GameSupportTemplatePaths {
     std::array<PackageView,18> models;
     PackageView textures;
 };
-struct GameSupportGlyph {uint16_t code=0;int8_t style=0;};
+struct GameSupportGlyph {uint16_t code=0;int16_t style=0;};
 struct GameSupportTextureState {
     GameSupportGlyph glyph;uint32_t width=0,height=0;uint64_t generation=0;
     std::array<uint8_t,32> pixels_sha256{};
