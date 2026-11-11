@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Stage seven owned background light controls with explicit reduced-effects policy; source5448 unknown, no scene/travel completion.
+Bind current RTC/RNG lifetime to background job; select and sample real motion controls. Travel/scene completion remains unimplemented.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).

@@ -1,6 +1,6 @@
 {
-  "source_commit": "c79c6b71f554b2c03f43a968a7c2b8cfbda17fe6",
-  "development_commits_preserved": 180,
+  "source_commit": "32a2233b2d6a3978a754c76eb7ba7f75b018c9fc",
+  "development_commits_preserved": 181,
   "approach": "source-only projection; original data and private parents excluded",
   "full_game": false,
   "source_fixture_groups_require_private_inputs": true
