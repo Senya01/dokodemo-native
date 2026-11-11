@@ -455,6 +455,8 @@ class GameSceneBgm final {
   private:
     friend class GameBackgroundPreparation;
     struct Data;std::unique_ptr<Data> data_;
+    friend class GameActorRuntime;
+    std::weak_ptr<const void> Lifetime()const;
 };
 struct GameBackgroundLightBinding {
     uint32_t slot=0;

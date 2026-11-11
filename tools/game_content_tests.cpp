@@ -64,6 +64,11 @@ int main() {
         auto boot_owner = std::make_unique<GameContentBoot>();
         auto& boot = *boot_owner;
         Check(boot.InitializeBB8(arena, vm) && boot.Snapshot().registered_records == 6, "two actual typed owners/six records");
+        const auto cold=boot.Snapshot().ordinary_scene_owners;
+        Check(cold.live&&cold.loadman.current&&cold.loadman.ui_current&&cold.loadman.transition50==0
+            &&cold.loadman.ui464==0&&cold.loadman.application20==-1&&cold.loadman.next24==-1&&cold.loadman.phase28==1
+            &&cold.loadman.transition50_writer==0x17938&&cold.loadman.ui464_writer==0x17908,
+            "actual ordinary module constructor owns signed-half50/current UI, distinct from manager scene fields");
         RngNativeOwner background_rng;background_rng.ImportCurrentState64(7,17,"explicit content component RNG");
         Check(!boot.SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,1,0,0,7,1,2026}};}),"content cannot bind absent current RNG");
         boot.SetTitleRng(background_rng);
@@ -81,6 +86,11 @@ int main() {
         const std::array<uint32_t, 6> states{{2, 4, 5, 5, 6, 6}};
         for (size_t i = 0; i < states.size(); ++i) {
             Check(boot.TickLoading(fs) && boot.Snapshot().load_state == states[i], "source cold state order");
+            const auto live=boot.Snapshot();const auto current=live.ordinary_scene_owners.loadman;
+            Check(current.current&&current.module_epoch==cold.loadman.module_epoch&&current.phase28==live.load_state
+                &&current.application20==live.current_scene&&current.next24==live.next_scene&&current.transition50==0
+                &&current.transition50_writer==0x17938&&current.ui464==0&&current.dispatches>cold.loadman.dispatches,
+                "constructor ->actual ordinary dispatcher->current history, no adoption-time reset or shadow manager");
             Check(fs.Snapshot().io.read_calls == (i < 4 ? 2u : 3u), "node creation T4 does not read;actual member read T5");
             Check(boot.Snapshot().font_ready == (i == 5), "consumer only after real completion T6");
         }

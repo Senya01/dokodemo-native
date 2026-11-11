@@ -4,6 +4,7 @@
 #include "game_position_native.h"
 #include "game_scene_ui_native.h"
 #include <functional>
+#include <map>
 
 namespace dokodemo::recovered {
 // A690 receives actor+10, so its +44 source is the actor's field54.
@@ -45,25 +46,76 @@ struct GameModelRetirementWitness {
   bool assets_retained_at_disable=false,clone_retained_at_disable=false;
   bool asset_owner_expired=false,clone_owner_cleared=false;
 };
+class GameContentBoot;
+class GameInventory;
+class GameNotebook;
+class GameWordMemo;
+class GameDiary;
+class GameSystemOptionFrontier;
+struct GameLoadManSnapshot {
+  bool current=false,ui_current=false,rendered_current=false;
+  uint64_t module_epoch=0,dispatches=0;
+  int16_t transition50=0; //177F8 signed HALF, not manager word50/menu/actor50
+  uint32_t ui464=0;
+  uint64_t ui_generation=0;
+  int32_t application20=-1,next24=-1;
+  uint32_t phase28=1;
+  uint32_t current_variant4A8=1,staged_variant4AC=1,cached_period4B4=2;
+  int32_t stored_bgm4BC=0,rendered_selector4DC=-1;
+  uint32_t transition50_writer=0,ui464_writer=0;
+};
 struct GameManagerSwitchSnapshot {
   bool live=false,bound=false,pending=false;
   uint64_t epoch=0,requests=0,consumed=0;
   int32_t current14=0,requested18=0;
   std::array<uint32_t,2> last_request_store_pcs{};
+  GameLoadManSnapshot loadman;
+  uint32_t publication_phase=0,old_resource=0,new_resource=0;
+  bool old_bit_known=false,old_bit=false,new_bit_known=false,new_bit=false;
+  std::array<uint32_t,6> publication_order{};
 };
-// Native typed manager owner: equal-selector0 cancellation plus a conditional
-// selector12 pending prefix. Non-equal1B238 bit publication/adoption is still
-// unimplemented. Neither a request nor its actor effects supply scene ready.
-class GameManagerSwitchControl {
+// WindowsOrdinarySceneOwners co-owns DISTINCT source1B188 manager and177F8
+// LoadMan fields. Content constructs it once; the actor borrows that instance.
+// This native layout is not PSP layout. UI15, adoption and completion refuse.
+class GameManagerSwitchControl : public std::enable_shared_from_this<GameManagerSwitchControl> {
 public:
-  bool Initialize(uint64_t epoch);
+  GameManagerSwitchControl()=default;
+  GameManagerSwitchControl(const GameManagerSwitchControl&)=delete;
+  GameManagerSwitchControl& operator=(const GameManagerSwitchControl&)=delete;
+  GameManagerSwitchControl(GameManagerSwitchControl&&)=delete;
+  GameManagerSwitchControl& operator=(GameManagerSwitchControl&&)=delete;
+  bool Initialize(uint64_t epoch,std::shared_ptr<const void> module={});
+  bool CurrentBorrow(const std::shared_ptr<GameManagerSwitchControl>&)const;
+  bool ResourceRequest(uint32_t index,bool& value)const;
   bool BindScene0(uint64_t epoch);
   bool RequestSame0(uint64_t epoch,int32_t target);
   bool RequestPending12(uint64_t epoch);
   bool ConsumeSame0(uint64_t epoch);
-  void Retire(){state_.live=state_.bound=state_.pending=false;}
-  GameManagerSwitchSnapshot Snapshot()const{return state_;}
+  void Retire();
+  GameManagerSwitchSnapshot Snapshot()const;
 private:
+  friend class GameContentBoot;
+  friend class GameActorRuntime;
+  bool Current()const;
+  bool BindActor(uint64_t epoch);
+  void ReleaseActor(uint64_t epoch);
+  bool RequestApplication(int32_t scene);
+  bool CommitApplication();
+  bool Phase(uint32_t phase);
+  bool OrdinaryUiIdle()const;
+  void BindUi(const GameInventory&,const GameNotebook&,const GameWordMemo&,
+              const GameDiary&,const GameSystemOptionFrontier&);
+  std::weak_ptr<const void> module_;
+  std::shared_ptr<const void> standalone_module_;
+  uint64_t last_module_epoch_=0;
+  const GameInventory* inventory_=nullptr;
+  const GameNotebook* notebook_=nullptr;
+  const GameWordMemo* wordmemo_=nullptr;
+  const GameDiary* diary_=nullptr;
+  const GameSystemOptionFrontier* options_=nullptr;
+  const GameSceneBgm* bgm_=nullptr;
+  std::weak_ptr<const void> bgm_lifetime_;
+  std::map<uint32_t,bool> resource_requests_; // only genuinely published bits known
   GameManagerSwitchSnapshot state_;
 };
 enum class GameContextActorPresence:uint32_t { Unknown, Absent, Present };
@@ -186,7 +238,8 @@ class GameActorRuntime final {
 public:
   GameFsStatus Initialize(uint32_t actor, PackageView selection,
                           GameTransition &transition,
-                         GameResourceSource *resources = nullptr,std::shared_ptr<GameBackgroundRuntime> background={});
+                         GameResourceSource *resources = nullptr,std::shared_ptr<GameBackgroundRuntime> background={},
+                         std::shared_ptr<GameManagerSwitchControl> ordinary_owners={});
   bool BackgroundModuleMatches(const std::shared_ptr<GameBackgroundRuntime>&)const;
   GameFsStatus BindCamera(int32_t mode);
   GameFsStatus BindCamera(script::Vm&,int32_t mode);
@@ -218,6 +271,9 @@ public:
   GameFsStatus RequestSameManager0(script::Vm&);
   GameFsStatus RequestSameManager0(int32_t target);
   GameFsStatus ConsumeSameManager0();
+  GameFsStatus BindInitialSceneBgmOwner(GameSceneBgm&);
+  // Source1B238 publication ONLY. Target4A8/4DC/adoption/wake still refuse.
+  GameFsStatus PublishPendingScene1B238(GameSceneBgm&);
   GameFsStatus ClearManager8();
   GameFsStatus ClearManager9();
   bool OwnersLive()const{return Live();}
@@ -250,7 +306,8 @@ private:
   };
   std::array<ModelSlot, 100> models_;
   GameActorRuntimeSnapshot state_;
-  GameManagerSwitchControl manager_switch_;
+  std::shared_ptr<GameManagerSwitchControl> manager_switch_;
+  bool ordinary_manager_borrow_=false;
   std::shared_ptr<const void> support_manager_;
   GameSupportRegistration support_registration_;
   struct ContextActorData;

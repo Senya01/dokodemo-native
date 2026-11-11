@@ -178,6 +178,7 @@ bool GameSceneBgm::CurrentChoice(int32_t& out)const{
 GameSceneBgmSnapshot GameSceneBgm::Snapshot()const{
     if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected)s.file=data_->files.Read(uint32_t(s.stored4BC));return s;
 }
+std::weak_ptr<const void> GameSceneBgm::Lifetime()const{return data_?data_->lifetime:std::weak_ptr<const void>{};}
 GameFsStatus GameSceneBgm::Close(){
     if(!data_)return {};data_->closing=true;auto status=data_->files.Close();if(!status)return status;data_.reset();return {};
 }

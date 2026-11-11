@@ -606,7 +606,19 @@ void OwnedInlineStringChecks(){
     }
 }
 void OutingComponents(){
+    static_assert(!std::is_copy_constructible<GameManagerSwitchControl>::value
+        &&!std::is_move_constructible<GameManagerSwitchControl>::value,"live source owner is not a copyable completion certificate");
     GameManagerSwitchControl owner;Check(!owner.Initialize(0)&&!owner.RequestSame0(1,0),"manager cold receipt unavailable");
+    auto parent=std::make_shared<uint64_t>(9);auto native=std::make_shared<GameManagerSwitchControl>();
+    Check(native->Initialize(9,parent)&&native->CurrentBorrow(native),"actual owned constructor/module registration");
+    const auto born=native->Snapshot();Check(born.loadman.current&&born.loadman.ui_current&&born.loadman.transition50==0
+        &&born.loadman.ui464==0&&born.loadman.module_epoch==9,"constructed current half50 is real native state, not UNKNOWN PSP RAM");
+    auto alias=std::shared_ptr<GameManagerSwitchControl>(native.get(),[](GameManagerSwitchControl*){});
+    auto foreign=std::make_shared<GameManagerSwitchControl>();Check(foreign->Initialize(10),"independent live constructor");
+    Check(!native->CurrentBorrow(alias)&&!native->CurrentBorrow(foreign),"same-address foreign control block and foreign instance refused");
+    parent.reset();Check(!native->CurrentBorrow(native)&&!native->Snapshot().loadman.current&&!native->BindScene0(9),
+        "expired parent refuses before any source request, not current zero/nil");
+    native->Retire();Check(!native->Initialize(9)&&native->Initialize(11)&&!native->BindScene0(9),"fresh epoch/replay qualification");
     Check(owner.Initialize(101)&&!owner.Snapshot().bound&&!owner.RequestSame0(101,0),"actual constructor does not supply selector binding");
     Check(!owner.BindScene0(102)&&owner.BindScene0(101),"genuine selector0 publication requires current owner");
     Check(!owner.RequestSame0(102,0)&&!owner.RequestSame0(101,1)&&!owner.Snapshot().pending,"foreign/non-equal domain refuses without effects");

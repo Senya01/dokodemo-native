@@ -264,6 +264,10 @@ bool GameContentBoot::InitializeBB8(GameArena &arena, GameVmBoot &manager) {
     }
     if (void *memory = arena.Allocate(sizeof(LoadMan), alignof(LoadMan))) {
         loadman_ = new (memory) LoadMan{};
+        loadman_->module=std::make_shared<uint64_t>(diary_io_owner_);
+        loadman_->control=std::make_shared<GameManagerSwitchControl>();
+        if(!loadman_->control->Initialize(diary_io_owner_,loadman_->module)){(void)Close();return false;}
+        loadman_->control->BindUi(inventory_,notebook_,wordmemo_,diary_,system_option_);
         constexpr char name[] = "/PSP_GAME/USRDIR/data/ksc/neko.ksc";
         static_assert(sizeof(name) == 35);
         std::copy_n(name, sizeof(name), loadman_->configured_script.begin());
@@ -404,6 +408,26 @@ bool GameContentBoot::ConfigureImportCallback5334C() {
     state_.import_callback_registered = false; // explicitly unavailable, not a successful service result
     return true;
 }
+bool GameContentBoot::RequestApplicationScene(int32_t scene){
+    if(!loadman_||!loadman_->control||!loadman_->control->RequestApplication(scene)){
+        state_.status={GameFsCode::Unavailable,0,"current LoadMan19AA8 request refused"};state_.blocked=true;return false;
+    }
+    const auto current=loadman_->control->Snapshot().loadman;
+    state_.next_scene=current.next24;state_.load_state=current.phase28;return true;
+}
+bool GameContentBoot::CommitApplicationScene(){
+    if(!loadman_||!loadman_->control||!loadman_->control->CommitApplication()){
+        state_.status={GameFsCode::Unavailable,0,"current LoadMan17B84 dispatch refused"};state_.blocked=true;return false;
+    }
+    state_.previous_scene=state_.current_scene;
+    state_.current_scene=loadman_->control->Snapshot().loadman.application20;return true;
+}
+bool GameContentBoot::SetLoadPhase(uint32_t phase){
+    if(!loadman_||!loadman_->control||!loadman_->control->Phase(phase)){
+        state_.status={GameFsCode::Unavailable,0,"current LoadMan dispatch phase refused"};state_.blocked=true;return false;
+    }
+    state_.load_state=loadman_->control->Snapshot().loadman.phase28;return true;
+}
 bool GameContentBoot::TickLoading(GameFilesystem &filesystem) {
     if (!state_.state_reset || !state_.import_callback_configured || !vsync_ || !loadman_ || state_.closed) {
         state_.status = {GameFsCode::Unavailable, 0, "cold loading owners not available"};
@@ -438,18 +462,16 @@ bool GameContentBoot::TickLoading(GameFilesystem &filesystem) {
         }
         switch (state_.load_state) {
         case 1: // 17B4C ->19AA8(next1,flag1)
-            state_.next_scene = 1;
-            state_.load_state = 2;
+            if(!RequestApplicationScene(1))return false;
             break;
         case 2: // 17B84's cold17BCC branch
-            state_.previous_scene = state_.current_scene;
-            state_.current_scene = state_.next_scene;
+            if(!CommitApplicationScene())return false;
             if (state_.current_scene == 2) {
-                state_.load_state = 3;
+                if(!SetLoadPhase(3))return false;
                 state_.scene_substate = 0;
             } else {
                 state_.requested_bits |= 1;
-                state_.load_state = 4;
+                if(!SetLoadPhase(4))return false;
             }
             break;
         case 3: // 17D90 scene2, no changed mount bits or old4F0 owner
@@ -459,24 +481,25 @@ bool GameContentBoot::TickLoading(GameFilesystem &filesystem) {
                 state_.scene_substate = 5;
             else if (state_.scene_substate == 5) {
                 state_.scene_substate = 0;
-                state_.load_state = 4;
+                if(!SetLoadPhase(4))return false;
             } else {
                 state_.status = {GameFsCode::Unavailable, 0, "unsupported scene2 transition substate"};
                 return false;
             }
             break;
         case 4: // 18160/251F0
-            if (state_.current_scene == 2)
-                state_.load_state = 6; // no requested/owned difference,18224
-            else {
+            if (state_.current_scene == 2) {
+                if(!SetLoadPhase(6))return false; // no requested/owned difference,18224
+            } else {
                 state_.owned_bits |= 1;
                 state_.mount_state = 1;
-                state_.load_state = 5;
+                if(!SetLoadPhase(5))return false;
             }
             break;
         case 5: // 182C0 waits for actual published package completion
-            if (state_.completed_bits & 1)
-                state_.load_state = 6;
+            if (state_.completed_bits & 1) {
+                if(!SetLoadPhase(6))return false;
+            }
             break;
         case 6: { // 18E84's first resource and real E364 consumer
             if (state_.current_scene == 2) {
@@ -675,8 +698,7 @@ GameFsStatus GameContentBoot::InitializeSceneResources(GameResourceSource &platf
         std::fill_n(reset_bytes_.begin() + base + 0x1830, 4, uint8_t(255));
     }
     // Cold flag460 is actually1:19AA8(next2,flag1). No KSC request occurs.
-    state_.next_scene = 2;
-    state_.load_state = 2;
+    if(!RequestApplicationScene(2))return state_.status;
     state_.scene_substate = 0;
     state_.blocked = false;
     state_.frontier_pc = 0x17B84;
@@ -815,18 +837,18 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
     if(state_.title_constructor_returned) {
         if(state_.title.scene3_completed)return TickActorDictionary(filesystem,graphics);
         if(state_.load_state==2) {
-            state_.previous_scene=state_.current_scene;state_.current_scene=state_.next_scene;
+            if(!CommitApplicationScene())return false;
             //Native phase0 folds the no-mount-delta transition into the
             //scene3 handler.193C4->1A7A0->1A89C returns pending whileCC!=3;
             //it does not release TITLE or produce a scene return.
-            state_.load_state=6;state_.scene_substate=0;
+            if(!SetLoadPhase(6))return false;state_.scene_substate=0;
         }
         state_.status=title_.TickAndDraw(graphics,scene_ui_.TitleTransitionOwner());
         state_.title=title_.Snapshot();state_.scene_ui=scene_ui_.Snapshot();
         state_.frontier_pc=state_.title.frontier_pc;
         state_.blocked=!bool(state_.status);
         if(state_.title.scene3_completed){
-            state_.next_scene=4;state_.load_state=2;
+            if(!RequestApplicationScene(4))return false;
             constexpr const char* dictionaries[]{"KSNEKO\\neko.dic","KSROBO\\robo.dic","KSUSAGI\\usagi.dic","KSINU\\inu.dic","KSKAERU\\kaeru.dic"};
             state_.next_resource=dictionaries[state_.title.selected_actor];
         }else if(state_.title.softkey_requested)state_.next_resource="Live native CP932/editor/profile;no KSC request";
@@ -968,7 +990,7 @@ bool GameContentBoot::TickInteractive(GameFilesystem &filesystem, GameStorage &s
             if(!status){state_.status=status;return false;}
             state_.title_constructor_returned=true;
             state_.registered_records+=2;
-            state_.next_scene=3;state_.load_state=2;
+            if(!RequestApplicationScene(3))return false;
             state_.next_resource = "Scene3 waits titleCC3; remaining TITLE menu/input/random restart consumers unsupported";
             state_.status = {};state_.blocked = false;state_.frontier_pc=0x30C34;
         } catch (const std::exception &e) {
@@ -1034,6 +1056,7 @@ bool GameContentBoot::Close() {
     font_.Close();
     directory_.Reset();
     package_.Reset(); // before filesystem leases
+    if(loadman_&&loadman_->control)loadman_->control->Retire();
     if (load_task_ != UINT32_MAX && !manager_->ReleaseTask(load_task_))
         return false;
     load_task_ = UINT32_MAX;
@@ -1428,12 +1451,16 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
 GameFsStatus GameContentBoot::InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource& resources,GameTransition& transition){
     if(actor_runtime_.Snapshot().live||state_.actor_script.started)return {GameFsCode::Unavailable,0,"fresh current primary/scene owners required; replacement is not adoption"};
     try{
-        state_.status=actor_runtime_.Initialize(actor,module,transition,&resources,background_runtime_);
+        if(!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
+            return {GameFsCode::Unavailable,0,"ordinary LoadMan module constructor/lifetime required"};
+        state_.status=actor_runtime_.Initialize(actor,module,transition,&resources,background_runtime_,loadman_->control);
         if(!state_.status)return state_.status;
         state_.frontier_pc=0x19DD4;
         auto scene_calendar=calendar_;
         if(scene_bgm_){
             state_.status=scene_bgm_->BeginInitial(background_runtime_,actor_runtime_);
+            if(!state_.status)return state_.status;
+            state_.status=actor_runtime_.BindInitialSceneBgmOwner(*scene_bgm_);
             if(!state_.status)return state_.status;
             scene_calendar=scene_bgm_->Snapshot().calendar;
         }
@@ -1460,8 +1487,28 @@ GameFsStatus GameContentBoot::TickSceneBgmFiles(){
     if(!status&&status.code==GameFsCode::Unavailable)return status;
     return {};
 }
+GameFsStatus GameContentBoot::TickPendingSceneRequest(){
+    if(state_.closed||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
+        return {GameFsCode::Unavailable,0,"current ordinary LoadMan module unavailable"};
+    auto pending=actor_runtime_.Snapshot().manager_switch;
+    if(pending.pending&&pending.requested18!=0){
+        if(!scene_bgm_)return {GameFsCode::Unavailable,0,"ordinary pending request has no current BGM owner"};
+        auto status=actor_runtime_.PublishPendingScene1B238(*scene_bgm_);if(!status)return status;
+        pending=loadman_->control->Snapshot();
+    }
+    if(pending.publication_phase&&pending.loadman.rendered_selector4DC!=pending.current14){
+        bool requested=false;
+        if(pending.publication_phase!=3||!loadman_->control->ResourceRequest(pending.new_resource,requested)||!requested)
+            return {GameFsCode::Unavailable,0,"partial source resource request not an adopted scene"};
+        return {GameFsCode::Unavailable,0,"source1B238 published; current133B7/13402 descriptor-to-target adoption command not implemented"};
+    }
+    return {};
+}
 bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
     const auto bgm_io=TickSceneBgmFiles();if(!bgm_io){state_.status=bgm_io;state_.status.detail="Native BGM worker: "+bgm_io.detail;state_.frontier_pc=0;state_.blocked=true;return false;}
+    const auto transition=TickPendingSceneRequest();
+    if(!transition){state_.status=transition;state_.frontier_pc=0;state_.blocked=true;
+        state_.actor_script.runtime=actor_runtime_.Snapshot();return false;}
     if(!scene_ui_.TickMoving()){state_.status={GameFsCode::Unavailable,0,"current moving UI owner retired"};return false;}
     if(state_.actor_dictionary_requested){
         if(!state_.actor_script.started)return false;
@@ -1618,7 +1665,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
     //Named synchronous native LoadMan adapter: source1A89C requests scene4,
     //25438(actor+3) queues its mount;1C3C reads the real selected BPM before
     //182F4->1AF20 can perform2E7C. No bootstrap prefix masquerades as a body.
-    state_.previous_scene=3;state_.current_scene=state_.next_scene=4;
+    if(!CommitApplicationScene())return false;
     state_.requested_bits=(state_.requested_bits&~(1u<<11))|(1u<<(actor+3));
     state_.status=filesystem.LoadMember(std::string(mounts[actor])+".BPM",actor_package_);
     if(!state_.status){state_.blocked=true;return false;}
@@ -1632,7 +1679,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         for(uint32_t i=0;i<(std::min)(16u,uint32_t(bytes));++i)state_.actor_dictionary_prefix[i]=actor_dictionary_.ReadU8(i);
         state_.actor_dictionary_ready=state_.actor_dictionary_live=true;++state_.opened_resources;
         state_.owned_bits=(state_.owned_bits&~(1u<<11))|(1u<<(actor+3));state_.completed_bits=state_.owned_bits;
-        state_.load_state=6;
+        if(!SetLoadPhase(6))return false;
         constexpr const char* scripts[]{"NEKO.KSC","ROBO.KSC","USAGI.KSC","INU.KSC","KAERU.KSC"};
         state_.next_resource=std::string(mounts[actor])+"\\"+scripts[actor];
         const auto script_image=actor_directory_.Open(scripts[actor]);

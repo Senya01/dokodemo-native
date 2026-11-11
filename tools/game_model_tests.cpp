@@ -11,6 +11,13 @@
 #include <stdexcept>
 namespace dokodemo {
 struct StartupRuntimeTestAccess {
+    static std::array<int32_t,3> Application(recovered::GameContentBoot& content){return {{content.state_.current_scene,content.state_.previous_scene,content.state_.next_scene}};}
+    static bool RequestApplication(recovered::GameContentBoot& content,int32_t scene){return content.RequestApplicationScene(scene);}
+    static bool CommitApplication(recovered::GameContentBoot& content){return content.CommitApplicationScene();}
+    static recovered::GameActorRuntime& Actor(recovered::GameContentBoot& content){return content.actor_runtime_;}
+    static recovered::GameInventory& Inventory(recovered::GameContentBoot& content){return content.inventory_;}
+    static recovered::GameSceneBgm& Bgm(recovered::GameContentBoot& content){return *content.scene_bgm_;}
+    static std::shared_ptr<recovered::GameManagerSwitchControl> Manager(recovered::GameContentBoot& content){return content.loadman_->control;}
     static bool ActorTick(recovered::GameContentBoot& content,recovered::GameFilesystem& fs,recovered::GameGraphics& graphics){return content.TickActorDictionary(fs,graphics);}
 };
 }
@@ -1520,26 +1527,115 @@ void CameraTargetRender(){
     Check(runtime.Snapshot().camera_ratio==old.camera_ratio&&runtime.Snapshot().camera_completions==old.camera_completions,"7980 is not an interpolation/job completion");
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
 }
-void OrdinaryContentDataTests(){
+void OrdinaryContentDataTests(bool failed_clock=false){
     const auto bytes=SyntheticMainData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data,foreign;auto data_io=std::make_shared<BackgroundFileState>(),foreign_io=std::make_shared<BackgroundFileState>();
     Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash))&&bool(foreign.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash)),"explicit synthetic DATA native owners");
     std::vector<uint8_t> backing(4*1024*1024);GameArena arena;GameVmBoot vm;Check(arena.Initialize(backing.data(),uint32_t(backing.size()))&&vm.Initialize74EF4(arena)&&vm.InitializeManager93404(),"actual Content module parents");
     auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,vm)&&content->Reset24994(),"ordinary Content owning constructors");
     RngNativeOwner rng;rng.ImportCurrentState64(81,3,"synthetic ordinary Content data lineage");content->SetTitleRng(rng);content->SetCalendar({{0,0,0,12,3,5,2026}});
-    Check(bool(content->SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};})),"current actual runtime/settings in synthetic clock domain");
+    bool invalid_clock=false;
+    Check(bool(content->SetBackgroundRuntime([&]{return std::array<uint32_t,7>{{0,0,0,invalid_clock?25u:12u,3,5,2026}};})),"current actual runtime/settings in synthetic clock domain");
     auto bgm_io=std::make_shared<BackgroundFileState>();unsigned factories=0;
     Check(!content->BindInitialScenePlacement(data)&&bool(content->BindInitialSceneBgm(data.Lists(),data.Gains(),data.Root(),[&](uint32_t i){return data.Name(i);},[&](const std::string&,std::unique_ptr<GameFileSource>& file)->GameFsStatus{++factories;file=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,7),bgm_io);return {};}))
         &&!content->BindInitialScenePlacement(foreign)&&bool(content->BindInitialScenePlacement(data))&&!content->SceneBgm().selected,"typed source DATA placement binds only SAME BGM data and BEFORE source selection/actor");
     ActorSource source;source.scene_assets=true;source.camera_triangle=true;GameTransition transition;Check(transition.Initialize({{0,0}}),"current Content transition");auto module=std::make_shared<Lease>(std::vector<uint8_t>(16));
     Check(bool(content->InitializeActorSceneOwners(0,PackageStorage::Attach(module,16),source,transition))&&factories==1&&content->SceneBgm().selected
         &&content->Snapshot().actor_script.runtime.source_placement_bound&&!content->BindInitialScenePlacement(data),"actual same production initialization body consumes data/initialBGM/placement/model before actor context");
+    const auto control=dokodemo::StartupRuntimeTestAccess::Manager(*content);
+    Check(dokodemo::StartupRuntimeTestAccess::RequestApplication(*content,3)
+        &&dokodemo::StartupRuntimeTestAccess::CommitApplication(*content)
+        &&!control->Snapshot().loadman.ui_current,
+        "real native application3 dispatcher has no ordinary UI admission");
+    Check(dokodemo::StartupRuntimeTestAccess::RequestApplication(*content,4)
+        &&dokodemo::StartupRuntimeTestAccess::CommitApplication(*content)
+        &&dokodemo::StartupRuntimeTestAccess::Application(*content)==std::array<int32_t,3>{{4,3,4}}
+        &&control->Snapshot().loadman.application20==4&&control->Snapshot().loadman.ui_current,
+        "real application3->4 request/commit uses SAME LoadMan history; no manually filled50/464");
+    auto& actor=dokodemo::StartupRuntimeTestAccess::Actor(*content);
+    const auto initialized=control->Snapshot();
+    Check(initialized.bound&&initialized.epoch==actor.Snapshot().owner_epoch&&initialized.loadman.current
+        &&initialized.loadman.module_epoch==actor.Snapshot().manager_switch.loadman.module_epoch
+        &&initialized.loadman.transition50==0&&initialized.loadman.ui464==0,
+        "Content constructor and actual actor/request path share ONE live owner, not a copied certificate");
+    auto alias=std::shared_ptr<GameManagerSwitchControl>(control.get(),[](GameManagerSwitchControl*){});
+    GameActorRuntime invalid;Check(!invalid.Initialize(0,PackageStorage::Attach(module,16),transition,&source,content->BackgroundRuntime().lock(),alias)
+        &&!control->CurrentBorrow(alias)&&control->Snapshot().requests==0,"foreign control-block borrow refuses before constructor/resource effects");
+    GameInventory foreign_inventory;Check(bool(foreign_inventory.Request({},true)),"foreign real synthetic UI request");
+    Check(control->Snapshot().loadman.ui464==0,"unregistered foreign UI cannot replace current owner by shape");
+    auto& inventory=dokodemo::StartupRuntimeTestAccess::Inventory(*content);
+    Check(bool(inventory.Request({},true))&&control->Snapshot().loadman.ui464==0x14
+        &&control->Snapshot().loadman.ui_generation==inventory.Snapshot().generation
+        &&!actor.RequestSameManager0(0)&&!control->Snapshot().pending,
+        "real registered current UI request blocks ordinary scene admission, no prefilled selector");
+    inventory.Close();foreign_inventory.Close();Check(control->Snapshot().loadman.ui_current&&control->Snapshot().loadman.ui464==0,
+        "actual owned cleanup retires the UI reference without changing half50");
+    std::vector<uint8_t> test_module(31);Word(test_module,0,0x0043534B);Word(test_module,4,0x20030204);
+    Word(test_module,12,3);test_module[28]=0x30;test_module[30]=0x38;
+    dokodemo::script::Program program;dokodemo::script::Diagnostic error;
+    Check(program.load_test_fixture(test_module,error),"synthetic current-context component program, no original bytecode");
+    dokodemo::script::Vm current(program);current.start();Check(bool(actor.BindScriptContextActor1C0FC(current)),"actual current context captures ordinary actor5 owner");
+    const auto prior=current.current_witness();
+    Check(bool(actor.RequestSameManager0(current))&&control->Snapshot().pending
+        &&control->Snapshot().requests==1&&control->Snapshot().current14==0&&control->Snapshot().requested18==0
+        &&control->Snapshot().loadman.transition50==0&&bool(actor.ConsumeSameManager0()),
+        "real context request/actor effects ->SAME current manager ->equal1B238; half50/464 unchanged by source");
+    Check(!actor.ConsumeSameManager0()&&bool(actor.RequestPendingScene12(current))&&control->Snapshot().requested18==12
+        &&control->Snapshot().current14==0&&control->Snapshot().loadman.transition50==0
+        &&!actor.RequestPendingScene12(current)&&!actor.ConsumeSameManager0()
+        &&current.current_witness().current_pc==prior.current_pc&&current.context_enabled(),
+        "actual nonzero request prefix preserves rendered/current scene, refuses replay/adoption-as-cancel, never wakes VM");
+    bool unknown_bit=true;Check(!control->ResourceRequest(31,unknown_bit)&&unknown_bit,
+        "unpublished resource bits remain UNKNOWN, not host-zero source authority");
+    auto& actual_bgm=dokodemo::StartupRuntimeTestAccess::Bgm(*content);GameSceneBgm unrelated_bgm;
+    const auto seed_before_publication=rng.CurrentSeed64();const auto cache_before=actual_bgm.Snapshot().cache_revision;
+    Check(!actor.PublishPendingScene1B238(unrelated_bgm)&&control->Snapshot().publication_phase==0
+        &&!control->Snapshot().old_bit_known&&actual_bgm.Snapshot().cache_revision==cache_before,
+        "foreign/missing BGM refuses before old clear/current clock/effects");
+    GameGraphics kept;Check(kept.Initialize({})&&bool(actor.BindCamera(1))&&bool(actor.Draw(kept)),"actual old owned synthetic scene before pending publication");
+    GameGraphicsFrame old_frame,new_frame;Check(kept.CopyFront(old_frame),"old owned frame");
+    if(failed_clock){
+        invalid_clock=true;const auto failed=content->TickPendingSceneRequest();const auto partial=control->Snapshot();
+        Check(!failed&&partial.publication_phase==1&&partial.old_bit_known&&!partial.old_bit
+            &&!partial.new_bit_known&&partial.current14==0&&partial.pending&&partial.requested18==12
+            &&partial.loadman.current_variant4A8==1&&partial.loadman.rendered_selector4DC==0
+            &&actual_bgm.Snapshot().cache_revision==cache_before&&rng.CurrentSeed64()==seed_before_publication,
+            "real clock failure occurs AFTER old clear; preserves pending/current/rendered/unknown-new and RNG");
+        invalid_clock=false;Check(!content->TickPendingSceneRequest()&&control->Snapshot().publication_phase==1
+            &&actual_bgm.Snapshot().cache_revision==cache_before&&bool(actor.Draw(kept))&&kept.CopyFront(new_frame)
+            &&new_frame.pixels==old_frame.pixels,"partial operation is not silently replayed/completed or old render discarded");
+        kept.Close();actor.Close();Check(content->Close()&&bool(data.Close())&&bool(foreign.Close())&&vm.Close()
+            &&!control->Snapshot().loadman.current,"partial owner/requests/resources cleanly retire");return;
+    }
+    const auto result=content->TickPendingSceneRequest();const auto published=control->Snapshot();
+    Check(!result&&result.detail.find("current133B7/13402")!=std::string::npos&&published.publication_phase==3
+        &&published.old_resource==31&&published.new_resource==66+published.loadman.staged_variant4AC
+        &&published.old_bit_known&&!published.old_bit&&published.new_bit_known&&published.new_bit
+        &&published.current14==12&&!published.pending&&published.requested18==12&&published.consumed==2
+        &&published.loadman.current_variant4A8==1&&published.loadman.rendered_selector4DC==0&&published.loadman.rendered_current
+        &&published.loadman.cached_period4B4==actual_bgm.Snapshot().period4B4
+        &&actual_bgm.Snapshot().cache_revision==cache_before+1&&rng.CurrentSeed64()==seed_before_publication
+        &&factories==1&&current.current_witness().current_pc==prior.current_pc&&current.context_enabled(),
+        "real old-clear/fresh-cache/new-set/14/1C/18 publication, no target RNG/I-O/adoption or VM wake");
+    Check(published.publication_order==std::array<uint32_t,6>{{0x1B284,0x1B290,0x1B29C,0x1B2A8,0x1B2AC,0x1B2B0}}
+        &&bool(actor.Draw(kept))&&kept.CopyFront(new_frame)&&old_frame.pixels==new_frame.pixels,
+        "source publication order and old rendered owners/pixels survive incomplete replacement");
+    const auto revision=actual_bgm.Snapshot().cache_revision;
+    Check(!content->TickPendingSceneRequest()&&!actor.PublishPendingScene1B238(actual_bgm)
+        &&actual_bgm.Snapshot().cache_revision==revision&&control->Snapshot().publication_phase==3,
+        "incomplete target never replays clock/stores or returns successful completion");kept.Close();
     const auto seed=rng.CurrentSeed64();bgm_io->missing=true;Check(bool(content->TickSceneBgmFiles())&&content->SceneBgm().file.state==1,"genuine later I/O failure stays pending and does not block source scene");bgm_io->missing=false;
     Check(bool(content->TickSceneBgmFiles())&&bool(content->TickSceneBgmFiles())&&content->SceneBgm().file.state==5&&content->SceneBgm().file.bytes==16
         &&content->SceneBgm().file.bank5C==-1&&rng.CurrentSeed64()==seed,"ordinary worker hook completes actual file bytes without RNG/playback/ready substitution");
     content->BackgroundRuntime().lock()->Close();GameFilesystem empty_fs;GameGraphics empty_graphics;
     Check(!content->TickSceneBgmFiles()&&!dokodemo::StartupRuntimeTestAccess::ActorTick(*content,empty_fs,empty_graphics)&&content->Snapshot().blocked
         &&content->Snapshot().frontier_pc==0&&content->Snapshot().status.detail.find("Native BGM worker:")==0,"unknown/retired worker is explicit native refusal, not I/O failure or invented source opcode PC");
+    actor.Close();Check(control->Snapshot().live&&!control->Snapshot().bound&&!control->Snapshot().pending
+        &&control->Snapshot().current14==12&&control->Snapshot().publication_phase==3&&!control->Snapshot().loadman.rendered_current
+        &&control->Snapshot().loadman.current&&control->Snapshot().loadman.transition50==0,
+        "actor retirement preserves module/source request history, no reconstruction/default reset");
     Check(content->Close()&&!bgm_io->live&&bool(data.Close())&&bool(foreign.Close())&&vm.Close(),"Content/BGM retire before user DATA/module");
+    Check(!control->CurrentBorrow(control)&&!control->Snapshot().loadman.current&&!control->RequestSame0(initialized.epoch,0),
+        "held borrower cannot consume after real Content/task/module retirement");
 }
 void PlacementLiveTests(){
     auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));ActorSource source;source.scene_assets=true;source.camera_triangle=true;
@@ -1979,6 +2075,7 @@ int main() {
         CameraTargetRender();
         PlacementLiveTests();
         OrdinaryContentDataTests();
+        OrdinaryContentDataTests(true);
         PositionRegionTests();
         TitleLifetimeAndFade();
         ArrivalBranchTests();

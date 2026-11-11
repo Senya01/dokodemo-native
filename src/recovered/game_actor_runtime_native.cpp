@@ -1,4 +1,9 @@
 #include "game_actor_runtime_native.h"
+#include "game_inventory_native.h"
+#include "game_notebook_native.h"
+#include "game_wordmemo_native.h"
+#include "game_diary_native.h"
+#include "game_system_option_native.h"
 #include "../script_vm.h"
 #include "game_model_resources_native.h"
 #include <algorithm>
@@ -144,28 +149,104 @@ int32_t ClassifySceneClock7398(const std::array<int16_t,12>& endpoints,
   }
   return 4;
 }
-bool GameManagerSwitchControl::Initialize(uint64_t epoch){
-  if(!epoch||state_.live)return false;
-  state_={};state_.live=true;state_.epoch=epoch;return true;
+bool GameManagerSwitchControl::Initialize(uint64_t epoch,std::shared_ptr<const void> module){
+  if(!epoch||epoch<=last_module_epoch_||state_.live)return false;
+  state_={};resource_requests_.clear();state_.live=true;state_.epoch=epoch;last_module_epoch_=epoch;
+  // Execute177F8, not an adoption-time default or a PSP RAM observation.
+  state_.loadman.module_epoch=epoch;state_.loadman.transition50=0;state_.loadman.ui464=0;
+  state_.loadman.application20=state_.loadman.next24=-1;state_.loadman.phase28=1;
+  state_.loadman.current_variant4A8=state_.loadman.staged_variant4AC=1;
+  state_.loadman.cached_period4B4=2;state_.loadman.stored_bgm4BC=0;
+  state_.loadman.transition50_writer=0x17938;
+  state_.loadman.ui464_writer=0x17908;
+  if(!module){standalone_module_=std::make_shared<uint64_t>(epoch);module=standalone_module_;}
+  module_=module;return true;
+}
+bool GameManagerSwitchControl::Current()const{return state_.live&&!module_.expired();}
+bool GameManagerSwitchControl::CurrentBorrow(const std::shared_ptr<GameManagerSwitchControl>& borrow)const{
+  const auto self=weak_from_this().lock();return Current()&&self&&borrow&&self.get()==borrow.get()
+    &&!self.owner_before(borrow)&&!borrow.owner_before(self);
+}
+void GameManagerSwitchControl::BindUi(const GameInventory& inventory,const GameNotebook& notebook,
+    const GameWordMemo& wordmemo,const GameDiary& diary,const GameSystemOptionFrontier& options){
+  inventory_=&inventory;notebook_=&notebook;wordmemo_=&wordmemo;diary_=&diary;options_=&options;
+}
+GameManagerSwitchSnapshot GameManagerSwitchControl::Snapshot()const{
+  auto out=state_;out.live=Current();out.loadman.current=out.live;out.loadman.ui_current=out.live;
+  out.loadman.rendered_current=out.live&&state_.bound&&out.loadman.rendered_selector4DC>=0;
+  out.old_bit_known=ResourceRequest(out.old_resource,out.old_bit);
+  out.new_bit_known=ResourceRequest(out.new_resource,out.new_bit);
+  if(!out.live)return out; // never dereference Content members after parent retirement
+  const bool any=inventory_||notebook_||wordmemo_||diary_||options_;
+  if(any&&!(inventory_&&notebook_&&wordmemo_&&diary_&&options_)){out.loadman.ui_current=false;return out;}
+  // The actual native owners are registered by Content, never supplied by a
+  // completion certificate/provider. Native projection preserves their leases.
+  unsigned active=0;
+  const auto select=[&](uint32_t selector,uint64_t generation,bool pending){
+    if(!pending)return;++active;out.loadman.ui464=selector;out.loadman.ui_generation=generation;
+    out.loadman.ui464_writer=0; // typed Windows publication, not a guessed PSP store PC
+  };
+  if(any){
+    const auto i=inventory_->Snapshot();select(0x14,i.generation,i.phase>=1&&i.phase<=6); // source14(hex), legacy inventory loader464 uses native14
+    const auto n=notebook_->Snapshot();select(9,n.generation,n.phase>=1&&n.phase<=6);
+    const auto w=wordmemo_->Snapshot();select(8,w.generation,w.phase>=1&&w.phase<=6);
+    const auto d=diary_->Snapshot();select(12,d.generation,d.phase>=1&&d.phase<=6);
+    const auto o=options_->Snapshot();select(10,o.generation,o.phase>=1&&o.phase<=6);
+  }
+  // Title has its own earlier current-UI domain; no ordinary travel borrow
+  // is issued during it. Real Content handoff, not a forced UI reset, exits it.
+  if(active>1||state_.loadman.application20==3)out.loadman.ui_current=false;
+  return out;
+}
+bool GameManagerSwitchControl::ResourceRequest(uint32_t index,bool& value)const{
+  if(!Current())return false;const auto it=resource_requests_.find(index);
+  if(it==resource_requests_.end())return false;value=it->second;return true;
+}
+bool GameManagerSwitchControl::OrdinaryUiIdle()const{
+  const auto s=Snapshot();return s.loadman.current&&s.loadman.ui_current
+    &&s.loadman.transition50==0&&s.loadman.ui464==0;
+}
+bool GameManagerSwitchControl::BindActor(uint64_t epoch){
+  if(!Current()||!epoch||state_.bound||state_.pending)return false;state_.epoch=epoch;return true;
+}
+void GameManagerSwitchControl::ReleaseActor(uint64_t epoch){
+  if(Current()&&state_.epoch==epoch)state_.bound=false; // preserve pending/source history
+}
+bool GameManagerSwitchControl::RequestApplication(int32_t scene){
+  if(!Current()||scene<1||scene>4)return false;
+  state_.loadman.next24=scene;state_.loadman.phase28=2;++state_.loadman.dispatches;return true; //19AA8
+}
+bool GameManagerSwitchControl::CommitApplication(){
+  if(!Current()||state_.loadman.phase28!=2||state_.loadman.next24<1||state_.loadman.next24>4)return false;
+  state_.loadman.application20=state_.loadman.next24;++state_.loadman.dispatches;return true; //17B84
+}
+bool GameManagerSwitchControl::Phase(uint32_t phase){
+  if(!Current()||phase<1||phase>6)return false;
+  state_.loadman.phase28=phase;++state_.loadman.dispatches;return true;
 }
 bool GameManagerSwitchControl::BindScene0(uint64_t epoch){
-  if(!state_.live||epoch!=state_.epoch||state_.bound||state_.pending)return false;
-  state_.current14=state_.requested18=0;state_.bound=true;return true;
+  if(!Current()||epoch!=state_.epoch||state_.bound||state_.pending)return false;
+  state_.current14=state_.requested18=0;state_.bound=true;state_.loadman.rendered_selector4DC=0;return true;
 }
 bool GameManagerSwitchControl::RequestSame0(uint64_t epoch,int32_t target){
-  if(!state_.live||!state_.bound||epoch!=state_.epoch||target!=0||state_.current14!=0)return false;
+  if(!Current()||!state_.bound||epoch!=state_.epoch||target!=0||state_.current14!=0||state_.pending||!OrdinaryUiIdle())return false;
   state_.pending=true;state_.requested18=target;
   state_.last_request_store_pcs={{0x1C2E4,0x1C2EC}};++state_.requests;return true;
 }
 bool GameManagerSwitchControl::RequestPending12(uint64_t epoch){
-  if(!state_.live||!state_.bound||state_.pending||epoch!=state_.epoch||state_.current14!=0)return false;
+  if(!Current()||!state_.bound||state_.pending||epoch!=state_.epoch||state_.current14!=0||!OrdinaryUiIdle())return false;
   state_.pending=true;state_.requested18=12;
   state_.last_request_store_pcs={{0x1C2E4,0x1C2EC}};++state_.requests;return true;
 }
 bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
-  if(!state_.live||!state_.bound||epoch!=state_.epoch||!state_.pending||state_.current14!=0||state_.requested18!=0)return false;
+  if(!Current()||!state_.bound||epoch!=state_.epoch||!state_.pending||state_.current14!=0||state_.requested18!=0||!OrdinaryUiIdle())return false;
   state_.pending=false;++state_.consumed;return true; //1B2C8/CC, no resource calls
 }
+void GameManagerSwitchControl::Retire(){
+  state_.live=state_.bound=state_.pending=false;module_.reset();standalone_module_.reset();
+  inventory_=nullptr;notebook_=nullptr;wordmemo_=nullptr;diary_=nullptr;options_=nullptr;bgm_=nullptr;bgm_lifetime_.reset();
+}
+
 namespace {
 std::string ContextActorPath(const PackageView& input,bool empty_allowed){
   std::string out;const auto n=input.Describe().size;
@@ -223,6 +304,7 @@ struct GameActorRuntime::ContextActorData {
 };
 GameActorRuntimeSnapshot GameActorRuntime::Snapshot()const{
   auto result=state_;
+  if(manager_switch_)result.manager_switch=manager_switch_->Snapshot();
   result.camera_target_current=ReadCameraTarget(result.camera_target_position);
   result.camera_target_epoch=result.camera_target_current?state_.owner_epoch:0;
   if(context_actor_){result.context_actor=context_actor_->state;result.context_actor.current=Live()&&context_actor_->Current();}
@@ -292,9 +374,9 @@ GameFsStatus GameActorRuntime::RequestContextScene(script::Vm& vm,int32_t select
     for(const auto& bound:context_actors_)if(bound.context.lock()==ctx&&bound.run==w.run_id&&bound.module==w.code_sha256){actor=bound.actor.lock();nil=bound.captured_nil;break;}
     // Source reads node24 BEFORE pending stores. Unknown/retired is not nil.
     if(!nil&&(!actor||!actor->Current()))throw std::runtime_error("context node24 actor association unknown/retired");
-    if(selector==0){if(!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.RequestSame0(state_.owner_epoch,0))throw std::runtime_error("same scene0 request owner/domain");}
-    else if(selector!=12||!manager_switch_.RequestPending12(state_.owner_epoch))throw std::runtime_error("pending scene12 request owner/replay/domain");
-    state_.manager_switch=manager_switch_.Snapshot();
+    if(selector==0){if(!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_->RequestSame0(state_.owner_epoch,0))throw std::runtime_error("same scene0 request owner/domain");}
+    else if(selector!=12||!manager_switch_->RequestPending12(state_.owner_epoch))throw std::runtime_error("pending scene12 request owner/replay/domain");
+    state_.manager_switch=manager_switch_->Snapshot();
     if(!nil){
       actor->Move(ContextActorFloat(actor->inputs[2],2),ContextActorFloat(actor->inputs[2],3));
       if(!actor->Current())throw std::runtime_error("context actor changed after logical stores");
@@ -305,13 +387,22 @@ GameFsStatus GameActorRuntime::RequestContextScene(script::Vm& vm,int32_t select
 }
 GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameTransition &transition,
-                                          GameResourceSource *resources,std::shared_ptr<GameBackgroundRuntime> background) {
+                                          GameResourceSource *resources,std::shared_ptr<GameBackgroundRuntime> background,
+                                          std::shared_ptr<GameManagerSwitchControl> ordinary_owners) {
   Close();
   state_ = {};
   state_.owner_epoch=next_room_owner_epoch.fetch_add(1,std::memory_order_relaxed)+1;
   try {
-    if(!manager_switch_.Initialize(state_.owner_epoch))throw std::runtime_error("Manager constructor owner unavailable");
-    state_.manager_switch=manager_switch_.Snapshot();
+    ordinary_manager_borrow_=bool(ordinary_owners);
+    if(ordinary_owners){
+      if(!ordinary_owners->CurrentBorrow(ordinary_owners)||!ordinary_owners->BindActor(state_.owner_epoch))
+        throw std::runtime_error("Current Content LoadMan borrow unavailable/foreign/replayed");
+      manager_switch_=std::move(ordinary_owners);
+    }else{
+      manager_switch_=std::make_shared<GameManagerSwitchControl>();
+      if(!manager_switch_->Initialize(state_.owner_epoch))throw std::runtime_error("Manager constructor owner unavailable");
+    }
+    state_.manager_switch=manager_switch_->Snapshot();
     support_manager_=std::make_shared<uint64_t>(state_.owner_epoch);
     const auto support_init=support_registration_.Initialize(support_manager_,state_.owner_epoch);if(!support_init)throw std::runtime_error(support_init.detail);
     if (actor >= 5 || !selection.Describe().readable ||
@@ -336,7 +427,7 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
   }
 }
 bool GameActorRuntime::Live() const {
-  if (!state_.live || !transition_ || !transition_->Snapshot().live)
+  if (!state_.live || !transition_ || !transition_->Snapshot().live || !manager_switch_ || !manager_switch_->Current() || manager_switch_->state_.epoch!=state_.owner_epoch)
     return false;
   try {
     return selection_.Describe().readable;
@@ -419,8 +510,8 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
     state_.scene_period_table52=season;
   }
   season_controls_=std::move(seasons);light_on_control_=std::move(light_on);
-  if(!manager_switch_.BindScene0(state_.owner_epoch))return {GameFsCode::Unavailable,0,"Source scene0 manager binding refused"};
-  state_.manager_switch=manager_switch_.Snapshot();
+  if(!manager_switch_->BindScene0(state_.owner_epoch))return {GameFsCode::Unavailable,0,"Source scene0 manager binding refused"};
+  state_.manager_switch=manager_switch_->Snapshot();
   state_.manager_scene14=0; // actual17C84 ->1839C/1B2DC,not a BSS premise
   state_.scene_clock_ready=true;
   state_.light_on_control_present=light_on_control_.present;
@@ -506,7 +597,7 @@ GameFsStatus GameActorRuntime::ApplySceneLightToggle(int32_t value) {
   ++state_.light_toggle_calls;return {};
 }
 GameFsStatus GameActorRuntime::QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result) {
-  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready||state_.manager_scene14!=0)
+  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready||manager_switch_->Snapshot().loadman.rendered_selector4DC!=0)
     return {GameFsCode::Unavailable,0,"GAME36 requires live selected scene0 manager/clock owner"};
   try {scene_calendar_[3]=hour;scene_calendar_[2]=minute;result=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),hour,minute);return {};}
   catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
@@ -635,14 +726,62 @@ GameFsStatus GameActorRuntime::RegisterSupportData16(script::Vm& vm,const script
   const auto status=support_registration_.Register16(vm,ref);state_.support_registration=support_registration_.Snapshot();return status;
 }
 GameFsStatus GameActorRuntime::RequestSameManager0(int32_t target){
-  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.RequestSame0(state_.owner_epoch,target))
+  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_->RequestSame0(state_.owner_epoch,target))
     return {GameFsCode::Unavailable,0,"GAME12 outside current same-selector0 owner"};
-  state_.manager_switch=manager_switch_.Snapshot();return {};
+  state_.manager_switch=manager_switch_->Snapshot();return {};
 }
 GameFsStatus GameActorRuntime::ConsumeSameManager0(){
-  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.ConsumeSame0(state_.owner_epoch))
+  if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_->ConsumeSame0(state_.owner_epoch))
     return {GameFsCode::Unavailable,0,"1B238 pending equal-selector0 unavailable"};
-  state_.manager_switch=manager_switch_.Snapshot();return {};
+  state_.manager_switch=manager_switch_->Snapshot();return {};
+}
+GameFsStatus GameActorRuntime::BindInitialSceneBgmOwner(GameSceneBgm& bgm){
+  if(!Live()||manager_switch_->bgm_||manager_switch_->state_.bound)
+    return {GameFsCode::Unavailable,0,"initial LoadMan/BGM constructor binding refused"};
+  const auto current=bgm.Snapshot();const auto life=bgm.Lifetime().lock();
+  if(!life||!current.current||!current.selected||!current.requested||current.actor_epoch!=state_.owner_epoch)
+    return {GameFsCode::Unavailable,0,"actual initial19DD4 current BGM selection required"};
+  manager_switch_->bgm_=&bgm;manager_switch_->bgm_lifetime_=life;
+  manager_switch_->state_.loadman.cached_period4B4=current.period4B4;
+  manager_switch_->state_.loadman.stored_bgm4BC=current.stored4BC;
+  return {}; // current4A8 remains the executed177F8 value until adoption
+}
+GameFsStatus GameActorRuntime::PublishPendingScene1B238(GameSceneBgm& bgm){
+  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready)
+    return {GameFsCode::Unavailable,0,"1B238 current old rendered scene required"};
+  const auto held_owner=manager_switch_;auto& owner=*held_owner;auto& s=owner.state_;
+  const auto life=owner.bgm_lifetime_.lock(),given=bgm.Lifetime().lock();
+  if(!owner.OrdinaryUiIdle()||!s.bound||s.epoch!=state_.owner_epoch||!s.pending||s.current14!=0||s.requested18!=12
+      ||s.publication_phase||owner.bgm_!=&bgm||!life||!given||life!=given||life.owner_before(given)||given.owner_before(life)
+      ||s.loadman.rendered_selector4DC!=0||s.loadman.current_variant4A8>2)
+    return {GameFsCode::Unavailable,0,"1B238 actual request/LoadMan/BGM/UI lineage or phase unavailable"};
+  const auto before=bgm.Snapshot();
+  if(!before.current||before.actor_epoch!=state_.owner_epoch||before.stored4BC!=s.loadman.stored_bgm4BC)
+    return {GameFsCode::Unavailable,0,"1B238 current initial BGM data owner drift"};
+  // WindowsTypedResourceRequests owns independently known bits; all other
+  // source bits remain UNKNOWN. This is not a zero-filled PSP/profile byte map.
+  // First old1B114(flag0) uses actual current4A8, WITHOUT a clock refresh.
+  s.old_resource=30+3*uint32_t(s.current14)+s.loadman.current_variant4A8;
+  owner.resource_requests_[s.old_resource]=false;s.publication_phase=1;s.publication_order[0]=0x1B284;
+  const auto runtime=background_module_.lock();auto status=bgm.RefreshCachedPeriod(runtime,*this);
+  if(!status)return status; // retain old-clear and pending source state on failure
+  const auto staged=bgm.Snapshot();
+  if(!staged.current||staged.actor_epoch!=state_.owner_epoch||!staged.cache_refreshed||staged.variant4AC>2)
+    return {GameFsCode::Unavailable,0,"1B114 actual refreshed cache changed"};
+  s.loadman.cached_period4B4=staged.period4B4;s.loadman.staged_variant4AC=staged.variant4AC;
+  s.publication_phase=2;s.publication_order[1]=0x1B290;
+  if(!owner.OrdinaryUiIdle()||s.epoch!=state_.owner_epoch||!s.pending||s.current14!=0||s.requested18!=12
+      ||owner.bgm_lifetime_.expired()||!Live())
+    return {GameFsCode::Unavailable,0,"1B238 owner/UI drift after current clock; cache effects retained"};
+  s.new_resource=30+3*uint32_t(s.requested18)+staged.variant4AC;
+  owner.resource_requests_[s.new_resource]=true;s.publication_order[2]=0x1B29C;
+  s.current14=s.requested18;s.publication_order[3]=0x1B2A8;
+  s.pending=false;s.publication_order[4]=0x1B2AC;
+  s.requested18=s.current14;s.publication_order[5]=0x1B2B0;
+  s.publication_phase=3;++s.consumed;state_.manager_scene14=uint32_t(s.current14);
+  state_.manager_switch=owner.Snapshot();return {};
+  // No staged resource is adopted: old4A8/4DC/clones/regions remain owned.
+  // No target RNG/BGM/aux sampling, context completion or source event17.
 }
 GameFsStatus GameActorRuntime::ClearManager8(){
   if(!Live())return {GameFsCode::Unavailable,0,"Manager8 clear owner retired"};
@@ -1402,7 +1541,11 @@ void GameActorRuntime::Close() {
   camera_target_.reset();primary_target_.reset();state_.camera_target_current=false;
   if(context_actor_)context_actor_->Close();context_actor_.reset();context_actors_.clear();
   support_registration_.Close();support_manager_.reset();state_.support_registration=support_registration_.Snapshot();
-  manager_switch_.Retire();state_.manager_switch=manager_switch_.Snapshot();
+  if(manager_switch_){
+    if(ordinary_manager_borrow_)manager_switch_->ReleaseActor(state_.owner_epoch);else manager_switch_->Retire();
+    state_.manager_switch=manager_switch_->Snapshot();manager_switch_.reset();
+  }
+  ordinary_manager_borrow_=false;
   intro_clone_.Close();intro_resource_.reset();state_.intro_live=false;state_.intro_controls={};
   light_on_control_={};season_controls_.clear();
   state_.scene_clock_ready=state_.light_on_control_present=false;

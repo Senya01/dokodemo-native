@@ -72,6 +72,7 @@ class GameFontResource final {
     GameFontSnapshot state_;
 };
 struct GameContentSnapshot {
+    GameManagerSwitchSnapshot ordinary_scene_owners;
     bool vsync_owner = false, loadman_owner = false, bb8_returned = false;
     bool state_reset = false, import_callback_configured = false, import_callback_registered = false;
     bool font_ready = false, package_mounted = false, blocked = false, closed = false;
@@ -187,6 +188,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameFsStatus BindInitialScenePlacement(const GameMainSceneData&);
     GameFsStatus InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource&,GameTransition&);
     GameFsStatus TickSceneBgmFiles();
+    GameFsStatus TickPendingSceneRequest();
     GameSceneBgmSnapshot SceneBgm()const{return scene_bgm_?scene_bgm_->Snapshot():GameSceneBgmSnapshot{};}
     std::weak_ptr<const void> OptionSettingsLifetime()const override{return option_settings_lifetime_;}
     GameFsStatus RequestBgmControlPrefix(const GameOptionSettingsSnapshot&,const GameSourceSoundSnapshot&,PackageView,uint32_t,uint32_t,uint64_t,GameBgmControlRecord&)override;
@@ -199,6 +201,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool DrawColdFrame(GameGraphics &graphics);
     GameContentSnapshot Snapshot() const {
         auto out=state_;out.texture_cache_entries=TextureCacheSize();out.texture_cache_pixels=TextureCachePixels();
+        if(loadman_&&loadman_->control)out.ordinary_scene_owners=loadman_->control->Snapshot();
         out.texture_cache_evictions=TextureCacheEvictions();return out;
     }
     const GameFontResource &Font() const {
@@ -212,6 +215,8 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
         bool render = true, finish = true, paused = false;
     };
     struct LoadMan {
+        std::shared_ptr<const void> module;
+        std::shared_ptr<GameManagerSwitchControl> control;
         std::array<char, 35> configured_script{};
         bool confirmed58=false;
         int32_t actor58=-1;
@@ -220,6 +225,9 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameVmBoot *manager_ = nullptr;
     Vsync *vsync_ = nullptr;
     LoadMan *loadman_ = nullptr;
+    bool RequestApplicationScene(int32_t);
+    bool CommitApplicationScene();
+    bool SetLoadPhase(uint32_t);
     uint32_t vsync_task_ = UINT32_MAX, load_task_ = UINT32_MAX;
     std::array<uint8_t, 0x10B50> reset_bytes_{};
     uint64_t option_settings_writes_=0;
