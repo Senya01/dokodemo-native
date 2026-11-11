@@ -144,6 +144,8 @@ GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
   try {
     if(!manager_switch_.Initialize(state_.owner_epoch))throw std::runtime_error("Manager constructor owner unavailable");
     state_.manager_switch=manager_switch_.Snapshot();
+    support_manager_=std::make_shared<uint64_t>(state_.owner_epoch);
+    const auto support_init=support_registration_.Initialize(support_manager_,state_.owner_epoch);if(!support_init)throw std::runtime_error(support_init.detail);
     if (actor >= 5 || !selection.Describe().readable ||
         !transition.Snapshot().live)
       throw std::runtime_error(
@@ -392,6 +394,10 @@ GameFsStatus GameActorRuntime::SetField54(int32_t value) {
 GameFsStatus GameActorRuntime::RequestManager9(){
   if(!Live())return {GameFsCode::Unavailable,0,"GAME3 manager owner/lease retired"};
   state_.manager_request9=true;return {};
+}
+GameFsStatus GameActorRuntime::RegisterSupportData16(script::Vm& vm,const script::Value& ref){
+  if(!Live())return {GameFsCode::Unavailable,0,"GAME16 manager owner retired"};
+  const auto status=support_registration_.Register16(vm,ref);state_.support_registration=support_registration_.Snapshot();return status;
 }
 GameFsStatus GameActorRuntime::RequestSameManager0(int32_t target){
   if(!Live()||!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.RequestSame0(state_.owner_epoch,target))
@@ -1149,6 +1155,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
+  support_registration_.Close();support_manager_.reset();state_.support_registration=support_registration_.Snapshot();
   manager_switch_.Retire();state_.manager_switch=manager_switch_.Snapshot();
   intro_clone_.Close();intro_resource_.reset();state_.intro_live=false;state_.intro_controls={};
   light_on_control_={};season_controls_.clear();

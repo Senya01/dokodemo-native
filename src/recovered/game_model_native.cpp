@@ -108,6 +108,56 @@ void SupportGlyphs(std::vector<GameSupportGlyph>& queue,bool& capped,const std::
     }
 }
 }
+struct GameSupportRegistration::State {
+    std::weak_ptr<const void> manager;
+    std::weak_ptr<script::NativeScriptContext> context;
+    std::weak_ptr<std::vector<script::Value>> frame_owner;
+    script::Table table{};uint16_t index=0;GameSupportRegistrationSnapshot record;
+    script::Value Reference(unsigned offset=0)const{
+        Need(uint32_t(index)+offset<=UINT16_MAX,"support registered reference extent");script::Value ref;ref.kind=script::Value::Kind::Reference;
+        ref.table=table;ref.index=uint16_t(index+offset);ref.frame_owner=frame_owner;ref.context_owner=context;return ref;
+    }
+    bool Current(script::Vm& vm)const{
+        try{const auto w=vm.current_witness();if(manager.expired()||!w.valid||w.stopped||w.run_id!=record.run||w.code_sha256!=record.module||!w.context_registered||context.expired())return false;
+            if(vm.context_value().context_owner.lock()!=context.lock())return false;
+            if(table==script::Table::Frame&&!vm.reference_belongs_to_frame(Reference(),record.frame))return false;
+            (void)vm.peek_reference(Reference());return true;
+        }catch(...){return false;}
+    }
+};
+GameFsStatus GameSupportRegistration::Initialize(std::shared_ptr<const void> manager,uint64_t epoch){
+    if(!manager||!epoch||!manager_.expired()||binding_)return {GameFsCode::Unavailable,0,"support manager constructor/epoch"};manager_=manager;epoch_=epoch;return {};
+}
+GameFsStatus GameSupportRegistration::Register16(script::Vm& vm,const script::Value& ref){
+    try{using V=script::Value;Need(!manager_.expired()&&epoch_&&ref.kind==V::Kind::Reference,"support actual GAME16 manager/reference required");
+        Need(ref.table==script::Table::Global||ref.table==script::Table::Local||ref.table==script::Table::Ctx28||ref.table==script::Table::Frame,"unimplemented support registration table");
+        const auto before=vm.current_witness();Need(before.valid&&before.run_id&&!before.stopped,"support actual current module/run");
+        const auto ctx=vm.context_value();const auto w=vm.current_witness();Need(vm.stable_value_owner(ref)||ref.table==script::Table::Frame,"support foreign context reference");
+        const std::weak_ptr<script::NativeScriptContext> empty;
+        if(ref.context_owner.owner_before(empty)||empty.owner_before(ref.context_owner))
+            Need(ref.context_owner.lock()==ctx.context_owner.lock(),"support foreign/retired reference owner");
+        uint64_t frame=0;if(ref.table==script::Table::Frame){if(vm.reference_belongs_to_frame(ref,w.frame_id))frame=w.frame_id;
+            else if(vm.reference_belongs_to_frame(ref,w.caller_frame_id))frame=w.caller_frame_id;Need(frame,"unimplemented foreign/noncurrent frame support registration");}
+        (void)vm.peek_reference(ref);auto b=std::make_shared<State>();b->manager=manager_;b->context=ctx.context_owner;b->frame_owner=ref.frame_owner;b->table=ref.table;b->index=ref.index;
+        b->record={true,true,epoch_,++serial_,w.run_id,frame,uint32_t(ref.table),ref.index,w.current_pc,w.code_sha256};binding_=std::move(b);return {};
+    }catch(const std::exception& e){return Error(e);}
+}
+bool GameSupportRegistration::Current(script::Vm& vm)const{return binding_&&binding_->Current(vm);}
+GameSupportRegistrationSnapshot GameSupportRegistration::Snapshot()const{
+    auto out=binding_?binding_->record:GameSupportRegistrationSnapshot{};out.live=!manager_.expired();out.manager_epoch=epoch_;out.registered=out.registered&&out.live;return out;
+}
+void GameSupportRegistration::Close(){binding_.reset();manager_.reset();epoch_=0;}
+script::Value GameSupportTextOwner::Cell(script::Vm& vm,unsigned offset)const{
+    if(state_.source_current_bound){const auto b=registration_.lock();Need(b&&b->Current(vm),"support registration replaced/retired");return vm.peek_reference(b->Reference(offset));}
+    return vm.read_slot(table_,uint16_t(index_+offset));
+}
+GameFsStatus GameSupportTextOwner::Initialize(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm& vm,const script::Value& context,script::Table table,uint16_t index,PackageView module,const GameSupportTextMap& map){
+    if(state_.live||state_.failed)return {GameFsCode::Unavailable,0,"support owner already live/failed"};registration_.reset();return InitializeImpl(std::move(owner),epoch,vm,context,table,index,std::move(module),map);
+}
+GameFsStatus GameSupportTextOwner::InitializeRegistered(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm& vm,const GameSupportRegistration& input,PackageView module,const GameSupportTextMap& map){
+    if(state_.live||state_.failed||!input.Current(vm))return {GameFsCode::Unavailable,0,"support current GAME16 binding required"};
+    registration_=input.binding_;const auto b=input.binding_;return InitializeImpl(std::move(owner),epoch,vm,vm.context_value(),b->table,b->index,std::move(module),map);
+}
 GameSupportTextOwner::Atom GameSupportTextOwner::Capture(script::Vm& vm,const script::Value& v)const{
     Atom a;a.kind=uint32_t(v.kind);a.word=v.word;
     if(v.kind==script::Value::Kind::String){a.text=v.cp932;if(v.owned_string.bound()){
@@ -123,13 +173,13 @@ bool GameSupportTextOwner::Current(const std::shared_ptr<const void>& owner,uint
     try{const auto held=owner_.lock();const auto w=vm.current_witness();
         if(!state_.live||state_.failed||state_.converted!=8||!held||held!=owner||held.owner_before(owner)||owner.owner_before(held)
            ||epoch!=state_.epoch||!w.valid||!w.context_registered||w.run_id!=state_.run||w.code_sha256!=module_sha_
-           ||(table_==script::Table::Frame&&w.frame_id!=frame_)||!InputsCurrent())return false;
+           ||(!state_.source_current_bound&&table_==script::Table::Frame&&w.frame_id!=frame_)||!InputsCurrent())return false;
         const auto expected=context_.lock();if(!expected||vm.context_value().context_owner.lock()!=expected)return false;
-        for(unsigned i=0;i<9;++i)if(!(Capture(vm,vm.read_slot(table_,uint16_t(index_+i)))==atoms_[i]))return false;
+        for(unsigned i=0;i<9;++i)if(!(Capture(vm,Cell(vm,i))==atoms_[i]))return false;
         return true;
     }catch(...){return false;}
 }
-GameFsStatus GameSupportTextOwner::Initialize(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm& vm,
+GameFsStatus GameSupportTextOwner::InitializeImpl(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm& vm,
         const script::Value& context,script::Table table,uint16_t index,PackageView module,const GameSupportTextMap& map){
     using V=script::Value;
     if(state_.live||state_.failed||!owner||epoch<=last_epoch_||index>UINT16_MAX-8)
@@ -142,15 +192,16 @@ GameFsStatus GameSupportTextOwner::Initialize(std::shared_ptr<const void> owner,
         const auto sha=core::hex_digest(module.InitializedDigest());Need(sha==std::string(w.code_sha256.data()),"support module/VM identity mismatch");
         state_={};state_.live=true;state_.epoch=epoch;state_.run=w.run_id;last_epoch_=epoch;owner_=owner;context_=ctx;
         table_=table;index_=index;frame_=w.frame_id;module_sha_=w.code_sha256;
+        if(const auto b=registration_.lock()){Need(b->Current(vm),"support registration expired");state_.source_current_bound=true;state_.source_registration=b->record.serial;state_.manager_epoch=b->record.manager_epoch;}
         const auto remember=[&](const PackageView& v){inputs_.push_back({v,v.InitializedDigest()});};remember(module);
         Need(map.keys.Describe().size==96,"support exact96-key map required");remember(map.keys);
         for(unsigned i=0;i<96;++i){keys_[i]=map.keys.ReadU8(i);remember(map.expansions[i]);expansions_[i]=SupportText(map.expansions[i]);}
         remember(map.fallback);fallback_=SupportText(map.fallback);remember(map.integer_format);integer_format_=SupportText(map.integer_format);
-        const auto header=vm.read_slot(table,index);atoms_[0]=Capture(vm,header);
+        const auto header=Cell(vm,0);atoms_[0]=Capture(vm,header);
         Need(header.kind==V::Kind::ArrayHeader&&header.word>>28==9&&(header.word&4095)>=8,"support current eight-cell header required");
         // Actual sequential conversion after256B clear. Failure retains only
         // completed cells in diagnostic Progress; it never publishes success.
-        for(unsigned i=0;i<8;++i){const auto value=vm.read_slot(table,uint16_t(index+1+i));atoms_[i+1]=Capture(vm,value);std::string text;
+        for(unsigned i=0;i<8;++i){const auto value=Cell(vm,i+1);atoms_[i+1]=Capture(vm,value);std::string text;
             if(value.kind==V::Kind::String&&(value.word>>28==5||value.word>>28==6))text=value.cp932;
             else if(value.kind==V::Kind::Scalar&&value.word>>28<2)text=fallback_;
             else if(value.kind==V::Kind::Scalar&&value.word>>28==2){Need(integer_format_=="%d","unimplemented support numeric format");text=std::to_string(value.signed_integer());}
@@ -293,7 +344,7 @@ GameFsStatus GameSupportTextOwner::DrawPreview(const std::shared_ptr<const void>
     for(size_t i=0;i<children_.size();++i){if(state_.glyph_pixels_ready&&!glyph_visible_[i])continue;const auto status=children_[i].Draw(graphics,camera);if(!status)return status;}return {};
 }
 void GameSupportTextOwner::Close(){
-    for(auto& c:children_)c.Close();children_.clear();glyph_images_.clear();glyph_visible_.clear();parent_.reset();templates_.clear();inputs_.clear();owner_.reset();context_.reset();state_={};
+    for(auto& c:children_)c.Close();children_.clear();glyph_images_.clear();glyph_visible_.clear();parent_.reset();templates_.clear();inputs_.clear();registration_.reset();owner_.reset();context_.reset();state_={};
 }
 GameFsStatus GameBackgroundRuntime::Initialize(Clock clock,RngNativeOwner& rng){
     if(identity_||!clock||!rng.Available()||!rng.Lineage())
@@ -398,12 +449,12 @@ GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& 
         const auto prefix=state_.registration+"\\"+state_.registration+"\\";
         status=asset->Load(resources,prefix+"model01.DVS",prefix+"gim\\",state_.transform_policy);
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
-        GameModelClone clone;status=clone.Initialize(asset);
+        auto clone=std::make_shared<GameModelClone>();status=clone->Initialize(asset);
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
-        status=clone.Update(ModelIdentity());
+        status=clone->Update(ModelIdentity());
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
         std::vector<GameAreaMarkerState> markers;
-        status=clone.AreaMarkers(*asset,markers);
+        status=clone->AreaMarkers(*asset,markers);
         if(!status){state_.failed=true;state_.pending=false;state_.status=status;return status;}
         Need(markers.size()==asset->Statistics().area_markers,"background marker-list readback");
         Need(Current(owner,epoch)&&RegistrationsCurrent()&&asset->Live(),"background load owner drift");
@@ -418,13 +469,14 @@ GameFsStatus GameBackgroundPreparation::Draw(const std::shared_ptr<const void>& 
     if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_||!asset_->Live())
         return {GameFsCode::Unavailable,0,"background staged draw owner retired/changed"};
     // Explicit component/offline view, never an ordinary game scene publish.
-    return clone_.Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
+    if(support_prepared_)return {GameFsCode::Unavailable,0,"current VM support consumer required; use DrawWithSupport"};
+    return clone_->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);
 }
 GameFsStatus GameBackgroundPreparation::AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
         std::vector<GameAreaMarkerState>& out)const {
     if(!Current(owner,epoch)||!state_.staged||state_.failed||!RegistrationsCurrent()||!MotionCountsCurrent()||!AuxiliaryCurrent()||!EffectsCurrent()||!asset_)
         return {GameFsCode::Unavailable,0,"background marker-list owner unavailable"};
-    return clone_.AreaMarkers(*asset_,out);
+    return clone_->AreaMarkers(*asset_,out);
 }
 GameFsStatus GameBackgroundPreparation::LoadModelMotions(const std::shared_ptr<const void>& owner,uint64_t epoch,
         PackageView counts) {
@@ -564,7 +616,7 @@ GameFsStatus GameBackgroundPreparation::Auxiliary(const std::shared_ptr<const vo
     for(const auto& b:auxiliary_bindings_){
         const auto& entry=auxiliary_entries_.at(b.entry);
         const auto* target=b.target==GameAuxiliaryTarget::Child?entry.child.get():
-                           b.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:&clone_;
+                           b.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:clone_.get();
         if(!target||!target->Asset()||!target->Asset()->Live())
             return {GameFsCode::Unavailable,0,"background auxiliary target retired"};
         result.push_back({b.entry,b.slot,entry.words[b.slot],b.target,b.playback.Snapshot(),
@@ -704,14 +756,14 @@ GameFsStatus GameBackgroundPreparation::SampleEffects(const std::shared_ptr<cons
         for(auto& binding:auxiliary_bindings_){
             auto& entry=auxiliary_entries_[binding.entry];
             auto* target=binding.target==GameAuxiliaryTarget::Child?entry.child.get():
-                binding.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:&clone_;
+                binding.target==GameAuxiliaryTarget::MainTemplate?&main_template_clone_:clone_.get();
             const auto status=binding.playback.Apply(*entry.motions[binding.slot],*target,delta);
             if(!status)throw std::runtime_error(status.detail);
         }
-        for(size_t i=0;i<light_playbacks_.size();++i){const auto status=light_playbacks_[i].Apply(light_motions_[i],clone_,delta);
+        for(size_t i=0;i<light_playbacks_.size();++i){const auto status=light_playbacks_[i].Apply(light_motions_[i],*clone_,delta);
             if(!status)throw std::runtime_error(status.detail);}
         for(auto& entry:auxiliary_entries_)if(entry.child){const auto status=entry.child->Update(ModelIdentity());if(!status)throw std::runtime_error(status.detail);}
-        auto status=clone_.Update(ModelIdentity());if(!status)throw std::runtime_error(status.detail);
+        auto status=clone_->Update(ModelIdentity());if(!status)throw std::runtime_error(status.detail);
         ++applied_.samples;return {};
     }catch(const std::exception& e){state_.failed=true;state_.staged=false;state_.status=Error(e);return state_.status;}
 }
@@ -719,7 +771,7 @@ GameFsStatus GameBackgroundPreparation::AppliedEffects(const std::shared_ptr<con
         GameBackgroundAppliedState& out)const {
     std::vector<GameBackgroundLightBinding> check;
     if(!activated_||!LightBindings(owner,epoch,check))return {GameFsCode::Unavailable,0,"background applied readback unavailable"};
-    auto result=applied_;result.main_pose=static_cast<const GameModelClone&>(clone_).Pose();result.lights=clone_.Lights();
+    auto result=applied_;result.main_pose=static_cast<const GameModelClone&>(*clone_).Pose();result.lights=clone_->Lights();
     for(auto i:result.selected_entries){const auto& child=auxiliary_entries_[i].child;
         result.child_poses.push_back(child?static_cast<const GameModelClone&>(*child).Pose():std::vector<GameModelPose>{});}
     out=std::move(result);return {};
@@ -738,6 +790,33 @@ GameBackgroundPreparationSnapshot GameBackgroundPreparation::Snapshot()const {
         out.live=out.pending=out.staged=out.model_motions_staged=out.auxiliary_staged=out.effects_prepared=false;
     return out;
 }
+bool GameBackgroundPreparation::SupportJobCurrent(const std::shared_ptr<const void>& owner,uint64_t epoch)const{
+    return Current(owner,epoch)&&state_.staged&&!state_.failed&&clone_&&asset_&&asset_->SourceCurrent()
+        &&RegistrationsCurrent()&&MotionCountsCurrent()&&AuxiliaryCurrent()&&EffectsCurrent();
+}
+GameFsStatus GameBackgroundPreparation::PrepareSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,
+        const GameSupportRegistration& registration,PackageView module,const GameSupportTextMap& map,GameResourceSource& source,
+        const GameSupportTemplatePaths& paths,PackageView format){
+    if(!SupportJobCurrent(owner,epoch)||support_prepared_||support_.Progress().live||!registration.Current(vm))
+        return {GameFsCode::Unavailable,0,"support requires current staged job and actual GAME16 producer"};
+    auto status=support_.InitializeRegistered(owner,epoch,vm,registration,std::move(module),map);
+    if(status)status=support_.LoadTemplates(owner,epoch,vm,source,paths);
+    if(status)status=support_.Attach(owner,epoch,vm,clone_);
+    if(status)status=support_.PrepareGlyphTextures(owner,epoch,vm,source,std::move(format));
+    if(status&&!SupportJobCurrent(owner,epoch))status={GameFsCode::Unavailable,0,"support background owner changed during preparation"};
+    if(!status){state_.failed=true;state_.staged=false;state_.status=status;return status;}
+    support_prepared_=true;return {};
+}
+GameFsStatus GameBackgroundPreparation::UpdateSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm){
+    if(!SupportJobCurrent(owner,epoch)||!support_prepared_)return {GameFsCode::Unavailable,0,"support job not current"};return support_.Update(owner,epoch,vm);
+}
+GameFsStatus GameBackgroundPreparation::ReadSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,GameSupportSnapshot& out)const{
+    if(!SupportJobCurrent(owner,epoch)||!support_prepared_)return {GameFsCode::Unavailable,0,"support job not current"};return support_.Read(owner,epoch,vm,out);
+}
+GameFsStatus GameBackgroundPreparation::DrawWithSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm& vm,GameGraphics& graphics,const GameMatrix& camera)const{
+    GameSupportSnapshot support;const auto checked=ReadSupport(owner,epoch,vm,support);if(!checked)return checked;
+    auto status=clone_->Draw(graphics,camera,GameModelColorPolicy::WindowsDvsTexturedModulation2x);if(status)status=support_.DrawGlyphPreview(owner,epoch,vm,graphics,camera);return status;
+}
 GameFsStatus GameBackgroundPreparation::Close() {
     // Clone/template/material views die before their backing/file is revoked.
     runtime_.reset();activated_=false;applied_={};
@@ -747,7 +826,8 @@ GameFsStatus GameBackgroundPreparation::Close() {
     main_template_clone_.Close();auxiliary_entries_.clear();auxiliary_asset_.reset();auxiliary_inputs_.clear();
     state_.auxiliary_staged=false;
     model_motions_.clear();model_motion_counts_.Reset();
-    clone_.Close();asset_.reset();package_.Reset();
+    support_.Close();support_prepared_=false;
+    if(clone_)clone_->Close();clone_.reset();asset_.reset();package_.Reset();
     auto status=filesystem_.Close();
     state_.live=state_.pending=state_.staged=false;
     if(!status){state_.failed=true;state_.status=status;return status;}

@@ -454,7 +454,9 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
     }
     case 10:case 11:case 16:case 29:case 35:
         Need(arg.kind==Value::Kind::Reference,"Game registration requires typed live table reference");
-        (void)vm_->load_reference(arg);bindings_[uint32_t(id)]=arg;
+        (void)vm_->load_reference(arg);
+        if(id==16&&runtime_){const auto status=runtime_->RegisterSupportData16(*vm_,arg);Need(bool(status),status.detail.c_str());}
+        bindings_[uint32_t(id)]=arg;
         if(id==11)++state_.notebook_registrations;
         if(id==10){++state_.wordmemo_registrations;state_.wordmemo_registration_source=vm_->current_witness();state_.wordmemo_import_alias=SameRegistration(arg,dictionary_import_target_);}
         return False();

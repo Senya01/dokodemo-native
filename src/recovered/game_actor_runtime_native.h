@@ -65,6 +65,7 @@ private:
 };
 struct GameActorRuntimeSnapshot {
   GameManagerSwitchSnapshot manager_switch;
+  GameSupportRegistrationSnapshot support_registration;
   uint64_t owner_epoch=0;
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
@@ -176,6 +177,8 @@ public:
   GameFsStatus SetField54(int32_t value);
   GameFsStatus RequestManager();
   GameFsStatus RequestManager9();
+  GameFsStatus RegisterSupportData16(script::Vm&,const script::Value&);
+  const GameSupportRegistration& SupportRegistration()const{return support_registration_;}
   GameFsStatus RequestSameManager0(int32_t target);
   GameFsStatus ConsumeSameManager0();
   GameFsStatus ClearManager8();
@@ -210,6 +213,8 @@ private:
   std::array<ModelSlot, 100> models_;
   GameActorRuntimeSnapshot state_;
   GameManagerSwitchControl manager_switch_;
+  std::shared_ptr<const void> support_manager_;
+  GameSupportRegistration support_registration_;
   PackageView actor_asc_;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;

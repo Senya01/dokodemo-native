@@ -1003,19 +1003,7 @@ std::vector<uint8_t> GlyphTestModel(unsigned count,bool uv=true){
         const float x=(float(i)-float(count-1)/2)*2;uint32_t word;std::memcpy(&word,&x,4);Word(b,at+16,word);}
     return b;
 }
-void SupportGlyphTests(){
-    using namespace dokodemo::script;
-    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
-    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
-    std::vector<uint8_t> bytes(28+3+9*4);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,3);bytes[24]=9;bytes[28]=0x30;bytes[30]=0x38;Word(bytes,31,0x90000008);
-    auto module=std::make_shared<Lease>(bytes);Program program;Diagnostic error;Check(program.load_test_fixture(bytes,error),"glyph synthetic module");Vm vm(program);(void)vm.start();const auto context=vm.context_value();
-    const auto put=[&](unsigned i,std::string value){Value r;r.kind=Value::Kind::Reference;r.table=Table::Global;r.index=uint16_t(i+1);vm.store_reference(r,Value::string(value));};
-    for(unsigned i=0;i<8;++i)put(i,i?"":"AB");
-    auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));keys->b[0]='A';keys->b[1]='B';GameSupportTextMap map;map.keys=view(keys);
-    std::vector<std::shared_ptr<Lease>> data;for(unsigned i=0;i<96;++i){data.push_back(text(i==0?"x":i==1?"y":""));map.expansions[i]=view(data.back());}
-    auto fallback=text(""),number=text("%d"),format=text("SYN%03d_%03d_%05d.GIM");map.fallback=view(fallback);map.integer_format=view(number);
-    GameSupportTemplatePaths paths;for(unsigned i=0;i<18;++i){data.push_back(text("PANEL_"+std::to_string(i)+".DVS"));paths.models[i]=view(data.back());}data.push_back(text("SYN/"));paths.textures=view(data.back());
-    struct Source final:GameResourceSource{
+struct GlyphFixtureSource final:GameResourceSource{
         unsigned glyph_calls=0,fail=0;bool uv=true,malformed=false,style_missing=false;std::function<void()> during;
         std::vector<std::shared_ptr<Lease>> glyph_leases;
         GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
@@ -1028,7 +1016,20 @@ void SupportGlyphTests(){
                 auto lease=std::make_shared<Lease>(b);glyph_leases.push_back(lease);out=PackageStorage::Attach(lease,b.size());return {};}
             auto lease=std::make_shared<Lease>(b);out=PackageStorage::Attach(lease,b.size());return {};
         }
-    } source;
+};
+void SupportGlyphTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
+    std::vector<uint8_t> bytes(28+3+9*4);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,3);bytes[24]=9;bytes[28]=0x30;bytes[30]=0x38;Word(bytes,31,0x90000008);
+    auto module=std::make_shared<Lease>(bytes);Program program;Diagnostic error;Check(program.load_test_fixture(bytes,error),"glyph synthetic module");Vm vm(program);(void)vm.start();const auto context=vm.context_value();
+    const auto put=[&](unsigned i,std::string value){Value r;r.kind=Value::Kind::Reference;r.table=Table::Global;r.index=uint16_t(i+1);vm.store_reference(r,Value::string(value));};
+    for(unsigned i=0;i<8;++i)put(i,i?"":"AB");
+    auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));keys->b[0]='A';keys->b[1]='B';GameSupportTextMap map;map.keys=view(keys);
+    std::vector<std::shared_ptr<Lease>> data;for(unsigned i=0;i<96;++i){data.push_back(text(i==0?"x":i==1?"y":""));map.expansions[i]=view(data.back());}
+    auto fallback=text(""),number=text("%d"),format=text("SYN%03d_%03d_%05d.GIM");map.fallback=view(fallback);map.integer_format=view(number);
+    GameSupportTemplatePaths paths;for(unsigned i=0;i<18;++i){data.push_back(text("PANEL_"+std::to_string(i)+".DVS"));paths.models[i]=view(data.back());}data.push_back(text("SYN/"));paths.textures=view(data.back());
+    GlyphFixtureSource source;
     auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);uint64_t epoch=0;GameSupportTextOwner worker;std::shared_ptr<GameModelClone> parent;
     const auto begin=[&](uint16_t mode,bool material=false){worker.Close();++epoch;source.glyph_calls=0;source.glyph_leases.clear();
         auto b=AreaMarkerFixture(0,material);auto p=dokodemo::model::parseDvs(b);const auto end=p.nodes[0].source.offset+p.nodes[0].source.bytes;
@@ -1065,6 +1066,87 @@ void SupportGlyphTests(){
     Check(!a.BindDiffuseTextures(a.Generation()+1,{{0,image}})&&bool(a.BindDiffuseTextures(a.Generation(),{{0,image}}))&&a.DiffuseTextureCount()==1&&b.DiffuseTextureCount()==0&&asset->Materials()[0].texture->Pixels()[0]==0xFFFFFFFF,"node binding never mutates shared material");
     Check(!a.BindDiffuseTextures(a.Generation(),{{0,image},{0,image}})&&a.DiffuseTextureCount()==1,"invalid upload preserves previous binding");const auto old=image->Generation();image->Close();Check(!a.DiffuseTexturesCurrent()&&b.DiffuseTexturesCurrent(),"image retirement isolated to bound clone");
     Check(bool(image->DecodeGim(view(gl)))&&image->Generation()!=old&&!a.DiffuseTexturesCurrent(),"same image allocation new decode cannot revive old generation");a.Close();b.Close();
+}
+void ManagerSupportJobTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
+    auto keys=std::make_shared<Lease>(std::vector<uint8_t>(96,255));keys->b[0]='A';keys->b[1]='B';GameSupportTextMap map;map.keys=view(keys);
+    std::vector<std::shared_ptr<Lease>> data;for(unsigned i=0;i<96;++i){data.push_back(text(i==0?"x":i==1?"y":""));map.expansions[i]=view(data.back());}
+    auto fallback=text(""),number=text("%d"),format=text("SYN%03d_%03d_%05d.GIM");map.fallback=view(fallback);map.integer_format=view(number);
+    GameSupportTemplatePaths paths;for(unsigned i=0;i<18;++i){data.push_back(text("PANEL_"+std::to_string(i)+".DVS"));paths.models[i]=view(data.back());}data.push_back(text("SYN/"));paths.textures=view(data.back());
+    auto model=AreaMarkerFixture(0,false);const auto parsed=dokodemo::model::parseDvs(model);const auto end=parsed.nodes[0].source.offset+parsed.nodes[0].source.bytes;
+    model[end-12]=1;model[end-10]=1;model[end-8]=1;
+    auto names=std::make_shared<Lease>(std::vector<uint8_t>(60));for(unsigned i=0;i<3;++i)std::copy_n("BOUND_A",7,names->b.begin()+i*20);
+    const auto file=BackgroundArchive({{"BOUND_A.BPM",BackgroundArchive({{"BOUND_A\\model01.DVS",model}})}});
+    auto actor_data=std::make_shared<Lease>(std::vector<uint8_t>(20));GameTransition transition;Check(transition.Initialize({{0,0}}),"support real transition owner");
+    GameActorRuntime runtime;Check(bool(runtime.Initialize(0,view(actor_data),transition)),"support actual manager constructor");
+    Check(runtime.SupportRegistration().Snapshot().live&&!runtime.SupportRegistration().Snapshot().registered,"constructor is not a default current data packet");
+    auto owner=std::make_shared<int>(17),foreign=std::make_shared<int>(18);GameBackgroundPreparation job;uint64_t epoch=0;
+    GameGraphics graphics;Check(graphics.Initialize({}),"bound job offscreen raster");auto camera=ModelIdentity();camera[0]=camera[5]=camera[10]=.1f;camera[12]=-.6f;camera[13]=-.8f;camera[14]=-1.1f;
+    const auto begin=[&]{Check(bool(job.Close()),"close previous support job");++epoch;auto io=std::make_shared<BackgroundFileState>();
+        Check(bool(job.Begin(owner,epoch,{27,12,0,epoch},view(names),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,epoch)),"same request actual package/marker clone load");return io;};
+    // Generated bytecode only. It executes the real reference, service, call,
+    // callback queue, deadline and event-return paths; no context field writes.
+    for(bool frame_binding:{false,true}){
+        std::vector<uint8_t> code{0x30,uint8_t(frame_binding?9:0)};
+        const auto ref=[&](uint8_t op,uint16_t i){code.push_back(op);H(code,i);};
+        if(frame_binding){code.push_back(0x4E);H(code,0);H(code,8);ref(0x91,0);ref(0x95,0);code.push_back(0x57);}
+        code.push_back(0x80);code.push_back(16);ref(frame_binding?0x91:0x95,0);code.insert(code.end(),{0x8B,0xF0,2});
+        const auto call=code.size();code.insert(code.end(),{0x20,0,0,0,0});const auto continuation=code.size();code.push_back(0x38);
+        const auto wait=code.size();code.insert(code.end(),{0x30,0,0x8C,0x8A,0,0,0,0x85,0x85,0x8B,0x27,4,0x80,1,0x44,0x31});
+        const auto callback=code.size();code.insert(code.end(),{0x30,3,0x3A,0x32});
+        for(unsigned i=0;i<3;++i){code[call+2+i]=uint8_t(wait>>(i*8));code[wait+4+i]=uint8_t(callback>>(i*8));}
+        std::vector<uint8_t> bytes(28);Word(bytes,0,0x0043534B);Word(bytes,4,0x20030204);Word(bytes,12,uint32_t(code.size()));bytes[24]=9;bytes.insert(bytes.end(),code.begin(),code.end());
+        W(bytes,0x90000008);for(unsigned i=0;i<8;++i)W(bytes,0);auto module=std::make_shared<Lease>(bytes);Program program;Diagnostic diagnostic;
+        Check(program.load_test_fixture(bytes,diagnostic),"generated registration/wait module");Vm vm(program),other(program);Check(vm.start().status==Status::Running&&other.start().status==Status::Running,"two actual VM run owners");
+        for(unsigned i=0;i<8;++i){Value r;r.kind=Value::Kind::Reference;r.table=Table::Global;r.index=uint16_t(i+1);vm.store_reference(r,Value::string(i?"":"AB"));}
+        Value registered;VmStateWitness before_callback;unsigned registration_calls=0,posts=0;
+        vm.host_service([&](uint8_t id,const std::vector<Value>& args){
+            if(id==0xF0){Check(args.size()==2&&args[0].signed_integer()==16,"actual synthetic GAME16 arguments");registered=args[1];++registration_calls;
+                const auto status=runtime.RegisterSupportData16(vm,registered);Check(bool(status),status.detail.c_str());Value result;result.kind=Value::Kind::Scalar;result.word=0x10000000;return result;}
+            Check(id==0x27&&args.size()==4,"only actual callback builtin admitted");before_callback=vm.current_witness();++posts;return Value::integer(vm.post_callback(args[0],args[1],args[2],args[3]));});
+        const auto first=vm.run(100);if(first.status==Status::Stopped)throw std::runtime_error(first.diagnostic.text());
+        Check(first.status==Status::Yield&&registration_calls==1&&posts==1&&vm.last_callback_receipt()==1,"real service -> self callback -> one deadline yield");
+        Check(vm.run(100).status==Status::Yield&&!vm.context_enabled()&&vm.callbacks_returned()==1&&vm.callback_depth()==0&&vm.queued_callbacks()==0,"3A/event32 actually restore disabled caller");
+        const auto paused=vm.current_witness();Check(paused.code_entry==wait&&paused.caller_return_pc==continuation&&paused.call_depth==1&&paused.deadline_tick==1
+            &&paused.frame_id==before_callback.frame_id&&paused.caller_frame_id==before_callback.caller_frame_id&&paused.result.word==0x20000000,"restored caller, result, stack and source deadline");
+        const auto binding=runtime.SupportRegistration().Snapshot();Check(binding.registered&&binding.run==paused.run_id&&binding.table==uint32_t(frame_binding?Table::Frame:Table::Global)
+            &&runtime.SupportRegistration().Current(vm)&&!runtime.SupportRegistration().Current(other),"current module/context/ref lineage, not another VM");
+        if(frame_binding)Check(binding.frame==paused.caller_frame_id&&binding.frame!=paused.frame_id,"registered ancestor-frame borrow survives wait callee");
+        const auto old_runtime=runtime.Snapshot();auto io=begin();GlyphFixtureSource source;GameSupportSnapshot support;
+        Check(!job.PrepareSupport(foreign,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format))&&source.glyph_calls==0,"foreign current job refuses before glyph load");
+        Check(bool(job.PrepareSupport(owner,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format)))&&bool(job.ReadSupport(owner,epoch,vm,support)),"production manager -> same-job normalize/load/clone/glyph consumer");
+        Check(support.source_current_bound&&support.source_registration==binding.serial&&support.manager_epoch==binding.manager_epoch&&support.glyph_pixels_ready&&support.converted==8
+            &&support.cells[0][0]=='x'&&support.cells[0][1]=='y'&&source.glyph_calls==2,"eight actual registered values and selected material pixels, no supplied ready");
+        Check(!job.PrepareSupport(owner,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format))&&!job.Draw(owner,epoch,graphics,camera),"support cannot replay or be silently omitted by plain draw");
+        Check(graphics.Clear(0xFF000000)&&bool(job.DrawWithSupport(owner,epoch,vm,graphics,camera))&&graphics.Snapshot().mesh_pixels>0,"same staged clone consumes actual owned glyph pixels");
+        Check(!job.Snapshot().source_committed&&runtime.Snapshot().manager_scene14==old_runtime.manager_scene14&&runtime.Snapshot().manager_switch.requested18==old_runtime.manager_switch.requested18
+            &&vm.current_witness().frame_id==paused.frame_id&&vm.pc()==paused.current_pc&&!vm.context_enabled()&&vm.deadline_tick()==1,"component preparation never commits scene, changes request, wakes or advances VM");
+        auto cell=registered;++cell.index;vm.store_reference(cell,Value::string("B"));Check(!job.ReadSupport(owner,epoch,vm,support),"current record drift revokes staged readback");vm.store_reference(cell,Value::string("AB"));
+        Check(bool(job.ReadSupport(owner,epoch,vm,support)),"exact unowned component value restoration is observable");
+        Check(!runtime.RegisterSupportData16(vm,Value::integer(0))&&runtime.SupportRegistration().Snapshot().serial==binding.serial,"invalid replacement preserves actual binding");
+        auto unbound=registered;unbound.index=UINT16_MAX;Check(!runtime.RegisterSupportData16(vm,unbound),"out-of-bounds registration does not supply nil");
+        auto foreign_context=registered;foreign_context.context_owner=other.context_value().context_owner;
+        Check(!runtime.RegisterSupportData16(vm,foreign_context)&&runtime.SupportRegistration().Snapshot().serial==binding.serial,"foreign typed context cannot replace this manager's current data");
+        Check(bool(runtime.RegisterSupportData16(vm,registered))&&!job.ReadSupport(owner,epoch,vm,support),"genuine replacement invalidates old serial even at identical coordinate");
+        io=begin();source.glyph_calls=0;source.fail=2;
+        Check(!job.PrepareSupport(owner,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format))&&job.Snapshot().failed&&!job.Snapshot().staged
+            &&!job.ReadSupport(owner,epoch,vm,support)&&!vm.context_enabled(),"partial real glyph load cannot publish support/job completion");
+        Check(bool(job.Close())&&io->closes==1,"partial support retires before real file close");source.fail=0;source.glyph_calls=0;io=begin();
+        source.during=[&]{names->b[0]='X';};
+        Check(!job.PrepareSupport(owner,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format))&&job.Snapshot().failed&&!job.Snapshot().staged,"background registration drift during real glyph load prevents stage publication");
+        names->b[0]='B';source.during={};source.glyph_calls=0;io=begin();
+        Check(bool(job.PrepareSupport(owner,epoch,vm,runtime.SupportRegistration(),view(module),map,source,paths,view(format))),"fresh request can retry owned preparation");
+        runtime.Close();Check(!job.ReadSupport(owner,epoch,vm,support)&&!job.DrawWithSupport(owner,epoch,vm,graphics,camera),"retired manager revokes an otherwise live staged job");
+        Check(bool(runtime.Initialize(0,view(actor_data),transition))&&!runtime.SupportRegistration().Current(vm),"new manager epoch is not old registration authority");
+        Check(bool(runtime.RegisterSupportData16(vm,registered)),"actual current packet can be explicitly rebound by the producer");
+        const auto retired_run=vm.current_witness().run_id;Check(vm.start().status==Status::Running&&vm.current_witness().run_id!=retired_run&&!runtime.SupportRegistration().Current(vm)
+            &&!job.ReadSupport(owner,epoch,vm,support),"module restart cannot revive old table/frame binding");Check(bool(job.Close()),"restart cleanup");
+    }
+    const auto old_epoch=runtime.Snapshot().owner_epoch;runtime.Close();Check(!runtime.SupportRegistration().Snapshot().live&&!runtime.SupportRegistration().Snapshot().registered,"actual manager retirement drops weak current data");
+    Check(bool(runtime.Initialize(0,view(actor_data),transition))&&runtime.Snapshot().owner_epoch!=old_epoch&&!runtime.SupportRegistration().Snapshot().registered,"fresh constructor has no inherited current packet");runtime.Close();graphics.Close();
+
 }
 struct TitleSource final : GameResourceSource {
     bool fail = false;
@@ -1584,6 +1666,7 @@ int main() {
         BackgroundSamplingTests();
         SupportConsumerTests();
         SupportGlyphTests();
+        ManagerSupportJobTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();

@@ -237,8 +237,8 @@ struct GameAuxiliaryBindingState {
     GameMotionStatistics motion;
     GameModelStatistics model;
 };
-// Conditional consumer of current VM table coordinates, NOT a source field20
-// issuer. No runtime entry/callback or scene readiness is granted by this API.
+// Caller-held data packets for the finite source text conversion domain.
+// Actual GAME16 registration below is distinct from supplying these tables.
 struct GameSupportTextMap {
     PackageView keys; // exact96 signed lookup bytes, first match wins
     std::array<PackageView,96> expansions;
@@ -269,9 +269,32 @@ struct GameSupportSnapshot {
     bool glyph_pixels_ready=false; // Windows synchronous resource stage, never source readiness
     uint32_t glyph_decoded=0,bound_texture_nodes=0;
     std::vector<GameSupportTextureState> textures;
-    // Windows glyph image/binding preparation only; current source field20
-    // bind and actual game/scene completion remain unimplemented.
+    // A bound registration is current manager+20 data, not game/scene ready.
     bool source_current_bound=false;
+    uint64_t source_registration=0,manager_epoch=0;
+};
+struct GameSupportRegistrationSnapshot {
+    bool live=false,registered=false;uint64_t manager_epoch=0,serial=0,run=0,frame=0;
+    uint32_t table=0,index=0,source_pc=0;std::array<char,65> module{};
+};
+// Actual GAME16 -> manager+20 producer. Native typed-reference/base mapping,
+// not a supplied PSP pointer or default/null current-data authority.
+class GameSupportRegistration final {
+  public:
+    GameSupportRegistration()=default;
+    GameSupportRegistration(const GameSupportRegistration&)=delete;
+    GameSupportRegistration& operator=(const GameSupportRegistration&)=delete;
+    GameFsStatus Initialize(std::shared_ptr<const void> manager,uint64_t epoch);
+    GameFsStatus Register16(script::Vm&,const script::Value&);
+    bool Current(script::Vm&)const;
+    GameSupportRegistrationSnapshot Snapshot()const;
+    void Close();
+  private:
+    friend class GameSupportTextOwner;
+    struct State;
+    std::shared_ptr<State> binding_;
+    std::weak_ptr<const void> manager_;
+    uint64_t epoch_=0,serial_=0;
 };
 class GameSupportTextOwner final {
   public:
@@ -281,6 +304,8 @@ class GameSupportTextOwner final {
     GameFsStatus Initialize(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm&,
         const script::Value& current_context,script::Table,uint16_t header_index,
         PackageView module,const GameSupportTextMap&);
+    GameFsStatus InitializeRegistered(std::shared_ptr<const void> owner,uint64_t epoch,script::Vm&,
+        const GameSupportRegistration&,PackageView module,const GameSupportTextMap&);
     GameFsStatus LoadTemplates(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
         GameResourceSource&,const GameSupportTemplatePaths&);
     // WindowsSupportMarkerWorld: real same-marker parent world as clone root;
@@ -298,6 +323,9 @@ class GameSupportTextOwner final {
     GameSupportSnapshot Progress()const{return state_;} // diagnostic partial state, never readiness
     void Close();
   private:
+    script::Value Cell(script::Vm&,unsigned)const;
+    GameFsStatus InitializeImpl(std::shared_ptr<const void>,uint64_t,script::Vm&,const script::Value&,script::Table,uint16_t,PackageView,const GameSupportTextMap&);
+    std::weak_ptr<GameSupportRegistration::State> registration_;
     struct Input {PackageView view;std::array<uint8_t,32> digest{};};
     struct Atom {uint32_t kind=0,word=0;uint64_t owner=0,epoch=0,serial=0;std::string text;bool operator==(const Atom& b)const{return kind==b.kind&&word==b.word&&owner==b.owner&&epoch==b.epoch&&serial==b.serial&&text==b.text;}};
     Atom Capture(script::Vm&,const script::Value&)const;
@@ -431,6 +459,12 @@ class GameBackgroundPreparation final {
                       GameGraphics&,const GameMatrix& view_projection) const;
     GameFsStatus AreaMarkers(const std::shared_ptr<const void>& owner,uint64_t epoch,
                              std::vector<GameAreaMarkerState>& out)const;
+    GameFsStatus PrepareSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,
+        const GameSupportRegistration&,PackageView module,const GameSupportTextMap&,GameResourceSource&,
+        const GameSupportTemplatePaths&,PackageView glyph_format);
+    GameFsStatus UpdateSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&);
+    GameFsStatus ReadSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameSupportSnapshot&)const;
+    GameFsStatus DrawWithSupport(const std::shared_ptr<const void>& owner,uint64_t epoch,script::Vm&,GameGraphics&,const GameMatrix&)const;
     GameFsStatus Close();
     GameBackgroundPreparationSnapshot Snapshot()const;
   private:
@@ -463,7 +497,10 @@ class GameBackgroundPreparation final {
     std::array<uint8_t,32> model_motion_counts_digest_{};
     GameFilesystem filesystem_;
     std::shared_ptr<GameModelAsset> asset_;
-    GameModelClone clone_;
+    std::shared_ptr<GameModelClone> clone_;
+    GameSupportTextOwner support_;
+    bool support_prepared_=false;
+    bool SupportJobCurrent(const std::shared_ptr<const void>& owner,uint64_t epoch)const;
     std::vector<GameModelMotion> model_motions_;
     PackageView light_format_;
     std::array<uint8_t,32> light_format_digest_{};
