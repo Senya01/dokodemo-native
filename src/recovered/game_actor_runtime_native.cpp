@@ -359,7 +359,7 @@ GameFsStatus GameActorRuntime::ReadInitialScenePeriod7398(int32_t& result)const{
   try{result=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),scene_calendar_[3],scene_calendar_[2]);return {};}
   catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
-GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& calendar) {
+GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& calendar,bool defer_regions) {
   if (!Live() || !resources_ || state_.scene_model_live)
     return {GameFsCode::Unavailable, 0,
             "Scene4DC admission requires live fresh native owner"};
@@ -444,17 +444,18 @@ GameFsStatus GameActorRuntime::InitializeScene0(const std::array<uint32_t,7>& ca
   status = ApplyScenePair(10);
   if (status)
     status = ApplyScenePair(13);
-  if(status) {
-    // 19EA0 compiles once from the actual scene clone; no per-frame fake
-    // list rebuild. Source26B30 owns three independent region arrays.
-    status=regions_.Build(scene_clone_);
-    if(status){state_.region_owners_live=true;
-      for(size_t i=0;i<3;++i)state_.region_counts[i]=uint32_t(regions_.Lists()[i].size());}
-  }
+  if(status&&!defer_regions)status=CompileSceneRegions26B80();
+  return status;
+}
+GameFsStatus GameActorRuntime::CompileSceneRegions26B80(){
+  if(!Live()||!state_.scene_model_live||state_.region_owners_live)
+    return {GameFsCode::Unavailable,0,"26B80 current fresh scene clone/region owner required"};
+  const auto status=regions_.Build(scene_clone_);if(status){state_.region_owners_live=true;
+    for(size_t i=0;i<3;++i)state_.region_counts[i]=uint32_t(regions_.Lists()[i].size());}
   return status;
 }
 GameFsStatus GameActorRuntime::ApplyScenePlacementBD28(const std::shared_ptr<GameBackgroundRuntime>& runtime,uint32_t scene,PackageView row,PackageView heading){
-  if(!BackgroundModuleMatches(runtime)||!state_.scene_model_live||!state_.region_owners_live||scene!=state_.manager_scene14||scene!=0)
+  if(!BackgroundModuleMatches(runtime)||!state_.scene_model_live||scene!=state_.manager_scene14||scene!=0)
     return {GameFsCode::Unavailable,0,"BD28 requires SAME current initialized scene/primary; target adoption not admitted"};
   try{if(row.Describe().size!=12||heading.Describe().size!=4)throw std::runtime_error("BD28 exact held XYZ/heading extents");
     const auto row_hash=row.InitializedDigest(),head_hash=heading.InitializedDigest();std::array<float,4> values{};

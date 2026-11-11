@@ -1545,13 +1545,15 @@ void PlacementLiveTests(){
     auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));ActorSource source;source.scene_assets=true;source.camera_triangle=true;
     GameTransition fade;Check(fade.Initialize({{0,0}}),"placement transition");fade.Open(true);RngNativeOwner rng;rng.ImportCurrentState64(7,2,"synthetic placement lineage");
     auto parent=std::make_shared<GameBackgroundRuntime>();Check(bool(parent->Initialize([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};},rng)),"real native parent with explicit synthetic clock");
-    GameActorRuntime actor;Check(bool(actor.Initialize(0,PackageStorage::Attach(lease,16),fade,&source,parent))&&bool(actor.InitializeScene0({{0,0,0,12,3,5,2026}}))&&bool(actor.BindCamera(1)),"actual scene/region/primary owners before BD28");
+    GameActorRuntime actor;Check(bool(actor.Initialize(0,PackageStorage::Attach(lease,16),fade,&source,parent))&&bool(actor.InitializeScene0({{0,0,0,12,3,5,2026}},true))&&bool(actor.BindCamera(1)),"actual scene/region/primary owners before BD28");
     GameGraphics g;Check(g.Initialize({})&&bool(actor.Draw(g)),"before placement render");GameGraphicsFrame before,after;Check(g.CopyFront(before),"before placement frame");const auto point=actor.Snapshot().camera_target_position;
     std::vector<uint8_t> xyz;for(const float v:{-123.f,456.f,78.f})F(xyz,v);std::vector<uint8_t> heading;F(heading,-3.14159265358979323846f);auto row=std::make_shared<Lease>(xyz),angle=std::make_shared<Lease>(heading);
     const auto view=[](const std::shared_ptr<Lease>& v){return PackageStorage::Attach(v,v->b.size());};auto alias=std::shared_ptr<GameBackgroundRuntime>(parent.get(),[](GameBackgroundRuntime*){});
     Check(!actor.ApplyScenePlacementBD28(alias,0,view(row),view(angle))&&!actor.ApplyScenePlacementBD28(parent,12,view(row),view(angle))&&!actor.Snapshot().source_placement_bound,"foreign module and unadopted target refuse before effects");
     Check(bool(actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle)))&&actor.Snapshot().source_placement20==std::array<float,4>{{-123,456,78,-3.14159265358979323846f}}
         &&actor.Snapshot().actor_root==GameVector4{{-123,456,78,1}}&&actor.Snapshot().camera_target_position==point,"BD28 logical20 XYZ/heading ->real99A8 model root; separate40 unmodified");
+    bool region_result=false;Check(!actor.Snapshot().region_owners_live&&!actor.QueryActorPosition(region_result)
+        &&bool(actor.CompileSceneRegions26B80())&&actor.Snapshot().region_owners_live&&!actor.CompileSceneRegions26B80(),"initial BD28 precedes real26B80; no collision/query readiness before compiled owner or silent replay");
     Check(bool(actor.Draw(g))&&g.CopyFront(after)&&before.pixels!=after.pixels&&actor.Snapshot().actor_pixel_writes>0,"production actual model/room/follow camera consumes posed primary placement");
     const auto old=actor.Snapshot();Word(row->b,0,0x7FC00000);Check(!actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle))&&actor.Snapshot().source_placement_writes==old.source_placement_writes&&actor.Snapshot().actor_root==old.actor_root,"nonfinite DATA refusal preserves live pose");
     actor.Close();Check(!actor.Snapshot().source_placement_bound&&!actor.ApplyScenePlacementBD28(parent,0,view(row),view(angle)),"retired scene/primary placement refuses");parent->Close();g.Close();

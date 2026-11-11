@@ -1437,11 +1437,13 @@ GameFsStatus GameContentBoot::InitializeActorSceneOwners(uint32_t actor,PackageV
             if(!state_.status)return state_.status;
             scene_calendar=scene_bgm_->Snapshot().calendar;
         }
-        state_.status=actor_runtime_.InitializeScene0(scene_calendar);
+        state_.status=actor_runtime_.InitializeScene0(scene_calendar,bool(scene_bgm_));
         if(!state_.status)return state_.status;
         if(scene_bgm_){
             if(initial_position_row_.InitializedDigest()!=initial_position_hash_||initial_position_heading_.InitializedDigest()!=initial_heading_hash_)return {GameFsCode::Unavailable,0,"current source placement DATA drift"};
             state_.status=actor_runtime_.ApplyScenePlacementBD28(background_runtime_,0,initial_position_row_,initial_position_heading_);
+            if(!state_.status)return state_.status;
+            state_.status=actor_runtime_.CompileSceneRegions26B80(); //19EA0 AFTER actual19E94/BD28
             if(!state_.status)return state_.status;
         }
         state_.frontier_pc=0x1A108;

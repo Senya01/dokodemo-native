@@ -191,7 +191,8 @@ public:
   GameFsStatus BindCamera(int32_t mode);
   GameFsStatus BindCamera(script::Vm&,int32_t mode);
   GameFsStatus RefreshCamera7980();
-  GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar);
+  GameFsStatus InitializeScene0(const std::array<uint32_t,7>& calendar,bool defer_regions=false);
+  GameFsStatus CompileSceneRegions26B80();
   GameFsStatus ApplyScenePlacementBD28(const std::shared_ptr<GameBackgroundRuntime>&,uint32_t scene,PackageView row,PackageView heading);
   GameFsStatus InitializeScene0Clock(const std::array<uint32_t,7>& calendar);
   GameFsStatus ReadInitialScenePeriod7398(int32_t&)const;
