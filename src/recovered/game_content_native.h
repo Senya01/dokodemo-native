@@ -278,6 +278,9 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     PackageView actor_model_package_;
     BpDirectory actor_model_directory_;
     bool actor_model_mounted_=false;
+    PackageView context_actor_package_;
+    BpDirectory context_actor_directory_;
+    bool context_actor_mounted_=false;
     GameFilesystem* game_filesystem_=nullptr;
     GameActorScript::ClockWord actor_clock_;
     GameMessageInput actor_message_gate_;

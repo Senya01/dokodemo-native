@@ -583,6 +583,15 @@ GameFsStatus GameContentBoot::OpenResource(const std::string &path, PackageView 
                 }
                 out=actor_model_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
             }
+            if(mount=="KURO"&&game_filesystem_){
+                // Source actor5 resource26, distinct from primary actor21 and
+                // background auxiliary resource29. Actual nested package I/O.
+                if(!context_actor_mounted_){
+                    const auto status=game_filesystem_->LoadMember(mount+".BPM",context_actor_package_);if(!status)return status;
+                    context_actor_directory_=BpDirectory::Parse(context_actor_package_,context_actor_package_.Describe().size);context_actor_mounted_=true;
+                }
+                out=context_actor_directory_.Open(path.substr(split+1));++state_.opened_resources;return {};
+            }
         }
         if (platform_) {
             auto status = platform_->OpenResource(path, out);
@@ -966,6 +975,7 @@ bool GameContentBoot::Close() {
     records_.Close();state_.actor_script.records=records_.Snapshot();
     actor_runtime_.Close();state_.actor_script.runtime=actor_runtime_.Snapshot();
     actor_model_directory_.Reset();actor_model_package_.Reset();actor_model_mounted_=false;
+    context_actor_directory_.Reset();context_actor_package_.Reset();context_actor_mounted_=false;
     inventory_directory_.Reset();inventory_package_.Reset();inventory_mounted_=false;
     notebook_directory_.Reset();notebook_package_.Reset();notebook_mounted_=false;
     wordmemo_directory_.Reset();wordmemo_package_.Reset();wordmemo_mounted_=false;
@@ -1556,6 +1566,9 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x19DD4;
         state_.status=actor_runtime_.InitializeScene0(calendar_);
+        if(!state_.status)throw std::runtime_error(state_.status.detail);
+        state_.frontier_pc=0x1A108;
+        state_.status=actor_runtime_.CreateOrdinaryContextActor5();
         if(!state_.status)throw std::runtime_error(state_.status.detail);
         state_.frontier_pc=0x230EC;
         state_.status=actor_script_.Initialize(actor_dictionary_,script_image,state_.next_resource,state_.title.profile.stored,actor_clock_,title_rng_,&actor_runtime_,&records_,&sound_bank_);

@@ -191,6 +191,7 @@ struct GameSoundBankSnapshot {
 // Native metadata pool adaptation of551E4/55208/5536C. This owns a live source
 // image and a real bounded slot; it does not pretend to implement SGX playback.
 class GameSoundBank final {
+    friend class GameBgmFileQueue;
   public:
     GameFsStatus InitializeSource17F0(){return source_control_.Initialize17F0();}
     GameSourceSoundSnapshot SourceControl()const{return source_control_.Snapshot();}

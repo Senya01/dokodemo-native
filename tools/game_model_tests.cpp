@@ -115,6 +115,7 @@ struct Lease : PackageStorageLease {
 
 struct BackgroundFileState {
     bool live=false,fail_read=false,fail_close=false;
+    bool missing=false;
     uint32_t reads=0,closes=0;
     std::vector<std::shared_ptr<Lease>> buffers;
 };
@@ -125,7 +126,7 @@ class BackgroundFile final:public GameFileSource {
     BackgroundFile(std::vector<uint8_t> bytes,std::shared_ptr<BackgroundFileState> state)
         :bytes_(std::move(bytes)),state_(std::move(state)){}
     ~BackgroundFile()override{(void)Close();}
-    GameFsStatus Open()override{state_->live=true;return {};}
+    GameFsStatus Open()override{if(state_->missing)return {GameFsCode::MissingFile,2,"synthetic missing file"};state_->live=true;return {};}
     GameFsStatus Read(uint64_t at,uint32_t count,PackageView& out)override{
         if(!state_->live||at>bytes_.size()||count>bytes_.size()-at||state_->fail_read)
             return {GameFsCode::IoFailure,0,"synthetic read failure"};
@@ -151,6 +152,74 @@ std::vector<uint8_t> BackgroundArchive(const std::vector<std::pair<std::string,s
         out.insert(out.end(),e.second.begin(),e.second.end());out.resize((out.size()+15)&~size_t(15));
     }
     return out;
+}
+void BgmTransportTests(){
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(std::move(b));};
+    auto root=text("/SYNTHETIC/sound"),name=text("TEST_BANK");
+    auto owner=std::make_shared<int>(1),foreign=std::make_shared<int>(2);
+    std::vector<uint8_t> sgxd(16);Word(sgxd,0,0x44584753);Word(sgxd,8,16); //generated minimal format, no game payload
+    auto io=std::make_shared<BackgroundFileState>();unsigned factories=0;
+    const auto factory=[&](const std::string& path,std::unique_ptr<GameFileSource>& out)->GameFsStatus{
+        Check(path=="/SYNTHETIC/sound/bgm/TEST_BANK.sgd","source path grammar reaches actual file factory");
+        ++factories;out=std::make_unique<BackgroundFile>(sgxd,io);return {};};
+    GameBgmFileQueue q;GameBgmFileResult r;
+    Check(bool(q.Initialize(owner,1,factory)),"initialized real file queue owner");
+    auto alias=std::shared_ptr<const void>(owner.get(),[](const void*){});
+    Check(!q.Request(foreign,1,2,view(root),view(name),r)&&!q.Request(alias,1,2,view(root),view(name),r)
+        &&!q.Request(owner,2,2,view(root),view(name),r)&&!factories,"foreign control block/owner/epoch cannot create an I/O request");
+    Check(bool(q.Request(owner,1,2,view(root),view(name),r))&&r.accepted&&!r.cached&&r.wrapper_return==0
+        &&q.Read(2).selector60==2&&q.Read(2).bank5C==-1&&!q.Read(2).buffer54&&!io->live,"accepted queue is not open, loaded, bank-ready or playback");
+    PackageView image;Check(!q.Borrow(owner,1,2,image)&&!q.Request(owner,1,2,view(root),view(name),r),"pending output/replayed alias is not completed");
+    Check(bool(q.Pump(owner,1))&&q.Read(2).state==2&&q.Read(2).buffer54&&q.Read(2).bytes==16&&q.Read(2).bank5C==-1
+        &&!q.Borrow(owner,1,2,image),"real initialized buffer distinct from second-stage completion/5C");
+    io->buffers[0]->b[0]^=1;Check(!q.Pump(owner,1)&&!q.Read(2).current&&q.Read(2).state==2,"buffer drift cannot publish late completion");io->buffers[0]->b[0]^=1;
+    Check(bool(q.Pump(owner,1))&&bool(q.Borrow(owner,1,2,image))&&image.ReadLE32(0)==0x44584753&&q.Read(2).current,"completed owned file readback");
+    GameSoundBank wrong_bank;auto foreign_image=std::make_shared<Lease>(sgxd);Check(bool(wrong_bank.InitializeSource17F0())&&bool(wrong_bank.Register(view(foreign_image)))
+        &&!q.BindRegistered(owner,1,2,wrong_bank),"same bytes in a foreign allocation cannot supply cached5C");wrong_bank.Close();
+    GameSoundBank bank;Check(bool(bank.InitializeSource17F0())&&bool(bank.Register(image)),"actual synthetic SGXD bank allocation, no playback");
+    Check(bool(q.BindRegistered(owner,1,2,bank))&&q.Read(2).bank5C>0&&q.Read(2).bank5C!=int32_t(q.Read(2).bytes),"5C is actual registry handle, not file size");
+    Check(bool(q.Request(owner,1,2,view(root),view(name),r))&&r.cached&&!r.accepted&&r.wrapper_return==q.Read(2).bank5C&&factories==1,"cached wrapper returns same current positive bank without new I/O");
+    bank.Close();Check(!q.Read(2).current&&!q.Request(owner,1,2,view(root),view(name),r),"retired bank cannot become a cold/cache success");
+    io->fail_close=true;Check(!q.Close()&&!q.Read(2).current&&!q.Initialize(owner,2,factory),"failed retirement retains actual file for retry; cannot restart");
+    io->fail_close=false;Check(bool(q.Close())&&!io->live&&!q.Initialize(owner,1,factory),"actual retry retires backing; same epoch cannot revive old calls");bool stale=false;try{(void)image.ReadLE32(0);}catch(...){stale=true;}Check(stale,"retired exported file lease refuses");
+    for(unsigned failure=0;failure<4;++failure){
+        io=std::make_shared<BackgroundFileState>();Check(bool(q.Initialize(owner,2+failure,factory)),"fresh file epoch");
+        Check(bool(q.Request(owner,2+failure,3,view(root),view(name),r)),"real failure begins with accepted request");
+        if(failure==0)io->missing=true;
+        if(failure==1)io->fail_read=true;
+        if(failure==2)root->b[1]='Q';
+        if(failure==3)owner.reset();
+        Check(!q.Pump(owner,2+failure)&&!q.Read(3).buffer54&&q.Read(3).selector60==3&&q.Read(3).bank5C==-1,"open/read/input/owner failure is not immediate queue rejection or ready");
+        if(failure<2){io->missing=io->fail_read=false;Check(bool(q.Pump(owner,2+failure))&&bool(q.Pump(owner,2+failure))&&q.Read(3).state==5,"actual supported I/O retry completes without changing wrapper result");}
+        if(failure==2)root->b[1]='S';
+        if(failure==3)owner=std::make_shared<int>(1);
+        Check(bool(q.Close()),"failure cleanup");
+    }
+    io=std::make_shared<BackgroundFileState>();Check(bool(q.Initialize(owner,9,factory)),"finite queue initialization");
+    for(unsigned i=0;i<8;++i)Check(bool(q.Request(owner,9,i,view(root),view(name),r))&&r.accepted,"eight actual pending output owners");
+    const auto before=factories;Check(bool(q.Request(owner,9,8,view(root),view(name),r))&&!r.accepted&&r.wrapper_return==-1
+        &&q.Read(8).selector60==-1&&factories==before,"real capacity refusal follows record60=-1 without a fake I/O request");Check(bool(q.Close()),"queue cleanup");
+    Check(bool(q.Initialize(owner,10,[](const std::string&,std::unique_ptr<GameFileSource>&)->GameFsStatus{return {GameFsCode::Unavailable,0,"unimplemented provider"};})),"unknown provider fixture");
+    r={true,true,123,456};Check(!q.Request(owner,10,0,view(root),view(name),r)&&r.wrapper_return==123&&q.Read(0).selector60==0&&q.Read(0).state==0&&!q.Read(0).buffer54,"unknown provider is not manufactured source failure/return-1");Check(bool(q.Close()),"unknown cleanup");
+
+    io=std::make_shared<BackgroundFileState>();io->fail_close=true;Check(bool(q.Initialize(owner,11,[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{
+        out=std::make_unique<BackgroundFile>(sgxd,io);Check(bool(out->Open()),"partial actual factory opens its file");throw std::runtime_error("synthetic factory exception after acquisition");})),"partial factory fixture");
+    Check(!q.Request(owner,11,1,view(root),view(name),r)&&io->live&&!q.Close(),"throwing factory retains actual acquired file for failed-close retry");io->fail_close=false;Check(bool(q.Close())&&!io->live,"partial factory cleanup retry");
+    // Different synthetic values across all four arrays; original BGM table is
+    // external user data. Exactly one RNG call, with source one-step avoidance.
+    std::vector<uint8_t> words;for(unsigned i=0;i<19;++i)W(words,(i*7+3)%25);auto lists=std::make_shared<Lease>(words);
+    for(unsigned period=0;period<6;++period)for(uint64_t seed:{0,1,9}){
+        RngNativeOwner rng;rng.ImportCurrentState64(seed,1,"synthetic BGM fixture");auto expected_rng=rng;
+        const auto raw=expected_rng.NextC3234();const unsigned start=period<2?0:period==2?3:period==3?9:12;
+        const unsigned modulo=period<2||period==3?2:period==2?5:6;
+        const unsigned at=raw%modulo;const auto previous=int32_t(view(lists).ReadLE32((start+at)*4));GameBgmSelection selected;
+        Check(bool(SelectBgm19B6C(period,previous,view(lists),rng,selected))&&selected.index==view(lists).ReadLE32((start+at+1)*4)
+            &&selected.rng_calls==1&&selected.before==seed&&selected.after==expected_rng.CurrentSeed64()&&rng.CurrentSeed64()==selected.after,"source avoids old choice by next array entry, not another RNG draw");
+    }
+    RngNativeOwner rng;rng.ImportCurrentState64(2,2,"synthetic invalid BGM");GameBgmSelection untouched;untouched.index=99;
+    Check(!SelectBgm19B6C(6,0,view(lists),rng,untouched)&&rng.CurrentSeed64()==2&&untouched.index==99,"unknown period refuses without invented return or random draw");
+    Word(lists->b,0,25);Check(!SelectBgm19B6C(0,0,view(lists),rng,untouched)&&rng.CurrentSeed64()==2,"malformed current table refuses before RNG");Word(lists->b,0,3);
 }
 void BackgroundPreparationTests(){
     // Arbitrary synthetic names/geometry; no extracted registry/asset fixture.
@@ -843,19 +912,35 @@ void BackgroundSamplingTests(){
         Check(bool(runtime->Initialize([&]{++reads;return calendar;},rng)),"initialize current clock and actual RNG lineage");
         const std::shared_ptr<const void> owner=runtime;
         GameBackgroundPreparation job;auto io=std::make_shared<BackgroundFileState>();
-        const auto prepare=[&](uint64_t epoch){Check(bool(job.Begin(owner,epoch,{1,12,0,epoch},view(records),std::make_unique<BackgroundFile>(file,io)))&&bool(job.Load(owner,epoch))
+        uint64_t after_bgm=seed;
+        const auto prepare=[&](uint64_t epoch){Check(bool(job.Begin(owner,epoch,{1,12,0,epoch},view(records),std::make_unique<BackgroundFile>(file,io))),"pending source resource job before BGM");
+            if(seed==3&&epoch==1){
+                auto old=std::make_shared<Lease>(std::vector<uint8_t>(4));Word(old->b,0,24);
+                std::vector<uint8_t> data;for(unsigned i=0;i<19;++i)W(data,(i*7+3)%25);auto list=std::make_shared<Lease>(data);
+                auto path=chars("/SYNTHETIC/sound"),bgm_name=chars("SAMPLE");auto bgm_io=std::make_shared<BackgroundFileState>();
+                const auto make_file=[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,3),bgm_io);return {};};
+                const auto names=[&](uint32_t){return view(bgm_name);};
+                auto other_owner=std::make_shared<int>(1);
+                Check(!job.RequestBgm(other_owner,epoch,runtime,view(old),view(list),view(path),names,make_file)&&rng.CurrentSeed64()==seed,"foreign pending job cannot consume shared RNG");
+                Check(bool(job.RequestBgm(owner,epoch,runtime,view(old),view(list),view(path),names,make_file)),"source BGM selection/file request on same pending job before background init");
+                after_bgm=rng.CurrentSeed64();Check(job.Snapshot().bgm_selection.before==seed&&job.Snapshot().bgm_selection.after==after_bgm
+                    &&job.Snapshot().bgm_requested&&job.BgmFile().state==1&&!reads,"BGM actual RNG effect precedes clock/auxiliary calls, accepted is not loaded");
+                bgm_io->missing=true;Check(!job.PumpBgm(owner,epoch)&&job.BgmFile().state==1,"supported open error retained, not a scene all-audio-success gate");
+                Check(!job.RequestBgm(owner,epoch,runtime,view(old),view(list),view(path),names,make_file)&&rng.CurrentSeed64()==after_bgm,"replay cannot repeat scene BGM selection");
+            }
+            Check(bool(job.Load(owner,epoch))
             &&bool(job.LoadModelMotions(owner,epoch,view(counts)))&&bool(job.LoadAuxiliary(owner,epoch,view(recipe),view(aux_format),resolver))
             &&bool(job.PrepareEffects(owner,epoch,GameBackgroundEffectsPolicy::WindowsReducedBackgroundEffects,view(light_format))),"real current staged sampling owner");};
         prepare(1);auto foreign=std::make_shared<GameBackgroundRuntime>();Check(bool(foreign->Initialize([&]{return calendar;},rng)),"other valid producer");
-        Check(!job.ActivateEffects(owner,1,foreign)&&!job.ActivateEffects(owner,2,runtime)&&rng.CurrentSeed64()==seed&&!reads,"foreign/stale activation never reads or advances");
+        Check(!job.ActivateEffects(owner,1,foreign)&&!job.ActivateEffects(owner,2,runtime)&&rng.CurrentSeed64()==after_bgm&&!reads,"foreign/stale activation never reads or advances");
         calendar[1]=1; // changed since initialization: Read must use CURRENT producer, not a saved date
         Check(bool(job.ActivateEffects(owner,1,runtime))&&reads==1,"current clock read and source selection");
-        uint64_t expected=seed;unsigned calls=0;const auto next=[&](){++calls;expected=expected*UINT64_C(0x5851f42d4c957f2d)+1;return uint32_t(expected>>32)&0x7fffffff;};
+        uint64_t expected=after_bgm;unsigned calls=0;const auto next=[&](){++calls;expected=expected*UINT64_C(0x5851f42d4c957f2d)+1;return uint32_t(expected>>32)&0x7fffffff;};
         const auto n=next()%4;std::vector<uint32_t> pool{0,1,2,3,4,5},selected;
         for(unsigned k=0;k<n;++k){const auto at=next()%pool.size();selected.push_back(pool[at]);pool.erase(pool.begin()+at);}
         std::vector<int32_t> phases;for(unsigned k=0;k<n;++k)phases.push_back(int32_t(next()%6));
         GameBackgroundAppliedState applied;Check(bool(job.AppliedEffects(owner,1,applied))&&applied.selected_entries==selected&&applied.child_phases==phases
-            &&applied.rng_calls==calls&&applied.rng_before==seed&&applied.rng_after==expected&&rng.CurrentSeed64()==expected,"exact61E4 compaction and child-only extra RNG call order");
+            &&applied.rng_calls==calls&&applied.rng_before==after_bgm&&applied.rng_after==expected&&rng.CurrentSeed64()==expected,"exact61E4 compaction and child-only extra RNG call order");
         Check(applied.calendar==calendar&&applied.light_slot==0&&!applied.samples,"month1 before day7 selects previous month row0, unsampled activation");
         Check(!job.ActivateEffects(owner,1,runtime)&&rng.CurrentSeed64()==expected&&reads==1,"activation cannot replay RNG or clock");
         Check(bool(job.SampleEffects(owner,1,4800))&&bool(job.AppliedEffects(owner,1,applied))&&applied.samples==1
@@ -1213,6 +1298,13 @@ void ContextActorTransactionPrefixTests(){
     initialize();Check(bool(create()),"drift actor epoch");Vm drift(program);drift.start();Check(bool(runtime.BindScriptContextActor1C0FC(drift)),"drift context owner");
     params->b[0]^=1;Check(!runtime.RequestPendingScene12(drift)&&!runtime.Snapshot().context_actor.current&&!runtime.Snapshot().manager_switch.pending,"held source constant drift refused before pending effects");params->b[0]^=1;
     drift.start();Check(!runtime.RequestPendingScene12(drift)&&bool(runtime.BindScriptContextActor1C0FC(drift))&&bool(runtime.RequestPendingScene12(drift)),"module restart needs a new real constructor association");
+    initialize();Check(bool(runtime.CreateOrdinaryContextActor5()),"ordinary source actor5 model initializer");
+    Vm same0(program);same0.start();Check(bool(runtime.BindScriptContextActor1C0FC(same0)),"context is created after ordinary actor5 constructor");
+    const auto ordinary=runtime.Snapshot();Check(ordinary.context_actor.presence==GameContextActorPresence::Present&&!ordinary.context_actor.model_visible&&ordinary.context_actor.logical[0]==-2000,"actual ordinary model owner, hidden finite logical subset");
+    Check(bool(runtime.RequestSameManager0(same0))&&runtime.Snapshot().context_actor.moves==ordinary.context_actor.moves+1
+        &&runtime.Snapshot().context_actor.hides==ordinary.context_actor.hides+1&&runtime.Snapshot().manager_switch.requested18==0
+        &&bool(runtime.ConsumeSameManager0()),"same0 uses its captured actor5 too, then actual equal-selector consume");
+    Check(!runtime.RequestSameManager0(foreign),"unbound unrelated context cannot use same0 shortcut");
     initialize();resources.fail=true;Check(!create()&&runtime.Snapshot().context_actor.presence==GameContextActorPresence::Unknown,"failed actual model load does not publish actor or known absence");resources.fail=false;
     auto short_params=std::make_shared<Lease>(std::vector<uint8_t>(20));Check(!runtime.CreateContextActor5(resources,view(path),view(prefix),view(short_params))&&bool(create()),"malformed constructor input refuses, fresh real retry works");
     Vm retired(program);retired.start();Check(bool(runtime.BindScriptContextActor1C0FC(retired)),"retirement bound owner");runtime.Close();Check(!runtime.RequestPendingScene12(retired)&&!runtime.Snapshot().context_actor.current,"retired manager cannot consume an old context binding");
@@ -1711,6 +1803,7 @@ int main() {
         SupportGlyphTests();
         ManagerSupportJobTests();
         ContextActorTransactionPrefixTests();
+        BgmTransportTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();

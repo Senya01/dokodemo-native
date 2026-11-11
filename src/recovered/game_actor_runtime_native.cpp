@@ -157,6 +157,19 @@ float ContextActorFloat(const PackageView& input,unsigned i){
   const auto bits=input.ReadLE32(i*4);float value;std::memcpy(&value,&bits,4);
   if(!std::isfinite(value))throw std::runtime_error("context actor constant nonfinite");return value;
 }
+// Authored native initializer, not a copied PSP24-byte packet. Leases own
+// initialized readonly native data just like caller-supplied packet inputs.
+struct ContextActorInput final:PackageStorageLease {
+  std::vector<uint8_t> bytes,known;
+  bool Span(PackageStorageSpan& out,std::string&)const override{
+    out={const_cast<uint8_t*>(bytes.data()),const_cast<uint8_t*>(known.data()),bytes.size(),
+      uint64_t(reinterpret_cast<uintptr_t>(bytes.data())),uint64_t(reinterpret_cast<uintptr_t>(this)),1,1,0,true,false};return true;
+  }
+};
+PackageView ActorTextInput(const std::string& text){
+  auto p=std::make_shared<ContextActorInput>();p->bytes.assign(text.begin(),text.end());p->bytes.push_back(0);p->known.assign(p->bytes.size(),1);
+  return PackageStorage::Attach(p,p->bytes.size());
+}
 }
 struct GameActorRuntime::ContextActorData {
   GameContextActorSnapshot state;
@@ -211,6 +224,19 @@ GameFsStatus GameActorRuntime::CreateContextActor5(GameResourceSource& source,Pa
     context_actor_=std::move(pending);return {};
   }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameActorRuntime::CreateOrdinaryContextActor5(){
+  if(!resources_)return {GameFsCode::Unavailable,0,"ordinary actor5 resource provider absent"};
+  // Selected26 registration and D7C[5]/D58[5] identify the same KURO mount,
+  // folder and body. 8D78/9214 formats are consumed as actual asset paths;
+  // no original name table, constructor byte array or default pose is copied.
+  const std::string stem="KURO",base=stem+"\\"+stem+"\\";
+  auto parameters=std::make_shared<ContextActorInput>();
+  // Distinct ctor/request source addresses, equal current literal values.
+  for(float value:{-2000.f,270.f,-2000.f,270.f,3.1415927410125732f,180.f}){
+    uint32_t bits;std::memcpy(&bits,&value,4);for(unsigned i=0;i<4;++i)parameters->bytes.push_back(uint8_t(bits>>(i*8)));}
+  parameters->known.assign(parameters->bytes.size(),1);
+  return CreateContextActor5(*resources_,ActorTextInput(base+stem+".DVS"),ActorTextInput(base+"gim\\"),PackageStorage::Attach(parameters,parameters->bytes.size()));
+}
 GameFsStatus GameActorRuntime::ClearContextActor1A1F4(){
   if(!Live()||!context_actor_||context_actor_->state.presence!=GameContextActorPresence::Present)
     return {GameFsCode::Unavailable,0,"context actor absence needs an actual prior object retirement"};
@@ -231,7 +257,9 @@ GameFsStatus GameActorRuntime::BindScriptContextActor1C0FC(script::Vm& vm){
     context_actors_.push_back({context.context_owner,context_actor_,w.run_id,nil,w.code_sha256});return {};
   }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
-GameFsStatus GameActorRuntime::RequestPendingScene12(script::Vm& vm){
+GameFsStatus GameActorRuntime::RequestPendingScene12(script::Vm& vm){return RequestContextScene(vm,12);}
+GameFsStatus GameActorRuntime::RequestSameManager0(script::Vm& vm){return RequestContextScene(vm,0);}
+GameFsStatus GameActorRuntime::RequestContextScene(script::Vm& vm,int32_t selector){
   if(!Live())return {GameFsCode::Unavailable,0,"pending scene manager retired"};
   try{const auto w=vm.current_witness();if(!w.valid||w.stopped||!w.context_registered)throw std::runtime_error("pending scene current context required");
     const auto context=vm.context_value();if(!vm.stable_value_owner(context))throw std::runtime_error("pending scene foreign context thread");
@@ -239,7 +267,8 @@ GameFsStatus GameActorRuntime::RequestPendingScene12(script::Vm& vm){
     for(const auto& bound:context_actors_)if(bound.context.lock()==ctx&&bound.run==w.run_id&&bound.module==w.code_sha256){actor=bound.actor.lock();nil=bound.captured_nil;break;}
     // Source reads node24 BEFORE pending stores. Unknown/retired is not nil.
     if(!nil&&(!actor||!actor->Current()))throw std::runtime_error("context node24 actor association unknown/retired");
-    if(!manager_switch_.RequestPending12(state_.owner_epoch))throw std::runtime_error("pending scene12 request owner/replay/domain");
+    if(selector==0){if(!state_.scene_clock_ready||state_.manager_scene14!=0||!manager_switch_.RequestSame0(state_.owner_epoch,0))throw std::runtime_error("same scene0 request owner/domain");}
+    else if(selector!=12||!manager_switch_.RequestPending12(state_.owner_epoch))throw std::runtime_error("pending scene12 request owner/replay/domain");
     state_.manager_switch=manager_switch_.Snapshot();
     if(!nil){
       actor->Move(ContextActorFloat(actor->inputs[2],2),ContextActorFloat(actor->inputs[2],3));

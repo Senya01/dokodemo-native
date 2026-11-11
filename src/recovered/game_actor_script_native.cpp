@@ -319,7 +319,7 @@ Value GameActorScript::DispatchGameService(const std::vector<Value>& args) {
         Need(runtime_&&o.entered&&!o.returned&&!o.failed&&w.frame_id==o.frame&&w.code_entry==0x13219
              &&(w.current_pc==0x13249||w.current_pc==0x133A3)&&Number(arg)==0,
              "GAME12 outside selected outing same-selector0 cancellation");
-        const auto status=runtime_->RequestSameManager0(0);Need(bool(status),status.detail.c_str());
+        const auto status=runtime_->RequestSameManager0(*vm_);Need(bool(status),status.detail.c_str());
         ++o.manager_requests;return False();
     }
     case 21:

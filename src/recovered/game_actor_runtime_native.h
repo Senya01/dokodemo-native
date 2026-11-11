@@ -199,9 +199,11 @@ public:
   // Full AC60 animation/callback behavior and scene adoption are not admitted.
   GameFsStatus CreateContextActor5(GameResourceSource&,PackageView model_path,
                                   PackageView texture_prefix,PackageView constants);
+  GameFsStatus CreateOrdinaryContextActor5();
   GameFsStatus ClearContextActor1A1F4();
   GameFsStatus BindScriptContextActor1C0FC(script::Vm&);
   GameFsStatus RequestPendingScene12(script::Vm&);
+  GameFsStatus RequestSameManager0(script::Vm&);
   GameFsStatus RequestSameManager0(int32_t target);
   GameFsStatus ConsumeSameManager0();
   GameFsStatus ClearManager8();
@@ -249,6 +251,7 @@ private:
     std::array<char,65> module{};
   };
   std::vector<ContextActorBinding> context_actors_;
+  GameFsStatus RequestContextScene(script::Vm&,int32_t);
   PackageView actor_asc_;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;

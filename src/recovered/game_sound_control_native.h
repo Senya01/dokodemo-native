@@ -1,10 +1,13 @@
 #pragma once
 #include "game_filesystem_native.h"
 #include <array>
+#include <functional>
+#include <vector>
 #include "game_sound_voice_native.h"
 
 namespace dokodemo::recovered {
 class GameSoundBank;
+class GameBgmFileQueue;
 struct GameSourceBankRegistration {
     bool live=false,attached=false,coherent=false;
     uint64_t registry=0,generation=0,serial=0;
@@ -28,6 +31,7 @@ class GameSourceBankRegistry final {
   private:
     friend class GameSoundBank;
     friend class GameSourceSoundControl;
+    friend class GameBgmFileQueue;
     GameFsStatus Allocate(PackageView,int32_t&);
     bool Readback(int32_t,GameSourceBankRegistration&)const;
     bool Retain(int32_t,uint32_t&,uint32_t&);
@@ -39,6 +43,53 @@ class GameSourceBankRegistry final {
     std::array<GameSourceBankRegistration,64> entries_{};
     std::array<PackageView,64> images_{},tails_{};
     uint64_t owner_=0,generation_=0,serial_=0;
+    std::shared_ptr<const void> lifetime_=std::make_shared<uint8_t>(uint8_t(0));
+};
+// WindowsStagedBgmFiles: mode1 file transport, NOT SGX playback/readiness.
+// The file source owns the real allocation until record retirement (native
+// lifetime adaptation); completion never manufactures a source bank handle.
+struct GameBgmFileRecord {
+    int32_t selector60=-1,bank5C=-1;
+    uint32_t state=0; // source queue1/2/5, not record+5C
+    uint64_t request=0,bytes=0;
+    bool buffer54=false,current=false,cleanup_pending=false;
+    GameFsStatus io;
+    PackageViewDescription buffer;
+    std::array<uint8_t,32> digest{};
+    std::string path;
+};
+struct GameBgmFileResult { bool accepted=false,cached=false;int32_t wrapper_return=0;uint64_t request=0; };
+struct GameBgmSelection {uint32_t period=0,index=0,rng_calls=0;int32_t previous=0;uint64_t before=0,after=0,lineage=0;};
+class RngNativeOwner;
+GameFsStatus SelectBgm19B6C(uint32_t period,int32_t previous,PackageView lists,
+                          RngNativeOwner&,GameBgmSelection&);
+class GameBgmFileQueue final {
+  public:
+    using Factory=std::function<GameFsStatus(const std::string&,std::unique_ptr<GameFileSource>&)>;
+    GameBgmFileQueue()=default;
+    ~GameBgmFileQueue();
+    GameBgmFileQueue(const GameBgmFileQueue&)=delete;
+    GameBgmFileQueue& operator=(const GameBgmFileQueue&)=delete;
+    GameFsStatus Initialize(std::shared_ptr<const void>,uint64_t epoch,Factory);
+    GameFsStatus Request(const std::shared_ptr<const void>&,uint64_t epoch,uint32_t index,
+                         PackageView root,PackageView name,GameBgmFileResult&);
+    // Separate real registrar result. Only the actually registered SAME image
+    // can back a cached5C return; integers/sizes/metadata slots are not inputs.
+    GameFsStatus BindRegistered(const std::shared_ptr<const void>&,uint64_t epoch,uint32_t index,const GameSoundBank&);
+    GameFsStatus Pump(const std::shared_ptr<const void>&,uint64_t epoch);
+    GameFsStatus Borrow(const std::shared_ptr<const void>&,uint64_t epoch,uint32_t index,PackageView&)const;
+    GameBgmFileRecord Read(uint32_t index)const;
+    GameFsStatus Close();
+  private:
+    struct Record;
+    bool Current(const std::shared_ptr<const void>&,uint64_t)const;
+    bool RecordCurrent(const Record&)const;
+    std::weak_ptr<const void> owner_;
+    uint64_t epoch_=0,last_epoch_=0,serial_=0;
+    Factory factory_;
+    std::array<std::shared_ptr<Record>,25> records_{};
+    std::vector<uint32_t> queue_;
+    bool closing_=false;
 };
 // Typed fields actually initialized by17F0. PSP padding and the native audio
 // queue/metadata slot are separate domains; neither is a source playback ID.

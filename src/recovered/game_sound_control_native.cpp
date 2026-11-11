@@ -1,10 +1,145 @@
 #include "game_sound_control_native.h"
+#include "game_scene_ui_native.h"
+#include "rng_native.h"
 #include <atomic>
 #include <tuple>
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 
 namespace dokodemo::recovered {
+GameFsStatus SelectBgm19B6C(uint32_t period,int32_t previous,PackageView lists,
+                           RngNativeOwner& rng,GameBgmSelection& out){
+    try{
+        // Four source arrays,19 words. Data is caller-held user input, never
+        // an extracted table in code. Only admitted current periods use RNG.
+        if(period>=6||!rng.Available()||lists.Describe().size!=76)
+            throw std::runtime_error("19B6C current period/RNG/list input unavailable");
+        const auto digest=lists.InitializedDigest();
+        for(unsigned i=0;i<19;++i)if(lists.ReadLE32(i*4)>=25)throw std::runtime_error("19B6C BGM record index outside25");
+        const unsigned group=period<2?0:period-1<3?period-1:3;
+        const unsigned starts[]{0,3,9,12},counts[]{3,6,3,7};
+        GameBgmSelection result;result.period=period;result.previous=previous;result.before=rng.CurrentSeed64();result.lineage=rng.Lineage();
+        const auto raw=rng.NextC3234();result.rng_calls=1;result.after=rng.CurrentSeed64();
+        // C3234 returns a nonnegative31-bit integer; source signed remainder
+        // is modulo(count-1), followed by one-step avoidance (NOT rejection).
+        unsigned at=raw%(counts[group]-1);auto chosen=lists.ReadLE32((starts[group]+at)*4);
+        if(int32_t(chosen)==previous){if(++at==counts[group])at=0;chosen=lists.ReadLE32((starts[group]+at)*4);}
+        if(lists.InitializedDigest()!=digest)throw std::runtime_error("19B6C list drift after RNG effect");
+        result.index=chosen;out=result;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+struct GameBgmFileQueue::Record {
+    GameBgmFileRecord state;
+    PackageView root,name,image;
+    std::array<uint8_t,32> root_hash{},name_hash{};
+    std::unique_ptr<GameFileSource> file;
+    const GameSourceBankRegistry* registry=nullptr;
+    std::weak_ptr<const void> registry_life;
+    GameSourceBankRegistration registration;
+};
+namespace {
+std::string BgmText(PackageView input,bool root){
+    const auto n=input.Describe().size;if(n<2||n>128)throw std::runtime_error("BGM path token extent");
+    std::string s;for(uint64_t i=0;i<n;++i){const auto c=input.ReadU8(i);if(!c){
+        if(i+1!=n||s.empty()||s.find("..")!=s.npos||s.back()=='/'||s.back()=='\\')throw std::runtime_error("BGM path token geometry");return s;}
+        if(c<33||c>126||c==':'||c=='\\'||(!root&&c=='/'))throw std::runtime_error("BGM path token character");s+=char(c);}
+    throw std::runtime_error("BGM path token terminator");
+}
+}
+GameBgmFileQueue::~GameBgmFileQueue(){(void)Close();}
+bool GameBgmFileQueue::Current(const std::shared_ptr<const void>& owner,uint64_t epoch)const{
+    const auto p=owner_.lock();return !closing_&&p&&owner&&p.get()==owner.get()&&!p.owner_before(owner)&&!owner.owner_before(p)&&epoch_==epoch;
+}
+bool GameBgmFileQueue::RecordCurrent(const Record& r)const{
+    try{
+        if(owner_.expired()||closing_||r.root.InitializedDigest()!=r.root_hash||r.name.InitializedDigest()!=r.name_hash)return false;
+        if(r.state.buffer54&&r.image.InitializedDigest()!=r.state.digest)return false;
+        if(r.state.bank5C>=0){GameSourceBankRegistration now;
+            if(r.registry_life.expired()||!r.registry||!r.registry->Readback(r.state.bank5C,now)||!GameSourceBankRegistrationExact(now,r.registration))return false;}
+        return true;
+    }catch(...){return false;}
+}
+GameFsStatus GameBgmFileQueue::Initialize(std::shared_ptr<const void> owner,uint64_t epoch,Factory factory){
+    if(epoch_||!owner||epoch<=last_epoch_||!factory)return {GameFsCode::Unavailable,0,"BGM current owner/fresh epoch/file factory required; close before restart"};
+    owner_=std::move(owner);epoch_=last_epoch_=epoch;factory_=std::move(factory);closing_=false;return {};
+}
+GameFsStatus GameBgmFileQueue::Request(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t index,PackageView root,PackageView name,GameBgmFileResult& out){
+    if(!Current(owner,epoch)||index>=25)return {GameFsCode::Unavailable,0,"BGM request foreign/retired/index"};
+    try{
+        const auto path=BgmText(root,true)+"/bgm/"+BgmText(name,false)+".sgd";
+        if(path.size()>79)throw std::runtime_error("BGM record+4 bounded80-byte path");
+        auto& old=records_[index];if(old){
+            if(!RecordCurrent(*old)||old->state.path!=path)throw std::runtime_error("BGM current record changed");
+            if(old->state.bank5C>0){out={false,true,old->state.bank5C,old->state.request};return {};}
+            // Source can enqueue duplicate raw output pointers. This adapter
+            // refuses that unsafe alias before modifying the current record.
+            throw std::runtime_error("BGM pending/loaded record needs explicit retirement before re-request");
+        }
+        auto r=std::make_shared<Record>();r->root=root;r->name=name;r->root_hash=root.InitializedDigest();r->name_hash=name.InitializedDigest();
+        r->state.selector60=int32_t(index);r->state.path=path;r->state.request=++serial_;
+        GameBgmFileResult result;result.request=r->state.request;
+        if(queue_.size()==8){r->state.selector60=-1;result.wrapper_return=-1;records_[index]=std::move(r);out=result;return {};}
+        // Resolve the real file provider before accepting. Unsupported factory
+        // is NOT an I/O request failure and never writes source record60=-1.
+        // The selected name/selector stores already precede4AA5C. Retain any
+        // partial factory owner even if it throws/fails, for explicit cleanup.
+        old=r;
+        auto status=factory_(path,r->file);if(!status){r->state.io=status;r->state.cleanup_pending=bool(r->file);return status;}
+        if(!r->file)throw std::runtime_error("BGM file factory supplied no owner");
+        if(!Current(owner,epoch)||!RecordCurrent(*r))throw std::runtime_error("BGM owner/input changed during file creation");
+        r->state.state=1;queue_.push_back(index);old=std::move(r);result.accepted=true;out=result;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameBgmFileQueue::Pump(const std::shared_ptr<const void>& owner,uint64_t epoch){
+    if(!Current(owner,epoch))return {GameFsCode::Unavailable,0,"BGM worker current owner required"};
+    if(queue_.empty())return {};
+    auto& r=*records_[queue_.front()];
+    if(!RecordCurrent(r))return {GameFsCode::Unavailable,0,"BGM worker record/source drift"};
+    if(r.state.cleanup_pending){auto s=r.file->Close();r.state.io=s;if(!s)return s;r.state.cleanup_pending=false;}
+    if(r.state.state==1){
+        auto status=r.file->Open();if(!status){r.state.io=status;return status;}
+        const auto io=r.file->Snapshot();
+        if(!io.file_live||!io.file_bytes||io.file_bytes>64*1024*1024){r.state.cleanup_pending=true;r.state.io={GameFsCode::Bounds,0,"BGM actual file outside native nonempty64MiB domain"};return r.state.io;}
+        PackageView image;status=r.file->Read(0,uint32_t(io.file_bytes),image);r.state.io=status;
+        if(!status){r.state.cleanup_pending=true;return status;}
+        try{
+            if(image.Describe().size!=io.file_bytes)throw std::runtime_error("BGM actual file read extent mismatch");
+            const auto hash=image.InitializedDigest();if(!Current(owner,epoch)||!RecordCurrent(r))throw std::runtime_error("BGM read owner/input drift");
+            r.image=image;r.state.digest=hash;r.state.buffer=image.Describe();r.state.buffer54=true;r.state.bytes=io.file_bytes;r.state.state=2;return {};
+        }catch(const std::exception& e){r.state.cleanup_pending=true;r.state.io={GameFsCode::Unavailable,0,e.what()};return r.state.io;}
+    }
+    if(r.state.state!=2)return {GameFsCode::Unavailable,0,"BGM worker state outside mode1 domain"};
+    // Synchronous Read has actually returned all initialized bytes. Separate
+    // native step preserves pending vs complete. File/allocation owner stays
+    // held until record retirement; GameFileSource::Close revokes its leases.
+    r.state.state=5;queue_.erase(queue_.begin());return {};
+}
+GameFsStatus GameBgmFileQueue::Borrow(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t index,PackageView& out)const{
+    if(!Current(owner,epoch)||index>=25||!records_[index]||!RecordCurrent(*records_[index])||records_[index]->state.state!=5)
+        return {GameFsCode::Unavailable,0,"BGM completed current file buffer unavailable"};
+    out=records_[index]->image;return {};
+}
+GameFsStatus GameBgmFileQueue::BindRegistered(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t index,const GameSoundBank& bank){
+    PackageView image;auto status=Borrow(owner,epoch,index,image);if(!status)return status;
+    auto& r=*records_[index];if(r.state.bank5C>=0)return {GameFsCode::Unavailable,0,"BGM registrar result already stored"};
+    const auto source=bank.source_control_.Snapshot();GameSourceBankRegistration entry;
+    // Only an existing actual registrar entry for this exact buffer; do not
+    // parse/register/play a new audio domain as a side effect of file loading.
+    if(!source.bank_live||!bank.registry_.Readback(source.registration.id,entry)||entry.id<=0||!bank.image_.SharesBacking(r.image)
+        ||entry.digest!=r.state.digest||entry.image.owner!=r.state.buffer.owner||entry.image.generation!=r.state.buffer.generation
+        ||entry.image.serial!=r.state.buffer.serial||entry.image.offset!=r.state.buffer.offset||entry.image.size!=r.state.buffer.size)
+        return {GameFsCode::Unavailable,0,"BGM cached5C requires SAME real registered image/positive handle"};
+    r.registry=&bank.registry_;r.registry_life=bank.registry_.lifetime_;r.registration=entry;r.state.bank5C=entry.id;return {};
+}
+GameBgmFileRecord GameBgmFileQueue::Read(uint32_t index)const{
+    if(index>=25||!records_[index])return {};auto s=records_[index]->state;s.current=RecordCurrent(*records_[index]);return s;
+}
+GameFsStatus GameBgmFileQueue::Close(){
+    closing_=true;owner_.reset();factory_={};queue_.clear();
+    for(auto& r:records_)if(r){r->image.Reset();r->state.buffer54=false;if(r->file){auto s=r->file->Close();if(!s){r->state.io=s;r->state.cleanup_pending=true;return s;}}r.reset();}
+    epoch_=0;closing_=false;return {};
+}
 namespace {
 bool BankSame(const PackageViewDescription& a,const PackageViewDescription& b)noexcept{
     return std::tie(a.owner,a.generation,a.serial,a.allocation_bytes,a.host_address,a.offset,a.size,a.source_address,a.allocation_source_base,a.readable,a.writable)

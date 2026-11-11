@@ -3,6 +3,7 @@
 #include "game_graphics_native.h"
 #include "model_formats.hpp"
 #include "rng_native.h"
+#include "game_sound_control_native.h"
 #include <memory>
 #include <functional>
 
@@ -414,6 +415,10 @@ struct GameBackgroundPreparationSnapshot {
     std::string registration;
     // Preparation never publishes source4A8/4DC, manager14 or VM completion.
     bool source_committed=false;
+    bool bgm_attempted=false,bgm_requested=false;
+    int32_t bgm_choice=-1;
+    GameBgmSelection bgm_selection;
+    GameBgmFileResult bgm_result;
 };
 class GameBackgroundPreparation final {
   public:
@@ -425,6 +430,14 @@ class GameBackgroundPreparation final {
                        std::unique_ptr<GameFileSource> source,
                        GameModelTransformPolicy policy=GameModelTransformPolicy::SourceCommon);
     GameFsStatus Load(const std::shared_ptr<const void>& owner,uint64_t epoch);
+    //19DD4: selection/store4BC and file request precede5F58/635C. The old
+    // choice is held CURRENT data, not a default/placement row. This remains
+    // conditional preparation, without a current VM candidate issuer.
+    GameFsStatus RequestBgm(const std::shared_ptr<const void>&,uint64_t epoch,
+        const std::shared_ptr<GameBackgroundRuntime>&,PackageView previous4BC,PackageView lists,
+        PackageView root,const std::function<PackageView(uint32_t)>& names,GameBgmFileQueue::Factory);
+    GameFsStatus PumpBgm(const std::shared_ptr<const void>&,uint64_t epoch);
+    GameBgmFileRecord BgmFile()const;
     // 52AC's selected three (presence,count) pairs, supplied as current owned
     // user data. Only template loading; no635C random selection/playback.
     GameFsStatus LoadModelMotions(const std::shared_ptr<const void>& owner,uint64_t epoch,
@@ -496,6 +509,11 @@ class GameBackgroundPreparation final {
     PackageView model_motion_counts_;
     std::array<uint8_t,32> model_motion_counts_digest_{};
     GameFilesystem filesystem_;
+    GameBgmFileQueue bgm_files_;
+    std::weak_ptr<GameBackgroundRuntime> bgm_runtime_;
+    std::array<PackageView,2> bgm_inputs_;
+    std::array<std::array<uint8_t,32>,2> bgm_hashes_{};
+    bool BgmCurrent()const;
     std::shared_ptr<GameModelAsset> asset_;
     std::shared_ptr<GameModelClone> clone_;
     GameSupportTextOwner support_;

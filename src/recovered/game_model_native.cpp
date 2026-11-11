@@ -401,8 +401,47 @@ bool GameBackgroundPreparation::EffectsCurrent()const {
     }catch(...){return false;}
 }
 bool GameBackgroundPreparation::RuntimeCurrent()const {
+    if(!BgmCurrent())return false;
     if(!activated_)return true;
     const auto runtime=runtime_.lock();return runtime&&runtime->Live()&&runtime->Identity()==applied_.runtime;
+}
+bool GameBackgroundPreparation::BgmCurrent()const {
+    if(!state_.bgm_attempted)return true;
+    const auto runtime=bgm_runtime_.lock();if(!runtime||!runtime->Live())return false;
+    try{for(unsigned i=0;i<2;++i)if(bgm_inputs_[i].InitializedDigest()!=bgm_hashes_[i])return false;
+        return state_.bgm_requested&&bgm_files_.Read(uint32_t(state_.bgm_choice)).current;
+    }catch(...){return false;}
+}
+GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const void>& owner,uint64_t epoch,
+    const std::shared_ptr<GameBackgroundRuntime>& runtime,PackageView previous,PackageView lists,
+    PackageView root,const std::function<PackageView(uint32_t)>& names,GameBgmFileQueue::Factory factory){
+    if(!Current(owner,epoch)||!state_.pending||state_.failed||state_.bgm_attempted||!RegistrationsCurrent()
+       ||!runtime||!runtime->Live()||!names||!factory)
+        return {GameFsCode::Unavailable,0,"BGM must use current pending job/clock/RNG before5F58"};
+    try{
+        Need(previous.Describe().size==4,"BGM requires current old4BC typed word, not an implicit default");
+        bgm_inputs_={{previous,lists}};for(unsigned i=0;i<2;++i)bgm_hashes_[i]=bgm_inputs_[i].InitializedDigest();
+        auto status=bgm_files_.Initialize(owner,epoch,std::move(factory));if(!status)return status;
+        bgm_runtime_=runtime;
+        state_.bgm_attempted=true;
+        status=SelectBgm19B6C(state_.period,int32_t(previous.ReadLE32(0)),lists,*runtime->rng_,state_.bgm_selection);
+        if(!status)return status;
+        state_.bgm_choice=int32_t(state_.bgm_selection.index); // source19E24 store, BEFORE file request
+        status=bgm_files_.Request(owner,epoch,uint32_t(state_.bgm_choice),root,names(uint32_t(state_.bgm_choice)),state_.bgm_result);
+        if(!status)return status; // unknown provider is not sourceI/O failure
+        state_.bgm_requested=true;
+        //19DD4 ignores wrapper_return, including genuine queue refusal. Do
+        // not gate background initialization on all-audio-success/registration.
+        return {};
+    }catch(const std::exception& e){return Error(e);}
+}
+GameFsStatus GameBackgroundPreparation::PumpBgm(const std::shared_ptr<const void>& owner,uint64_t epoch){
+    if(!Current(owner,epoch)||!BgmCurrent())return {GameFsCode::Unavailable,0,"BGM current job/input owner required"};
+    return bgm_files_.Pump(owner,epoch);
+}
+GameBgmFileRecord GameBackgroundPreparation::BgmFile()const {
+    if(state_.bgm_choice<0)return {};
+    auto value=bgm_files_.Read(uint32_t(state_.bgm_choice));value.current=value.current&&state_.live&&BgmCurrent();return value;
 }
 GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,uint64_t epoch,
         const GameBackgroundCandidate& candidate,PackageView records,std::unique_ptr<GameFileSource> source,GameModelTransformPolicy policy) {
@@ -431,7 +470,7 @@ GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,
     }catch(const std::exception& e){if(state_.live){state_.failed=true;state_.pending=false;state_.status=Error(e);}return Error(e);}
 }
 GameFsStatus GameBackgroundPreparation::Load(const std::shared_ptr<const void>& owner,uint64_t epoch) {
-    if(!Current(owner,epoch)||!state_.pending||state_.staged||state_.failed)
+    if(!Current(owner,epoch)||!state_.pending||state_.staged||state_.failed||!BgmCurrent())
         return {GameFsCode::Unavailable,0,"background pending owner/epoch/registration changed"};
     if(!RegistrationsCurrent()){
         state_.failed=true;state_.pending=false;
@@ -828,6 +867,9 @@ GameFsStatus GameBackgroundPreparation::Close() {
     model_motions_.clear();model_motion_counts_.Reset();
     support_.Close();support_prepared_=false;
     if(clone_)clone_->Close();clone_.reset();asset_.reset();package_.Reset();
+    const auto bgm_closed=bgm_files_.Close();
+    if(!bgm_closed){state_.live=state_.pending=state_.staged=false;state_.failed=true;state_.status=bgm_closed;return bgm_closed;}
+    bgm_runtime_.reset();bgm_inputs_={};
     auto status=filesystem_.Close();
     state_.live=state_.pending=state_.staged=false;
     if(!status){state_.failed=true;state_.status=status;return status;}
