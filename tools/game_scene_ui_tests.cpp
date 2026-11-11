@@ -113,6 +113,42 @@ std::vector<uint8_t> Gim() {
     W(b, 140, 0xFFFFFFFF);
     return b;
 }
+void MovingTests(){
+    auto lease=std::make_shared<Lease>(Gim());
+    auto image=std::make_shared<GameImage>();Check(bool(image->DecodeGim(PackageStorage::Attach(lease,lease->bytes.size()))),"moving real synthetic GIM decode");
+    auto module=std::make_shared<int>(7);std::shared_ptr<const void> owner=module;
+    auto foreign=std::make_shared<int>(7);std::shared_ptr<const void> alias(module.get(),[](const void*){});
+    GameMovingIndicator moving;
+    Check(!moving.Initialize({},1,image)&&!moving.Initialize(owner,0,image)&&!moving.Initialize(owner,1,{}),"no module/epoch/real image means no constructed moving owner");
+    Check(moving.Initialize(owner,1,image)&&moving.Snapshot().current&&moving.Snapshot().state==3&&!moving.Snapshot().source_color,"source constructor is inactive3, not readiness");
+    Check(!moving.Show(foreign,1,true)&&!moving.Show(alias,1,true)&&!moving.Show(owner,2,true)&&!moving.Tick(alias,1)&&moving.Snapshot().state==3&&!moving.Snapshot().ticks,"foreign pointer/controlblock/epoch refuse before state effects");
+    GameGraphics g;Check(g.Initialize({})&&g.Clear(0xFF102030,200),"moving production renderer");
+    Check(moving.Draw(owner,1,g)&&g.Snapshot().draw_calls==0,"source state3 omits draw");
+    Check(moving.Show(owner,1,false),"source3F1E0 gradual show");
+    for(unsigned i=1;i<=32;++i){Check(moving.Tick(owner,1)&&moving.Snapshot().source_color==i*0x04040404u,"exact packed source show update");
+        Check(moving.Show(owner,1,false)&&moving.Snapshot().source_color==i*0x04040404u,"duplicate show does not restart state0/1");}
+    Check(moving.Snapshot().state==1&&moving.Draw(owner,1,g),"source full state1 draws actual image pixels");
+    Check(g.DrawImage({0xFF000000},1,1,470,262,0xFFFFFFFF,150)&&g.SwapBuffers(),"draw behind existing depth after overlay");
+    GameGraphicsFrame frame;Check(g.CopyFront(frame)&&frame.pixels[262*frame.stride+470]==0xFFFF0000&&frame.pixels[262*frame.stride+471]==0xFF00FF00
+        &&frame.pixels[263*frame.stride+470]==0xFF0000FF&&frame.pixels[263*frame.stride+471]==0xFFFFFFFF
+        &&frame.pixels[261*frame.stride+470]==0xFF102030,"source bottomright placement/color and no overlay depth mutation");
+    Check(moving.Hide(owner,1,false),"source3F220 gradual hide");
+    for(unsigned i=1;i<=32;++i)Check(moving.Tick(owner,1)&&moving.Snapshot().source_color==(32-i)*0x04040404u,"exact source hide update");
+    Check(moving.Snapshot().state==3&&moving.Hide(owner,1,true),"already hidden is a source no-op");
+    Check(moving.Show(owner,1,false),"new gradual show");for(unsigned i=0;i<16;++i)Check(moving.Tick(owner,1),"half show ticks");
+    Check(g.Clear(0xFF000000)&&moving.Draw(owner,1,g)&&g.SwapBuffers()&&g.CopyFront(frame)
+        &&frame.pixels[262*frame.stride+470]==0xFF3F0000,"native128 modulation/alpha uses genuine half-stage raster pixels");
+    Check(moving.Hide(owner,1,true)&&moving.Snapshot().state==3&&!moving.Snapshot().source_color
+        &&moving.Show(owner,1,true)&&moving.Snapshot().state==1&&moving.Snapshot().source_color==0x80808080u,"actual source mode1 hide/show effects");
+    const auto stable=moving.Snapshot();lease->bytes[128]^=1;
+    Check(!moving.Current(owner,1)&&!moving.Draw(owner,1,g)&&!moving.Tick(owner,1)&&!moving.Hide(owner,1,true)
+        &&moving.Snapshot().state==stable.state,"aliased resource drift refuses before update/render");
+    lease->bytes[128]^=1;Check(moving.Current(owner,1),"restored source image still same generation");
+    moving.Close();Check(!moving.Snapshot().live&&image.use_count()==1&&!moving.Initialize(owner,1,image)&&moving.Initialize(owner,2,image),"retirement releases image and refuses epoch replay");
+    image->Close();Check(!moving.Current(owner,2)&&!moving.Show(owner,2,true),"retired decoded image cannot remain a current moving resource");moving.Close();
+    Check(bool(image->DecodeGim(PackageStorage::Attach(lease,lease->bytes.size())))&&moving.Initialize(owner,3,image),"fresh real image/current epoch");
+    module.reset();owner.reset();Check(!moving.Snapshot().current&&!moving.Tick({},3),"expired module never becomes known inactive");moving.Close();g.Close();
+}
 std::vector<uint8_t> Ui(bool select_transform=false) {
     std::vector<uint8_t> b(32 + 200 * 8 + 26 * 52, 0);
     W(b, 0, 0x30413242);
@@ -309,6 +345,11 @@ void OwnerTests() {
                       s.mutable_dictionaries == 2 && s.text_capacity_bytes == 91916 && !s.visible_roots &&
                       !s.ui_render_implemented,
                   "grouped owner/resource state");
+            Check(s.moving.current&&s.moving.state==3&&scene.BeginMoving()&&scene.Snapshot().moving.state==1,
+                  "actual fifth bootstrap owner captures live module/resource and source immediate show");
+            GameGraphics surface;Check(surface.Initialize({})&&scene.DrawColdFrame(surface),"bootstrap update/draw consumes actual moving owner");
+            GameGraphicsFrame frame;Check(surface.CopyFront(frame)&&frame.pixels[262*frame.stride+470]==0xFFFF0000
+                &&scene.FinishMoving()&&scene.Snapshot().moving.state==3,"bootstrap current moving GIM reaches production frame then mode1 hides");surface.Close();
         }
         Check(!vm.Close(), "parent cannot retire child tasks");
         Check(scene.Close() && arena.Used() == baseline,
@@ -598,6 +639,7 @@ int main() {
     ChoiceTests();
     try {
         ImageTests();
+        MovingTests();
         TextureCacheOwnershipTests();
         OwnerTests();
         BankTests();

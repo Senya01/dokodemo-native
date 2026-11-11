@@ -40,6 +40,33 @@ class GameTransition final {
 class GameArena;
 class GameVmBoot;
 class GameFontResource;
+struct GameMovingSnapshot {
+    bool live=false,current=false;
+    uint32_t state=3,source_color=0,width=0,height=0;
+    uint64_t epoch=0,image_generation=0,ticks=0;
+};
+//3EF88/3F1E0/3F220/3F0FC/3F190. WindowsMovingIndicator uses an owned
+// decoded GIM, source state/tick arithmetic and a native screen-image pass.
+// Not a fade/readiness/job completion provider; no external state setter.
+class GameMovingIndicator final {
+  public:
+    GameMovingIndicator()=default;
+    GameMovingIndicator(const GameMovingIndicator&)=delete;
+    GameMovingIndicator& operator=(const GameMovingIndicator&)=delete;
+    bool Initialize(std::shared_ptr<const void> module,uint64_t epoch,std::shared_ptr<const GameImage> image);
+    bool Current(const std::shared_ptr<const void>& module,uint64_t epoch)const noexcept;
+    bool Show(const std::shared_ptr<const void>& module,uint64_t epoch,bool immediate);
+    bool Hide(const std::shared_ptr<const void>& module,uint64_t epoch,bool immediate);
+    bool Tick(const std::shared_ptr<const void>& module,uint64_t epoch);
+    bool Draw(const std::shared_ptr<const void>& module,uint64_t epoch,GameGraphics&)const;
+    GameMovingSnapshot Snapshot()const noexcept;
+    void Close()noexcept;
+  private:
+    std::weak_ptr<const void> module_;
+    std::shared_ptr<const GameImage> image_;
+    GameMovingSnapshot state_;
+    uint64_t last_epoch_=0;
+};
 struct GameChoiceSnapshot {
     bool live=false,timed_out=false;
     uint32_t state=3,row=0,result=0,remaining=0,active_updates=0,confirmations=0,rejected_inputs=0;
@@ -111,6 +138,7 @@ struct GameSceneUiSnapshot {
     std::string editor_label;
     bool select_adapter=false;
     bool input32_text_panel=false; //named Windows committed-text display
+    GameMovingSnapshot moving;
 };
 // 18EE8..18F38: grouped typed native owners. Immutable views borrow DATA.BPM;
 // mutable NJ/text/control state is owned and retired before that package/font.
@@ -119,6 +147,10 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     GameFsStatus Initialize(GameResourceSource &source, GameArena &arena, GameVmBoot &manager,
                             const GameFontResource &font);
     bool DrawColdFrame(GameGraphics &graphics);
+    bool BeginMoving(bool immediate=true){return moving_.Show(module_owner_,module_epoch_,immediate);}
+    bool FinishMoving(bool immediate=true){return moving_.Hide(module_owner_,module_epoch_,immediate);}
+    bool TickMoving(){return moving_.Tick(module_owner_,module_epoch_);}
+    bool DrawMoving(GameGraphics& g)const{return moving_.Draw(module_owner_,module_epoch_,g);}
     GameTransition& TitleTransitionOwner()noexcept{return transition_;} //worker-owned,never exposed to UI thread
     const GameTransition& TitleTransitionOwner()const noexcept{return transition_;}
     GameTrcPrompt& OptionsPromptOwner()noexcept{return options_prompt_;}
@@ -158,7 +190,9 @@ class GameSceneUiBootstrap final : private GameUiCallbacks {
     std::array<std::shared_ptr<GameUiResource>, 3> resources_;
     std::array<GameUiInstance, 3> clones_;
     std::array<GameDictionary, 9> dictionaries_;
-    std::shared_ptr<GameImage> moving_;
+    std::shared_ptr<const void> module_owner_;
+    uint64_t module_epoch_=0;
+    GameMovingIndicator moving_;
     GameTransition transition_;
     GameDialogController dialog_;
     GameTrcPrompt options_prompt_;

@@ -7,6 +7,51 @@
 #include <stdexcept>
 
 namespace dokodemo::recovered {
+bool GameMovingIndicator::Initialize(std::shared_ptr<const void> module,uint64_t epoch,std::shared_ptr<const GameImage> image){
+    if(state_.live||!module||!epoch||epoch<=last_epoch_||!image||!image->Generation()||!image->SourceCurrent()
+       ||!image->Width()||!image->Height())return false;
+    state_={};state_.live=true;state_.epoch=last_epoch_=epoch;state_.width=image->Width();state_.height=image->Height();
+    state_.image_generation=image->Generation();module_=module;image_=std::move(image);return true;
+}
+bool GameMovingIndicator::Current(const std::shared_ptr<const void>& module,uint64_t epoch)const noexcept{
+    const auto owner=module_.lock();
+    return state_.live&&owner&&module&&owner==module&&!owner.owner_before(module)&&!module.owner_before(owner)
+        &&epoch==state_.epoch&&image_&&image_->Generation()==state_.image_generation&&image_->SourceCurrent();
+}
+bool GameMovingIndicator::Show(const std::shared_ptr<const void>& module,uint64_t epoch,bool immediate){
+    if(!Current(module,epoch))return false;
+    if(state_.state==0||state_.state==1)return true;
+    state_.state=immediate?1u:0u;state_.source_color=immediate?0x80808080u:0u;return true;
+}
+bool GameMovingIndicator::Hide(const std::shared_ptr<const void>& module,uint64_t epoch,bool immediate){
+    if(!Current(module,epoch))return false;
+    if(state_.state==2||state_.state==3)return true;
+    state_.state=immediate?3u:2u;state_.source_color=immediate?0u:0x80808080u;return true;
+}
+bool GameMovingIndicator::Tick(const std::shared_ptr<const void>& module,uint64_t epoch){
+    if(!Current(module,epoch))return false;
+    if(state_.state==0){state_.source_color+=0x04040404u;
+        if(state_.source_color>0x8080807Fu){state_.source_color=0x80808080u;state_.state=1;}
+    }else if(state_.state==2){state_.source_color+=0xFBFBFBFCu;
+        if(!state_.source_color){state_.state=3;state_.source_color=0;}
+    }
+    ++state_.ticks;return true;
+}
+bool GameMovingIndicator::Draw(const std::shared_ptr<const void>& module,uint64_t epoch,GameGraphics& g)const{
+    if(!Current(module,epoch))return false;
+    if(state_.state==3)return true;
+    const auto config=g.Snapshot().config;if(config.width!=480||config.height!=272)return false;
+    // Named Windows screen modulation: source128 is neutral/full opacity,
+    // matching the existing native B2A convention. No GE state authority.
+    uint32_t native=0;for(unsigned shift=0;shift<32;shift+=8)
+        native|=(std::min)(255u,((state_.source_color>>shift)&255u)*255u/128u)<<shift;
+    native=NativeColorFromPspAbgr(native);
+    return g.DrawImage(image_->Pixels(),state_.width,state_.height,472-int32_t(state_.width),264-int32_t(state_.height),native,0,true);
+}
+GameMovingSnapshot GameMovingIndicator::Snapshot()const noexcept{
+    auto result=state_;result.current=Current(module_.lock(),state_.epoch);return result;
+}
+void GameMovingIndicator::Close()noexcept{image_.reset();module_.reset();state_={};}
 bool GameDialogController::Begin(uint32_t mode, uint32_t selection) noexcept {
     if (state_.state != 3 || mode > 2 || selection > INT32_MAX - 1)
         return false;
@@ -240,9 +285,15 @@ GameFsStatus GameSceneUiBootstrap::Initialize(GameResourceSource &source, GameAr
             }
         }
         owner(4);
-        auto status = source.TextureResource("data\\gui\\moving\\moving.GIM", moving_);
+        std::shared_ptr<GameImage> image;
+        auto status = source.TextureResource("data\\gui\\moving\\moving.GIM", image);
         if (!status)
             return status;
+        // Actual18F28 allocation/18F7C->3EF88 owner, separate from3E558.
+        // Task4 keeps GameVmBoot live; this token retires before that task.
+        module_owner_=std::make_shared<uint8_t>(0);
+        if(!moving_.Initialize(module_owner_,++module_epoch_,std::move(image)))
+            return {GameFsCode::Unavailable,0,"moving image/current module initialization"};
         state_.textures = source.TextureCacheSize();
         state_.texture_pixels = source.TextureCachePixels();
         // All cloned roots remain hidden by97A54/964F8. We do not call the
@@ -255,7 +306,7 @@ GameFsStatus GameSceneUiBootstrap::Initialize(GameResourceSource &source, GameAr
     }
 }
 bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
-    if (!state_.constructors_returned)
+    if (!state_.constructors_returned||!TickMoving())
         return false;
     for (size_t i = 0; i < clones_.size(); ++i) {
         auto &clone = clones_[i];
@@ -285,7 +336,7 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
                 control->mode = 0;
                 control->active = 0;
             }
-            if (!graphics.SwapBuffers())
+            if (!DrawMoving(graphics)||!graphics.SwapBuffers())
                 return false;
             ++state_.native_frames;
             return true;
@@ -308,7 +359,7 @@ bool GameSceneUiBootstrap::DrawColdFrame(GameGraphics &graphics) {
             return false;
         state_.text_drawn = true;
     }
-    if (!graphics.SwapBuffers())
+    if (!DrawMoving(graphics)||!graphics.SwapBuffers())
         return false;
     ++state_.native_frames;
     return true;
@@ -488,6 +539,7 @@ bool GameSceneUiBootstrap::HandleDialogInput(const GameInputFrame &frame) {
 GameSceneUiSnapshot GameSceneUiBootstrap::Snapshot() const {
     auto out = state_;
     out.transition = transition_.Snapshot();
+    out.moving=moving_.Snapshot();
     out.editor=editor_.Snapshot();
     out.visible_roots = 0;
     for (const auto &clone : clones_)
@@ -510,7 +562,7 @@ bool GameSceneUiBootstrap::Close() {
     profile_confirmation_=false;
     std::vector<uint32_t>().swap(dialog_pixels_);
     dialog_width_ = dialog_height_ = 0;
-    moving_.reset();
+    moving_.Close();module_owner_.reset();
     for (auto &c : clones_)
         c.Close();
     for (auto &r : resources_)

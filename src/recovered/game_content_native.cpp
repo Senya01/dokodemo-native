@@ -1372,12 +1372,15 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.notebook=notebook_.Snapshot();
     state_.wordmemo=wordmemo_.Snapshot();state_.diary=diary_.Snapshot();if(state_.diary.generation)state_.diary_current=std::make_shared<const GameRecordImage>(records_.Image());
     state_.system_option=system_option_.Snapshot();state_.system_option.woken=actor_script_.Snapshot().menu_option_completions!=0;
-    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface){
+    if(status)status=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+        const auto draw_ui=[&]()->GameFsStatus{
         if(system_option_.Modal())return system_option_.Draw(surface,font_);
         if(diary_.Modal())return diary_.Draw(surface,font_);
         if(wordmemo_.Modal())return wordmemo_.Draw(surface,font_);
         if(notebook_.Modal())return notebook_.Draw(surface,font_);
         return inventory_.Modal()?inventory_.Draw(surface,font_):main_menu_.Draw(surface);
+        };const auto status=draw_ui();if(!status)return status;
+        return scene_ui_.DrawMoving(surface)?GameFsStatus{}:GameFsStatus{GameFsCode::Unavailable,0,"moving UI render owner"};
     });
     state_.main_menu=main_menu_.Snapshot();
     state_.notebook=notebook_.Snapshot(); // publish actual post-draw empty batch/lease observations
@@ -1391,6 +1394,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     return bool(status);
 }
 bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphics& graphics){
+    if(!scene_ui_.TickMoving()){state_.status={GameFsCode::Unavailable,0,"current moving UI owner retired"};return false;}
     if(state_.actor_dictionary_requested){
         if(!state_.actor_script.started)return false;
         if(state_.main_menu_phase)return TickMainMenu(graphics);
@@ -1480,6 +1484,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
         //Publish ONCE,after both room and text. CopyGameFrame must never see
         //an intermediate room-only front whileFONT is still being decoded.
         const auto rendered=actor_runtime_.Draw(graphics,[&](GameGraphics& surface)->GameFsStatus{
+            const auto draw_ui=[&]()->GameFsStatus{
             if(inventory_.Modal())return inventory_.Draw(surface,font_);
             if(state_.actor_script.awaiting_input){
                 if(!scene_ui_.DrawEditor(surface))return {GameFsCode::Unavailable,0,"Input32 editor draw failed"};
@@ -1497,6 +1502,8 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             ++state_.actor_message_draw_frames;
             if(state_.actor_script.awaiting_choice&&!scene_ui_.DrawChoice(surface))return {GameFsCode::Unavailable,0,"Native SELECT text draw failed"};
             return {};
+            };const auto status=draw_ui();if(!status)return status;
+            return scene_ui_.DrawMoving(surface)?GameFsStatus{}:GameFsStatus{GameFsCode::Unavailable,0,"moving UI render owner"};
         });
         if(!rendered){state_.status=rendered;state_.blocked=true;return false;}
         state_.inventory=inventory_.Snapshot();
