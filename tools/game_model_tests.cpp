@@ -1181,6 +1181,49 @@ void RoomAnchorLocalX(){
     Check(bool(RoomModelRootNativeSceneAnchorLocalX(0,-5,{},root,anchor))&&anchor==-1&&root[12]==-5&&root[13]==0,
           "native unparented local-X policy has no fabricated scene owner");
 }
+void ContextActorTransactionPrefixTests(){
+    using namespace dokodemo::script;
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
+    auto path=text("SYNTHETIC_BYSTANDER.DVS"),prefix=text("");
+    std::vector<uint8_t> parameter_bytes;for(float v:{40.f,2.f,90.f,4.f,2.f,8.f})F(parameter_bytes,v);
+    auto params=std::make_shared<Lease>(parameter_bytes),selection=std::make_shared<Lease>(std::vector<uint8_t>(20));
+    std::vector<uint8_t> module_bytes(31);Word(module_bytes,0,0x0043534B);Word(module_bytes,4,0x20030204);Word(module_bytes,12,3);module_bytes[28]=0x30;module_bytes[30]=0x38;
+    Program program;Diagnostic error;Check(program.load_test_fixture(module_bytes,error),"context actor synthetic module");
+    TitleSource resources;GameTransition transition;Check(transition.Initialize({{0,0}}),"context actor transition");GameActorRuntime runtime;
+    const auto initialize=[&]{runtime.Close();Check(bool(runtime.Initialize(0,view(selection),transition,&resources))&&bool(runtime.InitializeScene0({{0,0,0,12,12,5,2026}})),"actual primary scene/control owner");};
+    const auto create=[&]{return runtime.CreateContextActor5(resources,view(path),view(prefix),view(params));};
+    initialize();Vm unknown(program);unknown.start();Check(bool(runtime.BindScriptContextActor1C0FC(unknown)),"actual context can record an unknown slot without inventing nil");
+    Check(!runtime.RequestPendingScene12(unknown)&&!runtime.Snapshot().manager_switch.pending&&runtime.Snapshot().context_actor.presence==GameContextActorPresence::Unknown,"globally live primary actor is not node24 presence");
+    Check(bool(create()),"real independent actor5 asset/clone/parameter owner");
+    auto s=runtime.Snapshot();Check(s.context_actor.current&&s.context_actor.constructor_actor==5&&!s.context_actor.model_visible&&s.context_actor.logical==std::array<float,4>{{40,0,0,8}},"source ctor logical position and actual hidden model control");
+    Check(!runtime.RequestPendingScene12(unknown)&&!runtime.BindScriptContextActor1C0FC(unknown),"constructor-time unknown cannot silently rebase to a later actor");
+    Vm current(program),foreign(program);current.start();foreign.start();Check(bool(runtime.BindScriptContextActor1C0FC(current)),"new context copies the current actor5 owner");
+    const auto before=runtime.Snapshot();const auto w=current.current_witness();
+    Check(!runtime.RequestPendingScene12(foreign)&&!runtime.Snapshot().manager_switch.pending,"foreign context cannot supply a source actor");
+    Check(bool(runtime.RequestPendingScene12(current)),"actual present branch source request and move/hide prefix");s=runtime.Snapshot();
+    Check(s.manager_switch.pending&&s.manager_switch.requested18==12&&s.manager_switch.current14==0&&s.manager_switch.last_request_store_pcs==std::array<uint32_t,2>{{0x1C2E4,0x1C2EC}},"source pending1C before18, distinct from adoption/current14");
+    Check(s.context_actor.logical==std::array<float,4>{{90,0,0,16}}&&s.context_actor.moves==2&&s.context_actor.hides==2&&!s.context_actor.model_visible
+        &&s.actor_position==before.actor_position&&s.actor_root==before.actor_root&&s.scene_model_live,"GAME12 moves its context actor, leaves real primary/live scene owned");
+    Check(!runtime.RequestPendingScene12(current)&&!runtime.ConsumeSameManager0()&&current.pc()==w.current_pc&&current.context_enabled()&&current.deadline_tick()==w.deadline_tick,"prefix replay/cancel-as-consume refused; no VM pause/wake/result supplied");
+    initialize();Check(bool(create()),"fresh actor epoch");Vm old(program);old.start();Check(bool(runtime.BindScriptContextActor1C0FC(old)),"old context captures real actor");
+    Check(bool(runtime.ClearContextActor1A1F4())&&!runtime.RequestPendingScene12(old)&&!runtime.Snapshot().manager_switch.pending,"retirement is stale nonnull, not promoted to nil");
+    Vm nil(program);nil.start();Check(bool(runtime.BindScriptContextActor1C0FC(nil)),"later context copies real cleared slot");
+    Check(bool(create())&&bool(runtime.RequestPendingScene12(nil))&&runtime.Snapshot().context_actor.moves==1&&runtime.Snapshot().context_actor.hides==1,"copied nil remains nil after a later global-slot constructor; does not touch new actor");
+    initialize();Check(bool(create()),"drift actor epoch");Vm drift(program);drift.start();Check(bool(runtime.BindScriptContextActor1C0FC(drift)),"drift context owner");
+    params->b[0]^=1;Check(!runtime.RequestPendingScene12(drift)&&!runtime.Snapshot().context_actor.current&&!runtime.Snapshot().manager_switch.pending,"held source constant drift refused before pending effects");params->b[0]^=1;
+    drift.start();Check(!runtime.RequestPendingScene12(drift)&&bool(runtime.BindScriptContextActor1C0FC(drift))&&bool(runtime.RequestPendingScene12(drift)),"module restart needs a new real constructor association");
+    initialize();resources.fail=true;Check(!create()&&runtime.Snapshot().context_actor.presence==GameContextActorPresence::Unknown,"failed actual model load does not publish actor or known absence");resources.fail=false;
+    auto short_params=std::make_shared<Lease>(std::vector<uint8_t>(20));Check(!runtime.CreateContextActor5(resources,view(path),view(prefix),view(short_params))&&bool(create()),"malformed constructor input refuses, fresh real retry works");
+    Vm retired(program);retired.start();Check(bool(runtime.BindScriptContextActor1C0FC(retired)),"retirement bound owner");runtime.Close();Check(!runtime.RequestPendingScene12(retired)&&!runtime.Snapshot().context_actor.current,"retired manager cannot consume an old context binding");
+    // Invalid synthetic request angle reaches the native finite-FP refusal
+    // after source pending and XYZ stores; those completed effects must stay.
+    std::vector<uint8_t> overflow;for(float v:{40.f,0.f,90.f,(std::numeric_limits<float>::max)(),1.f,(std::numeric_limits<float>::max)()})F(overflow,v);
+    params->b=overflow;initialize();Check(bool(create()),"finite initial angle with later malformed request angle");
+    retired.start();Check(bool(runtime.BindScriptContextActor1C0FC(retired))&&!runtime.RequestPendingScene12(retired),"partial request fails at consumed nonfinite angle");s=runtime.Snapshot();
+    Check(s.manager_switch.pending&&s.manager_switch.requested18==12&&s.manager_switch.current14==0&&s.context_actor.logical==std::array<float,4>{{90,0,0,0}}
+        &&s.context_actor.hides==1&&s.context_actor.moves==1,"failed request preserves pending/XYZ prefix without publishing hide/adoption/completion");runtime.Close();
+}
 void RoomModelLifecycle(){
     //Synthetic DVS through the actual resource/asset/clone owner,not a fake slot.
     struct RoomSource final:GameResourceSource{
@@ -1667,6 +1710,7 @@ int main() {
         SupportConsumerTests();
         SupportGlyphTests();
         ManagerSupportJobTests();
+        ContextActorTransactionPrefixTests();
         BackgroundPreparationTests();
         MathAndSkin();
         GeometryAndRaster();

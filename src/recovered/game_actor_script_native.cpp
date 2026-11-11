@@ -275,6 +275,7 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         // route,not the old no-argument probe or an isolated message function.
         const auto begun=vm_->start({Value::integer(1),Value::integer(0)});
         Need(begun.status==script::Status::Running,begun.diagnostic.text().c_str());
+        if(runtime_){const auto binding=runtime_->BindScriptContextActor1C0FC(*vm_);Need(bool(binding),binding.detail.c_str());}
         state_.live=state_.started=true;state_.bytes=uint32_t(size);
         state_.entry_pc=state_.pc=program_.header().entrypoint;state_.sha256=program_.source().sha256;
         return {};

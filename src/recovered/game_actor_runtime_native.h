@@ -49,23 +49,37 @@ struct GameManagerSwitchSnapshot {
   bool live=false,bound=false,pending=false;
   uint64_t epoch=0,requests=0,consumed=0;
   int32_t current14=0,requested18=0;
+  std::array<uint32_t,2> last_request_store_pcs{};
 };
-// Native typed1B188/1B2DC owner. Only the source equal-selector0 cancellation
-// is admitted; it has no resource/unload calls. Never supplies a scene gate.
+// Native typed manager owner: equal-selector0 cancellation plus a conditional
+// selector12 pending prefix. Non-equal1B238 bit publication/adoption is still
+// unimplemented. Neither a request nor its actor effects supply scene ready.
 class GameManagerSwitchControl {
 public:
   bool Initialize(uint64_t epoch);
   bool BindScene0(uint64_t epoch);
   bool RequestSame0(uint64_t epoch,int32_t target);
+  bool RequestPending12(uint64_t epoch);
   bool ConsumeSame0(uint64_t epoch);
   void Retire(){state_.live=state_.bound=state_.pending=false;}
   GameManagerSwitchSnapshot Snapshot()const{return state_;}
 private:
   GameManagerSwitchSnapshot state_;
 };
+enum class GameContextActorPresence:uint32_t { Unknown, Absent, Present };
+struct GameContextActorSnapshot {
+  GameContextActorPresence presence=GameContextActorPresence::Unknown;
+  uint64_t epoch=0,serial=0,model_generation=0;
+  uint32_t constructor_actor=0,moves=0,hides=0;
+  bool current=false,model_visible=false;
+  std::array<float,4> logical{}; // source20/24/28/30, not a fabricated rendered pose
+  std::array<uint8_t,32> parameters_sha256{};
+};
 struct GameActorRuntimeSnapshot {
   GameManagerSwitchSnapshot manager_switch;
   GameSupportRegistrationSnapshot support_registration;
+  GameContextActorSnapshot context_actor;
+  uint32_t context_actor_bindings=0; // constructor captures; pruned at next bind
   uint64_t owner_epoch=0;
   bool live = false, camera_follows_actor = false, pose_dirty = false;
   bool actor_special_ready = false, command_complete = true,
@@ -179,6 +193,15 @@ public:
   GameFsStatus RequestManager9();
   GameFsStatus RegisterSupportData16(script::Vm&,const script::Value&);
   const GameSupportRegistration& SupportRegistration()const{return support_registration_;}
+  // Finite Windows typed1A108/1C0FC actor5 control owner. Actual model paths
+  // and six source constants are held user inputs; no default/null authority.
+  // Constants: initialX,initialHeading,requestX,requestHeading,divisor,multiplier.
+  // Full AC60 animation/callback behavior and scene adoption are not admitted.
+  GameFsStatus CreateContextActor5(GameResourceSource&,PackageView model_path,
+                                  PackageView texture_prefix,PackageView constants);
+  GameFsStatus ClearContextActor1A1F4();
+  GameFsStatus BindScriptContextActor1C0FC(script::Vm&);
+  GameFsStatus RequestPendingScene12(script::Vm&);
   GameFsStatus RequestSameManager0(int32_t target);
   GameFsStatus ConsumeSameManager0();
   GameFsStatus ClearManager8();
@@ -193,7 +216,7 @@ public:
   GameFsStatus UpdateModel(int32_t slot,int32_t selector,float x);
   GameFsStatus RetireModel(int32_t slot);
   GameFsStatus Draw(GameGraphics &,const std::function<GameFsStatus(GameGraphics&)>& overlay={});
-  GameActorRuntimeSnapshot Snapshot() const { return state_; }
+  GameActorRuntimeSnapshot Snapshot() const;
   void Close();
 
 private:
@@ -215,6 +238,17 @@ private:
   GameManagerSwitchControl manager_switch_;
   std::shared_ptr<const void> support_manager_;
   GameSupportRegistration support_registration_;
+  struct ContextActorData;
+  std::shared_ptr<ContextActorData> context_actor_;
+  uint64_t context_actor_serial_=0;
+  struct ContextActorBinding {
+    std::weak_ptr<script::NativeScriptContext> context;
+    std::weak_ptr<ContextActorData> actor;
+    uint64_t run=0;
+    bool captured_nil=false;
+    std::array<char,65> module{};
+  };
+  std::vector<ContextActorBinding> context_actors_;
   PackageView actor_asc_;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;

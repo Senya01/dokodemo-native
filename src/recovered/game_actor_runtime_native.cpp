@@ -1,8 +1,10 @@
 #include "game_actor_runtime_native.h"
+#include "../script_vm.h"
 #include "game_model_resources_native.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 
 namespace dokodemo::recovered {
@@ -129,11 +131,123 @@ bool GameManagerSwitchControl::BindScene0(uint64_t epoch){
 }
 bool GameManagerSwitchControl::RequestSame0(uint64_t epoch,int32_t target){
   if(!state_.live||!state_.bound||epoch!=state_.epoch||target!=0||state_.current14!=0)return false;
-  state_.requested18=target;state_.pending=true;++state_.requests;return true;
+  state_.pending=true;state_.requested18=target;
+  state_.last_request_store_pcs={{0x1C2E4,0x1C2EC}};++state_.requests;return true;
+}
+bool GameManagerSwitchControl::RequestPending12(uint64_t epoch){
+  if(!state_.live||!state_.bound||state_.pending||epoch!=state_.epoch||state_.current14!=0)return false;
+  state_.pending=true;state_.requested18=12;
+  state_.last_request_store_pcs={{0x1C2E4,0x1C2EC}};++state_.requests;return true;
 }
 bool GameManagerSwitchControl::ConsumeSame0(uint64_t epoch){
   if(!state_.live||!state_.bound||epoch!=state_.epoch||!state_.pending||state_.current14!=0||state_.requested18!=0)return false;
   state_.pending=false;++state_.consumed;return true; //1B2C8/CC, no resource calls
+}
+namespace {
+std::string ContextActorPath(const PackageView& input,bool empty_allowed){
+  std::string out;const auto n=input.Describe().size;
+  if(!n||n>256)throw std::runtime_error("context actor path extent");
+  for(uint64_t i=0;i<n;++i){const auto c=input.ReadU8(i);
+    if(!c){if(i+1!=n||(!empty_allowed&&out.empty())||out.find("..")!=out.npos||(!out.empty()&&(out[0]=='/'||out[0]=='\\')))
+        throw std::runtime_error("context actor path domain");return out;}
+    if(c<32||c>126||c==':')throw std::runtime_error("context actor path character");out+=char(c);}
+  throw std::runtime_error("context actor path terminator");
+}
+float ContextActorFloat(const PackageView& input,unsigned i){
+  const auto bits=input.ReadLE32(i*4);float value;std::memcpy(&value,&bits,4);
+  if(!std::isfinite(value))throw std::runtime_error("context actor constant nonfinite");return value;
+}
+}
+struct GameActorRuntime::ContextActorData {
+  GameContextActorSnapshot state;
+  std::weak_ptr<const void> manager;
+  std::shared_ptr<GameModelAsset> asset;
+  GameModelClone clone;
+  std::array<PackageView,3> inputs;
+  std::array<std::array<uint8_t,32>,3> digests{};
+  bool Current()const{
+    if(manager.expired()||state.presence==GameContextActorPresence::Unknown)return false;
+    if(state.presence==GameContextActorPresence::Absent)return true;
+    try{for(unsigned i=0;i<3;++i)if(inputs[i].InitializedDigest()!=digests[i])return false;
+      return asset&&asset->SourceCurrent()&&clone.Asset()==asset.get()&&clone.Generation()==state.model_generation;
+    }catch(...){return false;}
+  }
+  void Move(float x,float heading){
+    const auto& data=inputs[2];const auto divisor=ContextActorFloat(data,4),multiplier=ContextActorFloat(data,5);
+    if(divisor==0)throw std::runtime_error("context actor angle divisor");
+    const float angle=(heading/divisor)*multiplier;
+    state.logical[0]=x;state.logical[1]=state.logical[2]=0;
+    if(!std::isfinite(angle))throw std::runtime_error("context actor angle overflow");
+    // BD78 writes logical fields only. Actual posed world/animation update is
+    // a later consumer; do not move the unrelated primary actor or fake a pose.
+    state.logical[3]=angle;++state.moves;
+  }
+  void Close(){clone.Close();asset.reset();inputs={};state.current=false;}
+  ~ContextActorData(){Close();}
+};
+GameActorRuntimeSnapshot GameActorRuntime::Snapshot()const{
+  auto result=state_;
+  if(context_actor_){result.context_actor=context_actor_->state;result.context_actor.current=Live()&&context_actor_->Current();}
+  result.context_actor_bindings=uint32_t(context_actors_.size());return result;
+}
+GameFsStatus GameActorRuntime::CreateContextActor5(GameResourceSource& source,PackageView path,PackageView prefix,PackageView constants){
+  if(!Live()||(context_actor_&&context_actor_->state.presence==GameContextActorPresence::Present))
+    return {GameFsCode::Unavailable,0,"context actor slot needs live manager and explicit prior retirement"};
+  try{
+    if(constants.Describe().size!=24)throw std::runtime_error("context actor exact six-constant packet required");
+    auto pending=std::make_shared<ContextActorData>();pending->manager=support_manager_;
+    pending->inputs={{path,prefix,constants}};
+    for(unsigned i=0;i<3;++i)pending->digests[i]=pending->inputs[i].InitializedDigest();
+    for(unsigned i=0;i<6;++i)(void)ContextActorFloat(constants,i);
+    if(ContextActorFloat(constants,4)==0)throw std::runtime_error("context actor zero angle divisor");
+    pending->asset=std::make_shared<GameModelAsset>();auto status=pending->asset->Load(source,ContextActorPath(path,false),ContextActorPath(prefix,true));
+    if(!status)return status;status=pending->clone.Initialize(pending->asset);if(!status)return status;
+    pending->state.presence=GameContextActorPresence::Present;pending->state.epoch=state_.owner_epoch;
+    pending->state.serial=++context_actor_serial_;pending->state.constructor_actor=5;
+    pending->state.model_generation=pending->clone.Generation();pending->state.parameters_sha256=pending->digests[2];
+    pending->Move(ContextActorFloat(constants,0),ContextActorFloat(constants,1));
+    pending->state.model_visible=false;++pending->state.hides; // actual1A18C typed model visibility store
+    if(!Live()||!pending->Current())throw std::runtime_error("context actor constructor input/owner changed");
+    context_actor_=std::move(pending);return {};
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorRuntime::ClearContextActor1A1F4(){
+  if(!Live()||!context_actor_||context_actor_->state.presence!=GameContextActorPresence::Present)
+    return {GameFsCode::Unavailable,0,"context actor absence needs an actual prior object retirement"};
+  try{auto cleared=std::make_shared<ContextActorData>();cleared->manager=support_manager_;
+    cleared->state.presence=GameContextActorPresence::Absent;cleared->state.epoch=state_.owner_epoch;
+    cleared->state.serial=++context_actor_serial_;context_actor_->Close();context_actor_=std::move(cleared);return {};
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorRuntime::BindScriptContextActor1C0FC(script::Vm& vm){
+  if(!Live())return {GameFsCode::Unavailable,0,"context actor binding manager retired"};
+  try{const auto context=vm.context_value();const auto w=vm.current_witness();
+    if(!w.valid||w.stopped||!w.context_registered||!vm.stable_value_owner(context))throw std::runtime_error("context actor current module/run/thread required");
+    for(const auto& old:context_actors_)if(old.context.lock()==context.context_owner.lock()&&old.run==w.run_id)
+      throw std::runtime_error("context actor constructor binding cannot replay/rebase");
+    context_actors_.erase(std::remove_if(context_actors_.begin(),context_actors_.end(),[&](const ContextActorBinding& b){return b.context.expired()||b.context.lock()==context.context_owner.lock();}),context_actors_.end());
+    if(context_actors_.size()==8)throw std::runtime_error("context actor native registry bound");
+    const bool nil=context_actor_&&context_actor_->Current()&&context_actor_->state.presence==GameContextActorPresence::Absent;
+    context_actors_.push_back({context.context_owner,context_actor_,w.run_id,nil,w.code_sha256});return {};
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameActorRuntime::RequestPendingScene12(script::Vm& vm){
+  if(!Live())return {GameFsCode::Unavailable,0,"pending scene manager retired"};
+  try{const auto w=vm.current_witness();if(!w.valid||w.stopped||!w.context_registered)throw std::runtime_error("pending scene current context required");
+    const auto context=vm.context_value();if(!vm.stable_value_owner(context))throw std::runtime_error("pending scene foreign context thread");
+    const auto ctx=context.context_owner.lock();std::shared_ptr<ContextActorData> actor;bool nil=false;
+    for(const auto& bound:context_actors_)if(bound.context.lock()==ctx&&bound.run==w.run_id&&bound.module==w.code_sha256){actor=bound.actor.lock();nil=bound.captured_nil;break;}
+    // Source reads node24 BEFORE pending stores. Unknown/retired is not nil.
+    if(!nil&&(!actor||!actor->Current()))throw std::runtime_error("context node24 actor association unknown/retired");
+    if(!manager_switch_.RequestPending12(state_.owner_epoch))throw std::runtime_error("pending scene12 request owner/replay/domain");
+    state_.manager_switch=manager_switch_.Snapshot();
+    if(!nil){
+      actor->Move(ContextActorFloat(actor->inputs[2],2),ContextActorFloat(actor->inputs[2],3));
+      if(!actor->Current())throw std::runtime_error("context actor changed after logical stores");
+      actor->state.model_visible=false;++actor->state.hides;
+    }
+    return {}; // request/actor prefix ONLY: no bit publication/adoption/wake
+  }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorRuntime::Initialize(uint32_t actor, PackageView selection,
                                           GameTransition &transition,
@@ -1134,6 +1248,10 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
     state_.actor_visible_pixels = uint32_t(pixels);
     ++state_.actor_draw_frames;
   }
+  if(context_actor_&&context_actor_->state.presence==GameContextActorPresence::Present){
+    if(!context_actor_->Current())return {GameFsCode::Unavailable,0,"context actor render owner changed"};
+    if(context_actor_->state.model_visible){const auto drawn=context_actor_->clone.Draw(graphics,camera);if(!drawn)return drawn;}
+  }
   if(state_.intro_live){GameUiDrawStats drawn;std::string error;
     if(!intro_clone_.Draw(graphics,drawn,error))return {GameFsCode::Unavailable,0,error};
     state_.intro_quads=drawn.quads;}
@@ -1155,6 +1273,7 @@ GameFsStatus GameActorRuntime::Draw(GameGraphics &graphics,const std::function<G
   return {};
 }
 void GameActorRuntime::Close() {
+  if(context_actor_)context_actor_->Close();context_actor_.reset();context_actors_.clear();
   support_registration_.Close();support_manager_.reset();state_.support_registration=support_registration_.Snapshot();
   manager_switch_.Retire();state_.manager_switch=manager_switch_.Snapshot();
   intro_clone_.Close();intro_resource_.reset();state_.intro_live=false;state_.intro_controls={};
