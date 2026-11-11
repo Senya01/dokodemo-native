@@ -362,7 +362,7 @@ private:
     std::shared_ptr<NativeScriptContext> context_;
     std::deque<PendingCallback> pending_callbacks_;
     std::unique_ptr<EventEnvelope> event_envelope_;
-    bool context_enabled_=true,event_override_=false;
+    bool context_enabled_=true,event_override_=false,event_override_enabled_=false;
     uint32_t callbacks_posted_=0,callbacks_returned_=0;
     uint64_t next_callback_receipt_=0; // monotonic across start_at/run incarnations
     FrameObserver frame_observer_;

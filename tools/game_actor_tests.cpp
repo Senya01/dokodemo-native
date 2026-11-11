@@ -667,7 +667,49 @@ void IntegerReferenceSwap78(){
     {auto p=Fixture({0x30,0,0x95,1,0,0x95,4,0,0x78,0x95,2,0,0x95,3,0,0x78,0x38},{0x90000004,0x20000001,0x20000002,0x20000003,0x20000004});Vm vm(p);vm.start();
      Check(vm.run(40).status==Status::Complete&&vm.stack().empty(),"two actual array-cell swaps");for(uint16_t n=1;n<=4;++n)Check(vm.read_slot(Table::Global,n).signed_integer()==5-n,"current Global list ordering, no row fabrication");}
 }
+void EventEnable3BChecks(){
+    // Generated frames/operands only. This executes source3A/3B and the real
+    // event return; no manually populated restoration receipt or resume call.
+    for(const auto ret:{uint8_t(0x32),uint8_t(0x1C)})for(bool expired:{false,true}){
+        auto program=Fixture({0x30,2,0x80,9,0x70,0x80,13,0x80,5,0x44,0x38,
+                              0x30,3,0x3A,0x32,0x30,3,0x3B,ret});
+        script::Vm vm(program);vm.clock_tick(10);vm.start({script::Value::integer(111),script::Value::string("kept")});
+        Check(vm.run().status==script::Status::Yield,"actual caller result/operand/frame/deadline setup");
+        const auto original=vm.current_witness();const auto context=vm.context_value();
+        script::Value disable;disable.kind=script::Value::Kind::Code;disable.word=0x7000000B;
+        Check(vm.post_callback(context,disable,script::Value::integer(0),script::Value::integer(0))==0,"real self callback enters source event envelope");
+        vm.clock_tick(13);Check(vm.run().status==script::Status::Yield&&!vm.context_enabled(),"3A32 restores disabled caller");
+        vm.clock_tick(expired?21:17);const auto paused=vm.current_witness();
+        script::Value enable;enable.kind=script::Value::Kind::Code;enable.word=0x7000000F;
+        Check(vm.post_owner_nil_event(enable,17)==0,"typed owner event17 enters actual callback");
+        const auto entered=vm.current_witness();Check(entered.event_envelope_present&&entered.frame_values[0].word==script::Value::integer(17).word
+            &&entered.frame_values[1].word==0,"owner event uses ID plus finite NIL argument ABI");
+        vm.clock_tick(expired?23:19);
+        for(unsigned i=0;i<3;++i)Check(vm.step().status!=script::Status::Stopped,"3B and callback return execute");
+        const auto restored=vm.current_witness();
+        Check(vm.context_enabled()&&vm.callbacks_returned()==2&&!restored.event_envelope_present&&!vm.queued_callbacks()
+            &&restored.run_id==paused.run_id&&restored.context_word==paused.context_word&&restored.frame_id==original.frame_id
+            &&restored.current_pc==paused.current_pc&&restored.code_entry==paused.code_entry&&restored.call_depth==paused.call_depth
+            &&restored.active_blocks==paused.active_blocks&&restored.event_scope_depth==paused.event_scope_depth
+            &&restored.result.word==paused.result.word&&restored.result.word==script::Value::integer(9).word
+            &&restored.frame_cells==paused.frame_cells&&restored.operand_cells==paused.operand_cells
+            &&vm.stack().size()==1&&vm.stack()[0].signed_integer()==13
+            &&vm.read_slot(script::Table::Frame,0).signed_integer()==111&&vm.read_slot(script::Table::Frame,1).cp932=="kept"
+            &&vm.deadline_tick()==(paused.relative_deadline23>0?restored.clock_tick+uint32_t(paused.relative_deadline23):0),
+            "actual3B return enables only saved same caller and preserves values/stack/signed deadline");
+    }
+    for(bool enable_last:{false,true}){
+        auto program=Fixture({0x30,0,0x80,1,0x44,0x38,0x30,2,uint8_t(enable_last?0x3A:0x3B),uint8_t(enable_last?0x3B:0x3A),0x32});
+        script::Vm vm(program);vm.start();Check(vm.run().status==script::Status::Yield,"last-writer caller");(void)vm.context_value();
+        script::Value cb;cb.kind=script::Value::Kind::Code;cb.word=0x70000006;
+        Check(vm.post_owner_nil_event(cb,17)==0,"last-writer actual callback");for(unsigned i=0;i<4;++i)Check(vm.step().status!=script::Status::Stopped,"actual override sequence");
+        Check(vm.context_enabled()==enable_last,"source byte39 follows last3A/3B writer");
+    }
+    auto outside=Fixture({0x30,0,0x3B,0x38});script::Vm invalid(outside);invalid.start();
+    Check(invalid.run().status==script::Status::Stopped,"finite3B requires an actual event envelope; no generic wake permission");
+}
 void Focused(){
+    EventEnable3BChecks();
     IntegerReferenceSwap78();
     OutingComponents();
     OwnedInlineStringChecks();

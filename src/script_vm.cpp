@@ -727,10 +727,11 @@ Event Vm::step() {
             //6BB68 ->6B33C. Drain after publishing this instruction's PC so
             //the event envelope saves the actual following continuation.
             if(event_depth_)--event_depth_;
-        } else if(op==0x3A){
-            //6E43C: event return overrides restored enable38 with byte39=0.
-            if(!event_envelope_)return stop(cmd,"3A requires the reached event envelope");
-            event_override_=true;
+        } else if(op==0x3A||op==0x3B){
+            //6E43C/6E44C set override3A=1 and desired39=0/1. Selected
+            //6DA24..40 restores packed enable only without that override.
+            if(!event_envelope_)return stop(cmd,op==0x3A?"3A requires the reached event envelope":"3B requires the reached event envelope");
+            event_override_=true;event_override_enabled_=op==0x3B;
         } else if(op==0x32||op==0x1C){
             //In the named native frame-scoped event ABI,use the6D95C saved
             //event return for1C/32. PSP6D944's nonzero62 path remains open;
@@ -738,7 +739,7 @@ Event Vm::step() {
             if(!event_envelope_||!calls_.empty()||!blocks_.empty())
                 return stop(cmd,"32 needs finite callback frame without abnormal active unwind");
             auto saved=std::move(event_envelope_);
-            const bool enabled=event_override_?false:saved->enabled;
+            const bool enabled=event_override_?event_override_enabled_:saved->enabled;
             stack_=std::move(saved->stack);frame_=std::move(saved->frame);calls_=std::move(saved->calls);blocks_=std::move(saved->blocks);
             frame_id_=saved->frame_id;code_entry_=saved->code_entry;
             result_=std::move(saved->result);frame_reserved_=saved->reserved;waiting_event_=saved->waiting;event_signal_=saved->signal;

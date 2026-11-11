@@ -407,7 +407,9 @@ bool GameBackgroundPreparation::RuntimeCurrent()const {
 }
 bool GameBackgroundPreparation::BgmCurrent()const {
     if(!state_.bgm_attempted)return true;
-    const auto runtime=bgm_runtime_.lock();if(!runtime||!runtime->Live())return false;
+    const auto runtime=bgm_runtime_.lock();const auto owner=owner_.lock();
+    const std::shared_ptr<const void> parent=runtime;
+    if(!runtime||!runtime->Live()||!owner||parent!=owner||parent.owner_before(owner)||owner.owner_before(parent))return false;
     try{for(unsigned i=0;i<2;++i)if(bgm_inputs_[i].InitializedDigest()!=bgm_hashes_[i])return false;
         return state_.bgm_requested&&bgm_files_.Read(uint32_t(state_.bgm_choice)).current;
     }catch(...){return false;}
@@ -415,8 +417,9 @@ bool GameBackgroundPreparation::BgmCurrent()const {
 GameFsStatus GameBackgroundPreparation::RequestBgm(const std::shared_ptr<const void>& owner,uint64_t epoch,
     const std::shared_ptr<GameBackgroundRuntime>& runtime,PackageView previous,PackageView lists,
     PackageView root,const std::function<PackageView(uint32_t)>& names,GameBgmFileQueue::Factory factory){
+    const std::shared_ptr<const void> parent=runtime;
     if(!Current(owner,epoch)||!state_.pending||state_.failed||state_.bgm_attempted||!RegistrationsCurrent()
-       ||!runtime||!runtime->Live()||!names||!factory)
+       ||!runtime||!runtime->Live()||parent!=owner||parent.owner_before(owner)||owner.owner_before(parent)||!names||!factory)
         return {GameFsCode::Unavailable,0,"BGM must use current pending job/clock/RNG before5F58"};
     try{
         Need(previous.Describe().size==4,"BGM requires current old4BC typed word, not an implicit default");

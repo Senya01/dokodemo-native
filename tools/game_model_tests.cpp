@@ -918,8 +918,18 @@ void BackgroundSamplingTests(){
                 auto old=std::make_shared<Lease>(std::vector<uint8_t>(4));Word(old->b,0,24);
                 std::vector<uint8_t> data;for(unsigned i=0;i<19;++i)W(data,(i*7+3)%25);auto list=std::make_shared<Lease>(data);
                 auto path=chars("/SYNTHETIC/sound"),bgm_name=chars("SAMPLE");auto bgm_io=std::make_shared<BackgroundFileState>();
-                const auto make_file=[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,3),bgm_io);return {};};
-                const auto names=[&](uint32_t){return view(bgm_name);};
+                unsigned factory_calls=0,name_calls=0;
+                const auto make_file=[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{++factory_calls;out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(16,3),bgm_io);return {};};
+                const auto names=[&](uint32_t){++name_calls;return view(bgm_name);};
+                RngNativeOwner independent;independent.ImportCurrentState64(99,92,"synthetic foreign BGM lineage");
+                auto other_runtime=std::make_shared<GameBackgroundRuntime>();
+                Check(bool(other_runtime->Initialize([&]{return calendar;},independent)),"distinct live runtime with independent RNG");
+                auto same_address=std::shared_ptr<GameBackgroundRuntime>(runtime.get(),[](GameBackgroundRuntime*){});
+                Check(!job.RequestBgm(owner,epoch,other_runtime,view(old),view(list),view(path),names,make_file)
+                    &&!job.RequestBgm(owner,epoch,same_address,view(old),view(list),view(path),names,make_file)
+                    &&rng.CurrentSeed64()==seed&&independent.CurrentSeed64()==99&&!job.Snapshot().bgm_attempted
+                    &&job.Snapshot().bgm_choice==-1&&!job.Snapshot().bgm_selection.rng_calls&&!factory_calls&&!name_calls&&!reads,
+                    "current ownerA cannot select from runtimeB or same-address foreign control block; no job/RNG/provider effects");
                 auto other_owner=std::make_shared<int>(1);
                 Check(!job.RequestBgm(other_owner,epoch,runtime,view(old),view(list),view(path),names,make_file)&&rng.CurrentSeed64()==seed,"foreign pending job cannot consume shared RNG");
                 Check(bool(job.RequestBgm(owner,epoch,runtime,view(old),view(list),view(path),names,make_file)),"source BGM selection/file request on same pending job before background init");
