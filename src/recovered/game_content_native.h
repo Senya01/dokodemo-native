@@ -190,6 +190,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameFsStatus InitializeActorSceneOwners(uint32_t actor,PackageView module,GameResourceSource&,GameTransition&);
     GameFsStatus TickSceneBgmFiles();
     GameFsStatus TickPendingSceneRequest();
+    GameFsStatus PublishPendingSceneRequest();
     bool OutingInputsCurrent(const GameActorRuntime&)const;
     GameSceneBgmSnapshot SceneBgm()const{return scene_bgm_?scene_bgm_->Snapshot():GameSceneBgmSnapshot{};}
     std::weak_ptr<const void> OptionSettingsLifetime()const override{return option_settings_lifetime_;}

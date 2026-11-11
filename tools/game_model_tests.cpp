@@ -1770,7 +1770,19 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       if(owning_return&&id==0x7B){Check(args.empty()&&bool(actor.StartTransition()),"executed synthetic GAME6 opens current radial");source_open=true;return script::Value::integer(0);}
       if(id==0x70){Check(args.size()==1&&bool(actor.RegisterSupportData16(vm,args[0])),"actual eight typed current texts producer registration");return script::Value::integer(0);}
       Check(id==0x7E&&args.size()==1&&bool(command.Issue(vm,actor,args[0].signed_integer())),"executed producer/copy/operand issues same real context request");
-      Check(!command.Issue(vm,actor,12)&&bool(actor.PublishPendingScene1B238(bgm)),"no issue replay; actual source request publication");
+      Check(!command.Issue(vm,actor,12),"no issue replay");
+      if(owning_return){
+        GameMainFlow flow;Check(bool(flow.Initialize(actor,[](uint32_t,int32_t)->GameFsStatus{return {GameFsCode::Unavailable,0,"unexpected component event"};})),"actual main-flow current actor owner");
+        GameMainFlowGate gate;gate.loader_state20=6;gate.fade_state=2;gate.manager_switch_pending=control->Snapshot().pending;
+        const auto pending_seed=rng.CurrentSeed64();
+        Check(!flow.Tick(gate)&&control->Snapshot().pending&&control->Snapshot().current14==0,
+          "literal old pending positive request cannot go through equal-selector0 consumer");
+        Check(bool(content->PublishPendingSceneRequest())&&command.WaitingForPause()&&!control->Snapshot().pending
+          &&control->Snapshot().current14==12&&control->Snapshot().loadman.rendered_selector4DC==0&&rng.CurrentSeed64()==pending_seed,
+          "SAME Content source publication executes BEFORE pause, preserves old render and RNG; no wake/adoption");
+        gate.manager_switch_pending=control->Snapshot().pending;
+        Check(bool(flow.Tick(gate))&&vm.callbacks_posted()==0,"ordinary main-flow poll now continues while intended callback has not yet paused");flow.Close();
+      }else Check(bool(actor.PublishPendingScene1B238(bgm)),"actual source request publication");
       GameMainSceneData foreign_data;auto foreign_io=std::make_shared<BackgroundFileState>();std::shared_ptr<const GameOutingData> foreign_packet;
       Check(bool(foreign_data.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash))&&bool(foreign_data.Outing12(foreign_packet)),"independent live identical DATA is not this BGM owner");
       const auto seed_before_foreign=rng.CurrentSeed64();auto refused_io=std::make_shared<BackgroundFileState>();

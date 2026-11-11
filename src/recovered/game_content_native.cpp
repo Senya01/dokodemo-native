@@ -1526,6 +1526,16 @@ bool GameContentBoot::OutingInputsCurrent(const GameActorRuntime& actor)const{
       &&s.loadman.transition50==0&&s.loadman.ui_current&&!s.loadman.ui464&&!s.loadman.ui_change461
       &&s.loadman.initial_scene6_handoff&&b.selected&&scene_ui_.Snapshot().moving.current&&r.live&&r.scene_clock_ready;
 }
+GameFsStatus GameContentBoot::PublishPendingSceneRequest(){
+    if(state_.closed||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
+        return {GameFsCode::Unavailable,0,"current ordinary publication owner unavailable"};
+    const auto pending=actor_runtime_.Snapshot().manager_switch;
+    if(pending.pending&&pending.requested18!=0){
+        if(!scene_bgm_)return {GameFsCode::Unavailable,0,"ordinary pending request has no current BGM owner"};
+        return actor_runtime_.PublishPendingScene1B238(*scene_bgm_);
+    }
+    return {};
+}
 GameFsStatus GameContentBoot::TickPendingSceneRequest(){
     if(state_.closed||!loadman_||!loadman_->control||!loadman_->control->CurrentBorrow(loadman_->control))
         return {GameFsCode::Unavailable,0,"current ordinary LoadMan module unavailable"};
@@ -1537,14 +1547,13 @@ GameFsStatus GameContentBoot::TickPendingSceneRequest(){
         if(!scene_bgm_)return {GameFsCode::Unavailable,0,"current destination BGM owner retired"};
         return actor_script_.TickPendingDestinationContinuation(scene_ui_,*scene_bgm_,state_.source_loader469);
     }
-    // The actual self callback may be in flight at the end of the last VM
-    // slice. Let THAT callback execute3A/32 before borrowing root refs again.
+    // Publish the REAL request before the main-flow pending poll, even when
+    // its self-pause callback is still queued. Otherwise that poll routes a
+    // positive target into the legacy equal-selector0 consumer. Publication
+    // is not VM wake/adoption; only subsequent root borrowing waits for3A/32.
+    const auto published=PublishPendingSceneRequest();if(!published)return published;
+    pending=loadman_->control->Snapshot();
     if(actor_script_.OutingWaitingForPause())return {};
-    if(pending.pending&&pending.requested18!=0){
-        if(!scene_bgm_)return {GameFsCode::Unavailable,0,"ordinary pending request has no current BGM owner"};
-        auto status=actor_runtime_.PublishPendingScene1B238(*scene_bgm_);if(!status)return status;
-        pending=loadman_->control->Snapshot();
-    }
     if(pending.publication_phase&&pending.loadman.rendered_selector4DC!=pending.current14){
         bool requested=false;
         if(pending.publication_phase!=3||!loadman_->control->ResourceRequest(pending.new_resource,requested)||!requested)
