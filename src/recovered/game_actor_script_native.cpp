@@ -726,7 +726,12 @@ GameFsStatus GameActorScript::Tick() {
         }
         ++state_.ticks;
         const auto event=vm_->run(200000);
-        Need(!state_.outing.failed,"Outing source owner/return validation failed");
+        if(event.status==script::Status::Stopped){auto& o=state_.outing;o.vm_stopped=true;o.vm_stop_pc=event.pc;o.vm_stop_opcode=event.opcode;
+            o.vm_diagnostic=event.diagnostic.text().substr(0,192);}
+        if(state_.outing.failed){const auto& failure=state_.outing.failure;std::ostringstream why;
+            why<<"Outing source owner/return validation failed code="<<unsigned(failure.code)<<" "<<failure.reason.data();
+            if(state_.outing.vm_stopped)why<<"; VM also stopped: "<<state_.outing.vm_diagnostic;
+            throw std::runtime_error(why.str());}
         dictionary_.Capture(*vm_);
         CompleteInventoryActionReadback();
         state_.pc=event.pc;state_.last_opcode=uint32_t(event.opcode);
@@ -1033,6 +1038,33 @@ uint32_t GameActorScript::OutingChoiceMask()const{
     for(uint32_t row=0;row<only;++row)if(GameOutingCommand::ChoiceSupported(*vm_,row))mask|=1u<<row;
     return mask;
 }
+namespace {
+using OutingCode=GameOutingFailureCode;
+struct OutingGuardError:std::runtime_error {
+    OutingCode code;uint32_t field=UINT32_MAX;bool values=false;script::ValueWitness expected,actual;
+    OutingGuardError(OutingCode c,const char* why,uint32_t i=UINT32_MAX):std::runtime_error(why),code(c),field(i){}
+};
+void OutingCheck(OutingCode code,bool ok,const char* why){if(!ok)throw OutingGuardError(code,why);}
+GameOutingFrameFacts OutingFacts(const script::VmStateWitness& w){
+    GameOutingFrameFacts f;f.valid=w.valid;f.envelope=w.event_envelope_present;f.run=w.run_id;f.frame=w.frame_id;f.caller=w.caller_frame_id;
+    f.executed=w.executed;f.clock=w.clock_tick;f.deadline=w.deadline_tick;f.signed_remaining=w.relative_deadline23;
+    f.entry=w.code_entry;f.pc=w.current_pc;f.context=w.context_word;f.caller_pc=w.caller_call_pc;f.return_pc=w.caller_return_pc;
+    f.operands=uint32_t(w.operand_cells);f.cells=uint32_t(w.frame_cells);f.blocks=w.active_blocks;f.depth=w.call_depth;f.result=w.result;return f;
+}
+void OutingFailure(script::Vm& vm,const script::FrameTransition& t,GameOutingFailureSnapshot& f,
+                   OutingCode code,const char* why,uint64_t root,uint32_t root_entry,const std::array<char,65>& module,uint32_t context){
+    if(f.valid)return;
+    f.code=code;for(size_t i=0;i+1<f.reason.size()&&why[i];++i)f.reason[i]=why[i];
+    f.opcode=t.opcode;f.root=root;f.module=module;f.context=context;
+    f.before=OutingFacts(t.before);f.after=OutingFacts(t.after);
+    f.previous_store_valid=t.previous_store_valid;f.store_context_current=t.store_context_current;
+    if(t.previous_store_valid)f.previous_store=t.previous_store;
+    if(t.opcode==0x51&&t.before.operand_cells>=2&&t.before.operands_captured==t.before.operand_cells){
+        f.store_operands_valid=true;f.store_target=t.before.operands[t.before.operand_cells-2];f.store_value=t.before.operands[t.before.operand_cells-1];}
+    f.root_active=vm.owns_active_frame(root,root_entry);f.before_module_matches=t.before.valid&&t.before.code_sha256==module;
+    f.after_module_matches=t.after.valid&&t.after.code_sha256==module;f.valid=true;
+}
+}
 struct GameOutingCommand::Data {
     struct Ref {
         script::Table table{};uint16_t index=0;uint32_t word=0;
@@ -1096,33 +1128,35 @@ struct GameOutingCommand::Data {
     void Current(script::Vm& vm,bool stored)const{
         const auto w=vm.current_witness();
         if(!state.live||state.failed||!w.valid||!w.context_registered||w.run_id!=state.run||w.context_word!=state.context||w.code_sha256!=module
-            ||!vm.owns_active_frame(state.root,abi.root))throw std::runtime_error("outing command module/run/context/root retired or foreign");
+            ||!vm.owns_active_frame(state.root,abi.root))throw OutingGuardError(OutingCode::CurrentRoot,"outing command module/run/context/root retired or foreign");
         const auto ctx=vm.context_value().context_owner.lock();
-        if(!ctx||context.lock()!=ctx||context.owner_before(ctx)||ctx.owner_before(context))throw std::runtime_error("outing weak context owner changed");
+        if(!ctx||context.lock()!=ctx||context.owner_before(ctx)||ctx.owner_before(context))throw OutingGuardError(OutingCode::CurrentContext,"outing weak context owner changed");
         const auto header=vm.peek_reference(descriptor.Value());
-        if(header.kind!=script::Value::Kind::ArrayHeader||header.word!=0x90000006)throw std::runtime_error("outing six-field descriptor header");
+        if(header.kind!=script::Value::Kind::ArrayHeader||header.word!=0x90000006)throw OutingGuardError(OutingCode::DescriptorHeader,"outing six-field descriptor header");
         std::array<script::Value,6> values;
         for(unsigned i=0;i<6;++i){values[i]=vm.peek_reference(Data::Cell(vm,descriptor.Value(),i));
-            if(state.produced&&!Equal(fields[i],Digest(vm,values[i])))throw std::runtime_error("outing produced descriptor drift");}
+            if(state.produced&&!Equal(fields[i],Digest(vm,values[i]))){OutingGuardError e(OutingCode::DescriptorField,"outing produced descriptor drift",i);
+                e.values=true;e.expected=fields[i];e.actual=Digest(vm,values[i]);throw e;}}
         if(!state.produced)return;
         if(Int(values[0])!=uint32_t(candidate)||!record.Same(values[1])||Int(values[2])!=state.word)
-            throw std::runtime_error("outing candidate/word/record drift");
+            throw OutingGuardError(OutingCode::DescriptorAssociation,"outing candidate/word/record drift");
         script::Value root;root.kind=script::Value::Kind::Reference;root.table=script::Table::Global;root.index=abi.candidates;root.word=0xB2000000u|root.index;
         const auto selected=vm.peek_reference(Data::Cell(vm,root,uint32_t(candidate)));
-        if(!record.Same(selected))throw std::runtime_error("outing current candidate registry replaced");
+        if(!record.Same(selected))throw OutingGuardError(OutingCode::CandidateRegistry,"outing current candidate registry replaced");
         const auto rh=vm.peek_reference(record.Value());
         if(rh.kind!=script::Value::Kind::ArrayHeader||rh.word!=state.record_header||rh.word!=0x90000009
             ||Int(vm.peek_reference(Data::Cell(vm,record.Value(),0)))!=state.selector)
-            throw std::runtime_error("outing current record/schema/selector drift");
+            throw OutingGuardError(OutingCode::RecordSchema,"outing current record/schema/selector drift");
         if(stored){
             if(!state.stored||!copied||destination.table!=script::Table::Ctx28||destination.index!=abi.stored)
-                throw std::runtime_error("outing executed current-context copy absent");
+                throw OutingGuardError(OutingCode::CopiedAbsent,"outing executed current-context copy absent");
             const auto bound=destination.context.lock();
-            if(!bound||bound!=ctx||bound.owner_before(ctx)||ctx.owner_before(bound))throw std::runtime_error("outing copied context reference foreign/retired");
+            if(!bound||bound!=ctx||bound.owner_before(ctx)||ctx.owner_before(bound))throw OutingGuardError(OutingCode::CopiedContext,"outing copied context reference foreign/retired");
             const auto h=vm.peek_reference(destination.Value());
-            if(h.kind!=script::Value::Kind::ArrayHeader||h.word!=0x90000006)throw std::runtime_error("outing current-context descriptor header");
-            for(unsigned i=0;i<6;++i)if(!Equal(stored_fields[i],Digest(vm,vm.peek_reference(Data::Cell(vm,destination.Value(),i)))))
-                throw std::runtime_error("outing current-context copied descriptor drift");
+            if(h.kind!=script::Value::Kind::ArrayHeader||h.word!=0x90000006)throw OutingGuardError(OutingCode::CopiedHeader,"outing current-context descriptor header");
+            for(unsigned i=0;i<6;++i){const auto actual=Digest(vm,vm.peek_reference(Data::Cell(vm,destination.Value(),i)));
+                if(!Equal(stored_fields[i],actual)){OutingGuardError e(OutingCode::CopiedField,"outing current-context copied descriptor drift",i);
+                    e.values=true;e.expected=stored_fields[i];e.actual=actual;throw e;}}
         }
     }
 };
@@ -1150,9 +1184,15 @@ GameFsStatus GameOutingCommand::Begin(script::Vm& vm,const GameOutingCommandAbi&
 }
 void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)noexcept{
     if(!data_||data_->state.failed)return;
+    OutingCode phase=OutingCode::TransitionOwner;
     try{auto& d=*data_;auto& s=d.state;const auto& a=d.abi;
-        if(t.before.run_id!=s.run||t.after.run_id!=s.run||t.after.context_word!=s.context)throw std::runtime_error("outing transition owner drift");
+        if(t.before.run_id!=s.run||t.after.run_id!=s.run||t.after.context_word!=s.context||t.before.code_sha256!=d.module||t.after.code_sha256!=d.module)throw std::runtime_error("outing transition owner drift");
+        if(!t.after.context_registered)throw OutingGuardError(OutingCode::CurrentContext,"outing transition context unregistered");
+        const auto context=vm.context_value().context_owner;
+        if(!t.after.context_registered||context.expired()||context.owner_before(d.context)||d.context.owner_before(context))
+            throw OutingGuardError(OutingCode::CurrentContext,"outing transition weak context owner changed");
         if(t.before.frame_id==s.root&&t.before.current_pc==a.produce_call&&t.opcode==0x20){
+            phase=OutingCode::ProducerCall;
             if(s.producer_frame||t.after.code_entry!=a.producer||t.after.caller_frame_id!=s.root)throw std::runtime_error("outing producer call replaced/replayed");
             d.descriptor=Data::Ref::From(vm.read_slot(script::Table::Frame,0));
             if(!vm.reference_belongs_to_frame(d.descriptor.Value(),s.root))throw std::runtime_error("outing descriptor is not root-owned");
@@ -1161,6 +1201,7 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             d.candidate=int32_t(Data::Int(vm.read_slot(script::Table::Frame,1)));s.producer_frame=t.after.frame_id;d.Current(vm,false);
         }
         if(s.producer_frame&&t.before.frame_id==s.producer_frame&&t.opcode==0x31){
+            phase=OutingCode::ProducerReturn;
             if(t.after.frame_id!=s.root||t.before.code_entry!=a.producer||t.after.result.kind!=script::Value::Kind::Scalar||t.after.result.word!=0x10000001)
                 throw std::runtime_error("outing producer did not return source TRUE");
             const auto ref=d.descriptor.Value();for(unsigned i=0;i<6;++i)d.fields[i]=Data::Digest(vm,vm.peek_reference(Data::Cell(vm,ref,i)));
@@ -1171,15 +1212,18 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             s.produced=true;s.fields=d.fields;d.Current(vm,false);
         }
         if(t.before.frame_id==s.root&&t.before.current_pc==a.copy_call&&t.opcode==0x20){
+            phase=OutingCode::CopyCall;
             if(!s.produced||s.copy_frame||t.after.code_entry!=a.copier||!d.descriptor.Same(vm.read_slot(script::Table::Frame,0)))
                 throw std::runtime_error("outing copy input/call owner replaced");
             d.Current(vm,false);d.destination=Data::Ref::From(vm.read_slot(script::Table::Frame,1));s.copy_frame=t.after.frame_id;
         }
         if(s.copy_frame&&t.before.frame_id==s.copy_frame&&t.opcode==0x31){
+            phase=OutingCode::CopyReturn;
             if(t.after.frame_id!=s.root||t.before.code_entry!=a.copier)throw std::runtime_error("outing copy return owner replaced");
             d.stored_fields=d.fields;d.copied=true;s.stored=true;d.Current(vm,true);
         }
         if(s.wait_posted&&t.before.frame_id==s.wait_frame&&t.before.current_pc==a.deadline&&t.opcode==0x44){
+            phase=OutingCode::Deadline;
             d.Current(vm,true);
             if(d.delayed.valid||t.before.code_entry!=a.wait_entry||t.after.current_pc!=a.wait_resume
               ||t.after.caller_frame_id!=s.travel_frame||t.after.caller_call_pc!=a.wait_call
@@ -1187,6 +1231,7 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             d.delayed=t.after;
         }
         if(s.wait_posted&&t.callback_receipt==s.pause_receipt&&t.before.code_entry==a.pause_entry){
+            phase=OutingCode::Pause;
             if(t.opcode==0x3A&&t.before.current_pc==a.pause_disable){
                 if(!d.delayed.valid||d.pause_disabled)throw std::runtime_error("outing disable before actual wait/replayed");d.pause_disabled=true;
             }
@@ -1197,6 +1242,7 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             }
         }
         if(s.event_posted&&t.callback_receipt==s.event_receipt&&t.before.code_entry==a.event_entry){
+            phase=OutingCode::Event;
             if(t.opcode==0x3B&&t.before.current_pc==a.event_enable){
                 if(d.event_enabled||s.event_returned)throw std::runtime_error("outing enable replay");d.event_enabled=true;
             }
@@ -1207,6 +1253,7 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             }
         }
         if(t.before.current_pc==a.field5_store&&t.opcode==0x51){
+            phase=OutingCode::Field5Set;
             if(!s.event_returned||s.field5_written||!t.previous_store_valid||!t.store_context_current||!Data::Equal(t.previous_store,d.stored_fields[5])||t.before.code_entry!=a.travel||t.before.frame_id!=s.travel_frame
               ||t.before.operands_captured!=t.before.operand_cells||t.before.operand_cells<2)
                 throw std::runtime_error("outing field5 writer outside completed source phase");
@@ -1223,18 +1270,74 @@ void GameOutingCommand::Observe(script::Vm& vm,const script::FrameTransition& t)
             try{d.Current(vm,true);}catch(...){d.stored_fields[5]=prior;throw;}
             s.field5_written=true;s.field5_sequence=t.after.executed;
         }
+        if(s.issued&&t.before.frame_id==s.travel_frame&&t.before.current_pc==a.epilogue_call&&t.opcode==0x20){
+            phase=OutingCode::EpilogueCall;
+            d.Current(vm,true);
+            if(!s.field5_written||!s.event_returned||s.epilogue_frame||t.after.code_entry!=a.epilogue
+              ||t.after.caller_frame_id!=s.travel_frame||t.after.caller_return_pc!=a.travel_return
+              ||t.after.frame_captured<1||t.after.frame_values[0].kind!=script::Value::Kind::Scalar||t.after.frame_values[0].word!=0x20000001)
+                throw std::runtime_error("outing source epilogue call/flag/owner mismatch");
+            s.epilogue_frame=t.after.frame_id;
+        }
+        if(t.before.current_pc==a.field5_clear&&t.opcode==0x51){
+            phase=OutingCode::Field5Clear;
+            if(!s.field5_written||!s.event_returned||s.field5_cleared||t.before.frame_id!=s.epilogue_frame||t.before.code_entry!=a.epilogue
+              ||!t.previous_store_valid||!t.store_context_current||!Data::Equal(t.previous_store,d.stored_fields[5])
+              ||t.previous_store.kind!=script::Value::Kind::Scalar||t.previous_store.word!=0x10000001
+              ||t.before.operands_captured!=t.before.operand_cells||t.before.operand_cells<2)
+                throw std::runtime_error("outing source field5 clear phase/previous value/owner mismatch");
+            const auto cell=Data::Cell(vm,d.destination.Value(),5);const auto& ref=t.before.operands[t.before.operand_cells-2];
+            const auto& value=t.before.operands[t.before.operand_cells-1];
+            if(ref.kind!=script::Value::Kind::Reference||ref.table!=uint32_t(cell.table)||ref.index!=cell.index
+              ||value.kind!=script::Value::Kind::Scalar||value.word!=0||t.after.operand_cells+2!=t.before.operand_cells)
+                throw std::runtime_error("outing source field5 clear target/NIL/stack mismatch");
+            const auto prior=d.stored_fields[5];const auto actual=Data::Digest(vm,vm.peek_reference(cell));
+            if(actual.kind!=script::Value::Kind::Scalar||actual.word!=0)throw std::runtime_error("outing source cleared field5 not readable as NIL");
+            d.stored_fields[5]=actual;
+            try{d.Current(vm,true);}catch(...){d.stored_fields[5]=prior;throw;}
+            s.field5_cleared=true;s.field5_clear_sequence=t.after.executed;
+        }
+        if(s.epilogue_frame&&t.before.frame_id==s.epilogue_frame&&t.opcode==0x31){
+            phase=OutingCode::EpilogueReturn;
+            if(!s.field5_cleared||s.epilogue_returned||t.before.current_pc!=a.epilogue_return||t.before.code_entry!=a.epilogue
+              ||t.after.frame_id!=s.travel_frame||t.after.current_pc!=a.travel_return
+              ||t.before.result.kind!=script::Value::Kind::Scalar||t.before.result.word!=0x10000001||!Data::Equal(t.before.result,t.after.result))
+                throw std::runtime_error("outing source epilogue return/result lacks exact owning clear");
+            d.Current(vm,true);s.epilogue_returned=true;
+        }
         if(s.issued&&t.opcode==0x31&&t.before.frame_id==s.travel_frame){
-            if(!s.field5_written||!s.event_returned||s.travel_returned||t.after.frame_id!=s.root
+            phase=OutingCode::TravelReturn;
+            if(!s.field5_written||!s.field5_cleared||!s.epilogue_returned||!s.event_returned||s.travel_returned||t.after.frame_id!=s.root
+              ||t.before.current_pc!=a.travel_return||!Data::Equal(t.before.result,t.after.result)
               ||t.after.current_pc!=a.root_return||t.before.code_entry!=a.travel)throw std::runtime_error("outing travel return lacks owning completion");
             d.Current(vm,true);s.travel_returned=true;d.travel_return_sequence=t.after.executed;
         }
         if(s.issued&&t.opcode==0x31&&t.before.frame_id==s.root){
+            phase=OutingCode::RootReturn;
             if(!s.travel_returned||s.completed||t.before.current_pc!=a.root_return||t.before.code_entry!=a.root
               ||t.before.executed!=d.travel_return_sequence||(d.root_caller&&(t.after.frame_id!=d.root_caller||t.after.current_pc!=d.root_next)))
                 throw std::runtime_error("outing root return outside immediate owning handoff");
+            if(!Data::Equal(t.before.result,t.after.result)||t.after.result.kind!=script::Value::Kind::Scalar||t.after.result.word!=0x10000001)
+                throw std::runtime_error("outing root result changed during immutable return handoff");
+            // The immediately preceding travel return checked live root data.
+            // This committed RET retires that frame: validate the exact handoff,
+            // not a new borrow of expired descriptor/frame references.
             s.completed=true;s.live=false;s.completion_sequence=t.after.executed;
         }
-    }catch(...){data_->state.failed=true;}
+    }catch(const std::exception& error){
+        auto& d=*data_;auto& s=d.state;const auto* guard=dynamic_cast<const OutingGuardError*>(&error);
+        OutingFailure(vm,t,s.failure,guard?guard->code:phase,error.what(),s.root,d.abi.root,d.module,s.context);
+        auto& f=s.failure;f.travel=s.travel_frame;f.epilogue=s.epilogue_frame;f.wait=s.wait_frame;f.request=s.request;
+        f.phase_flags=uint32_t(s.issued)|(uint32_t(s.event_returned)<<1)|(uint32_t(s.field5_written)<<2)|(uint32_t(s.field5_cleared)<<3)
+            |(uint32_t(s.epilogue_returned)<<4)|(uint32_t(s.travel_returned)<<5)|(uint32_t(s.completed)<<6);
+        f.descriptor_table=uint32_t(d.descriptor.table);f.descriptor_index=d.descriptor.index;
+        f.descriptor_frame_applicable=d.descriptor.table==script::Table::Frame||d.descriptor.table==script::Table::InputResult;
+        f.descriptor_frame_alive=!d.descriptor.frame.expired();
+        if(t.after.context_registered){const auto context=vm.context_value().context_owner;f.context_weak_checked=true;
+            f.context_matches=!context.expired()&&!context.owner_before(d.context)&&!d.context.owner_before(context);}
+        if(guard){f.field=guard->field;f.field_values_valid=guard->values;f.expected=guard->expected;f.actual=guard->actual;}
+        s.failed=true;
+    }catch(...){auto& d=*data_;OutingFailure(vm,t,d.state.failure,phase,"unknown outing observer exception",d.state.root,d.abi.root,d.module,d.state.context);d.state.failed=true;}
 }
 bool GameOutingCommand::IsWaitCall(script::Vm& vm)const{
     if(!data_||!data_->state.issued||data_->state.failed)return false;
@@ -1251,7 +1354,8 @@ int32_t GameOutingCommand::PostWait(script::Vm& vm,const std::vector<script::Val
       ||args[1].kind!=script::Value::Kind::Code||args[1].word!=(0x70000000u|d.abi.pause_entry)
       ||Data::Int(args[2])!=0||Data::Int(args[3])!=0||w.queued_callbacks||w.event_envelope_present)
         throw std::runtime_error("outing wait context/callee/operands/current caller mismatch");
-    if(!vm.observe_frame_instruction(d.abi.deadline,0x44)||!vm.observe_frame_instruction(d.abi.field5_store,0x51))
+    if(!vm.observe_frame_instruction(d.abi.deadline,0x44)||!vm.observe_frame_instruction(d.abi.field5_store,0x51)
+       ||!vm.observe_frame_instruction(d.abi.field5_clear,0x51))
         throw std::runtime_error("outing consumed source instructions absent");
     const auto before=vm.last_callback_receipt();const auto result=vm.post_callback(args[0],args[1],args[2],args[3]);
     if(result!=0)return result;
@@ -1342,33 +1446,68 @@ GameOutingCommandSnapshot GameOutingCommand::Snapshot(script::Vm& vm)const{
     if(!data_)return {};auto out=data_->state;try{data_->Current(vm,out.stored);out.current=out.produced;}catch(...){out.current=false;}return out;
 }
 
+void GameObserveOutingReturn(script::Vm& vm,const script::FrameTransition& t,GameMenuOutingSnapshot& o,
+                            const GameOutingCommandSnapshot& command,const GameOutingReturnAbi& a)noexcept{
+    if(!o.entered||o.failed||o.cleanup_returned)return;
+    OutingCode phase=OutingCode::OuterOwner;
+    try{
+        OutingCheck(phase,t.before.run_id==o.run&&t.after.run_id==o.run&&t.after.context_word==o.context
+            &&t.before.code_sha256==o.module&&t.after.code_sha256==o.module,"outing outer module/run/context changed");
+        if(!o.returned&&t.opcode==0x31&&t.before.frame_id==o.frame&&t.before.code_entry==a.root){
+            phase=OutingCode::OuterReturn;
+            const bool empty=t.before.current_pc==a.empty;
+            const bool cancel=t.before.current_pc==a.cancel&&o.choice_completed&&(o.choice_result==0||o.choice_result==o.choice_count);
+            const bool positive=t.before.current_pc==a.positive&&command.completed&&!command.failed;
+            OutingCheck(phase,(empty||cancel||positive)&&o.manager_requests==1&&t.after.frame_id==o.caller
+                &&t.after.code_entry==o.caller_entry&&o.caller_entry==a.caller&&t.after.current_pc==a.resume,
+                "outing root return does not restore entered outer invocation");
+            o.returned=true;o.empty=empty;o.return_pc=t.before.current_pc;o.result_word=t.after.result.word;
+        }
+        if(o.returned&&t.before.frame_id==o.caller&&t.before.current_pc==a.cleanup_call&&t.opcode==0x20){
+            phase=OutingCode::CleanupCall;
+            OutingCheck(phase,!o.cleanup_frame&&t.before.code_entry==o.caller_entry&&t.after.code_entry==a.cleanup
+                &&t.after.caller_frame_id==o.caller&&t.after.caller_return_pc==a.cleanup_resume,
+                "outing cleanup call replaced/replayed entered caller");
+            o.cleanup_frame=t.after.frame_id;
+        }
+        if(o.cleanup_frame&&t.before.frame_id==o.cleanup_frame&&t.opcode==0x31){
+            phase=OutingCode::CleanupReturn;
+            OutingCheck(phase,t.before.code_entry==a.cleanup&&t.before.current_pc==a.cleanup_return
+                &&t.after.frame_id==o.caller&&t.after.code_entry==o.caller_entry&&t.after.current_pc==a.cleanup_resume,
+                "outing cleanup return changed frame/site/caller");
+            const auto phase_value=vm.read_slot(script::Table::Global,a.phase),arg=vm.read_slot(script::Table::Global,a.argument);
+            const auto check_cell=[&](const Value& value,uint32_t expected,uint32_t index,const char* why){
+                if(value.kind==Value::Kind::Scalar&&value.word==expected)return;
+                OutingGuardError e(phase,why,index);e.values=true;e.expected.kind=Value::Kind::Scalar;e.expected.word=expected;
+                e.actual.kind=value.kind;e.actual.word=value.word;e.actual.table=uint32_t(value.table);e.actual.index=value.index;throw e;
+            };
+            check_cell(phase_value,0x20000001u,a.phase,"outing executed cleanup phase is not1");
+            check_cell(arg,0,a.argument,"outing executed cleanup argument is not canonical NIL");
+            o.cleanup_returned=true;o.cleanup_pc=t.before.current_pc;
+        }
+    }catch(const std::exception& e){const auto* guard=dynamic_cast<const OutingGuardError*>(&e);
+        OutingFailure(vm,t,o.failure,guard?guard->code:phase,e.what(),o.frame,a.root,o.module,o.context);
+        if(guard){o.failure.field=guard->field;o.failure.field_values_valid=guard->values;
+            if(guard->values){o.failure.expected=guard->expected;o.failure.actual=guard->actual;}}
+        o.failed=true;
+    }catch(...){OutingFailure(vm,t,o.failure,phase,"unknown outing outer observer exception",o.frame,a.root,o.module,o.context);o.failed=true;}
+}
 void GameActorScript::ObserveOutingTransition(const script::FrameTransition& t)noexcept{
     try{
         auto& o=state_.outing;const auto& c=state_.menu_outing_return;
         if(!o.entered&&c.returned&&c.phase_written&&!c.failed&&c.argument==3
            &&t.before.current_pc==0x8DF88&&t.after.code_entry==0x13219&&t.opcode==0x21){
-            o.entered=true;o.run=t.after.run_id;o.frame=t.after.frame_id;o.caller=t.before.frame_id;
-            const auto command=outing_command_.Begin(*vm_);if(!command)o.failed=true;
-            o.context=t.after.context_word;o.receipt=c.receipt;o.menu_generation=c.menu_generation;o.call_pc=t.before.current_pc;
+            o.entered=true;o.run=t.after.run_id;o.frame=t.after.frame_id;o.caller=t.before.frame_id;o.caller_entry=t.before.code_entry;
+            o.module=t.after.code_sha256;o.context=t.after.context_word;o.receipt=c.receipt;o.menu_generation=c.menu_generation;o.call_pc=t.before.current_pc;
+            const auto command=outing_command_.Begin(*vm_);
+            if(!command||o.caller_entry!=0x8DDB5){OutingFailure(*vm_,t,o.failure,OutingCode::OuterEntry,
+                command?"outing entry is not the selected outer caller":command.detail.c_str(),o.frame,0x13219,o.module,o.context);o.failed=true;}
         }
         if(!o.entered||o.failed||o.cleanup_returned)return;
         outing_command_.Observe(*vm_,t);state_.outing_command=outing_command_.Snapshot(*vm_);
-        if(state_.outing_command.failed){o.failed=true;return;}
-        if(t.before.run_id!=o.run||t.after.run_id!=o.run||t.after.context_word!=o.context){o.failed=true;return;}
-        if(!o.returned&&t.opcode==0x31&&t.before.frame_id==o.frame&&t.before.code_entry==0x13219){
-            const bool empty=t.before.current_pc==0x13252;
-            const bool cancel=t.before.current_pc==0x133A6&&o.choice_completed
-                &&(o.choice_result==0||o.choice_result==o.choice_count);
-            const bool positive=t.before.current_pc==0x13411&&state_.outing_command.completed&&!state_.outing_command.failed;
-            o.returned=(empty||cancel||positive)&&o.manager_requests==1&&t.after.frame_id==o.caller&&t.after.current_pc==0x8DF8C;
-            o.empty=empty;o.failed=!o.returned;o.return_pc=t.before.current_pc;o.result_word=t.after.result.word;
-        }
-        if(o.returned&&t.opcode==0x31&&t.before.code_entry==0x8D932&&t.before.current_pc==0x8D9C9
-           &&t.after.frame_id==o.caller&&t.after.current_pc==0x8E029){
-            const auto phase=vm_->read_slot(script::Table::Global,0x9A76),arg=vm_->read_slot(script::Table::Global,0x9A77);
-            o.cleanup_returned=phase.kind==Value::Kind::Scalar&&phase.word==0x20000001u
-                &&arg.kind==Value::Kind::Scalar&&arg.word==0;o.failed=!o.cleanup_returned;o.cleanup_pc=t.before.current_pc;
-        }
+        if(state_.outing_command.failed){o.failure=state_.outing_command.failure;o.failed=true;return;}
+        GameObserveOutingReturn(*vm_,t,o,state_.outing_command);
+    }catch(const std::exception& e){auto& o=state_.outing;OutingFailure(*vm_,t,o.failure,OutingCode::Exception,e.what(),o.frame,0x13219,o.module,o.context);o.failed=true;
     }catch(...){state_.outing.failed=true;}
 }
 GameChoiceTarget GameActorScript::InputTarget()const{

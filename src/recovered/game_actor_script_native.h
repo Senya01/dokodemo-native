@@ -143,12 +143,41 @@ struct GameNotebookStoreWitness {
     uint64_t executed=0,frame=0,run_id=0,generation=0;
     script::ValueWitness value;
 };
+enum class GameOutingFailureCode:uint16_t {
+    None,TransitionOwner,ProducerCall,ProducerOwner,ProducerReturn,CopyCall,CopyReturn,Deadline,Pause,Event,
+    Field5Set,EpilogueCall,Field5Clear,EpilogueReturn,TravelReturn,RootReturn,
+    CurrentRoot,CurrentContext,DescriptorHeader,DescriptorField,DescriptorAssociation,CandidateRegistry,RecordSchema,
+    CopiedAbsent,CopiedContext,CopiedHeader,CopiedField,OuterEntry,OuterOwner,OuterReturn,CleanupCall,CleanupReturn,Exception
+};
+struct GameOutingFrameFacts {
+    bool valid=false,envelope=false;uint64_t run=0,frame=0,caller=0,executed=0,clock=0,deadline=0;
+    uint32_t entry=0,pc=0,context=0,caller_pc=0,return_pc=0,operands=0,cells=0,blocks=0,depth=0;
+    int32_t signed_remaining=0;script::ValueWitness result;
+};
+// First refusal only. Typed copies, no Value/pointer/strong frame lease.
+// Weak-owner facts are labelled by the applicable reference table.
+struct GameOutingFailureSnapshot {
+    bool valid=false,root_active=false,context_matches=false,before_module_matches=false,after_module_matches=false;
+    bool descriptor_frame_applicable=false,descriptor_frame_alive=false,field_values_valid=false;
+    bool context_weak_checked=false;
+    bool previous_store_valid=false,store_context_current=false,store_operands_valid=false;
+    GameOutingFailureCode code=GameOutingFailureCode::None;uint8_t opcode=0;
+    uint32_t field=UINT32_MAX,context=0,descriptor_table=0,descriptor_index=0,phase_flags=0;
+    uint64_t root=0,travel=0,epilogue=0,wait=0,request=0;
+    std::array<char,193> reason{};GameOutingFrameFacts before,after;script::ValueWitness expected,actual;
+    std::array<char,65> module{};
+    script::ValueWitness previous_store,store_target,store_value;
+};
 struct GameMenuOutingSnapshot {
     bool entered=false,returned=false,cleanup_returned=false,choice_seen=false,choice_completed=false,empty=false,failed=false;
     uint64_t run=0,frame=0,caller=0,receipt=0,menu_generation=0;
     uint32_t context=0,call_pc=0,return_pc=0,result_word=0,cleanup_pc=0;
     uint32_t choice_pc=0,choice_request=0,choice_count=0,choice_result=0,manager_requests=0;
     int32_t destinations=-1;
+    uint32_t caller_entry=0;uint64_t cleanup_frame=0;
+    std::array<char,65> module{};
+    GameOutingFailureSnapshot failure;
+    bool vm_stopped=false;uint32_t vm_stop_pc=0;int32_t vm_stop_opcode=-1;std::string vm_diagnostic;
 };
 // Selected argument3 can confirm only the genuine appended cancellation row.
 bool GameOutingChoiceShape(int32_t destinations,uint32_t rows,uint32_t pc)noexcept;
@@ -164,6 +193,7 @@ struct GameOutingCommandAbi {
     uint32_t pause_entry=0x1C57,pause_disable=0x1C59,pause_return=0x1C5A;
     uint32_t event_entry=0x8DA28,event_enable=0x8DC14,event_return=0x8DD8B;
     uint32_t field5_store=0x126AD,root_return=0x13411;
+    uint32_t epilogue_call=0x1277A,epilogue=0x125D3,field5_clear=0x12641,epilogue_return=0x1264D,travel_return=0x1277F;
 };
 struct GameOutingCommandSnapshot {
     bool live=false,produced=false,stored=false,current=false,failed=false;
@@ -174,7 +204,17 @@ struct GameOutingCommandSnapshot {
     script::VmStateWitness suspended,restored;
     uint32_t context=0,candidate=0,word=0,selector=0,record_table=0,record_index=0,record_header=0;
     std::array<script::ValueWitness,6> fields{};
+    uint64_t epilogue_frame=0,field5_clear_sequence=0;
+    bool field5_cleared=false,epilogue_returned=false;
+    GameOutingFailureSnapshot failure;
 };
+struct GameOutingReturnAbi {
+    uint32_t root=0x13219,empty=0x13252,cancel=0x133A6,positive=0x13411;
+    uint32_t caller=0x8DDB5,resume=0x8DF8C,cleanup_call=0x8E024,cleanup=0x8D932,cleanup_return=0x8D9C9,cleanup_resume=0x8E029;
+    uint16_t phase=0x9A76,argument=0x9A77;
+};
+void GameObserveOutingReturn(script::Vm&,const script::FrameTransition&,GameMenuOutingSnapshot&,
+                            const GameOutingCommandSnapshot&,const GameOutingReturnAbi& = {})noexcept;
 class GameOutingCommand final {
 public:
     GameOutingCommand();~GameOutingCommand();

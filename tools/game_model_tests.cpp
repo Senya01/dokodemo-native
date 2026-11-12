@@ -1904,8 +1904,12 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     std::vector<uint8_t> code;auto emit=[&](std::initializer_list<uint8_t> b){code.insert(code.end(),b);};
     auto slot=[&](uint8_t op,uint16_t i){emit({op,uint8_t(i),uint8_t(i>>8)});};
     auto call=[&](uint8_t n){const auto pc=uint32_t(code.size());emit({0x20,n,0,0,0});return pc;};
+    uint32_t parent_call=0,parent_resume=0,parent_cleanup_call=0,parent_cleanup_resume=0,cleanup_entry=0,cleanup_return=0;
+    if(owning_return){emit({0x30,0});parent_call=call(0);parent_resume=uint32_t(code.size());emit({0x86});parent_cleanup_call=call(1);
+      parent_cleanup_resume=uint32_t(code.size());emit({0x80,7,0x44,0x38});}
+    const auto root_entry=uint32_t(code.size());
     emit({0x30,24});for(unsigned i=0;i<8;++i){slot(0x99,uint16_t(17+i));emit({0x8E,'A',0,0x51});}slot(0x99,16);emit({0x8B,0x70,1});
-    emit({0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,0x84});GameOutingCommandAbi abi;abi.root=0;abi.candidates=abi.stored=0;abi.produce_call=call(3);
+    emit({0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,0x84});GameOutingCommandAbi abi;abi.root=root_entry;abi.candidates=abi.stored=0;abi.produce_call=call(3);
     slot(0x91,13);slot(0x99,0);abi.copy_call=call(2);emit({0x80,12,0x80,1});abi.travel_call=call(2);abi.root_return=uint32_t(code.size());emit({0x31});
     abi.producer=uint32_t(code.size());emit({0x30,3});for(unsigned i=0;i<6;++i){slot(0x90,0);emit({0x80,uint8_t(i),0xF5});
       if(i==0)slot(0x90,1);else if(i==1){slot(0x95,0);slot(0x90,1);emit({0xF4});}else if(i==2)emit({0x80,7});else if(i==3||i==4)emit({0x8E,'T',0});else emit({0x84});emit({0x51});}emit({0x87,0x70,0x31});
@@ -1918,22 +1922,51 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       // host assignment of radial state, source phase or completion receipt.
       emit({0x8B,0x7B,0});
     }
+    uint32_t epilogue_call=0,epilogue_entry=0,epilogue_clear=0,epilogue_return=0;
+    if(owning_return){if(return_fault==9)emit({0x80,2});else slot(0x90,1);epilogue_call=call(1);}
     emit({0x31});
     if(owning_return){
+      epilogue_entry=uint32_t(code.size());emit({0x30,1});
+      // Source-connected epilogue ordering, arbitrary synthetic duration:
+      // current copiedfield5 TRUE -> NIL, real delay, TRUE/ordinary return.
+      slot(0x99,0);emit({0x80,uint8_t(return_fault==4?4:5),0xF5,uint8_t(return_fault==5?0x85:0x84)});
+      epilogue_clear=uint32_t(code.size());emit({0x51,0x80,2,0x44,uint8_t(return_fault==7?0x86:0x87),0x70});
+      epilogue_return=uint32_t(code.size());emit({0x31});
       abi.wait_entry=uint32_t(code.size());emit({0x30,0,0x8C,0x8A});pause_code_patch=uint32_t(code.size());emit({0,0,0,0x85,0x85});
       abi.wait_builtin=uint32_t(code.size());emit({0x8B,0x27,4,0x80,1});abi.deadline=uint32_t(code.size());emit({0x44});abi.wait_resume=uint32_t(code.size());emit({0x31});
       abi.pause_entry=uint32_t(code.size());emit({0x30,3});abi.pause_disable=uint32_t(code.size());emit({0x3A});abi.pause_return=uint32_t(code.size());emit({0x32});
       abi.event_entry=uint32_t(code.size());emit({0x30,2});abi.event_enable=uint32_t(code.size());emit({0x3B});abi.event_return=uint32_t(code.size());emit({0x32});
     }
+    if(owning_return){cleanup_entry=uint32_t(code.size());emit({0x30,1});slot(0x95,13);emit({0x80,uint8_t(return_fault==10?2:1),0x51});slot(0x95,14);
+      if(return_fault==11)emit({0x80,0});else emit({0x84});emit({0x51});
+      cleanup_return=uint32_t(code.size());emit({0x31});}
     const auto patch=[&](uint32_t at,uint32_t target){for(unsigned i=0;i<3;++i)code[at+2+i]=uint8_t(target>>(8*i));};patch(abi.produce_call,abi.producer);patch(abi.copy_call,abi.copier);patch(abi.travel_call,abi.travel);
+    if(owning_return){patch(parent_call,root_entry);patch(parent_cleanup_call,cleanup_entry);patch(epilogue_call,epilogue_entry);
+      abi.epilogue_call=epilogue_call;abi.epilogue=epilogue_entry;abi.field5_clear=epilogue_clear;
+      abi.epilogue_return=epilogue_return;abi.travel_return=epilogue_call+5;}
     if(owning_return)for(unsigned i=0;i<3;++i){code[abi.wait_call+1+i]=uint8_t(abi.wait_entry>>(8*i));code[pause_code_patch+i]=uint8_t(abi.pause_entry>>(8*i));}
-    std::vector<uint8_t> ksc(28+code.size()+4*(25+13+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=13;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
+    if(owning_return&&return_fault==8)abi.field5_clear=cleanup_entry+7;
+    std::vector<uint8_t> ksc(28+code.size()+4*(25+15+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=15;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
     if(owning_return)Word(ksc,28+code.size(),0x70000000u|abi.event_entry);
     const auto ctx_at=uint32_t(28+code.size()+(owning_return?4:0));Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
     const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);
     script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());script::Vm vm(program);vm.native_reserved_local_nil(true);vm.start();
     Check(bool(actor.BindScriptContextActor1C0FC(vm)),"actual constructor context captures this actor5 owner");auto image=std::make_shared<Lease>(ksc);const auto image_view=PackageStorage::Attach(image,image->b.size());
-    GameOutingCommand command;Check(bool(command.Begin(vm,abi)),"vertical command actual VM root");vm.frame_observer([&](const script::FrameTransition& t){command.Observe(vm,t);});
+    GameOutingCommand command;GameMenuOutingSnapshot outer;GameOutingReturnAbi outer_abi;
+    if(!owning_return)Check(bool(command.Begin(vm,abi)),"vertical command actual VM root");
+    outer_abi.root=abi.root;outer_abi.positive=abi.root_return;outer_abi.caller=0;outer_abi.resume=parent_resume;
+    outer_abi.cleanup_call=parent_cleanup_call;outer_abi.cleanup=cleanup_entry;outer_abi.cleanup_return=cleanup_return;
+    outer_abi.cleanup_resume=parent_cleanup_resume;outer_abi.phase=13;outer_abi.argument=14;
+    vm.frame_observer([&](const script::FrameTransition& t){
+      if(owning_return&&!outer.entered&&t.before.current_pc==parent_call&&t.after.code_entry==root_entry&&t.opcode==0x20){
+        Check(bool(command.Begin(vm,abi)),"real entered synthetic caller/root, no fabricated completion or original SHA bypass");
+        outer.entered=true;outer.frame=t.after.frame_id;outer.caller=t.before.frame_id;outer.caller_entry=t.before.code_entry;
+        outer.run=t.after.run_id;outer.context=t.after.context_word;outer.module=t.after.code_sha256;
+      }
+      command.Observe(vm,t);const auto current=command.Snapshot(vm);
+      if(current.failed){outer.failed=true;outer.failure=current.failure;}
+      else if(owning_return)GameObserveOutingReturn(vm,t,outer,current,outer_abi);
+    });
     auto target_io=std::make_shared<BackgroundFileState>();bool consumed=false,source_open=false;
     std::weak_ptr<const GameModelAsset> returned_old;
     vm.host_service([&](uint8_t id,const std::vector<script::Value>& args){
@@ -1941,6 +1974,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       if(owning_return&&id==0x7B){Check(args.empty()&&bool(actor.StartTransition()),"executed synthetic GAME6 opens current radial");source_open=true;return script::Value::integer(0);}
       if(id==0x70){Check(args.size()==1&&bool(actor.RegisterSupportData16(vm,args[0])),"actual eight typed current texts producer registration");return script::Value::integer(0);}
       Check(id==0x7E&&args.size()==1&&bool(command.Issue(vm,actor,args[0].signed_integer())),"executed producer/copy/operand issues same real context request");
+      if(owning_return)++outer.manager_requests; // capture the ACTUAL successful request, not a prefilled receipt
       Check(!command.Issue(vm,actor,12),"no issue replay");
       if(owning_return){
         GameMainFlow flow;Check(bool(flow.Initialize(actor,[](uint32_t,int32_t)->GameFsStatus{return {GameFsCode::Unavailable,0,"unexpected component event"};})),"actual main-flow current actor owner");
@@ -2109,15 +2143,50 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       Check(cleanup&&cleanup->bound&&cleanup->pending&&cleanup->record_index==2&&!cleanup->file_request_bound&&!cleanup->linked_request
         &&cleanup->handle14==-1&&cleanup->source_owner&&cleanup->source_generation&&cleanup->argument28==0,
         "actual4AD4C initialized record2/current gain owner independent of file54/bank5C/voice11EC, no playback credit");
-      const auto done=vm.run(100);if(done.status!=script::Status::Complete)throw std::runtime_error(done.diagnostic.text());
-      w=command.Snapshot(vm);Check(w.completed&&w.travel_returned&&!w.live&&!w.failed&&w.field5_sequence<w.completion_sequence&&returned_old.expired(),
-        "actual travel31 -> owning root31 completion, old render owner retired, not a counter certificate");
+      while(vm.pc()!=epilogue_clear){const auto step=vm.run(1);Check(step.status!=script::Status::Stopped,"reach executed source-like epilogue");}
+      if(return_fault==6){script::Value ref;ref.kind=script::Value::Kind::Reference;ref.table=script::Table::Ctx28;ref.index=6;ref.context_owner=vm.context_value().context_owner;
+        vm.store_reference(ref,script::Value::integer(99));} // negative external data drift, never a positive provider
+      const auto clearing=vm.run(100);Check(clearing.status==script::Status::Yield,"real epilogue clear/delay before source return");
+      GameBackgroundCandidate after_clear;const auto current_after_clear=command.CurrentRequest(vm,actor,after_clear);
+      if(return_fault>=4&&return_fault<=9&&return_fault!=7){
+        Check(!current_after_clear&&!command.Snapshot(vm).completed,"wrong clear/call/drift cannot validate current command");
+        if(return_fault==8){vm.clock_tick(vm.deadline_tick());(void)vm.run(100);}
+        const auto refused=command.Snapshot(vm);Check(refused.failed&&refused.failure.valid&&!refused.completed,"first real observer refusal captured");
+        Check(refused.failure.reason[0]!=0&&refused.failure.before.valid&&refused.failure.after.valid,"bounded reason and actual committed transition");
+        Check(bool(actor.CloseDestination())&&!target_io->live,"refused epilogue retains real resources until cleanup");
+      }else{
+      if(!current_after_clear)throw std::runtime_error("SOURCE_EPILOGUE_REPRO: "+current_after_clear.detail);
+      w=command.Snapshot(vm);Check(w.field5_cleared&&w.epilogue_frame&&w.field5_clear_sequence>w.field5_sequence&&!w.completed,"only actual scoped51 clear advances known copied field");
+      vm.clock_tick(vm.deadline_tick());
+      const auto done=vm.run(100);if(done.status!=script::Status::Yield)throw std::runtime_error(done.diagnostic.text());
+      w=command.Snapshot(vm);
+      if(return_fault==7){Check(w.failed&&w.failure.code==GameOutingFailureCode::EpilogueReturn&&w.failure.before.result.word==0x10000000&&!w.completed,
+          "wrong actual source return result refuses, no manufactured TRUE");Check(bool(actor.CloseDestination()),"failed result resources close");}
+      else{
+      if(return_fault==10||return_fault==11){
+        Check(w.completed&&!w.failed&&outer.returned&&!outer.cleanup_returned&&outer.failed&&outer.failure.valid
+          &&outer.failure.code==GameOutingFailureCode::CleanupReturn&&outer.failure.field_values_valid
+          &&outer.failure.field==(return_fault==10?13u:14u)&&outer.failure.actual.word==(return_fault==10?0x20000002u:0x20000000u),
+          "actual cleanup phase/Int0-versus-NIL refusal is distinct from successful root return");
+        const auto first_failure=outer.failure;(void)vm.run(1);
+        Check(outer.failure.before.executed==first_failure.before.executed&&outer.failure.reason==first_failure.reason&&outer.failure.code==first_failure.code,
+          "later VM transitions cannot overwrite first actual outer failure");
+        Check(bool(actor.CloseDestination())&&!target_io->live,"failed outer cleanup retains target until explicit close");
+      }else{
+      Check(w.completed&&w.travel_returned&&w.epilogue_returned&&!w.live&&!w.failed&&w.field5_sequence<w.completion_sequence&&returned_old.expired()
+        &&outer.returned&&outer.cleanup_returned&&!outer.failed&&vm.current_witness().frame_id==outer.caller,
+        "real nested epilogue/travel/root retirement then same entered parent cleanup, not a filled completion");
+      Check(bool(command.CurrentRequest(vm,actor,after_clear))&&bool(actor.TickDestinationContinuation(vm,command,ui,bgm,true)),
+        "normal Content poll after actual owning return does not reborrow retired root or preserve old WIP refusal");
       Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"completed command cannot rearm old caller");
       script::Vm foreign_after(program);foreign_after.start();GameBackgroundCandidate rejected;const auto seed_after=rng.CurrentSeed64();
       Check(!command.CurrentRequest(foreign_after,actor,rejected)&&!foreign_after.current_witness().context_registered&&rng.CurrentSeed64()==seed_after,
         "completed receipt refuses foreign VM BEFORE registering its context or changing RNG/request effects");
       target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
       Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
+      }
+      }
+      }
       }
       }
     }else{const auto result=vm.run(4096);if(result.status!=script::Status::Complete)throw std::runtime_error(result.diagnostic.text());}
@@ -2664,7 +2733,7 @@ int main(int argc,char** argv) {
         BgmTransportTests();
         MainSceneDataTests();
         ExecutedDestinationPreparationTests();
-        for(unsigned fault=0;fault<4;++fault)ExecutedDestinationPreparationTests({},true,fault);
+        for(unsigned fault=0;fault<12;++fault)ExecutedDestinationPreparationTests({},true,fault);
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();
