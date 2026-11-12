@@ -313,8 +313,24 @@ struct GameActorRuntime::ContextActorData {
   void Close(){clone.Close();asset.reset();inputs={};state.current=false;}
   ~ContextActorData(){Close();}
 };
+bool GameActorRuntime::CurrentAscActorField60()const{
+  if(!Live()||!state_.actor_model_live||!asc_actor_field60_)return false;
+  const auto cell=asc_field60_binding_.lock();const auto owner=asc_actor_field60_->owner.lock();
+  const auto module=asc_module_owner_.lock();
+  if(!cell||cell!=asc_actor_field60_||cell.owner_before(asc_actor_field60_)||asc_actor_field60_.owner_before(cell)
+     ||cell->actor!=this||cell->epoch!=state_.owner_epoch||!owner||owner!=support_manager_
+     ||owner.owner_before(support_manager_)||support_manager_.owner_before(owner)
+     ||!module||module!=manager_switch_||module.owner_before(manager_switch_)||manager_switch_.owner_before(module)
+     ||module->state_.loadman.module_epoch!=asc_module_epoch_)return false;
+  // Readback describes this owned cell's lifetime. Source byte/digest checks
+  // remain at the actual consuming store, not every observation/frame.
+  return true;
+}
 GameActorRuntimeSnapshot GameActorRuntime::Snapshot()const{
   auto result=state_;result.destination=destination_state_;
+  result.source_field60_current=CurrentAscActorField60();
+  result.source_field60=result.source_field60_current?asc_actor_field60_->value:std::optional<int32_t>{};
+  result.source_field60_writes=result.source_field60_current?asc_actor_field60_->writes:0;
   if(manager_switch_)result.manager_switch=manager_switch_->Snapshot();
   result.camera_target_current=ReadCameraTarget(result.camera_target_position);
   result.camera_target_epoch=result.camera_target_current?state_.owner_epoch:0;
@@ -1191,6 +1207,13 @@ GameFsStatus GameActorRuntime::PrepareActor() {
       throw std::runtime_error("ASC current module cell owner unavailable");
     actor_asc_digest_=asc.InitializedDigest();asc_selection_digest_=selection_.InitializedDigest();
     asc_module_owner_=manager_switch_;asc_module_epoch_=manager_switch_->Snapshot().loadman.module_epoch;
+    // AC60 AE1C/AE2C: the command receiver3C names THIS actor+60,
+    // not the module cell30, primary9480 vector or current scene4DC.
+    // WindowsOwnedAscActorField60 uses the executed native actor lifetime;
+    // no PSP address/layout or pre-write source value is manufactured.
+    asc_actor_field60_=std::make_shared<AscActorField60>();
+    asc_actor_field60_->actor=this;asc_actor_field60_->owner=support_manager_;
+    asc_actor_field60_->epoch=state_.owner_epoch;asc_field60_binding_=asc_actor_field60_;
     actor_asc_ = std::move(asc);
     actor_motion_names_ = std::move(parsed);
     actor_asset_ = std::move(asset);
@@ -1577,6 +1600,20 @@ GameFsStatus GameActorRuntime::AdvanceActorFrame(script::Vm* support_vm) {
         // No scene absence, readiness, wait, motion or completion is inferred.
         module->state_.asc6_cell=value;++module->state_.asc6_writes;
         state_.command_pc+=12;
+      } else if(parameter==9){
+        const auto module=asc_module_owner_.lock();
+        if(!module||module!=manager_switch_||module.owner_before(manager_switch_)||manager_switch_.owner_before(module)
+           ||!module->CurrentBorrow(module)||module->state_.epoch!=state_.owner_epoch
+           ||module->state_.loadman.module_epoch!=asc_module_epoch_||!CurrentAscActorField60()
+           ||selection_.InitializedDigest()!=asc_selection_digest_||actor_asc_.InitializedDigest()!=actor_asc_digest_
+           ||command_image_.InitializedDigest()!=command_digest_)
+          throw std::runtime_error("ASC9 current actor/cell/module/record binding retired/foreign/drifted");
+        // D9910[9] ->2466C/2467C: full32-bit store through bound3C,
+        // then the ordinary240DC loop. No helper/wait/visibility/ready call.
+        // The admitted AC60 constructor really binds this non-null cell;
+        // unknown/foreign is refused, not recast as the source nil branch.
+        asc_actor_field60_->value=value;++asc_actor_field60_->writes;
+        state_.command_pc+=12;
       } else if(parameter==8){
         const auto status=ApplySceneLightToggle(value);if(!status)throw std::runtime_error(status.detail);
         state_.command_pc+=12;
@@ -1869,6 +1906,7 @@ void GameActorRuntime::Close() {
   actor_clone_.Close();
   actor_asset_.reset();
   actor_asc_.Reset();
+  asc_field60_binding_.reset();asc_actor_field60_.reset();
   asc_module_owner_.reset();asc_module_epoch_=0;
   actor_asc_digest_={};asc_selection_digest_={};pending_command_digest_={};command_digest_={};
   state_.asc_operand_valid=false;

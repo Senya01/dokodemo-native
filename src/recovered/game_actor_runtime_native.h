@@ -231,6 +231,11 @@ struct GameActorRuntimeSnapshot {
   int32_t asc_operand_record=-1,asc_operand_value=0;
   uint32_t asc_operand_at=0,asc_operand_parameter=0;
   int32_t source_field58 = 0;
+  // AC60 AE2C binds command3C to this actor's distinct field60. Unknown
+  // before an admitted write, never a guessed visibility/scene/global value.
+  bool source_field60_current=false;
+  std::optional<int32_t> source_field60;
+  uint64_t source_field60_writes=0;
   std::array<float, 2> logical_xy{};
   float logical_heading = 0,logical_z=0;
   bool source_placement_bound=false;uint32_t source_placement_scene=0,source_placement_writes=0;
@@ -398,6 +403,15 @@ private:
   std::array<uint8_t,32> actor_asc_digest_{},asc_selection_digest_{},pending_command_digest_{},command_digest_{};
   std::weak_ptr<GameManagerSwitchControl> asc_module_owner_;
   uint64_t asc_module_epoch_=0;
+  struct AscActorField60 {
+    const GameActorRuntime* actor=nullptr;
+    std::weak_ptr<const void> owner;
+    uint64_t epoch=0,writes=0;
+    std::optional<int32_t> value;
+  };
+  std::shared_ptr<AscActorField60> asc_actor_field60_;
+  std::weak_ptr<AscActorField60> asc_field60_binding_;
+  bool CurrentAscActorField60()const;
   std::vector<std::string> actor_motion_names_;
   std::shared_ptr<GameModelAsset> actor_asset_;
   GameModelClone actor_clone_;

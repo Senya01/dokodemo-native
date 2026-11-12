@@ -22,6 +22,19 @@ struct StartupRuntimeTestAccess {
             s.command_ready,s.command_complete,s.asc_operand_valid,s.asc_operand_record,s.asc_operand_value,s.source_field58,s.asc_operand_parameter};}
     static std::shared_ptr<recovered::GameManagerSwitchControl> AscManager(const recovered::GameActorRuntime& a){return a.manager_switch_;}
     static void ForeignAscBinding(recovered::GameActorRuntime& a,const std::shared_ptr<recovered::GameManagerSwitchControl>& foreign){a.asc_module_owner_=foreign;}
+    struct Asc9Read {std::optional<int32_t> value;uint64_t writes;bool current;uint32_t pc,effects,completions;int32_t prefix;bool blocked,ready,complete;};
+    static Asc9Read Asc9(const recovered::GameActorRuntime& a){const auto& c=a.asc_actor_field60_;const auto& s=a.state_;
+        return {c?c->value:std::optional<int32_t>{},c?c->writes:0,a.CurrentAscActorField60(),s.command_pc,s.command_effects,
+            s.command_completions,s.source_field58,s.command_blocked,s.command_ready,s.command_complete};}
+    static void FaultAsc9(recovered::GameActorRuntime& a,recovered::GameActorRuntime& other,unsigned fault,std::shared_ptr<const void>& held){
+        if(fault==0)a.asc_field60_binding_=other.asc_actor_field60_;
+        if(fault==1){auto alias=std::shared_ptr<recovered::GameActorRuntime::AscActorField60>(a.asc_actor_field60_.get(),[](auto*){});
+            held=alias;a.asc_field60_binding_=alias;}
+        if(fault==2)++a.asc_actor_field60_->epoch;
+        if(fault==3)a.asc_actor_field60_->actor=&other;
+        if(fault==4){held=std::shared_ptr<const void>(a.support_manager_.get(),[](const void*){});a.asc_actor_field60_->owner=held;}
+        if(fault==5)a.asc_field60_binding_.reset();
+    }
     static std::array<int32_t,3> Application(recovered::GameContentBoot& content){return {{content.state_.current_scene,content.state_.previous_scene,content.state_.next_scene}};}
     static bool RequestApplication(recovered::GameContentBoot& content,int32_t scene){return content.RequestApplicationScene(scene);}
     static bool RequestApplicationFlag(recovered::GameContentBoot& c,int32_t scene,uint32_t flag){return c.RequestApplicationScene(scene,flag);}
@@ -1767,7 +1780,7 @@ void AscParameter6Tests(){
     for(unsigned fault=0;fault<7;++fault){
         Asc6Source source,other_source;source.commands={0x8030,5,43,0x8030,6,71,0x8031,0x8000};other_source.commands=source.commands;
         if(fault==0)source.commands.resize(5); // truncated6 value AFTER a valid prefix
-        if(fault==1)source.commands[4]=9; // genuinely unimplemented other domain
+        if(fault==1)source.commands[4]=7; // still-unimplemented domain;9 has its own owned actor-cell store
         auto actor=std::make_unique<GameActorRuntime>(),foreign=std::make_unique<GameActorRuntime>();
         Check(bool(actor->Initialize(0,PackageStorage::Attach(selection,16),fade,&source))&&bool(actor->RequestActorEvent(1,0))
             &&bool(actor->AdvanceActorFrame())&&bool(foreign->Initialize(0,PackageStorage::Attach(selection,16),fade,&other_source))
@@ -1793,6 +1806,54 @@ void AscParameter6Tests(){
         &&bool(actor->AdvanceActorFrame())&&module->Snapshot().asc6_cell==83,"borrowed current module receives actual ASC write");
     actor->Close();Check(module->Snapshot().live&&module->Snapshot().asc6_cell==83,"actor close retains borrowed module field lifetime");
     module->Retire();Check(!module->Snapshot().asc6_cell&&!module->Snapshot().live,"actual module retirement releases global-field state");fade.Retire();
+}
+void AscParameter9Tests(){
+    using Access=dokodemo::StartupRuntimeTestAccess;
+    auto selection=std::make_shared<Lease>(std::vector<uint8_t>(16));GameTransition fade;
+    Check(fade.Initialize({{0,0}}),"ASC9 transition constructor");
+    for(const int32_t value:{41,0,-27,INT32_MIN,INT32_MAX}){
+        Asc6Source source;source.commands={0x8030,5,53,0x8030,9,uint32_t(value),0x8031,0x8000};
+        auto actor=std::make_unique<GameActorRuntime>();source.models.scene_assets=(value==0);
+        Check(bool(actor->Initialize(0,PackageStorage::Attach(selection,16),fade,&source)),"ASC9 actual actor constructor");
+        if(value==0)Check(bool(actor->InitializeScene0({{0,0,0,12,3,5,2026}})),"ASC9 real scene present, not a null-scene shortcut");
+        Check(bool(actor->RequestActorEvent(1,0)),"ASC9 parses synthetic ASC and binds actual constructor cell");
+        auto state=Access::Asc9(*actor);Check(state.current&&!state.value&&state.writes==0&&!actor->WaitReady(),"current field60 unknown before actual write, not default zero");
+        Check(bool(actor->AdvanceActorFrame()),"ASC9 real prefix instruction");
+        state=Access::Asc9(*actor);Check(state.pc==12&&state.prefix==53&&state.effects==1&&!state.value,"prefix effect retained before9");
+        Check(bool(actor->AdvanceActorFrame()),"ASC9 actual scalar effect");state=Access::Asc9(*actor);
+        Check(state.current&&state.value==value&&state.writes==1&&state.pc==24&&state.effects==2&&!state.blocked&&!state.ready&&!state.complete
+            &&!Access::Asc6(*actor).value&&!actor->WaitReady(),"exact full32-bit actor-cell write including zero; distinct from module6, no ready/complete");
+        Check(bool(actor->AdvanceActorFrame())&&actor->WaitReady()&&Access::Asc9(*actor).pc==28,"only later real8031 produces ready");
+        Check(bool(actor->AdvanceActorFrame())&&Access::Asc9(*actor).complete&&Access::Asc9(*actor).completions==1,"real8000 completes after actual9 effect");
+        Check(!actor->RequestActorEvent(2,0)&&Access::Asc9(*actor).value==value&&Access::Asc9(*actor).writes==1,
+            "outside parsed ordinal refuses without mutating current field or prior completion");
+        Check(bool(actor->RequestActorEvent(1,0))&&bool(actor->AdvanceActorFrame())&&bool(actor->AdvanceActorFrame())&&Access::Asc9(*actor).writes==2,
+            "fresh real command may write same current actor cell, not a replayed effect certificate");
+        actor->Close();Check(!Access::Asc9(*actor).current&&!Access::Asc9(*actor).value,"actor retirement releases cell and binding");
+        Check(bool(actor->Initialize(0,PackageStorage::Attach(selection,16),fade,&source))&&bool(actor->RequestActorEvent(1,0))
+            &&Access::Asc9(*actor).current&&!Access::Asc9(*actor).value&&Access::Asc9(*actor).writes==0,"restart has a fresh uninitialized cell, no stale reuse");actor->Close();
+    }
+    for(unsigned fault=0;fault<13;++fault){
+        Asc6Source source,other_source;source.commands={0x8030,5,61,0x8030,9,73,0x8031,0x8000};other_source.commands=source.commands;
+        if(fault==6)source.commands.resize(5); // actual truncated operand AFTER a valid prefix
+        auto actor=std::make_unique<GameActorRuntime>(),other=std::make_unique<GameActorRuntime>();
+        Check(bool(actor->Initialize(0,PackageStorage::Attach(selection,16),fade,&source))&&bool(actor->RequestActorEvent(1,0))&&bool(actor->AdvanceActorFrame())
+            &&bool(other->Initialize(0,PackageStorage::Attach(selection,16),fade,&other_source))&&bool(other->RequestActorEvent(1,0)),"two independent parsed actor/module owners");
+        std::shared_ptr<const void> held;
+        if(fault<6)Access::FaultAsc9(*actor,*other,fault,held);
+        if(fault==7)source.asc->b.back()^=1;
+        if(fault==8)source.asc->live=false;
+        if(fault==9)selection->b[0]^=1;
+        if(fault==10)Access::ForeignAscBinding(*actor,Access::AscManager(*other));
+        if(fault==11){auto alias=std::shared_ptr<GameManagerSwitchControl>(Access::AscManager(*actor).get(),[](auto*){});held=alias;Access::ForeignAscBinding(*actor,alias);}
+        if(fault==12)Access::AscManager(*actor)->Retire();
+        const auto advanced=actor->AdvanceActorFrame();const auto state=Access::Asc9(*actor);
+        Check((!advanced||state.blocked)&&state.pc==12&&state.prefix==61&&!state.value&&state.writes==0&&!state.ready&&!state.complete
+            &&state.completions==0&&!Access::Asc9(*other).value,"missing/foreign/alias/stale/retired/drift/truncated9 refuses before store/progression, retains real prefix");
+        if(fault==9)selection->b[0]^=1;
+        actor->Close();other->Close();
+    }
+    fade.Retire();
 }
 void CameraTargetRender(){
     auto lease=std::make_shared<Lease>(std::vector<uint8_t>(16));ActorSource source;source.camera_triangle=true;
@@ -2617,6 +2678,7 @@ int main(int argc,char** argv) {
         ActorChannelOrder();
         ActorPendingReplacement();
         AscParameter6Tests();
+        AscParameter9Tests();
         CameraTargetRender();
         PlacementLiveTests();
         OrdinaryContentDataTests();
