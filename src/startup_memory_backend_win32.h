@@ -105,6 +105,11 @@ public:
     WindowsStartupBackend(const WindowsStartupBackend&) = delete;
     WindowsStartupBackend& operator=(const WindowsStartupBackend&) = delete;
     StartupNativeDescription Allocate(const StartupPartitionRequest& request);
+    // Windows file RAM coordinates are a backend-owned logical namespace,
+    // never PSP placement. Select and allocate a page-aligned free range under
+    // the SAME metadata lock; explicit Allocate address contracts stay exact.
+    StartupNativeDescription AllocateFileBuffer(uint32_t bytes, uint32_t minimum,
+                                                uint32_t limit = 0xF0000000);
     StartupNativeDescription Head(StartupNativeBlock handle);
     StartupHostStatus Free(StartupNativeBlock handle);
     StartupAllocationBorrow Borrow(StartupNativeBlock handle, StartupHostStatus& status);
@@ -130,6 +135,7 @@ private:
     struct Impl;
     explicit WindowsStartupBackend(std::unique_ptr<Impl> impl);
     std::unique_ptr<Impl> impl_;
+    StartupNativeDescription AllocateLocked(const StartupPartitionRequest& request);
 };
 const char* StartupHostCodeName(StartupHostCode code);
 } // namespace dokodemo

@@ -153,6 +153,36 @@ WindowsStartupBackend::~WindowsStartupBackend() {
 }
 StartupNativeDescription WindowsStartupBackend::Allocate(const StartupPartitionRequest& request) {
     auto& s = *impl_; std::lock_guard<std::mutex> guard(s.metadata);
+    return AllocateLocked(request);
+}
+StartupNativeDescription WindowsStartupBackend::AllocateFileBuffer(uint32_t bytes, uint32_t minimum, uint32_t limit) {
+    auto& s = *impl_; std::lock_guard<std::mutex> guard(s.metadata);
+    StartupNativeDescription out;
+    if(s.closed){out.status=Error(StartupHostCode::Closed);return out;}
+    SYSTEM_INFO info{};GetSystemInfo(&info);
+    const uint64_t page=info.dwPageSize;
+    if(!page){out.status=Error(StartupHostCode::UnexpectedGeometry);return out;}
+    if(!bytes||!minimum||minimum%page||limit%page||minimum>=limit){
+        out.status=Error(StartupHostCode::SourceRange);return out;
+    }
+    const uint64_t size=((uint64_t(bytes)+page-1)/page)*page;
+    uint64_t at=minimum;
+    // First fit over actual live allocations, including explicit startup
+    // blocks. Monotonic advancement terminates even with unsorted blocks.
+    for(;;){
+        if(size>uint64_t(limit)-at){out.status=Error(StartupHostCode::SourceRange);return out;}
+        uint64_t next=at;
+        for(const auto& b:s.blocks)if(at<uint64_t(b->source)+b->committed&&uint64_t(b->source)<at+size)
+            next=(std::max)(next,uint64_t(b->source)+b->committed);
+        if(next==at)break;
+        if(next>=limit){out.status=Error(StartupHostCode::SourceRange);return out;}
+        at=next;
+    }
+    StartupPartitionRequest request;request.bytes=bytes;request.source_base=uint32_t(at);
+    return AllocateLocked(request); // overlap and initialized-byte guards remain
+}
+StartupNativeDescription WindowsStartupBackend::AllocateLocked(const StartupPartitionRequest& request) {
+    auto& s = *impl_;
     StartupNativeDescription out;
     if (s.closed) { out.status = Error(StartupHostCode::Closed); return out; }
     if (request.partition != 2 || request.type != 0 || request.name != "block" || request.address_argument != 0) {

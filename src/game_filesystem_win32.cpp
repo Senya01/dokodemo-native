@@ -28,7 +28,7 @@ struct Buffer final : PackageStorageLease {
 class WindowsGameFileSource final : public GameFileSource {
 public:
     WindowsGameFileSource(std::shared_ptr<WindowsStartupBackend> backend, std::wstring path,uint32_t coordinate)
-        : backend_(std::move(backend)), path_(std::move(path)),next_coordinate_(coordinate) { buffers_.reserve(130); }
+        : backend_(std::move(backend)), path_(std::move(path)),minimum_coordinate_(coordinate) { buffers_.reserve(130); }
     ~WindowsGameFileSource() override { (void)Close(); }
     GameFsStatus Open() override {
         if (!backend_ || file_) return {GameFsCode::Busy, 0, "invalid/already open file owner"};
@@ -44,21 +44,22 @@ public:
         if (!file_) return {GameFsCode::Unavailable, 0, "file closed"};
         if (buffers_.size() == 130) return {GameFsCode::Busy, 0, "header/root/128 member allocation slots occupied"};
         if (!count || offset > state_.file_bytes || count > state_.file_bytes - offset || count > 64 * 1024 * 1024
-            || next_coordinate_ + count + 4095 > 0xF0000000ull)
+            || uint64_t(minimum_coordinate_) + count + 4095 > 0xF0000000ull)
             return {GameFsCode::Bounds, 0, "bounded file read exceeds actual extent/native cap"};
         const auto sought = backend_->Seek64(file_, int64_t(offset), 0);
         if (!sought.status) return host_failure(sought.status, "DATA.BP seek failed");
         if (sought.position != int64_t(offset)) return {GameFsCode::IoFailure, 0, "seek position mismatch"};
         auto buffer = std::make_shared<Buffer>();
-        StartupPartitionRequest request; request.bytes = count; request.source_base = uint32_t(next_coordinate_);
-        const auto allocation = backend_->Allocate(request);
-        if (!allocation.status) return host_failure(allocation.status, "file buffer allocation failed");
+        const auto allocation = backend_->AllocateFileBuffer(count, minimum_coordinate_);
+        if (!allocation.status) {
+            auto failure=host_failure(allocation.status,"file buffer allocation failed: ");
+            failure.detail+=StartupHostCodeName(allocation.status.code);return failure;
+        }
         buffer->block = allocation.handle;
         // Reserved before file acquisition: this shared_ptr insertion cannot
         // allocate. Retain ownership before read/lease/publication can fail.
         buffers_.push_back(buffer);
         ++state_.live_allocations;
-        next_coordinate_ += (uint64_t(count) + 4095) & ~uint64_t(4095);
         const auto read = backend_->ReadInto(file_, buffer->block, 0, count);
         ++state_.read_calls; state_.transferred_bytes += read.transferred;
         if (!read.status) return host_failure(read.status, "DATA.BP read failed/short");
@@ -93,11 +94,20 @@ private:
     StartupNativeFile file_;
     std::vector<std::shared_ptr<Buffer>> buffers_;
     GameFileIoSnapshot state_;
-    uint64_t next_coordinate_ = 0x74000000; // native logical coordinates, never PSP placement
+    uint32_t minimum_coordinate_ = 0x74000000; // shared backend chooses actual live nonoverlapping ranges
 };
 }
 std::unique_ptr<recovered::GameFileSource> CreateWindowsGameFileSource(
     std::shared_ptr<WindowsStartupBackend> backend, std::wstring path,uint32_t coordinate) {
     return std::make_unique<WindowsGameFileSource>(std::move(backend), std::move(path),coordinate);
+}
+std::function<recovered::GameFsStatus(const std::string&,std::unique_ptr<recovered::GameFileSource>&)>
+CreateWindowsGameFileFactory(std::shared_ptr<WindowsStartupBackend> backend,std::wstring media_root,uint32_t coordinate){
+    return [backend=std::move(backend),root=std::move(media_root),coordinate]
+        (const std::string& uri,std::unique_ptr<recovered::GameFileSource>& file)->recovered::GameFsStatus{
+        if(!backend)return {recovered::GameFsCode::Unavailable,0,"Windows file factory backend unavailable"};
+        auto path=root;for(const unsigned char c:uri)path.push_back(wchar_t(c));
+        file=CreateWindowsGameFileSource(backend,std::move(path),coordinate);return {};
+    };
 }
 } // namespace dokodemo

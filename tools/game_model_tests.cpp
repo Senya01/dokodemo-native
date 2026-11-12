@@ -65,6 +65,23 @@ struct StartupRuntimeTestAccess {
             &&s.source_current_bound&&s.glyph_pixels_ready&&s.glyph_decoded==1&&s.bound_texture_nodes==1&&s.placements.size()==1;
     }
     static uint32_t TargetSamples(recovered::GameActorRuntime& a){return a.destination_->applied_.samples;}
+    struct ClockRead {bool clock_initialized;uint32_t clock_table52,clock_writer,light_bindings;};
+    static ClockRead TargetClock(recovered::GameActorRuntime& a){const auto s=a.destination_->Snapshot();
+        return {s.clock_initialized,s.clock_table52,s.clock_writer,s.light_bindings};}
+    static bool ClockBindingRefusals(recovered::GameActorRuntime& a){
+        auto check=[&](){int32_t result=-77;return !a.QueryScenePeriod(15,35,result)&&result==-77;};
+        const auto module=a.background_module_.lock();
+        auto alias=std::shared_ptr<recovered::GameBackgroundRuntime>(module.get(),[](auto*){});
+        a.background_module_=alias;const bool foreign=check();a.background_module_=module;
+        ++a.destination_state_.request;const bool request=check();--a.destination_state_.request;
+        ++a.destination_state_.epoch;const bool epoch=check();--a.destination_state_.epoch;
+        auto& generation=a.manager_switch_->state_.loadman.source_scene_generation;
+        ++generation;const bool replaced=check();--generation;
+        a.destination_->state_.clock_initialized=false;const bool unknown=check();a.destination_->state_.clock_initialized=true;
+        auto& registered=a.manager_switch_->loaded_models_.at(a.destination_state_.resource);const auto old=registered;
+        registered=std::shared_ptr<const recovered::GameModelAsset>(old.get(),[](auto*){});const bool model=check();registered=old;
+        return foreign&&request&&epoch&&replaced&&unknown&&model;
+    }
     static bool CommitApplication(recovered::GameContentBoot& content){return content.CommitApplicationScene();}
     static recovered::GameActorRuntime& Actor(recovered::GameContentBoot& content){return content.actor_runtime_;}
     static recovered::GameFsStatus DrawPrepared(recovered::GameActorRuntime& actor,script::Vm& vm,recovered::GameGraphics& g){
@@ -1061,6 +1078,7 @@ void BackgroundSamplingTests(){
     for(uint64_t seed:{0,1,2,3}){ // fixed synthetic cases, no live seed search
         RngNativeOwner rng;rng.ImportCurrentState64(seed,91,"synthetic sampling fixture");
         std::array<uint32_t,7> calendar{{0,0,0,0,1,1,2026}};unsigned reads=0;
+        if(seed==3){calendar[4]=7;calendar[5]=3;} // nonzero current72B8 endpoint, not an old scene row
         auto runtime=std::make_shared<GameBackgroundRuntime>();
         Check(bool(runtime->Initialize([&]{++reads;return calendar;},rng)),"initialize current clock and actual RNG lineage");
         const std::shared_ptr<const void> owner=runtime;
@@ -1104,7 +1122,15 @@ void BackgroundSamplingTests(){
         std::vector<int32_t> phases;for(unsigned k=0;k<n;++k)phases.push_back(int32_t(next()%6));
         GameBackgroundAppliedState applied;Check(bool(job.AppliedEffects(owner,1,applied))&&applied.selected_entries==selected&&applied.child_phases==phases
             &&applied.rng_calls==calls&&applied.rng_before==after_bgm&&applied.rng_after==expected&&rng.CurrentSeed64()==expected,"exact61E4 compaction and child-only extra RNG call order");
-        Check(applied.calendar==calendar&&applied.light_slot==0&&!applied.samples,"month1 before day7 selects previous month row0, unsampled activation");
+        const auto season=SceneSeason709C(calendar[5],calendar[4]);
+        Check(applied.calendar==calendar&&applied.light_slot==season&&!applied.samples,"current date selects source709C seasonal endpoint");
+        int32_t period=-7;uint32_t table=99;
+        Check(bool(job.ReadScenePeriod(owner,1,15,35,period,table))&&table==season
+            &&period==ClassifySceneClock7398(SceneClockEndpoints7398(season),15,35)
+            &&job.Snapshot().clock_writer==0x7350&&rng.CurrentSeed64()==expected&&reads==1,"real current selected clock row0/nonzero reads do not sample/replay RTC/RNG");
+        auto foreign_clock=std::shared_ptr<const void>(runtime.get(),[](const void*){});period=-7;table=99;
+        Check(!job.ReadScenePeriod(foreign_clock,1,15,35,period,table)&&!job.ReadScenePeriod(owner,2,15,35,period,table)
+            &&!job.ReadScenePeriod(owner,1,25,0,period,table)&&period==-7&&table==99,"clock foreign control block/epoch/time refuse without output publication");
         Check(!job.ActivateEffects(owner,1,runtime)&&rng.CurrentSeed64()==expected&&reads==1,"activation cannot replay RNG or clock");
         Check(bool(job.SampleEffects(owner,1,4800))&&bool(job.AppliedEffects(owner,1,applied))&&applied.samples==1
             &&applied.main_pose[0].position[0]!=0&&applied.child_poses.size()==n,"actual main/child pose consumers sampled");
@@ -1112,14 +1138,15 @@ void BackgroundSamplingTests(){
         const auto pose=applied.main_pose[0].position;
         Check(bool(job.SampleEffects(owner,1,4800))&&bool(job.AppliedEffects(owner,1,applied))&&applied.main_pose[0].position!=pose
             &&rng.CurrentSeed64()==expected&&reads==1,"speed30 advances real seasonal pose, no extra random or RTC reads");
-        std::vector<GameBackgroundLightBinding> lights;Check(bool(job.LightBindings(owner,1,lights))&&lights[0].playback.speed==30
-            &&lights[0].playback.sampled_time==90&&lights[0].playback.time==120,"source clock60 plus native30-per-frame sampling");
-        for(unsigned i=1;i<7;++i)Check(lights[i].playback.state==1&&!lights[i].playback.samples,"unselected seasonal controls stay inactive");
+        std::vector<GameBackgroundLightBinding> lights;Check(bool(job.LightBindings(owner,1,lights))&&lights[season].playback.speed==30
+            &&lights[season].playback.sampled_time==90&&lights[season].playback.time==120,"source clock60 plus native30-per-frame sampling");
+        for(unsigned i=0;i<7;++i)if(i!=season)Check(lights[i].playback.state==1&&!lights[i].playback.samples,"unselected seasonal controls stay inactive");
         std::vector<GameAuxiliaryBindingState> bindings;Check(bool(job.Auxiliary(owner,1,bindings)),"selected auxiliary readback");
         for(const auto& b:bindings){const bool active=b.target!=GameAuxiliaryTarget::MainTemplate&&std::find(selected.begin(),selected.end(),b.entry)!=selected.end();
             Check(b.playback.samples==(active?2u:0u),"only source-selected non-template controls execute");}
         const auto oldlineage=rng.Lineage();rng.ImportCurrentState64(expected,91,"synthetic sampling fixture");
         Check(rng.Lineage()!=oldlineage&&!runtime->Live()&&!job.SampleEffects(owner,1,4800)&&!job.Snapshot().live,"same bytes reseed still revokes lineage and job");
+        Check(!job.ReadScenePeriod(owner,1,15,35,period,table),"retired current clock producer cannot return a period");
         Check(bool(job.Close()),"retired producer controls/template cleanup");
     }
     // Bad current clock and producer retirement before/during sampling are refusals.
@@ -1936,7 +1963,9 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     Check(arena.Initialize(memory.data(),uint32_t(memory.size()))&&module_owner.Initialize74EF4(arena)&&module_owner.InitializeManager93404(),"vertical ordinary module constructors");
     auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,module_owner)&&content->Reset24994(),"vertical actual Content/LoadMan constructors");
     RngNativeOwner rng;rng.ImportCurrentState64(81,3,"synthetic executed-destination component");content->SetTitleRng(rng);
-    Check(bool(content->SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};})),"vertical same clock/RNG initialized producer");
+    std::array<uint32_t,7> current_calendar{{0,0,0,12,3,5,2026}};unsigned current_clock_reads=0;
+    GameBackgroundRuntime::Clock civil_clock=[&]{++current_clock_reads;return current_calendar;};
+    Check(bool(content->SetBackgroundRuntime(civil_clock)),"vertical same clock/RNG initialized producer");
     std::vector<std::shared_ptr<BackgroundFileState>> audio_ios;std::weak_ptr<GameManagerSwitchControl> observed_manager;bool observed_store=false;
     Check(bool(content->BindInitialSceneBgm(data.Lists(),data.Gains(),data.Root(),[&](uint32_t i){return data.Name(i);},
       [&](const std::string&,std::unique_ptr<GameFileSource>& file)->GameFsStatus{
@@ -2126,6 +2155,26 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
           &&l.render_state20==1&&l.render_state21==1&&old_scene.expired()&&vm.callbacks_posted()==0
           &&primary==expected_placement,"real target placement/control vs primary40, BD28 before26B80, old owner retired, NO callback/wake");
         Check(!actor.AdoptPreparedDestination(vm,command)&&rng.CurrentSeed64()==after,"adoption replay refuses without RNG/placement");
+        const auto clock_bgm=bgm.Snapshot();const auto clock_manager=control->Snapshot();
+        current_calendar[3]=15;current_calendar[2]=35;const auto before_clock_reads=current_clock_reads;
+        const auto now=civil_clock();
+        Check(current_clock_reads==before_clock_reads+1&&now==current_calendar,"same current civil producer, not cached activation time (synthetic calendar)");
+        int32_t current_period=-1;const auto target_clock=dokodemo::StartupRuntimeTestAccess::TargetClock(actor);
+        const auto expected_clock=target_clock.light_bindings?SceneSeason709C(5,3):0;
+        Check(target_clock.clock_initialized&&target_clock.clock_table52==expected_clock
+          &&target_clock.clock_writer==(target_clock.light_bindings?0x7350u:0x5DC8u)
+          &&bool(actor.QueryScenePeriod(now[3],now[2],current_period))
+          &&current_period==ClassifySceneClock7398(SceneClockEndpoints7398(expected_clock),15,35)
+          &&actor.Snapshot().scene_period_table52==expected_clock,"adopted target uses ITS executed constructor/72B8 endpoint");
+        const auto queried_bgm=bgm.Snapshot();const auto queried_manager=control->Snapshot();
+        Check(queried_bgm.cache_revision==clock_bgm.cache_revision&&queried_bgm.period4B4==clock_bgm.period4B4
+          &&queried_bgm.variant4AC==clock_bgm.variant4AC&&queried_bgm.stored4BC==clock_bgm.stored4BC
+          &&queried_manager.loadman.cached_period4B4==clock_manager.loadman.cached_period4B4
+          &&queried_manager.loadman.staged_variant4AC==clock_manager.loadman.staged_variant4AC&&rng.CurrentSeed64()==after,
+          "flag0 getter does not refresh cache4B4/4AC, replay stores or consume RNG");
+        int32_t untouched=-77;Check(!actor.QueryScenePeriod(24,0,untouched)&&untouched==-77
+          &&dokodemo::StartupRuntimeTestAccess::ClockBindingRefusals(actor),"invalid time and foreign/CB/request/epoch/retired-model bindings refuse without output");
+        current_calendar[3]=12;current_calendar[2]=0;
         Check(bool(actor.BindCamera(vm,1)),"actual scoped context/primary camera bind");
         GameGraphics graphics;Check(graphics.Initialize({}),"adopted production renderer");
         Check(!actor.Draw(graphics),"adopted support cannot borrow an absent/latest VM");
@@ -2243,12 +2292,14 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         "real nested epilogue/travel/root retirement then same entered parent cleanup, not a filled completion");
       Check(bool(command.CurrentRequest(vm,actor,after_clear))&&bool(actor.TickDestinationContinuation(vm,command,ui,bgm,true)),
         "normal Content poll after actual owning return does not reborrow retired root or preserve old WIP refusal");
+      int32_t returned_period=-1;Check(bool(actor.QueryScenePeriod(15,35,returned_period)),"current adopted clock survives legitimate root/outer cleanup without borrowing retired VM frame");
       Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"completed command cannot rearm old caller");
       script::Vm foreign_after(program);foreign_after.start();GameBackgroundCandidate rejected;const auto seed_after=rng.CurrentSeed64();
       Check(!command.CurrentRequest(foreign_after,actor,rejected)&&!foreign_after.current_witness().context_registered&&rng.CurrentSeed64()==seed_after,
         "completed receipt refuses foreign VM BEFORE registering its context or changing RNG/request effects");
       target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
       Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
+      returned_period=-77;Check(!actor.QueryScenePeriod(15,35,returned_period)&&returned_period==-77,"retired target cannot fall back to old Scene0/default clock");
       }
       }
       }

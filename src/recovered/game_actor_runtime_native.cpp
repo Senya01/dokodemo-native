@@ -634,9 +634,29 @@ GameFsStatus GameActorRuntime::ApplySceneLightToggle(int32_t value) {
   ++state_.light_toggle_calls;return {};
 }
 GameFsStatus GameActorRuntime::QueryScenePeriod(uint32_t hour,uint32_t minute,int32_t& result) {
-  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready||manager_switch_->Snapshot().loadman.rendered_selector4DC!=0)
-    return {GameFsCode::Unavailable,0,"GAME36 requires live selected scene0 manager/clock owner"};
-  try {scene_calendar_[3]=hour;scene_calendar_[2]=minute;result=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),hour,minute);return {};}
+  if(!Live()||!state_.scene_model_live||!state_.scene_clock_ready||!manager_switch_->Current())
+    return {GameFsCode::Unavailable,0,"GAME36 requires current adopted background/clock owner"};
+  const auto& manager=manager_switch_->state_.loadman;
+  if(manager.rendered_selector4DC==12){
+    const auto module=background_module_.lock();const auto& d=destination_state_;
+    if(!module||!BackgroundModuleMatches(module)||!destination_||!d.adopted||d.failed
+        ||!destination_inputs_||!destination_inputs_->Current()||!destination_->Current(module,d.epoch)
+        ||manager.source_selector4DC!=12||manager.source_scene_generation!=d.request
+        ||destination_->Snapshot().request!=d.request)
+      return {GameFsCode::Unavailable,0,"GAME36 adopted request/module/clock binding retired or changed"};
+    const auto registration=manager_switch_->loaded_models_.find(d.resource);
+    if(registration==manager_switch_->loaded_models_.end()||registration->second!=destination_->asset_
+        ||registration->second.owner_before(destination_->asset_)||destination_->asset_.owner_before(registration->second))
+      return {GameFsCode::Unavailable,0,"GAME36 adopted clock/model registration foreign or retired"};
+    uint32_t table=0;const auto status=destination_->ReadScenePeriod(module,d.epoch,hour,minute,result,table);
+    if(status){state_.scene_period_table52=table;scene_calendar_[3]=hour;scene_calendar_[2]=minute;}
+    return status; //19AFC flag0: no4B4/4AC/cache publication
+  }
+  if(manager.rendered_selector4DC!=0||manager.source_selector4DC!=0||!scene_asset_||!scene_asset_->SourceCurrent()
+      ||scene_clone_.Asset()!=scene_asset_.get())
+    return {GameFsCode::Unavailable,0,"GAME36 selected background clock domain unavailable"};
+  try {const auto value=ClassifySceneClock7398(SceneClockEndpoints7398(state_.scene_period_table52),hour,minute);
+    scene_calendar_[3]=hour;scene_calendar_[2]=minute;result=value;return {};}
   catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorRuntime::ApplyScenePair(uint32_t pair) {
@@ -975,6 +995,10 @@ GameFsStatus GameActorRuntime::AdoptPreparedDestination(script::Vm& vm,const Gam
   }
   const auto stats=destination_->asset_->Statistics();
   const auto& applied=destination_->applied_;
+  int32_t period=-1;uint32_t table=0;
+  status=destination_->ReadScenePeriod(runtime,d.epoch,applied.calendar[3],applied.calendar[2],period,table);
+  if(!status)return status;
+  state_.scene_period_table52=table; // current target constructor/72B8, never old Scene0's row
   scene_calendar_=applied.calendar;state_.scene_clock_ready=true;
   state_.scene_nodes=stats.nodes;state_.scene_vertices=stats.vertices;state_.scene_triangles=stats.triangles;
   //80F14's consumed output is a light-model borrow. WindowsReducedBackgroundEffects

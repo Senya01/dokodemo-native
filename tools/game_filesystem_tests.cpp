@@ -1,6 +1,7 @@
 #include "game_filesystem_win32.h"
 #include "recovered/game_boot_native.h"
 #include "recovered/game_scene_native.h"
+#include "recovered/game_sound_control_native.h"
 #include <windows.h>
 #include <filesystem>
 #include <fstream>
@@ -28,6 +29,72 @@ void Write(const std::filesystem::path& path, const std::vector<uint8_t>& bytes)
     out.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
     Check(bool(out), "write owned test fixture");
 }
+struct TextLease final:PackageStorageLease {
+    std::vector<uint8_t> bytes,known;
+    explicit TextLease(std::string s):bytes(s.begin(),s.end()){bytes.push_back(0);known.assign(bytes.size(),1);}
+    bool Span(PackageStorageSpan& out,std::string&)const override{
+        out={const_cast<uint8_t*>(bytes.data()),const_cast<uint8_t*>(known.data()),bytes.size(),
+            uint64_t(reinterpret_cast<uintptr_t>(bytes.data())),uint64_t(reinterpret_cast<uintptr_t>(this)),1,1,0,true,false};return true;
+    }
+};
+PackageView Text(const std::string& text){auto lease=std::make_shared<TextLease>(text);return PackageStorage::Attach(lease,lease->bytes.size());}
+void RetainedWindowsFiles(const std::filesystem::path& root,const std::shared_ptr<WindowsStartupBackend>& backend){
+    const auto a=root/"first.bin",b=root/"second.bin";
+    Write(a,{1,2,3,4});Write(b,{9,8,7,6,5});
+    // SAME ordinary factory/backend; only synthetic input paths and bytes.
+    auto one=CreateWindowsGameFileSource(backend,a.wstring(),0x7C000000);
+    auto two=CreateWindowsGameFileSource(backend,b.wstring(),0x7C000000);
+    Check(bool(one->Open())&&bool(two->Open()),"independent live ordinary files");PackageView x,y;
+    Check(bool(one->Read(0,4,x))&&bool(two->Read(0,5,y))&&x.ReadU8(0)==1&&y.ReadU8(0)==9&&!x.SharesBacking(y),
+          "retained overlapping floors choose distinct real initialized bytes");
+    const auto dx=x.Describe(),dy=y.Describe();
+    Check(dx.source_address+4096<=dy.source_address||dy.source_address+4096<=dx.source_address,"page ranges do not overlap");
+    StartupPartitionRequest exact;exact.bytes=4;exact.source_base=uint32_t(dx.source_address);
+    Check(backend->Allocate(exact).status.code==StartupHostCode::SourceOverlap,"explicit startup address/overlap contract stays exact");
+    Check(!backend->Close()&&x.ReadU8(3)==4&&y.ReadU8(4)==5,"live source/borrow prevents backend close");
+    Check(bool(one->Close())&&bool(two->Close()),"independent files close");
+
+    std::array<std::unique_ptr<GameFileSource>,4> files;std::array<PackageView,4> views;std::array<GameFsStatus,4> statuses;
+    for(auto& file:files){file=CreateWindowsGameFileSource(backend,a.wstring(),0x7C000000);Check(bool(file->Open()),"concurrent current file");}
+    std::array<std::thread,4> workers;
+    for(size_t i=0;i<workers.size();++i)workers[i]=std::thread([&,i]{statuses[i]=files[i]->Read(0,4,views[i]);});
+    for(auto& worker:workers)worker.join();
+    for(size_t i=0;i<files.size();++i){Check(bool(statuses[i])&&views[i].ReadLE32(0)==0x04030201,"concurrent production file actual bytes");
+        for(size_t j=0;j<i;++j)Check(views[i].Describe().source_address!=views[j].Describe().source_address,"shared allocator reserves ranges atomically");}
+    for(auto& file:files)Check(bool(file->Close()),"concurrent owners retire after joins");
+
+    const auto edge=backend->AllocateFileBuffer(4096,0xEFFFF000);
+    Check(bool(edge.status)&&edge.source_base==0xEFFFF000,"bounded final page is usable");
+    Check(backend->AllocateFileBuffer(4096,0xEFFFF000).status.code==StartupHostCode::SourceRange
+        &&backend->AllocateFileBuffer(1,0xEFFFF001).status.code==StartupHostCode::SourceRange
+        &&backend->AllocateFileBuffer(0x2000,0xEFFFF000).status.code==StartupHostCode::SourceRange,"exhausted/misaligned/oversize range refuses");
+    Check(bool(backend->Free(edge.handle)),"release actual edge allocation");
+    const auto retry=backend->AllocateFileBuffer(4096,0xEFFFF000);
+    Check(bool(retry.status)&&retry.handle.serial!=edge.handle.serial&&bool(backend->Free(retry.handle)),"failed allocation can retry without stale identity");
+
+    const auto prefix=root/"opaque";Check(std::filesystem::create_directory(prefix),"owned URI root");
+    const auto bgm=prefix/"bgm";Check(std::filesystem::create_directory(bgm),"owned factory directory");
+    const auto track=bgm/"test.sgd";Write(track,{1,2,3,4});
+    GameBgmFileQueue queue;auto owner=std::make_shared<int>(1);const auto uri=Text("/opaque"),name=Text("test");
+    Check(bool(queue.Initialize(owner,1,CreateWindowsGameFileFactory(backend,root.wstring(),0x7C000000))),"SAME ordinary Windows queue factory");
+    GameBgmFileResult old,next;Check(bool(queue.Request(owner,1,7,uri,name,old))&&old.accepted
+        &&bool(queue.Request(owner,1,7,uri,name,next))&&next.accepted,"same index queued requests own distinct actual files");
+    Check(bool(queue.Pump(owner,1))&&queue.Read(7).output_request==old.request&&queue.Read(7).state==1,"old read publishes old identity only");
+    Check(bool(queue.Pump(owner,1)),"old actual completion");PackageView old_bytes;Check(bool(queue.BorrowRequest(owner,1,7,old.request,old_bytes)),"old initialized borrow retained");
+    Check(bool(queue.Pump(owner,1))&&queue.Read(7).state==2&&queue.Read(7).output_request==next.request,"new initialized output follows old");
+    Check(bool(queue.Pump(owner,1)),"new actual completion");PackageView new_bytes;Check(bool(queue.Borrow(owner,1,7,new_bytes))
+        &&old_bytes.ReadU8(0)==1&&new_bytes.ReadU8(0)==1&&!old_bytes.SharesBacking(new_bytes),"new initialized buffer not substituted from retained old output");
+    GameBgmFileResult third;Check(bool(queue.Request(owner,1,7,uri,name,third))&&third.accepted
+        &&queue.Read(7).output_request==next.request&&queue.Read(7).state==1,"rerequest completed current retains output separately");
+    Check(bool(queue.Pump(owner,1))&&bool(queue.Pump(owner,1))&&queue.Read(7).state==5
+        &&queue.Read(7).output_request==third.request&&queue.Read(7).retained_requests==3,"third actual file completes under its own identity");
+    const auto held=old_bytes.Describe();StartupHostStatus borrowed;
+    auto hold=backend->Borrow({held.owner,held.generation,held.serial},borrowed);Check(bool(borrowed),"independent real native borrow");
+    Check(!queue.Close(),"close refuses actual still-borrowed old allocation");StartupRawBorrowSpan span;
+    Check(bool(hold.Span(span))&&span.bytes[0]==1,"failed close retains real bytes");hold.Reset();Check(bool(queue.Close()),"close retry retires actual requests");
+    Check(std::filesystem::remove(track)&&std::filesystem::remove(bgm)&&std::filesystem::remove(prefix),"remove only factory fixture");
+    Check(std::filesystem::remove(a)&&std::filesystem::remove(b),"remove only owned synthetic files");
+}
 }
 int main() {
     try {
@@ -36,6 +103,7 @@ int main() {
         StartupHostStatus created;
         std::shared_ptr<WindowsStartupBackend> backend(WindowsStartupBackend::Create(created));
         Check(bool(created) && bool(backend), "real Windows file/allocation backend");
+        RetainedWindowsFiles(root,backend);
         const auto valid = root / "valid.bp";
         Write(valid, Fixture());
         GameFilesystem fs;

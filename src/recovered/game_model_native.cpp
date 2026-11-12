@@ -785,6 +785,9 @@ GameFsStatus GameBackgroundPreparation::Begin(std::shared_ptr<const void> owner,
         // A restarted epoch must follow explicit retirement; this object owns
         // both file and buffers even if Mount fails part way through.
         state_={};state_.live=true;state_.pending=true;state_.epoch=epoch;
+        // Execute this new background owner's5D98 clock constructor. It is
+        // independent of the old rendered scene and precedes5F58/72B8.
+        state_.clock_initialized=true;state_.clock_table52=0;state_.clock_writer=0x5DC8;
         state_.request=candidate.request;state_.candidate=candidate.id;
         state_.transform_policy=policy;
         state_.selector=candidate.selector;state_.period=candidate.period;
@@ -1106,6 +1109,7 @@ GameFsStatus GameBackgroundPreparation::ActivateEffects(const std::shared_ptr<co
             Need(!light_motions_[result.light_slot].Statistics().deferred_sections,"unimplemented selected light motion");
             auto& control=light_playbacks_[result.light_slot];control.SetSpeed(30);
             control.Start(calendar[3]*216000+calendar[2]*3600+calendar[1]*60);
+            state_.clock_table52=result.light_slot;state_.clock_writer=0x7350;
         }
         Need(runtime->Live()&&Current(owner,epoch),"background producer retired during activation");
         result.rng_after=rng.CurrentSeed64();runtime_=runtime;applied_=std::move(result);activated_=true;
@@ -1141,6 +1145,21 @@ GameFsStatus GameBackgroundPreparation::AppliedEffects(const std::shared_ptr<con
     for(auto i:result.selected_entries){const auto& child=auxiliary_entries_[i].child;
         result.child_poses.push_back(child?static_cast<const GameModelClone&>(*child).Pose():std::vector<GameModelPose>{});}
     out=std::move(result);return {};
+}
+GameFsStatus GameBackgroundPreparation::ReadScenePeriod(const std::shared_ptr<const void>& owner,uint64_t epoch,
+        uint32_t hour,uint32_t minute,int32_t& result,uint32_t& table52)const {
+    std::vector<GameBackgroundLightBinding> bindings;
+    const auto runtime=runtime_.lock();const std::shared_ptr<const void> parent=runtime;
+    if(!activated_||!state_.clock_initialized||!runtime||!runtime->Live()||parent!=owner
+        ||parent.owner_before(owner)||owner.owner_before(parent)||runtime->Identity()!=applied_.runtime
+        ||state_.clock_table52!=(light_playbacks_.empty()?0:applied_.light_slot)
+        ||state_.clock_writer!=(light_playbacks_.empty()?0x5DC8u:0x7350u)
+        ||!LightBindings(owner,epoch,bindings))
+        return {GameFsCode::Unavailable,0,"7398 current constructed/activated background clock owner required"};
+    try{
+        const auto value=ClassifySceneClock7398(SceneClockEndpoints7398(state_.clock_table52),hour,minute);
+        result=value;table52=state_.clock_table52;return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameBackgroundPreparation::DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,
         uint32_t entry,GameGraphics& graphics,const GameMatrix& camera)const {

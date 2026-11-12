@@ -518,6 +518,8 @@ struct GameBackgroundAppliedState {
 struct GameBackgroundPreparationSnapshot {
     bool live=false,pending=false,package_read=false,staged=false,failed=false,model_motions_staged=false;
     uint64_t epoch=0,request=0;
+    bool clock_initialized=false;
+    uint32_t clock_table52=0,clock_writer=0;
     uint32_t candidate=0,selector=0,period=0,variant=0,resource=0;
     uint64_t package_owner=0,package_generation=0,package_serial=0;
     GameModelStatistics model;
@@ -584,6 +586,8 @@ class GameBackgroundPreparation final {
     GameFsStatus SampleEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t delta);
     GameFsStatus AppliedEffects(const std::shared_ptr<const void>& owner,uint64_t epoch,
                                 GameBackgroundAppliedState& out)const;
+    GameFsStatus ReadScenePeriod(const std::shared_ptr<const void>& owner,uint64_t epoch,
+                                uint32_t hour,uint32_t minute,int32_t& result,uint32_t& table52)const;
     // Explicit component preview of one prepared child; not source visibility.
     GameFsStatus DrawAuxiliary(const std::shared_ptr<const void>& owner,uint64_t epoch,uint32_t entry,
                                GameGraphics&,const GameMatrix& view_projection)const;

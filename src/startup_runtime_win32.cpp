@@ -1468,11 +1468,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices,
         auto status=main_scene_data.Load(CreateWindowsGameFileSource(backend,path,0x7B000000),expected);if(!status)return status;
         status=game_content.BindInitialSceneBgm(main_scene_data.Lists(),main_scene_data.Gains(),main_scene_data.Root(),
             [this](uint32_t index){return main_scene_data.Name(index);},
-            [this](const std::string& uri,std::unique_ptr<recovered::GameFileSource>& file)->recovered::GameFsStatus{
-                // Source root/name/path are already validated by the owning queue.
-                std::wstring path=options.media_root;for(const unsigned char c:uri)path.push_back(wchar_t(c));
-                file=CreateWindowsGameFileSource(backend,std::move(path),0x7C000000);return {};
-            });
+            CreateWindowsGameFileFactory(backend,options.media_root,0x7C000000));
         if(!status)return status;
         status=game_content.BindInitialScenePlacement(main_scene_data);if(!status)return status;
         std::shared_ptr<const recovered::GameOutingData> destination;
