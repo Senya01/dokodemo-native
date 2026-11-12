@@ -266,7 +266,7 @@ void BgmTransportTests(){
         &&!q.Request(owner,2,2,view(root),view(name),r)&&!factories,"foreign control block/owner/epoch cannot create an I/O request");
     Check(bool(q.Request(owner,1,2,view(root),view(name),r))&&r.accepted&&!r.cached&&r.wrapper_return==0
         &&q.Read(2).selector60==2&&q.Read(2).bank5C==-1&&!q.Read(2).buffer54&&!io->live,"accepted queue is not open, loaded, bank-ready or playback");
-    PackageView image;Check(!q.Borrow(owner,1,2,image)&&!q.Request(owner,1,2,view(root),view(name),r),"pending output/replayed alias is not completed");
+    PackageView image;Check(!q.Borrow(owner,1,2,image),"pending output is not completed; re-request lifetime is tested separately");
     Check(bool(q.Pump(owner,1))&&q.Read(2).state==2&&q.Read(2).buffer54&&q.Read(2).bytes==16&&q.Read(2).bank5C==-1
         &&!q.Borrow(owner,1,2,image),"real initialized buffer distinct from second-stage completion/5C");
     io->buffers[0]->b[0]^=1;Check(!q.Pump(owner,1)&&!q.Read(2).current&&q.Read(2).state==2,"buffer drift cannot publish late completion");io->buffers[0]->b[0]^=1;
@@ -276,6 +276,8 @@ void BgmTransportTests(){
     GameSoundBank bank;Check(bool(bank.InitializeSource17F0())&&bool(bank.Register(image)),"actual synthetic SGXD bank allocation, no playback");
     Check(bool(q.BindRegistered(owner,1,2,bank))&&q.Read(2).bank5C>0&&q.Read(2).bank5C!=int32_t(q.Read(2).bytes),"5C is actual registry handle, not file size");
     Check(bool(q.Request(owner,1,2,view(root),view(name),r))&&r.cached&&!r.accepted&&r.wrapper_return==q.Read(2).bank5C&&factories==1,"cached wrapper returns same current positive bank without new I/O");
+    Check(!q.Close()&&image.ReadLE32(0)==0x44584753,"live registered SAME image is not freed by file teardown");
+    io->buffers[0]->b[0]^=1;Check(!q.Close()&&io->live,"drifted registered image remains held even when source/cache readback fails");io->buffers[0]->b[0]^=1;
     bank.Close();Check(!q.Read(2).current&&!q.Request(owner,1,2,view(root),view(name),r),"retired bank cannot become a cold/cache success");
     io->fail_close=true;Check(!q.Close()&&!q.Read(2).current&&!q.Initialize(owner,2,factory),"failed retirement retains actual file for retry; cannot restart");
     io->fail_close=false;Check(bool(q.Close())&&!io->live&&!q.Initialize(owner,1,factory),"actual retry retires backing; same epoch cannot revive old calls");bool stale=false;try{(void)image.ReadLE32(0);}catch(...){stale=true;}Check(stale,"retired exported file lease refuses");
@@ -317,6 +319,61 @@ void BgmTransportTests(){
     Check(!SelectBgm19B6C(6,0,view(lists),rng,untouched)&&rng.CurrentSeed64()==2&&untouched.index==99,"unknown period refuses without invented return or random draw");
     Word(lists->b,0,25);Check(!SelectBgm19B6C(0,0,view(lists),rng,untouched)&&rng.CurrentSeed64()==2,"malformed current table refuses before RNG");Word(lists->b,0,3);
 }
+void BgmRerequestTests(){
+    const auto view=[](const std::shared_ptr<Lease>& p){return PackageStorage::Attach(p,p->b.size());};
+    const auto text=[](std::string s){std::vector<uint8_t> b(s.begin(),s.end());b.push_back(0);return std::make_shared<Lease>(b);};
+    auto root=text("/SYNTHETIC"),name=text("REPEATED");auto owner=std::make_shared<int>(8),foreign=std::make_shared<int>(9);
+    auto alias=std::shared_ptr<const void>(owner.get(),[](const void*){});
+    for(unsigned stage=0;stage<3;++stage){
+        GameBgmFileQueue q;std::vector<std::shared_ptr<BackgroundFileState>> io;
+        Check(bool(q.Initialize(owner,1,[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{
+            auto f=std::make_shared<BackgroundFileState>();io.push_back(f);out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(4,uint8_t(io.size())),f);return {};})),"re-request actual native owner");
+        GameBgmFileResult first,second;Check(bool(q.Request(owner,1,7,view(root),view(name),first)),"old genuine request");
+        for(unsigned i=0;i<stage;++i)Check(bool(q.Pump(owner,1)),"old real read/complete stages");
+        auto other_root=text("/SYNTHETIC");const auto before=q.Read(7);GameBgmFileResult untouched{true,true,99,100};
+        Check(!q.Request(foreign,1,7,view(root),view(name),untouched)&&!q.Request(alias,1,7,view(root),view(name),untouched)
+          &&!q.Request(owner,2,7,view(root),view(name),untouched)&&!q.Request(owner,1,7,view(other_root),view(name),untouched)
+          &&io.size()==1&&untouched.request==100&&q.Read(7).request==before.request,"foreign owner/CB/epoch/input cannot replace old work");
+        Check(bool(q.Request(owner,1,7,view(root),view(name),second))&&second.accepted&&!second.cached&&second.request>first.request
+          &&q.Read(7).previous_request==first.request&&q.Read(7).state==1&&q.Read(7).retained_requests==2&&io.size()==2,"queued/read/completed same-index owns a new real file, old retained");
+        PackageView old_image,new_image;Check(!q.Borrow(owner,1,7,new_image)&&!q.BorrowRequest(owner,1,6,first.request,old_image),"old buffer cannot complete/retarget a new request");
+        if(!stage)Check(bool(q.Pump(owner,1)),"old queued request actually reads its own file");
+        if(stage<2){Check(q.ReadRequest(7,first.request).state==2&&q.Read(7).state==1&&q.Read(7).output_request==first.request
+          &&!io[1]->reads,"old output54 publication is labelled and does not change new completion");Check(bool(q.Pump(owner,1)),"old request completion");}
+        Check(bool(q.BorrowRequest(owner,1,7,first.request,old_image))&&old_image.ReadU8(0)==1&&q.Read(7).state==1,"old completed borrow remains real and distinct");
+        io[0]->buffers[0]->b[0]=3;Check(!q.Pump(owner,1)&&!io[1]->reads&&!q.Read(7).current,"drift in retained current output refuses before new read");io[0]->buffers[0]->b[0]=1;
+        Check(bool(q.Pump(owner,1))&&q.Read(7).state==2&&q.Read(7).output_request==second.request
+          &&q.Read(7).output_sequence>q.ReadRequest(7,first.request).write_sequence&&!q.Borrow(owner,1,7,new_image),"new real read publishes owned54 in worker order, not ready");
+        Check(bool(q.Pump(owner,1))&&bool(q.Borrow(owner,1,7,new_image))&&new_image.ReadU8(0)==2&&old_image.ReadU8(0)==1
+          &&!new_image.SharesBacking(old_image)&&!q.ReadRequest(7,first.request).latest&&!q.ReadRequest(7,first.request).published,"new completion and immutable retained old bytes/identity");
+        Check(!q.BorrowRequest(alias,1,7,first.request,new_image)&&!q.BorrowRequest(owner,2,7,first.request,new_image),"retained borrow preserves actual owner/CB/epoch");
+        io[1]->fail_close=true;Check(!q.Close()&&io[1]->live&&!q.Initialize(owner,2,{}),"failed second Close retains real owner and blocks restart");io[1]->fail_close=false;
+        Check(bool(q.Close())&&!io[0]->live&&!io[1]->live&&!q.Pump(owner,1),"module teardown retires both requests");bool retired=false;try{(void)old_image.ReadU8(0);}catch(...){retired=true;}Check(retired,"explicit module retirement revokes retained old borrow");
+    }
+    {GameBgmFileQueue q;std::vector<std::shared_ptr<BackgroundFileState>> io;GameBgmFileResult result;
+     Check(bool(q.Initialize(owner,1,[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{auto f=std::make_shared<BackgroundFileState>();io.push_back(f);out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(3,uint8_t(io.size())),f);return {};})),"same-index queue capacity");
+     std::vector<uint64_t> ids;for(unsigned i=0;i<8;++i){Check(bool(q.Request(owner,1,7,view(root),view(name),result))&&result.accepted,"eight independently owned same-index work items");ids.push_back(result.request);}
+     Check(bool(q.Request(owner,1,7,view(root),view(name),result))&&!result.accepted&&result.wrapper_return==-1&&q.Read(7).selector60==-1&&io.size()==8,"queuefull writes current60=-1 without retarget/cancel/factory");
+     for(unsigned i=0;i<8;++i){Check(bool(q.Pump(owner,1))&&q.Read(7).output_request==ids[i]&&q.Read(7).state==0,"each older worker publishes its own output, not refused latest completion");Check(bool(q.Pump(owner,1)),"each actual completion");}
+     PackageView image;Check(!q.Borrow(owner,1,7,image)&&bool(q.BorrowRequest(owner,1,7,ids[0],image))&&image.ReadU8(0)==1,"queuefull latest is not ready even when all old jobs finish");
+     Check(bool(q.Request(owner,1,7,view(root),view(name),result))&&result.accepted&&io.size()==9&&bool(q.Pump(owner,1))&&bool(q.Pump(owner,1))&&bool(q.Borrow(owner,1,7,image))&&image.ReadU8(0)==9,"fresh genuine request after capacity returns");Check(bool(q.Close()),"capacity teardown");}
+    {GameBgmFileQueue q;std::vector<std::shared_ptr<BackgroundFileState>> io;GameBgmFileResult first,next;
+     Check(bool(q.Initialize(owner,1,[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{auto f=std::make_shared<BackgroundFileState>();io.push_back(f);out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(4,5),f);return {};})),"ordered failure queue");
+     Check(bool(q.Request(owner,1,7,view(root),view(name),first))&&bool(q.Request(owner,1,7,view(root),view(name),next)),"old/new accepted before real failure");
+     io[0]->missing=true;Check(!q.Pump(owner,1)&&q.ReadRequest(7,first.request).state==1&&!io[1]->reads,"old Open failure remains pending, new not skipped/complete");
+     io[0]->missing=false;io[0]->fail_read=true;Check(!q.Pump(owner,1)&&q.ReadRequest(7,first.request).cleanup_pending&&!q.Read(7).output54,"Read failure has no initialized output");
+     io[0]->fail_close=true;Check(!q.Pump(owner,1)&&io[0]->live&&!io[1]->live,"cleanup Close failure retains FIFO/current ownership");
+     io[0]->fail_read=io[0]->fail_close=false;for(unsigned i=0;i<4;++i)Check(bool(q.Pump(owner,1)),"honest retry of old I/O then new I/O");
+     Check(q.ReadRequest(7,first.request).state==5&&q.Read(7).state==5&&q.Read(7).output_request==next.request,"both actual completions, no wrapper error fabrication");Check(bool(q.Close()),"failure teardown");}
+    {GameBgmFileQueue q;auto one=std::make_shared<BackgroundFileState>(),two=std::make_shared<BackgroundFileState>();unsigned factory=0;GameBgmFileResult result;
+     Check(bool(q.Initialize(owner,1,[&](const std::string&,std::unique_ptr<GameFileSource>& out)->GameFsStatus{
+       ++factory;auto f=factory==1?one:two;out=std::make_unique<BackgroundFile>(std::vector<uint8_t>(4,6),f);
+       if(factory==2){Check(!q.Close(),"factory cannot reentrantly tear down active ownership");Check(bool(out->Open()),"partial factory real acquisition");throw std::runtime_error("synthetic second factory fails after Open");}return {};})),"partial new factory");
+     Check(bool(q.Request(owner,1,7,view(root),view(name),result))&&bool(q.Pump(owner,1))&&bool(q.Pump(owner,1)),"old request fully loaded");const auto first=result.request;PackageView image;Check(bool(q.Borrow(owner,1,7,image)),"old held image");
+     result={true,true,55,66};Check(!q.Request(owner,1,7,view(root),view(name),result)&&result.request==66&&q.Read(7).state==0&&q.ReadRequest(7,first).state==5&&image.ReadU8(0)==6,"partial new failure retains old allocation and has no invented accepted return");
+     two->fail_close=true;Check(!q.Close()&&two->live,"partial new file retained for Close retry");two->fail_close=false;Check(bool(q.Close()),"partial retry teardown");}
+}
+
 void BackgroundPreparationTests(){
     // Arbitrary synthetic names/geometry; no extracted registry/asset fixture.
     auto records=std::make_shared<Lease>(std::vector<uint8_t>(60));
@@ -1868,10 +1925,11 @@ void CameraTargetRender(){
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
 }
 
-void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0){
+void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0,bool repeated_bgm=false){
   static_assert(!std::is_copy_constructible<GameOutingData>::value,"selected DATA packet is not an editable copied receipt");
   for(unsigned failure=0;failure<(owning_return?1u:3u);++failure){
-    const auto bytes=SyntheticOutingData();const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data;
+    auto bytes=SyntheticOutingData();if(repeated_bgm)for(unsigned i=0;i<19;++i)Word(bytes,128+0xD8CC8+i*4,7);
+    const auto hash=dokodemo::core::sha256(bytes.data(),bytes.size());GameMainSceneData data;
     auto data_io=std::make_shared<BackgroundFileState>();Check(bool(data.Load(std::make_unique<BackgroundFile>(bytes,data_io),hash)),"vertical current held DATA");
     std::shared_ptr<const GameOutingData> packet;Check(bool(data.Outing12(packet)),"vertical selected packet");
     std::vector<uint8_t> memory(4*1024*1024);GameArena arena;GameVmBoot module_owner;
@@ -1879,12 +1937,12 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     auto content=std::make_unique<GameContentBoot>();Check(content->InitializeBB8(arena,module_owner)&&content->Reset24994(),"vertical actual Content/LoadMan constructors");
     RngNativeOwner rng;rng.ImportCurrentState64(81,3,"synthetic executed-destination component");content->SetTitleRng(rng);
     Check(bool(content->SetBackgroundRuntime([]{return std::array<uint32_t,7>{{0,0,0,12,3,5,2026}};})),"vertical same clock/RNG initialized producer");
-    auto audio_io=std::make_shared<BackgroundFileState>();std::weak_ptr<GameManagerSwitchControl> observed_manager;bool observed_store=false;
+    std::vector<std::shared_ptr<BackgroundFileState>> audio_ios;std::weak_ptr<GameManagerSwitchControl> observed_manager;bool observed_store=false;
     Check(bool(content->BindInitialSceneBgm(data.Lists(),data.Gains(),data.Root(),[&](uint32_t i){return data.Name(i);},
       [&](const std::string&,std::unique_ptr<GameFileSource>& file)->GameFsStatus{
         if(const auto m=observed_manager.lock()){Check(m->Snapshot().loadman.stored_bgm4BC==content->SceneBgm().stored4BC,
           "real4BC write is visible to file factory BEFORE request effects, not at final preparation readback");observed_store=true;}
-        file=std::make_unique<BackgroundFile>(std::vector<uint8_t>(8,4),audio_io);return {};}))
+        auto audio_io=std::make_shared<BackgroundFileState>();audio_ios.push_back(audio_io);file=std::make_unique<BackgroundFile>(std::vector<uint8_t>(8,4),audio_io);return {};}))
       &&bool(content->BindInitialScenePlacement(data)),"vertical ordinary initialization DATA before actor");
     unsigned factories=0;Check(bool(content->BindDestinationData(packet,[&](){++factories;return std::unique_ptr<GameFileSource>{};})),"same DATA/fresh factory binder, not selection");
     ActorSource resources;resources.scene_assets=true;resources.camera_triangle=true;
@@ -2043,6 +2101,13 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         &&state.epoch==dokodemo::StartupRuntimeTestAccess::Scene(actor).epoch&&state.phase==(failure?8u:9u)&&rng.CurrentSeed64()!=before,"real current request stages actual selected job/aux/RNG/support, failure preserves effects");
       Check(control->Snapshot().loadman.stored_bgm4BC==bgm.Snapshot().stored4BC&&control->Snapshot().loadman.rendered_selector4DC==0
         &&control->Snapshot().current14==12&&vm.callbacks_posted()==0&&observed_store,"actual4BC source store, old render retained, no fabricated adoption/wake");
+      if(repeated_bgm){const auto b=bgm.Snapshot();
+        Check(audio_ios.size()==2&&b.stored4BC==7&&b.selection.previous==0&&b.file.previous_request&&b.previous_file.request==b.file.previous_request
+          &&b.file.request>b.previous_file.request&&b.file.latest&&!b.previous_file.latest&&b.previous_file.current&&b.previous_file.bank5C==-1,
+          "actual initial7 -> source19F94 reset0 -> target7 re-request retains SAME pool old request, not cached readiness");
+        const auto projected=content->Snapshot().scene_bgm;
+        Check(projected.file.request==b.file.request&&projected.previous_file.request==b.previous_file.request,
+          "ordinary Content forwards actual current/previous owned requests, not a detached receipt");}
       const auto after=rng.CurrentSeed64();auto replay_io=std::make_shared<BackgroundFileState>();
       Check(!actor.PreparePendingDestination(vm,command,image_view,packet,bgm,std::make_unique<BackgroundFile>(BackgroundArchive(packages),replay_io))
         &&rng.CurrentSeed64()==after&&!replay_io->live&&replay_io->reads==0,"attempt cannot replay RNG/selection/open");
@@ -2730,10 +2795,11 @@ int main(int argc,char** argv) {
         SupportGlyphTests();
         ManagerSupportJobTests();
         ContextActorTransactionPrefixTests();
-        BgmTransportTests();
+        BgmTransportTests();BgmRerequestTests();
         MainSceneDataTests();
         ExecutedDestinationPreparationTests();
         for(unsigned fault=0;fault<12;++fault)ExecutedDestinationPreparationTests({},true,fault);
+        ExecutedDestinationPreparationTests({},true,0,true);
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();

@@ -469,7 +469,7 @@ struct GameSceneBgmSnapshot {
     std::array<uint32_t,7> calendar{};
     GameBgmSelection selection;
     GameBgmFileResult file_result;
-    GameBgmFileRecord file;
+    GameBgmFileRecord file,previous_file; // current request and retained predecessor, copied readback only
 };
 // Native current scene/BGM owner: original static tables are held user data.
 // Fresh scene clock0 ->7398 ->4B4 ->19B6C/store4BC/file BEFORE5F58.

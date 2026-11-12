@@ -55,12 +55,18 @@ class GameSourceBankRegistry final {
     std::shared_ptr<const void> lifetime_=std::make_shared<uint8_t>(uint8_t(0));
 };
 // WindowsStagedBgmFiles: mode1 file transport, NOT SGX playback/readiness.
-// The file source owns the real allocation until record retirement (native
+// The file source owns the real allocation through negative scene retirement/re-request until module teardown (native
 // lifetime adaptation); completion never manufactures a source bank handle.
 struct GameBgmFileRecord {
     int32_t selector60=-1,bank5C=-1;
     uint32_t state=0; // source queue1/2/5, not record+5C
-    uint64_t request=0,bytes=0;
+    uint64_t request=0,bytes=0,previous_request=0,write_sequence=0;
+    // WindowsRetainedBgmRequests: per-request completion is separate from the
+    // SAME logical output54 cell, which may still contain an older request.
+    bool latest=false,published=false,output54=false,output_current=false,cancelled=false;
+    uint64_t output_request=0,output_sequence=0,retained_requests=0,queued_requests=0;
+    PackageViewDescription output_buffer;
+    std::array<uint8_t,32> output_digest{};
     bool buffer54=false,current=false,cleanup_pending=false;
     GameFsStatus io;
     PackageViewDescription buffer;
@@ -89,6 +95,8 @@ class GameBgmFileQueue final {
     GameFsStatus Pump(const std::shared_ptr<const void>&,uint64_t epoch);
     GameFsStatus Borrow(const std::shared_ptr<const void>&,uint64_t epoch,uint32_t index,PackageView&)const;
     GameBgmFileRecord Read(uint32_t index)const;
+    GameBgmFileRecord ReadRequest(uint32_t index,uint64_t request)const;
+    GameFsStatus BorrowRequest(const std::shared_ptr<const void>&,uint64_t epoch,uint32_t index,uint64_t request,PackageView&)const;
     GameFsStatus Close();
   private:
     friend class GameSceneBgm;
@@ -96,12 +104,15 @@ class GameBgmFileQueue final {
     struct Record;
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RecordCurrent(const Record&)const;
+    GameBgmFileRecord Project(const Record&)const;
+    std::shared_ptr<Record> Find(uint32_t,uint64_t)const;
     std::weak_ptr<const void> owner_;
-    uint64_t epoch_=0,last_epoch_=0,serial_=0;
+    uint64_t epoch_=0,last_epoch_=0,serial_=0,publication_=0;
     Factory factory_;
     std::array<std::shared_ptr<Record>,25> records_{};
-    std::vector<uint32_t> queue_;
-    bool closing_=false;
+    std::array<std::shared_ptr<Record>,25> outputs_{};
+    std::vector<std::shared_ptr<Record>> requests_,queue_;
+    bool closing_=false,factory_active_=false,worker_active_=false;
 };
 // Typed fields actually initialized by17F0. PSP padding and the native audio
 // queue/metadata slot are separate domains; neither is a source playback ID.

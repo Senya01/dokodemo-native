@@ -99,6 +99,7 @@ struct GameContentSnapshot {
     std::array<uint8_t,16> actor_dictionary_prefix{};
     GameActorScriptSnapshot actor_script;
     GameMainFlowSnapshot main_flow;
+    GameSceneBgmSnapshot scene_bgm; // actual SAME pool request/output lineage, no readiness authority
     GameMainMenuSnapshot main_menu;
     GameNotebookSnapshot notebook;
     GameNotebookRows notebook_observed;
@@ -206,7 +207,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     GameContentSnapshot Snapshot() const {
         auto out=state_;out.texture_cache_entries=TextureCacheSize();out.texture_cache_pixels=TextureCachePixels();
         if(loadman_&&loadman_->control)out.ordinary_scene_owners=loadman_->control->Snapshot();
-        out.texture_cache_evictions=TextureCacheEvictions();return out;
+        out.scene_bgm=SceneBgm();out.texture_cache_evictions=TextureCacheEvictions();return out;
     }
     const GameFontResource &Font() const {
         return font_;

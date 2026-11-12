@@ -292,7 +292,8 @@ bool GameSceneBgm::CurrentChoice(int32_t& out)const{
     if(!data_||!data_->Current()||!data_->state.selected)return false;out=data_->state.stored4BC;return true;
 }
 GameSceneBgmSnapshot GameSceneBgm::Snapshot()const{
-    if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected&&!s.source_scene_retired)s.file=data_->files.Read(uint32_t(s.stored4BC));return s;
+    if(!data_)return {};auto s=data_->state;s.current=data_->Current();if(s.selected&&!s.source_scene_retired){s.file=data_->files.Read(uint32_t(s.stored4BC));
+        if(s.file.previous_request)s.previous_file=data_->files.ReadRequest(uint32_t(s.stored4BC),s.file.previous_request);}return s;
 }
 std::weak_ptr<const void> GameSceneBgm::Lifetime()const{return data_?data_->lifetime:std::weak_ptr<const void>{};}
 GameFsStatus GameSceneBgm::Close(){
