@@ -7,7 +7,7 @@ The current source includes title/new-game/profile entry, room and actor renderi
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
 <!-- source-status:start -->
-Source-bound ASC parameter6 module-cell effect with owned lifecycle and real ready/complete progression; ordinary travel validation separate, full game incomplete.
+Implement current actor field60 ASC9 store with real ownership and synthetic progression/refusal tests; selected original191 component passed, ordinary travel/fullgame not claimed.
 <!-- source-status:end -->
 
 Finite selected GAME73 sound output exists. Broader SGX/SAS work currently reaches control-state effects and stops at an unknown Port field. Control-state writes are not DSP/audio completion. See [audio references and limits](docs/AUDIO_REFERENCE.md).
