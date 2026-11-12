@@ -26,8 +26,9 @@ bool GameWordMemoPausedOwnerExact(const script::VmStateWitness& s,const script::
     // executed/caller state cannot. Restored is sampled inside callback scope.
     return true;
 }
-GameWordMemoRows GameObserveWordMemoRows(const script::Vm& vm,uint64_t generation,const script::Value& registered){
+GameWordMemoRows GameObserveWordMemoRows(const script::Vm& vm,uint64_t generation,const script::Value& registered,GameWordMemoRows* partial){
     using V=script::Value;GameWordMemoRows out;const auto witness=vm.current_witness();
+    struct Readback {GameWordMemoRows* target;const GameWordMemoRows& value;~Readback(){if(target)*target=value;}} readback{partial,out};
     Need(generation&&witness.valid&&witness.run_id&&witness.context_registered,"Wordmemo current registered VM owner unavailable");
     const auto empty_owner=[](const auto& owner){using W=std::decay_t<decltype(owner)>;const W empty;return !owner.owner_before(empty)&&!empty.owner_before(owner);};
     const auto global_owner=[&](const V& ref){return ref.kind==V::Kind::Reference&&ref.table==script::Table::Global
@@ -35,8 +36,11 @@ GameWordMemoRows GameObserveWordMemoRows(const script::Vm& vm,uint64_t generatio
     // NativeGlobalGAME10Only: the VM owns this one global table for this run.
     // Foreign or weak-owner references cannot alias identical numeric keys.
     Need(global_owner(registered),"Wordmemo GAME10 requires this VM's unborrowed Global table");
+    out.script_generation=generation;out.run_id=witness.run_id;out.code_sha=witness.code_sha256;
+    out.root_table=uint32_t(registered.table);out.root_index=registered.index;out.root_captured=true;
     const auto at=[&](V ref,uint32_t offset){Need(uint64_t(ref.index)+offset<=UINT16_MAX,"Wordmemo table extent");ref.index=uint16_t(ref.index+offset);return vm.peek_reference(ref);};
     const auto header=vm.peek_reference(registered);
+    out.root_header=header.word;out.header_captured=true;
     Need(header.kind==V::Kind::ArrayHeader&&header.word>>28==9&&(header.word&0xFFF)<=600,"Wordmemo actual Array9 header/capacity600");
     out.script_generation=generation;out.run_id=witness.run_id;out.code_sha=witness.code_sha256;
     out.root_table=uint32_t(registered.table);out.root_index=registered.index;out.root_header=header.word;out.records=header.word&0xFFF;

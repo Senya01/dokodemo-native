@@ -7,6 +7,7 @@
 #include "recovered/game_notebook_native.h"
 #include "recovered/game_input_native.h"
 #include "recovered/game_returned_interaction_native.h"
+#include "game_wordmemo_regressions.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -16,6 +17,29 @@
 #include <stdexcept>
 namespace dokodemo {
 struct StartupRuntimeTestAccess {
+    // Generated component boot only. Ordinary Initialize/load_original_bytes
+    // is unchanged: no original module identity is bypassed. No callback or
+    // completion record is filled here; real GAME10/48 and menu32 execute.
+    static script::Vm& MemoComponent(recovered::GameActorScript& a,std::vector<uint8_t> bytes,recovered::PackageView dictionary,recovered::GameActorRuntime& runtime){
+        a.Close();script::Diagnostic error;
+        if(!a.program_.load_test_fixture(std::move(bytes),error))throw std::runtime_error(error.text());
+        const auto status=a.dictionary_.Attach(std::move(dictionary));if(!status)throw std::runtime_error(status.detail);
+        a.vm_=std::make_unique<script::Vm>(a.program_);a.vm_->native_reserved_local_nil(true);
+        a.state_={};a.state_.generation=1;a.state_.live=a.state_.started=true;a.runtime_=&runtime;
+        if(a.vm_->start().status!=script::Status::Running)throw std::runtime_error("synthetic MEMO component start");return *a.vm_;
+    }
+    static script::Value MemoService(recovered::GameActorScript& a,uint8_t id,const std::vector<script::Value>& args){return a.Service(id,args);}
+    static void MemoObserve(recovered::GameActorScript& a,const script::FrameTransition& t){a.ObserveMenuCallback(t);}
+    static std::array<uint32_t,4> MemoRegistration(const recovered::GameActorScript& a){return {a.state_.wordmemo_registrations,a.state_.wordmemo_imports,
+        a.dictionary_.ImportedRecordCount(),a.dictionary_.ImportedRecordsInRoot(*a.vm_,a.bindings_.at(10))};}
+    static void MemoRetireImports(recovered::GameActorScript& a){a.dictionary_.Close();}
+    static bool MemoProducerRefusal(recovered::GameActorScript& a,const recovered::GameOwnerEventTarget& target,
+            uint64_t parent,const recovered::GameWordMemoRows& rows,bool registration,unsigned field){
+        auto& value=registration?a.state_.wordmemo_registration_source:a.state_.wordmemo_import_source;const auto saved=value;
+        if(field==0)++value.run_id;if(field==1)++value.context_word;if(field==2)value.code_sha256[0]^=1;
+        if(field==3)value.context_registered=false;if(field==4)value.valid=false;
+        const bool refused=!a.PrepareMenuWordMemo(target,1,parent,rows);value=saved;return refused;
+    }
     static recovered::GameFsStatus MenuPrepare(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,recovered::GameActorRuntime& a,
         const recovered::GameMainMenuLease& l,const recovered::GameCompletedOutingMenuAbi& abi){return p.Prepare(vm,a,l,1,abi);}
     static recovered::GameFsStatus MenuAccept(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,const recovered::GameMenuCallbackSnapshot& c){return p.Accept(vm,c);}
@@ -2003,8 +2027,99 @@ struct CompletedMenuResources:GameResourceSource{
         auto owner=std::make_shared<Lease>(std::move(b));out=PackageStorage::Attach(owner,owner->b.size());return {};
     }
 };
+
+struct CompletedMemoResources:CompletedMenuResources {
+    dokodemo::wordmemo_tests::Resources memo;
+    GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
+        return path.rfind("mkotoba",0)==0?memo.OpenResource(path,out):CompletedMenuResources::OpenResource(path,out);
+    }
+};
+void CompletedOutingMemoConsumer(GameCompletedOutingMenuBorrow& proof,script::Vm& vm,GameActorScript& script,GameMainMenu& menu,
+    const GameMainMenuLease& lease,CompletedMemoResources& resources,GameTransition& fade,RngNativeOwner& rng,
+    const std::function<void(uint32_t)>& input,const std::function<void(unsigned,int)>& callback,const std::function<GameInputFrame(uint32_t)>& menu_packet){
+    using A=dokodemo::StartupRuntimeTestAccess;using V=dokodemo::script::Value;
+    const auto target=script.OwnerEventTarget();const auto registered=A::MemoRegistration(script);
+    Check(registered==std::array<uint32_t,4>{{1,1,1,1}},"real executed GAME10/48/current dictionary imports in SAME VM");
+    GameWordMemoRows rows;Check(bool(script.ReadMenuWordMemo(target,rows))&&rows.valid&&rows.root_index==32&&rows.records==1&&rows.cells==19&&!rows.eligible_records,
+      "registered source-empty image is distinct from teaching700/global3DD2");
+    const auto original=rows;const auto source_clock=vm.current_witness().clock_tick;const auto random=rng.CurrentSeed64();
+    for(bool registration:{false,true})for(unsigned field=0;field<5;++field)
+      Check(A::MemoProducerRefusal(script,target,menu.Snapshot().generation,rows,registration,field),"actual GAME10/48 producer module/run/context lineage cannot drift");
+    Check(bool(script.PrepareMenuWordMemo(target,1,menu.Snapshot().generation,rows)),"native current preconfirmation succeeds after actual event10/32");
+    for(unsigned fault=0;fault<6;++fault){auto bad=target;std::shared_ptr<dokodemo::script::NativeScriptContext> hold;
+      if(fault==0)++bad.generation;if(fault==1)bad.callback.word++;
+      if(fault==2){auto current=target.context.context_owner.lock();hold=std::shared_ptr<dokodemo::script::NativeScriptContext>(current.get(),[](auto*){});bad.context.context_owner=hold;}
+      auto foreign_program=dokodemo::wordmemo_tests::Program();auto foreign=std::make_unique<dokodemo::script::Vm>(foreign_program);
+      if(fault==3||fault==4){foreign->start();bad.context.context_owner=foreign->context_value().context_owner;if(fault==4)foreign.reset();}
+      if(fault==5)bad.context.word++;
+      Check(!script.ReadMenuWordMemo(bad,rows)&&!rows.valid&&!rows.root_captured&&!rows.header_captured,
+        "foreign/stale/retired/same-address foreign control-block target refuses without retaining earlier read facts");
+    }
+    const auto root=dokodemo::wordmemo_tests::Ref(32),field=dokodemo::wordmemo_tests::Ref(65),nested=dokodemo::wordmemo_tests::Ref(66);
+    const auto oldflag=vm.peek_reference(field),oldfield=vm.peek_reference(nested);
+    input(0);input(Down);Check(menu.Snapshot().column==1,"actual offered column1");
+    const auto untouched_checks=menu.Snapshot().wordmemo_checks;
+    for(unsigned fault=0;fault<4;++fault){auto bad=menu_packet(Circle);
+      if(fault==0)++bad.main_menu_epoch;if(fault==1)++bad.message_owner_generation;
+      if(fault==2)++bad.returned_generation;if(fault==3)++bad.message_context;
+      Check(!menu.Input(bad)&&bool(menu.Tick())&&menu.Snapshot().wordmemo_checks==untouched_checks&&menu.Snapshot().state78==1,
+        "stale owner/epoch packet refuses before preconfirmation/close");}
+    auto release=menu_packet(0);Check(menu.Input(release)&&bool(menu.Tick())&&!menu.Input(release),"menu sequence replay refuses");
+    auto lost=menu_packet(Circle);lost.focused=false;
+    Check(menu.Input(lost)&&bool(menu.Tick()),"focus loss is observed by actual button gate");input(Circle);
+    Check(menu.Snapshot().wordmemo_checks==untouched_checks&&menu.Snapshot().state78==1,"held Circle after focus loss cannot confirm");
+    const auto refusal=[&]{const auto closed=menu.Snapshot().closed;const auto before=menu.Snapshot().wordmemo_checks;
+      input(0);input(Circle);auto now=menu.Snapshot();
+      Check(now.wordmemo_checks==before+1&&now.wordmemo_refusals&&now.state78==1&&now.result==-1&&now.closed==closed&&resources.memo.opens==0,
+        "live native preconfirmation refuses BEFORE parent close/result/resource8");
+      input(Circle);Check(menu.Snapshot().wordmemo_checks==before+1,"held Circle after refusal cannot retarget/confirm");};
+    vm.store_reference(field,V::integer(32));refusal(); // synthetic supported flag marks one eligible row
+    vm.store_reference(field,oldflag);auto bad_header=vm.peek_reference(root);auto oldhead=bad_header;bad_header.word=0x900002BC;
+    vm.store_reference(root,bad_header);refusal();GameWordMemoRows partial;
+    Check(!script.ReadMenuWordMemo(target,partial)&&!partial.valid&&partial.root_captured&&partial.header_captured&&partial.root_header==bad_header.word,
+      "refused header keeps actual typed-root read facts, not a fabricated empty count");
+    vm.store_reference(root,oldhead); // do not raise600 to700
+    vm.store_reference(nested,root);refusal();vm.store_reference(nested,oldfield);
+    Check(!script.PrepareMenuWordMemo(target,1,menu.Snapshot().generation,GameWordMemoRows{}),"caller empty snapshot is not readiness");
+    vm.store_reference(nested,V::string("changed"));Check(!script.PrepareMenuWordMemo(target,1,menu.Snapshot().generation,original),"copied digest drift cannot bind");vm.store_reference(nested,oldfield);
+    Check(rng.CurrentSeed64()==random&&vm.current_witness().clock_tick==source_clock&&vm.context_enabled(),"preconfirmation has no clock/RNG/pause effects");
+    input(0);input(Down);input(0);input(Circle);Check(menu.Snapshot().column==2&&menu.Snapshot().state78==1,"diary/other leaf remains refused");
+    input(0);input(Up);
+    auto before=menu.Snapshot().wordmemo_checks;input(0);input(Circle);
+    Check(menu.Snapshot().state78==2&&menu.Snapshot().wordmemo_checks==before+1&&menu.Snapshot().wordmemo_preflight_code==GameFsCode::Ok,"fresh current supported confirmation actually begins close");
+    for(unsigned i=0;i<8&&menu.Snapshot().state78!=3;++i)Check(bool(menu.Tick()),"actual parent closing clip");
+    Check(menu.Snapshot().state78==3&&menu.Snapshot().result==4&&resources.memo.opens==0,"result4 only after actual clip; no pre-run resource effect");
+    Check(bool(menu.RetireClosedRender()),"hidden parent render retired after actual result4");
+    Check(bool(script.ReadMenuWordMemo(target,rows))&&rows.sha==original.sha&&bool(script.PrepareMenuWordMemo(target,1,menu.Snapshot().generation,rows)),"actual confirmation rechecks current rows/imports");
+    GameWordMemo memo;GameWordMemoLease child{lease.script_generation,lease.run_id,lease.message_context,menu.Snapshot().generation,
+      lease.available_owner,lease.available_generation,lease.input_epoch+1};
+    Check(bool(memo.Request(rows,child))&&bool(script.BindMenuWordMemo(target,memo.Snapshot().generation,menu.Snapshot().generation,rows)),"real current resource8 request/registration bind");
+    callback(1,11);callback(2,18);Check(!vm.context_enabled(),"actual event18/3A/32 pauses exact caller");
+    Check(bool(script.CheckMenuWordMemo(target,memo.Snapshot().generation,menu.Snapshot().generation)),"actual paused result/operands/deadline guard");
+    for(unsigned i=0;i<100&&memo.Snapshot().phase!=3;++i){fade.Update();Check(bool(memo.Tick(resources,fade)),"real MEMO open/update");}
+    Check(memo.Snapshot().phase==3&&memo.Snapshot().owner470&&resources.memo.opens==1,"source-empty actual firstview resource owner");
+    Check(memo.SetInputEpoch(child.input_epoch+1),"actual child ready boundary");uint64_t sequence=1000;
+    const auto packet=[&](uint32_t keys){GameInputFrame f;f.buttons=keys;f.focused=f.test_injected=true;f.sequence=++sequence;
+      f.message_owner_generation=child.script_generation;f.message_context=child.context;f.returned_owner=child.available_owner;
+      f.returned_generation=child.available_generation;f.main_menu_epoch=memo.Snapshot().input_epoch;return f;};
+    auto stale=packet(Cross);stale.main_menu_epoch=lease.input_epoch;Check(!memo.Input(stale),"old menu input cannot migrate to child");
+    auto key=[&](uint32_t keys){Check(memo.Input(packet(keys))&&bool(memo.Tick(resources,fade)),"current MEMO input");};
+    key(Cross);Check(memo.Snapshot().phase==3,"opening held Cross unarmed");key(0);key(Right);Check(memo.Snapshot().category9D4==2,"actual Right category");key(0);key(Left);Check(memo.Snapshot().category9D4==1,"actual Left return");
+    GameGraphics graphics;GameFontResource font;Check(graphics.Initialize({})&&bool(font.Initialize(dokodemo::notebook_tests::FontImage()))&&bool(memo.Draw(graphics,font)),"production synthetic MEMO renderer/font/callbacks");
+    Check(memo.Snapshot().callback_null_returns&&memo.Snapshot().draw_frames,"actual source-empty callbacks/draw, not a filled completion");
+    key(0);key(Cross);Check(memo.Snapshot().phase==4&&!memo.ClosedAndRetired(),"distinct fresh Cross starts real close");
+    for(unsigned i=0;i<100&&memo.Snapshot().phase!=6;++i){fade.Update();Check(bool(memo.Tick(resources,fade)),"real close/poll");}
+    Check(memo.Snapshot().phase==6&&!memo.ClosedAndRetired()&&!vm.context_enabled(),"poll does not wake or retire");
+    Check(bool(memo.Tick(resources,fade))&&memo.ClosedAndRetired()&&bool(script.CheckMenuWordMemo(target,memo.Snapshot().generation,menu.Snapshot().generation)),"distinct deferred retirement with exact owner");
+    Check(bool(script.CompleteMenuWordMemo(target,memo.Snapshot()))&&vm.context_enabled(),"actual NativeActualClosedWordMemoWake owning return");
+    Check(!script.CompleteMenuWordMemo(target,memo.Snapshot())&&A::MenuRetire(proof,lease,menu.Snapshot().generation)
+      &&!A::MenuRetire(proof,lease,menu.Snapshot().generation)&&!A::MenuCurrent(proof,lease,menu.Snapshot().generation),"completion/lease retirement one-use, no reopen");
+    Check(bool(script.ReadMenuWordMemo(target,rows))&&rows.sha==original.sha&&rng.CurrentSeed64()==random,"current root immutable across UI/return; no policy RNG");
+    A::MemoRetireImports(script);Check(!script.PrepareMenuWordMemo(target,2,menu.Snapshot().generation,rows),"retired imports cannot reauthorize actual root");
+    font.Close();graphics.Close();memo.Close();menu.Close();
+}
 void CompletedOutingMenuConsumers(GameCompletedOutingMenuBorrow& proof,script::Vm& vm,GameActorRuntime& actor,
-        const GameOutingCommand& command,const GameMenuOutingSnapshot& outer,const GameMainMenuLease& previous,RngNativeOwner& rng,unsigned fault,const std::array<uint32_t,3>& callbacks){
+        const GameOutingCommand& command,const GameMenuOutingSnapshot& outer,const GameMainMenuLease& previous,RngNativeOwner& rng,unsigned fault,const std::array<uint32_t,3>& callbacks,GameActorScript* memo_script=nullptr,GameTransition* linked_fade=nullptr){
     using A=dokodemo::StartupRuntimeTestAccess;
     const auto seed=rng.CurrentSeed64();const auto source_clock=vm.current_witness().clock_tick;
     if(fault){Check(A::MenuOwnerFault(proof,vm,actor,command,outer,fault),"current completed pipeline refuses wrong owner/module/epoch/run/root/callback/context/failure");return;}
@@ -2025,10 +2140,18 @@ void CompletedOutingMenuConsumers(GameCompletedOutingMenuBorrow& proof,script::V
     Check(!right.Observe(frame,Right),"held old Right cannot open new proof");frame.buttons=0;Check(!right.Observe(frame,Right),"release alone cannot open");
     frame.buttons=Right;Check(right.Observe(frame,Right)&&A::MenuBorrow(proof,lease),"actual release/fresh Right consumes one new lease");
     Check(!A::MenuBorrow(proof,lease)&&!poll()&&proof.Snapshot().id==saved.id,"spent successor cannot republish or borrow twice");
-    CompletedMenuResources resources;GameMainMenu menu;
-    const auto opened=menu.Open(resources,lease,true,true,true,false,true);if(!opened)throw std::runtime_error(opened.detail);
+    CompletedMemoResources resources;GameMainMenu menu;
+    const auto preconfirm=[&](const GameMainMenuLease& current)->GameFsStatus{
+      if(!memo_script||!A::MenuCurrent(proof,current,menu.Snapshot().generation))return {GameFsCode::Unavailable,0,"current MEMO owner absent"};
+      GameWordMemoRows rows;auto status=memo_script->ReadMenuWordMemo(memo_script->OwnerEventTarget(),rows);
+      if(status)status=memo_script->PrepareMenuWordMemo(memo_script->OwnerEventTarget(),1,menu.Snapshot().generation,rows);return status;
+    };
+    const auto opened=menu.Open(resources,lease,true,true,true,false,true,preconfirm);if(!opened)throw std::runtime_error(opened.detail);
     Check(A::MenuBind(proof,lease,menu.Snapshot().generation),"actual authored menu generation binds borrowed proof");
     const auto callback=[&](unsigned which,int event){
+        if(memo_script){int32_t queue=-1;Check(bool(memo_script->PostMenuEvent(memo_script->OwnerEventTarget(),uint32_t(event),menu.Snapshot().generation,queue))&&queue==0
+            &&bool(memo_script->TickMenuOwner()),"actual ActorScript menu event/observer/restoration");
+          (void)poll();Check(!proof.Snapshot().revoked&&A::MenuCurrent(proof,lease,menu.Snapshot().generation),"current completed proof survives actual callback");return;}
         const auto old=vm.current_witness();script::Value code;code.kind=script::Value::Kind::Code;code.word=0x70000000|callbacks[which];
         Check(vm.post_owner_nil_event(code,event)==0,"actual menu nil callback accepted on exact current context");
         for(unsigned i=0;i<32&&vm.current_witness().event_envelope_present;++i)Check(vm.run(1).status!=script::Status::Stopped,"actual menu callback/32");
@@ -2048,6 +2171,7 @@ void CompletedOutingMenuConsumers(GameCompletedOutingMenuBorrow& proof,script::V
     input(0);input(Down);input(0);input(Down);Check(menu.Snapshot().row==3,"actual source skip/navigation reaches NOTE row3");
     input(0);input(Circle);for(unsigned i=0;i<4;++i)Check(bool(menu.Tick()),"actual NOTE submenu clip");
     Check(menu.Snapshot().substate7C==1&&menu.Snapshot().column==0,"current NOTE firstview only");
+    if(memo_script){Check(linked_fade!=nullptr,"SAME current transition owner");CompletedOutingMemoConsumer(proof,vm,*memo_script,menu,lease,resources,*linked_fade,rng,input,callback,sample);return;}
     input(0);input(Down);input(0);input(Circle);Check(menu.Snapshot().state78==1&&menu.Snapshot().unsupported==2,"other notebook leaf refuses before close");
     input(0);input(Up);input(0);input(Circle);for(unsigned i=0;i<8&&menu.Snapshot().state78!=3;++i)Check(bool(menu.Tick()),"actual menu closing clip");
     Check(menu.Snapshot().state78==3&&menu.Snapshot().result==3,"real closing clip yields NOTE firstview result3");
@@ -2082,7 +2206,7 @@ void CompletedOutingMenuConsumers(GameCompletedOutingMenuBorrow& proof,script::V
     fade.Retire();menu.Close();
 }
 
-void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0,bool repeated_bgm=false,bool menu_proof=false,unsigned menu_fault=0){
+void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0,bool repeated_bgm=false,bool menu_proof=false,unsigned menu_fault=0,bool memo_consumer=false){
   static_assert(!std::is_copy_constructible<GameOutingData>::value,"selected DATA packet is not an editable copied receipt");
   for(unsigned failure=0;failure<(owning_return?1u:3u);++failure){
     auto bytes=SyntheticOutingData();if(repeated_bgm)for(unsigned i=0;i<19;++i)Word(bytes,128+0xD8CC8+i*4,7);
@@ -2123,7 +2247,9 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     auto call=[&](uint8_t n){const auto pc=uint32_t(code.size());emit({0x20,n,0,0,0});return pc;};
     uint32_t parent_call=0,parent_resume=0,parent_cleanup_call=0,parent_cleanup_resume=0,cleanup_entry=0,cleanup_return=0;
     uint32_t menu_initial_yield=0,ready_main_call=0,ready_middle_call=0,ready_middle=0,ready_idle=0,ready_pc=0,callback_entry=0,callback_return=0;std::array<uint32_t,3> menu_callbacks{};
-    if(owning_return){emit({0x30,0});if(menu_proof){slot(0x95,13);emit({0x80,1,0x51,0x80,1});menu_initial_yield=uint32_t(code.size());emit({0x44});}parent_call=call(0);parent_resume=uint32_t(code.size());emit({0x86});parent_cleanup_call=call(1);
+    if(owning_return){emit({0x30,0});
+      if(memo_consumer){for(uint8_t service:{uint8_t(10),uint8_t(48)}){emit({0x80,service});slot(0x95,32);emit({0x8B,0xF0,2});}}
+      if(menu_proof){slot(0x95,13);emit({0x80,1,0x51,0x80,1});menu_initial_yield=uint32_t(code.size());emit({0x44});}parent_call=call(0);parent_resume=uint32_t(code.size());emit({0x86});parent_cleanup_call=call(1);
       parent_cleanup_resume=uint32_t(code.size());if(menu_proof)ready_main_call=call(0);emit({0x80,7,0x44,uint8_t(menu_proof?0x31:0x38)});}
     const auto root_entry=uint32_t(code.size());
     emit({0x30,24});for(unsigned i=0;i<8;++i){slot(0x99,uint16_t(17+i));emit({0x8E,'A',0,0x51});}slot(0x99,16);emit({0x8B,0x70,1});
@@ -2160,7 +2286,9 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       cleanup_return=uint32_t(code.size());emit({0x31});}
     if(menu_proof){
       ready_middle=uint32_t(code.size());emit({0x30,0});ready_middle_call=call(0);emit({0x31});
-      ready_idle=uint32_t(code.size());emit({0x30,0,0x80,50});ready_pc=uint32_t(code.size());emit({0x44,0x31});
+      ready_idle=uint32_t(code.size());emit({0x30,0});
+      if(memo_consumer){slot(0x93,0);emit({0x8A,0x28,0xDA,0x08,0x51});}
+      emit({0x80,50});ready_pc=uint32_t(code.size());emit({0x44,0x31});
       callback_entry=uint32_t(code.size());emit({0x30,2});slot(0x95,13);emit({0x80,2,0x51});slot(0x95,14);slot(0x90,1);emit({0x51});callback_return=uint32_t(code.size());emit({0x1C});
       for(unsigned i=0;i<3;++i){menu_callbacks[i]=uint32_t(code.size());emit({0x30,2});if(i==2)emit({0x3A});emit({0x32});}
     }
@@ -2171,11 +2299,31 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       abi.epilogue_return=epilogue_return;abi.travel_return=epilogue_call+5;}
     if(owning_return)for(unsigned i=0;i<3;++i){code[abi.wait_call+1+i]=uint8_t(abi.wait_entry>>(8*i));code[pause_code_patch+i]=uint8_t(abi.pause_entry>>(8*i));}
     if(owning_return&&return_fault==8)abi.field5_clear=cleanup_entry+7;
-    std::vector<uint8_t> ksc(28+code.size()+4*(25+16+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=16;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
+    if(memo_consumer){
+      // Arbitrary generated callback at the public owner ABI addresses. No
+      // original bytecode is copied; actual stores/envelope32 are executed.
+      code.resize(0x8DA28,0x03);emit({0x30,2});slot(0x90,0);emit({0x80,10,0xC0});
+      const auto no_open=uint32_t(code.size());emit({0x11,0,0,0});slot(0x95,0x9A78);emit({0x87,0x51});
+      const auto flag_done=uint32_t(code.size());emit({0x10,0,0,0});
+      const auto close_flag=uint32_t(code.size());slot(0x95,0x9A78);emit({0x86,0x51});
+      const auto selected=uint32_t(code.size());slot(0x90,0);emit({0x80,18,0xC0});const auto no_pause=uint32_t(code.size());emit({0x11,0,0,0,0x3A});
+      emit({0x10,0x8B,0xDD,0x08});code.resize(0x8DD8B,0x03);emit({0x32});
+      for(auto q:{std::pair<uint32_t,uint32_t>{no_open,close_flag},{flag_done,selected},{no_pause,0x8DD8B}})
+        for(unsigned k=0;k<3;++k)code[q.first+1+k]=uint8_t(q.second>>(8*k));
+    }
+    const uint32_t global_count=memo_consumer?0x9A79:16;
+    std::vector<uint8_t> ksc(28+code.size()+4*(25+global_count+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;Word(ksc,24,global_count);ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
     if(owning_return)Word(ksc,28+code.size(),0x70000000u|abi.event_entry);
     const auto ctx_at=uint32_t(28+code.size()+(owning_return?4:0));Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
     const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);Word(ksc,global_at+15*4,0x90000000);
-    script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());script::Vm vm(program);vm.native_reserved_local_nil(true);vm.start();
+    if(memo_consumer){Word(ksc,global_at+32*4,0x90000001);Word(ksc,global_at+33*4,0xB0000040);Word(ksc,global_at+64*4,0x90000013);}
+    script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());
+    auto plain_vm=std::make_unique<script::Vm>(program);auto memo_owner=std::make_unique<GameActorScript>();
+    std::vector<uint8_t> dictionary(96);Word(dictionary,0,0x90000001);Word(dictionary,4,0xB0000008);Word(dictionary,8,0x90000013);
+    Word(dictionary,16,0x60000058);Word(dictionary,20,0x6000005A);dictionary[88]='A';dictionary[90]='a';
+    auto dictionary_owner=std::make_shared<Lease>(std::move(dictionary));
+    auto& vm=memo_consumer?dokodemo::StartupRuntimeTestAccess::MemoComponent(*memo_owner,ksc,PackageStorage::Attach(dictionary_owner,dictionary_owner->b.size()),actor):*plain_vm;
+    if(!memo_consumer){vm.native_reserved_local_nil(true);vm.start();}
     Check(bool(actor.BindScriptContextActor1C0FC(vm)),"actual constructor context captures this actor5 owner");auto image=std::make_shared<Lease>(ksc);const auto image_view=PackageStorage::Attach(image,image->b.size());
     GameOutingCommand command;GameMenuOutingSnapshot outer;GameOutingReturnAbi outer_abi;
     GameCompletedOutingMenuBorrow menu;GameCompletedOutingMenuAbi menu_abi;GameMainMenuLease previous_lease{1,vm.current_witness().run_id,7,1,1,1};
@@ -2188,6 +2336,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     outer_abi.cleanup_call=parent_cleanup_call;outer_abi.cleanup=cleanup_entry;outer_abi.cleanup_return=cleanup_return;
     outer_abi.cleanup_resume=parent_cleanup_resume;outer_abi.phase=13;outer_abi.argument=14;
     vm.frame_observer([&](const script::FrameTransition& t){
+      if(memo_consumer)dokodemo::StartupRuntimeTestAccess::MemoObserve(*memo_owner,t);
       if(owning_return&&!outer.entered&&t.before.current_pc==parent_call&&t.after.code_entry==root_entry&&t.opcode==0x20){
         Check(bool(command.Begin(vm,abi)),"real entered synthetic caller/root, no fabricated completion or original SHA bypass");
         outer.entered=true;outer.frame=t.after.frame_id;outer.caller=t.before.frame_id;outer.caller_entry=t.before.code_entry;
@@ -2201,6 +2350,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     auto target_io=std::make_shared<BackgroundFileState>();bool consumed=false,source_open=false;
     std::weak_ptr<const GameModelAsset> returned_old;
     vm.host_service([&](uint8_t id,const std::vector<script::Value>& args){
+      if(memo_consumer&&id==0xF0)return dokodemo::StartupRuntimeTestAccess::MemoService(*memo_owner,id,args);
       if(owning_return&&id==0x27)return script::Value::integer(command.PostWait(vm,args));
       if(owning_return&&id==0x7B){Check(args.empty()&&bool(actor.StartTransition()),"executed synthetic GAME6 opens current radial");source_open=true;return script::Value::integer(0);}
       if(id==0x70){Check(args.size()==1&&bool(actor.RegisterSupportData16(vm,args[0])),"actual eight typed current texts producer registration");return script::Value::integer(0);}
@@ -2454,7 +2604,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       script::Vm foreign_after(program);foreign_after.start();GameBackgroundCandidate rejected;const auto seed_after=rng.CurrentSeed64();
       Check(!command.CurrentRequest(foreign_after,actor,rejected)&&!foreign_after.current_witness().context_registered&&rng.CurrentSeed64()==seed_after,
         "completed receipt refuses foreign VM BEFORE registering its context or changing RNG/request effects");
-      if(menu_proof)CompletedOutingMenuConsumers(menu,vm,actor,command,outer,previous_lease,rng,menu_fault,menu_callbacks);
+      if(menu_proof)CompletedOutingMenuConsumers(menu,vm,actor,command,outer,previous_lease,rng,menu_fault,menu_callbacks,memo_consumer?memo_owner.get():nullptr,&transition);
       target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
       Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
       returned_period=-77;Check(!actor.QueryScenePeriod(15,35,returned_period)&&returned_period==-77,"retired target cannot fall back to old Scene0/default clock");
@@ -3010,6 +3160,7 @@ int main(int argc,char** argv) {
         for(unsigned fault=0;fault<12;++fault)ExecutedDestinationPreparationTests({},true,fault);
         ExecutedDestinationPreparationTests({},true,0,true);
         for(unsigned fault=0;fault<=12;++fault)ExecutedDestinationPreparationTests({},true,0,false,true,fault);
+        ExecutedDestinationPreparationTests({},true,0,false,true,0,true);
         dokodemo::StartupRuntimeTestAccess::MenuOnlyRefusals();
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();

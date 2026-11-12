@@ -454,6 +454,7 @@ struct GameActorScriptSnapshot {
 // interpreter,not a PSP/MIPS runtime. Named host services bind actual current
 // native profile/state; unsupported operations retain an explicit boundary.
 class GameActorScript final {
+    friend struct ::dokodemo::StartupRuntimeTestAccess; // generated VM/registration component setup; ordinary SHA guard unchanged
   public:
     using ClockWord = std::function<uint32_t()>;
     GameFsStatus Initialize(PackageView dictionary,PackageView script,std::string path,

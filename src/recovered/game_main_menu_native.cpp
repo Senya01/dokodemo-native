@@ -1,4 +1,5 @@
 #include "game_main_menu_native.h"
+#include <algorithm>
 #include <utility>
 
 namespace dokodemo::recovered {
@@ -8,7 +9,7 @@ int32_t GameMainMenuControl::Resolve(bool full,int32_t row,int32_t column)noexce
     if(row<0||column<0||column>=4||row>=(full?7:4))return -1;
     return full?a[row][column]:b[row][column];
 }
-bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing){
+bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing,GameMainMenuWordMemoPreconfirm memo){
     if((state_.live&&state_.state78!=3)||!full||!lease.script_generation||!lease.run_id
        ||!lease.available_owner||!lease.available_generation||!lease.message_context||!lease.input_epoch)return false;
     const auto old=state_;state_={};state_.generation=old.generation+1;state_.opens=old.opens+1;
@@ -16,6 +17,7 @@ bool GameMainMenuControl::Begin(GameMainMenuLease lease,bool full,bool scene,boo
     state_.live=true;state_.full=full;state_.source_scene_nonzero=scene;state_.lease=lease;state_.state78=0;
     state_.notebook_enabled=notebook;state_.other_profiles=profiles;
     state_.outing_capable=outing;
+    wordmemo_preconfirm_=std::move(memo);
     input_.BeginContext();return true;
 }
 bool GameMainMenuControl::Input(const GameInputFrame& f){
@@ -76,7 +78,19 @@ void GameMainMenuControl::Tick(uint8_t mode){
         if(down){if(state_.column<max)++state_.column;else if(down==1)state_.column=0;return;}
         if(up){if(state_.column>0)--state_.column;else if(up==1)state_.column=max;return;}
         if(input_.First(Circle)){
-            if(state_.lease.completed_outing_proof&&state_.column!=0){++state_.unsupported;return;}
+            if(state_.lease.completed_outing_proof){
+                if(state_.column>1){++state_.unsupported;return;}
+                if(state_.column==1){
+                    ++state_.wordmemo_checks;
+                    const auto status=wordmemo_preconfirm_?wordmemo_preconfirm_(state_.lease)
+                        :GameFsStatus{GameFsCode::Unavailable,0,"MEMO current Content preconfirmation owner unavailable"};
+                    state_.wordmemo_preflight_code=status.code;state_.wordmemo_preflight_detail={};
+                    const auto n=std::min(status.detail.size(),state_.wordmemo_preflight_detail.size()-1);
+                    std::copy_n(status.detail.data(),n,state_.wordmemo_preflight_detail.data());
+                    state_.wordmemo_detail_truncated=n!=status.detail.size();
+                    if(!status){++state_.wordmemo_refusals;++state_.unsupported;return;}
+                }
+            }
             if(state_.column<=2){state_.state78=2;input_.BeginContext();}else ++state_.unsupported;
             return;
         }
@@ -115,7 +129,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
         state_.row=state_.column=-1;state_.result=-1;state_.state78=2;++state_.cancels;input_.BeginContext();
     }
 }
-void GameMainMenuControl::Close()noexcept{state_.live=false;input_.BeginContext();}
+void GameMainMenuControl::Close()noexcept{state_.live=false;input_.BeginContext();wordmemo_preconfirm_={};}
 GameFsStatus GameMainMenu::Load(GameResourceSource& source){
     if(resource_)return {};
     auto image=std::make_shared<GameUiResource>();
@@ -133,10 +147,10 @@ void GameMainMenu::Auxiliary(){
     const uint32_t indices[]={9,10,11,12,17,18},frames[]={5,6,6,5,6,5};
     for(uint32_t i=0;i<6;++i){auto* c=clone_.Control(indices[i]);c->frame=frames[i];c->mode=2;c->active=1;}
 }
-GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing){
+GameFsStatus GameMainMenu::Open(GameResourceSource& source,GameMainMenuLease lease,bool full,bool scene,bool notebook,bool profiles,bool outing,GameMainMenuWordMemoPreconfirm memo){
     if(Modal()||!full)return {GameFsCode::Unavailable,0,"Main menu finite full-mode owner only"};
     auto status=Load(source);if(!status)return status;
-    if(!control_.Begin(lease,full,scene,notebook,profiles,outing))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
+    if(!control_.Begin(lease,full,scene,notebook,profiles,outing,std::move(memo)))return {GameFsCode::Unavailable,0,"Main menu owner identity unavailable"};
     if(!clone_.ShowRoot(0)||!clone_.Bind(0,0,0))return {GameFsCode::Unavailable,0,"Main menu opening clip"};
     auto* main=clone_.Control(0);*main={0,0,1,1};
     auto* context=clone_.Control(1);context->frame=scene?2:1;context->mode=2;context->active=1;

@@ -2643,14 +2643,21 @@ GameFsStatus GameActorScript::CompleteMenuDiary(const GameOwnerEventTarget& targ
     vm_->resume_modal_context();state_.menu_diary_live=false;++state_.menu_diary_completions;return {};
 }
 GameFsStatus GameActorScript::ReadMenuWordMemo(const GameOwnerEventTarget& expected,GameWordMemoRows& out)const{
+    out={}; // a refused owner cannot leave an earlier caller image marked current
     try{
-        Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Wordmemo read needs idle owning VM");
+        Need(state_.live&&vm_&&!state_.blocked&&!vm_->callback_depth()&&!vm_->queued_callbacks()
+             &&vm_->current_witness().context_registered,"Wordmemo read needs registered idle owning VM");
         const auto target=OwnerEventTarget();
+        const auto current=vm_->current_witness();const auto& registration=state_.wordmemo_registration_source;
+        Need(state_.wordmemo_registrations&&registration.valid&&registration.context_registered
+             &&registration.run_id==current.run_id&&registration.context_word==current.context_word&&registration.code_sha256==current.code_sha256,
+             "Wordmemo GAME10 registration belongs to a different module/run/context");
         Need(expected.generation==target.generation&&expected.context.kind==target.context.kind&&expected.context.word==target.context.word
              &&!expected.context.context_owner.expired()&&expected.context.context_owner.lock()==target.context.context_owner.lock()
+             &&!expected.context.context_owner.owner_before(target.context.context_owner)&&!target.context.context_owner.owner_before(expected.context.context_owner)
              &&expected.callback.kind==target.callback.kind&&expected.callback.word==target.callback.word&&target.callback.word==0x7008DA28u,
              "Wordmemo actual registered context/Local0 replaced");
-        out=GameObserveWordMemoRows(*vm_,state_.generation,bindings_.at(10));return {};
+        out=GameObserveWordMemoRows(*vm_,state_.generation,bindings_.at(10),&out);return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
 GameFsStatus GameActorScript::BindMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent,const GameWordMemoRows& rows){
@@ -2664,6 +2671,10 @@ GameFsStatus GameActorScript::PrepareMenuWordMemo(const GameOwnerEventTarget& ta
        ||state_.menu_inventory_live||state_.inventory_requested||!vm_||!vm_->context_enabled())
         return {GameFsCode::Unavailable,0,"Wordmemo origin/generation unavailable"};
     GameWordMemoRows current;const auto status=ReadMenuWordMemo(target,current);if(!status)return status;
+    const auto owner=vm_->current_witness();const auto& imported=state_.wordmemo_import_source;
+    if(!imported.valid||!imported.context_registered||imported.run_id!=owner.run_id
+       ||imported.context_word!=owner.context_word||imported.code_sha256!=owner.code_sha256)
+        return {GameFsCode::Unavailable,0,"Wordmemo GAME48 import module/run/context changed"};
     if(!rows.valid||rows.sha!=current.sha||rows.run_id!=current.run_id||rows.code_sha!=current.code_sha
        ||rows.records!=current.records||rows.cells!=current.cells||rows.eligible_records!=current.eligible_records||current.eligible_records
        ||!state_.wordmemo_imports||!dictionary_.ImportedRecordCount()
@@ -2674,10 +2685,13 @@ GameFsStatus GameActorScript::PrepareMenuWordMemo(const GameOwnerEventTarget& ta
 }
 GameFsStatus GameActorScript::CheckMenuWordMemo(const GameOwnerEventTarget& target,uint64_t gui,uint64_t parent)const{
     try{
-        Need(state_.menu_wordmemo_live&&gui==state_.menu_wordmemo_generation&&parent==state_.menu_wordmemo_parent
+        Need(vm_&&state_.menu_wordmemo_live&&gui==state_.menu_wordmemo_generation&&parent==state_.menu_wordmemo_parent
              &&wordmemo_registration_at_bind_==state_.wordmemo_registrations&&state_.wordmemo_imports
              &&dictionary_.ImportedRecordCount()&&dictionary_.ImportedRecordsInRoot(*vm_,bindings_.at(10))==dictionary_.ImportedRecordCount(),
              "Wordmemo GUI/registration/imported-record owner replaced");
+        const auto owner=vm_->current_witness();const auto& imported=state_.wordmemo_import_source;
+        Need(imported.valid&&imported.context_registered&&imported.run_id==owner.run_id
+             &&imported.context_word==owner.context_word&&imported.code_sha256==owner.code_sha256,"Wordmemo current import producer changed");
         const auto& pause=state_.menu_pause_return;
         Need(vm_&&pause.returned&&!pause.failed&&pause.event==18&&pause.menu_generation==parent
              &&!vm_->context_enabled()&&!vm_->callback_depth()&&!vm_->queued_callbacks(),"Wordmemo needs actual disabled18/32 owner");

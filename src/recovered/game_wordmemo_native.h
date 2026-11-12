@@ -6,12 +6,13 @@ namespace dokodemo::recovered {
 // Array9/reference representation, not original22F38 pointer equivalence.
 struct GameWordMemoRows {
     bool valid=false;
+    bool root_captured=false,header_captured=false; // bounded read facts even on refusal; never admission
     uint64_t script_generation=0,run_id=0;
     uint32_t root_table=0,root_index=0,root_header=0,records=0,cells=0,eligible_records=0;
     std::array<char,65> code_sha{};
     std::array<uint8_t,32> sha{};
 };
-GameWordMemoRows GameObserveWordMemoRows(const script::Vm&,uint64_t,const script::Value&);
+GameWordMemoRows GameObserveWordMemoRows(const script::Vm&,uint64_t,const script::Value&,GameWordMemoRows* partial=nullptr);
 bool GameWordMemoPausedOwnerExact(const script::VmStateWitness& restored,const script::VmStateWitness& current)noexcept;
 using GameWordMemoLease=GameNotebookLease; // same borrowed identity fields, separate owning instance
 struct GameWordMemoSnapshot {

@@ -1195,6 +1195,20 @@ GameFsStatus GameContentBoot::CheckMainMenuLease(){
         return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
 }
+GameFsStatus GameContentBoot::PreconfirmMenuWordMemo(const GameMainMenuLease& lease){
+    const auto menu=main_menu_.Snapshot();const auto& current=main_menu_lease_;
+    if(state_.main_menu_phase!=3||menu.state78!=1||menu.row!=3||menu.substate7C!=1||menu.column!=1
+       ||!lease.completed_outing_proof||lease.completed_outing_proof!=current.completed_outing_proof
+       ||lease.script_generation!=current.script_generation||lease.run_id!=current.run_id
+       ||lease.available_owner!=current.available_owner||lease.available_generation!=current.available_generation
+       ||lease.message_context!=current.message_context||lease.input_epoch!=current.input_epoch)
+        return {GameFsCode::Unavailable,0,"MEMO preconfirmation current menu-only lease/selection changed"};
+    auto status=CheckMainMenuLease();if(!status)return status;
+    GameWordMemoRows rows;status=actor_script_.ReadMenuWordMemo(main_menu_target_,rows);
+    state_.wordmemo_observed=rows; // actual partial/current read, never empty authority
+    if(status)status=actor_script_.PrepareMenuWordMemo(main_menu_target_,wordmemo_.Snapshot().generation+1,menu.generation,rows);
+    return status; // readonly GAME10/import/owner check BEFORE source close/result/resource8
+}
 bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     if(state_.main_menu_phase&&state_.system_option.failed){
         // A stopped unsupported consumer gets no subsequent owner VM/service
@@ -1217,7 +1231,8 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         switch(state_.main_menu_phase){
         case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
         case 2:{
-            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent(),actor_script_.MenuOutingCapable());
+            const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent(),actor_script_.MenuOutingCapable(),
+                [this](const GameMainMenuLease& lease){return PreconfirmMenuWordMemo(lease);});
             if(status&&main_menu_lease_.completed_outing_proof&&!returned_interaction_.BindCompletedOutingMenu(actor_script_,main_menu_lease_,main_menu_.Snapshot().generation))
                 status={GameFsCode::Unavailable,0,"Completed outing menu generation bind refused"};
             if(status)status=main_flow_.MenuOpened();
