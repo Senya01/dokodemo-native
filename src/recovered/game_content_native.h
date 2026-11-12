@@ -278,7 +278,7 @@ class GameContentBoot final : public GameResourceSource, public GameDiaryIo, pub
     bool MainMenuEligible()const;
     enum class MenuInputRoute { NoMatch,Consumed,Error };
     MenuInputRoute MainMenuInput(const GameInputFrame&);
-    GameFsStatus CheckMainMenuLease()const;
+    GameFsStatus CheckMainMenuLease();
     bool TickMainMenu(GameGraphics&);
     GamePostModalInteraction post_modal_;
     GameReturnedConversationInteraction returned_interaction_;

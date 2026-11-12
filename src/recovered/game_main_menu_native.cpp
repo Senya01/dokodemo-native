@@ -76,6 +76,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
         if(down){if(state_.column<max)++state_.column;else if(down==1)state_.column=0;return;}
         if(up){if(state_.column>0)--state_.column;else if(up==1)state_.column=max;return;}
         if(input_.First(Circle)){
+            if(state_.lease.completed_outing_proof&&state_.column!=0){++state_.unsupported;return;}
             if(state_.column<=2){state_.state78=2;input_.BeginContext();}else ++state_.unsupported;
             return;
         }
@@ -93,6 +94,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
     // Source confirm priority remains ahead of Cancel. This finite host domain
     // retains the owner and selection when an unimplemented action is offered.
     if(input_.First(Circle)){
+        if(state_.lease.completed_outing_proof&&state_.row!=3){++state_.unsupported;return;}
         if(state_.row==1&&!state_.outing_capable){++state_.unsupported;return;}
         if(state_.row==4){state_.substate7C=2;state_.column=0;input_.BeginContext();return;}
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
@@ -102,6 +104,7 @@ void GameMainMenuControl::Tick(uint8_t mode){
         return;
     }
     if(input_.First(Right)){
+        if(state_.lease.completed_outing_proof&&state_.row!=3){++state_.unsupported;return;}
         if(state_.row==4){state_.substate7C=2;state_.column=0;input_.BeginContext();return;}
         if(state_.row==6){state_.substate7C=3;state_.column=0;input_.BeginContext();return;}
         if(state_.row==3&&state_.notebook_enabled){state_.substate7C=1;state_.column=0;input_.BeginContext();return;}

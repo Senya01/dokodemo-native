@@ -792,7 +792,7 @@ bool GameContentBoot::ProcessDialogInput(const GameInputFrame &frame) {
         const auto menu_route=MainMenuInput(frame);
         if(menu_route!=MenuInputRoute::NoMatch)return menu_route==MenuInputRoute::Consumed;
         if(state_.actor_script.awaiting_input||(scene_ui_.Editor().live&&scene_ui_.Editor().source_state!=3))return false;
-        if(!inventory_.Modal())main_flow_.Input(frame,state_.actor_script.awaiting_message||state_.actor_script.awaiting_choice||state_.actor_script.awaiting_input);
+        if(!inventory_.Modal())main_flow_.Input(frame,returned.menu_only||state_.actor_script.awaiting_message||state_.actor_script.awaiting_choice||state_.actor_script.awaiting_input);
         const bool posted=post_modal_.Input(frame);state_.post_modal=post_modal_.Snapshot();
         if(posted)return true;
         // Recheck live owners before the queue call;the published input token
@@ -1129,7 +1129,7 @@ bool GameContentBoot::MainMenuEligible()const{
     // NativeSourceZeroMenuBorrow: after an actual resource9 poll, the same
     // already admitted available activation may still lend menu ownership.
     // Returned Circle's source469 gate and token remain unchanged.
-    const bool source_zero=state_.source469_resource==9&&!state_.source_loader469&&state_.main_menu_notebook_completions
+    const bool source_zero=!available.menu_only&&state_.source469_resource==9&&!state_.source_loader469&&state_.main_menu_notebook_completions
         &&available.admitted&&available.script_generation==actor.generation&&available.run_id==actor.vm_current.run_id
         &&actor.owned_conversation.dispatch_ready;
     return !state_.closed&&!state_.blocked&&!state_.main_menu_phase&&state_.current_scene==4&&state_.load_state==6
@@ -1160,7 +1160,11 @@ GameContentBoot::MenuInputRoute GameContentBoot::MainMenuInput(const GameInputFr
     try{
         const auto actor=actor_script_.Snapshot();main_menu_target_=actor_script_.OwnerEventTarget();
         main_menu_lease_={actor.generation,actor.vm_current.run_id,available.owner,available.generation,state_.actor_message_contexts,state_.main_menu_input_epoch+1};
+        if(available.menu_only)main_menu_lease_.completed_outing_proof=available.outing_menu.id;
         const auto status=main_flow_.BeginAvailableMenu();if(!status){state_.status=status;state_.blocked=true;return MenuInputRoute::Error;}
+        if(available.menu_only&&!returned_interaction_.BorrowCompletedOutingMenu(actor_script_,main_menu_lease_)){
+            state_.status={GameFsCode::Unavailable,0,"Completed outing menu borrow drifted"};state_.blocked=true;return MenuInputRoute::Error;
+        }
         state_.main_menu_input_epoch=main_menu_lease_.input_epoch;state_.main_menu_phase=1;state_.main_menu_available=false;
         main_menu_last_sequence_=frame.sequence;state_.main_menu_child_ready=false;
         main_menu_entry_gate_.Stop();main_menu_entry_ready_=false;returned_interaction_.SuspendInput();
@@ -1168,7 +1172,7 @@ GameContentBoot::MenuInputRoute GameContentBoot::MainMenuInput(const GameInputFr
         return MenuInputRoute::Consumed;
     }catch(const std::exception& e){state_.status={GameFsCode::Unavailable,0,e.what()};state_.blocked=true;return MenuInputRoute::Error;}
 }
-GameFsStatus GameContentBoot::CheckMainMenuLease()const{
+GameFsStatus GameContentBoot::CheckMainMenuLease(){
     try{
         const auto actor=actor_script_.Snapshot();const auto available=returned_interaction_.Snapshot();const auto target=actor_script_.OwnerEventTarget();
         const auto result=main_menu_.Snapshot().result;
@@ -1181,7 +1185,10 @@ GameFsStatus GameContentBoot::CheckMainMenuLease()const{
         if(!actor.live||actor.blocked||actor.generation!=main_menu_lease_.script_generation||actor.vm_current.run_id!=main_menu_lease_.run_id
            ||!actor_runtime_.OwnersLive()||actor.runtime.camera_mode==0||state_.current_scene!=4
            ||!available.live||available.revoked||available.owner!=main_menu_lease_.available_owner||available.generation!=main_menu_lease_.available_generation
-           ||(available.event_posted&&!consumed_teach)||target.generation!=main_menu_target_.generation||target.callback.kind!=main_menu_target_.callback.kind
+           ||(available.event_posted&&!consumed_teach&&!main_menu_lease_.completed_outing_proof)
+           ||(main_menu_lease_.completed_outing_proof&&!returned_interaction_.CompletedOutingLeaseCurrent(
+                actor_script_,main_menu_lease_,state_.main_menu_phase<=2?0:main_menu_.Snapshot().generation))
+           ||target.generation!=main_menu_target_.generation||target.callback.kind!=main_menu_target_.callback.kind
            ||target.callback.word!=main_menu_target_.callback.word||target.context.word!=main_menu_target_.context.word
            ||main_menu_target_.context.context_owner.expired()||target.context.context_owner.lock()!=main_menu_target_.context.context_owner.lock())
             return {GameFsCode::Unavailable,0,"Main menu borrowed owner replaced or retired"};
@@ -1198,6 +1205,9 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     auto status=CheckMainMenuLease();
     if(status)status=actor_script_.TickMenuOwner();
     const auto finish=[&]{
+        if(main_menu_lease_.completed_outing_proof&&!returned_interaction_.RetireCompletedOutingMenu(actor_script_,main_menu_lease_,main_menu_.Snapshot().generation)){
+            status={GameFsCode::Unavailable,0,"Completed outing menu retirement owner changed"};return;
+        }
         ++state_.main_menu_returns;++state_.main_menu_input_epoch;state_.main_menu_phase=0;
         state_.main_menu_child_ready=false;
         main_menu_target_={};main_menu_lease_={};main_flow_.ResetInput();returned_interaction_.SuspendInput();
@@ -1208,6 +1218,8 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
         case 1:status=main_flow_.AdvanceMenuOpening();if(status)state_.main_menu_phase=2;break;
         case 2:{
             const auto runtime=actor_runtime_.Snapshot();status=main_menu_.Open(*this,main_menu_lease_,runtime.camera_mode!=0,runtime.manager_scene14!=0,true,records_.OtherProfilesPresent(),actor_script_.MenuOutingCapable());
+            if(status&&main_menu_lease_.completed_outing_proof&&!returned_interaction_.BindCompletedOutingMenu(actor_script_,main_menu_lease_,main_menu_.Snapshot().generation))
+                status={GameFsCode::Unavailable,0,"Completed outing menu generation bind refused"};
             if(status)status=main_flow_.MenuOpened();
             int32_t queue=-1;if(status)status=actor_script_.PostMenuEvent(main_menu_target_,10,main_menu_.Snapshot().generation,queue);
             if(status&&queue!=0)status={GameFsCode::Unavailable,0,"Main menu event10 queue refused"};
@@ -1460,7 +1472,7 @@ bool GameContentBoot::TickMainMenu(GameGraphics& graphics){
     state_.system_option=system_option_.Snapshot();state_.system_option.woken=actor_script_.Snapshot().menu_option_completions!=0;
     state_.actor_script.runtime=actor_runtime_.Snapshot();state_.status=status;state_.blocked=!bool(status);
     if(status&&!state_.main_menu_phase){
-        returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
+        returned_interaction_.Update(actor_script_,state_.main_flow,ReturnedGate());state_.returned_interaction=returned_interaction_.Snapshot();
         state_.main_menu_available=MainMenuEligible();
     }
     return bool(status);
@@ -1695,7 +1707,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
             actor_message_gate_.Begin(state_.actor_message_contexts,state_.actor_script.generation);state_.actor_message_input_armed=false;
         }
         if(state_.status){
-            returned_interaction_.Update(state_.actor_script,state_.main_flow,ReturnedGate());
+            returned_interaction_.Update(actor_script_,state_.main_flow,ReturnedGate());
             state_.returned_interaction=returned_interaction_.Snapshot();
         }
         state_.main_menu_available=MainMenuEligible();state_.main_menu_source_right_blocked=state_.source_loader469;
@@ -1763,7 +1775,7 @@ bool GameContentBoot::TickActorDictionary(GameFilesystem& filesystem,GameGraphic
                         main_menu_lease_.available_generation,main_menu_.Snapshot().generation);
                 if(event==0&&arg==3&&state_.main_menu_phase==9)
                     return returned_interaction_.PostMenuOuting(actor_script_,main_menu_lease_.available_owner,
-                        main_menu_lease_.available_generation,main_menu_.Snapshot().generation);
+                        main_menu_lease_.available_generation,main_menu_.Snapshot().generation,main_menu_lease_);
                 return actor_script_.PostMainFlowEvent(event,arg);
             });
             if(!state_.status)throw std::runtime_error(state_.status.detail);

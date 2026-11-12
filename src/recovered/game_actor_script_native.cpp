@@ -6,6 +6,7 @@
 #include "core_hash.h"
 #include <stdexcept>
 #include <sstream>
+#include <tuple>
 
 namespace dokodemo::recovered {
 namespace {
@@ -259,10 +260,10 @@ GameFsStatus GameActorScript::Initialize(PackageView dictionary,PackageView imag
         const auto attached=dictionary_.Attach(std::move(dictionary));
         Need(bool(attached),attached.detail.c_str());
         script_image_=std::move(image);profile_=profile;clock_=std::move(clock);rng_=rng;runtime_=runtime;records_=records;sound_=sound;state_.path=std::move(path);
-        vm_=std::make_unique<script::Vm>(program_);
+        vm_=std::make_unique<script::Vm>(program_);input_policy_lifetime_=std::make_shared<uint8_t>(uint8_t(0));
         vm_->access_observer([this](const Value& ref,bool write){ObserveNotebookStore(ref,write);});
-        owned_conversation_=GameOwnedConversation{};
-        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);ObserveFlow5Event(t);ObserveOutingTransition(t);});
+        owned_conversation_=GameOwnedConversation{};completed_outing_menu_.Close();
+        vm_->frame_observer([this](const script::FrameTransition& t){owned_conversation_.Observe(t,*vm_);ObserveInventoryAction(t);ObserveWordSelection(t);ObserveMenuCallback(t);ObserveFlow5Event(t);ObserveOutingTransition(t);completed_outing_menu_.Observe(t,*vm_);});
         ascii_class70_.Begin(state_.generation);
         state_.ascii_class70_live=ascii_class70_.Live();state_.ascii_class70_generation=ascii_class70_.Generation();
         state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
@@ -1412,6 +1413,154 @@ GameFsStatus GameOutingCommand::CurrentRequest(script::Vm& vm,const GameActorRun
             throw std::runtime_error("outing actual request/actor/current cache changed");
         out={s.candidate,s.selector,state.loadman.cached_period4B4,s.request};return {};
     }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+struct GameCompletedOutingMenuBorrow::Data {
+    GameCompletedOutingMenuSnapshot state;
+    GameCompletedOutingMenuAbi abi;
+    GameMainMenuLease prior;
+    script::VmStateWitness suspended;
+    std::array<char,65> code{};
+    std::weak_ptr<script::NativeScriptContext> context;
+    std::weak_ptr<GameManagerSwitchControl> manager;
+    std::weak_ptr<GameBackgroundRuntime> background;
+    const GameActorRuntime* actor=nullptr;
+    void Fail(const char* why){state.revoked=true;state.ready=false;state.error=why;}
+    bool Context(script::Vm& vm)const{
+        const auto w=vm.current_witness();
+        if(!w.valid||w.stopped||!w.context_registered||w.run_id!=state.run||w.code_sha256!=code||w.context_word!=state.context)return false;
+        const auto now=vm.context_value().context_owner;
+        return !now.expired()&&!now.owner_before(context)&&!context.owner_before(now);
+    }
+    bool Ready(script::Vm& vm)const{
+        const auto w=vm.current_witness();if(!Context(vm)||!vm.context_enabled()||w.event_envelope_present||w.queued_callbacks)return false;
+        const auto phase=vm.read_slot(script::Table::Global,abi.phase);
+        return phase.kind==Value::Kind::Scalar&&phase.word==0x20000001&&w.code_entry==abi.idle&&w.current_pc==abi.idle_pc
+            &&w.caller_entry==abi.middle&&w.caller_call_pc==abi.middle_call&&w.caller_return_pc==abi.middle_resume
+            &&vm.active_call_matches(state.main,abi.main,abi.main_call,abi.main_resume,w.caller_frame_id,abi.middle);
+    }
+    static bool Lease(const GameMainMenuLease& a,const GameMainMenuLease& b){
+        return std::tie(a.script_generation,a.run_id,a.available_owner,a.available_generation,a.message_context,a.input_epoch,a.completed_outing_proof)
+            ==std::tie(b.script_generation,b.run_id,b.available_owner,b.available_generation,b.message_context,b.input_epoch,b.completed_outing_proof);
+    }
+};
+GameCompletedOutingMenuBorrow::GameCompletedOutingMenuBorrow()=default;
+GameCompletedOutingMenuBorrow::~GameCompletedOutingMenuBorrow()=default;
+GameCompletedOutingMenuSnapshot GameCompletedOutingMenuBorrow::Snapshot()const{return data_?data_->state:GameCompletedOutingMenuSnapshot{};}
+GameFsStatus GameCompletedOutingMenuBorrow::Prepare(script::Vm& vm,GameActorRuntime& actor,const GameMainMenuLease& prior,
+        uint64_t activation,const GameCompletedOutingMenuAbi& abi){
+    try{
+        const auto w=vm.current_witness();const auto main=vm.unique_active_frame(abi.main);
+        Need((!data_||data_->state.retired||data_->state.revoked)&&activation&&prior.available_owner&&prior.available_generation
+            &&prior.message_context&&prior.input_epoch&&!prior.completed_outing_proof&&prior.run_id==w.run_id&&prior.script_generation,
+            "outing menu origin is not a fresh borrowed conversation lease");
+        Need(main&&w.valid&&!w.stopped&&w.context_registered&&!w.event_envelope_present&&!w.queued_callbacks&&vm.context_enabled()
+            &&actor.Live()&&actor.manager_switch_&&actor.manager_switch_->CurrentBorrow(actor.manager_switch_),"outing menu needs its real current main/module");
+        const auto background=actor.background_module_.lock();Need(background&&actor.BackgroundModuleMatches(background),"outing menu background module unavailable");
+        auto d=std::make_unique<Data>();d->abi=abi;d->prior=prior;d->suspended=w;d->code=w.code_sha256;
+        d->actor=&actor;d->manager=actor.manager_switch_;d->background=background;d->context=vm.context_value().context_owner;
+        auto& s=d->state;s.captured=true;s.prior_activation=activation;s.prior_owner=prior.available_owner;s.prior_generation=prior.available_generation;
+        s.script_generation=prior.script_generation;s.run=w.run_id;s.context=w.context_word;s.main=main;s.actor_epoch=actor.state_.owner_epoch;
+        s.module_epoch=actor.manager_switch_->state_.loadman.module_epoch;data_=std::move(d);return {};
+    }catch(const std::exception& e){return {GameFsCode::Unavailable,0,e.what()};}
+}
+GameFsStatus GameCompletedOutingMenuBorrow::Accept(script::Vm& vm,const GameMenuCallbackSnapshot& c){
+    try{
+        Need(data_&&!data_->state.callback_receipt&&data_->Context(vm),"outing menu prepared source owner changed");
+        auto& d=*data_;auto& s=d.state;const auto w=vm.current_witness();
+        Need(c.pending&&!c.failed&&c.event==0&&c.argument==3&&c.menu_generation&&c.receipt>last_receipt_
+            &&c.suspended.run_id==s.run&&c.suspended.frame_id==d.suspended.frame_id&&c.suspended.executed==d.suspended.executed
+            &&c.suspended.code_sha256==d.code&&c.suspended.current_pc==d.suspended.current_pc
+            &&w.frame_id==c.callback_frame&&w.code_entry==d.abi.callback&&w.event_envelope_present,
+            "outing menu accepted callback is foreign/replayed or not argument3");
+        const auto event=vm.read_slot(script::Table::Frame,0),argument=vm.read_slot(script::Table::Frame,1);
+        Need(event.kind==Value::Kind::Scalar&&argument.kind==Value::Kind::Scalar&&event.word==0x20000000&&argument.word==0x20000003,
+            "outing menu callback requires actual typed integer operands");
+        s.prior_menu=c.menu_generation;s.callback_receipt=last_receipt_=c.receipt;s.callback_frame=c.callback_frame;return {};
+    }catch(const std::exception& e){if(data_)data_->Fail(e.what());return {GameFsCode::Unavailable,0,e.what()};}
+}
+void GameCompletedOutingMenuBorrow::Observe(const script::FrameTransition& t,script::Vm& vm)noexcept{
+    if(!data_||data_->state.revoked)return;
+    try{auto& d=*data_;auto& s=d.state;
+        if(t.before.run_id!=s.run||t.after.run_id!=s.run||t.after.code_sha256!=d.code){d.Fail("outing menu module/run changed");return;}
+        if(t.opcode==0x31&&t.before.frame_id==s.main){d.Fail("outing menu main frame retired");return;}
+        if(s.callback_returned||!s.callback_receipt||t.callback_receipt!=s.callback_receipt)return;
+        if(t.opcode!=0x1C)return;
+        const auto& a=t.before;const auto& b=t.after;const auto& old=d.suspended;
+        const auto phase=vm.read_slot(script::Table::Global,d.abi.phase),arg=vm.read_slot(script::Table::Global,d.abi.argument);
+        Need(a.frame_id==s.callback_frame&&a.code_entry==d.abi.callback&&a.current_pc==d.abi.callback_return&&a.event_envelope_present
+            &&!b.event_envelope_present&&b.frame_id==old.frame_id&&b.code_entry==old.code_entry&&b.current_pc==old.current_pc
+            &&b.result.kind==old.result.kind&&b.result.word==old.result.word&&b.operand_cells==old.operand_cells
+            &&b.call_depth==old.call_depth&&b.relative_deadline23==old.relative_deadline23
+            &&b.deadline_tick==(old.relative_deadline23>0?b.clock_tick+uint32_t(old.relative_deadline23):0)
+            &&phase.kind==Value::Kind::Scalar&&phase.word==0x20000002&&arg.kind==Value::Kind::Scalar&&arg.word==0x20000003,
+            "outing menu callback did not restore its accepted source invocation");
+        s.callback_returned=true;
+    }catch(const std::exception& e){data_->Fail(e.what());}catch(...){data_->Fail("outing menu callback observation failed");}
+}
+bool GameCompletedOutingMenuBorrow::Poll(script::Vm& vm,GameActorRuntime& actor,const GameOutingCommand& command,
+        const GameMenuOutingSnapshot& o,bool busy){
+    if(!data_||data_->state.revoked)return false;
+    try{auto& d=*data_;auto& s=d.state;s.ready=false;
+        const auto module=d.manager.lock();const auto background=d.background.lock();
+        Need(d.actor==&actor&&d.Context(vm)&&module&&background&&module==actor.manager_switch_
+            &&!module.owner_before(actor.manager_switch_)&&!actor.manager_switch_.owner_before(module)&&module->CurrentBorrow(module)
+            &&actor.BackgroundModuleMatches(background)&&actor.Live()&&actor.state_.owner_epoch==s.actor_epoch
+            &&module->state_.loadman.module_epoch==s.module_epoch,"outing menu actor/module/context lifetime drift");
+        if(o.failed||o.vm_stopped)throw std::runtime_error("outing menu source invocation failed");
+        if(o.returned&&o.empty){d.Fail("outing menu source returned without a positive destination");return false;}
+        if(!s.callback_receipt||!s.callback_returned||!o.cleanup_returned)return false;
+        const auto c=command.Snapshot(vm);GameBackgroundCandidate candidate;
+        Need(bool(command.CurrentRequest(vm,actor,candidate))&&o.entered&&o.returned&&!o.empty&&o.result_word==0x10000001
+            &&o.receipt==s.callback_receipt&&o.menu_generation==s.prior_menu&&o.run==s.run&&o.module==d.code&&o.context==s.context
+            &&o.caller==s.main&&o.caller_entry==d.abi.main&&o.frame==c.root&&o.cleanup_frame
+            &&c.issued&&!c.failed&&c.completed&&c.request&&c.root&&c.travel_frame&&c.wait_frame&&c.pause_receipt&&c.event_receipt
+            &&c.paused&&c.event_posted&&c.event_returned&&c.field5_written&&c.field5_cleared&&c.epilogue_returned&&c.travel_returned
+            &&c.field5_sequence<c.field5_clear_sequence&&c.field5_clear_sequence<c.completion_sequence&&c.selector==12,
+            "outing menu lacks exact positive command/root/outer cleanup");
+        const auto& target=actor.destination_state_;const auto& m=module->state_.loadman;
+        Need(target.adopted&&target.scene_dispatch_completed&&!target.failed&&target.request==c.request&&target.candidate==c.candidate
+            &&target.period==candidate.period&&actor.destination_&&actor.destination_->Current(background,target.epoch)
+            &&m.source_scene_generation==c.request&&m.source_selector4DC==12&&m.rendered_selector4DC==12,
+            "outing menu current adopted target/request unavailable");
+        if(s.published){Need(s.request==c.request&&s.root==c.root&&s.travel==c.travel_frame&&s.wait==c.wait_frame&&s.event==c.event_receipt
+            &&s.epilogue==c.epilogue_frame&&s.cleanup==o.cleanup_frame&&s.completion_sequence==c.completion_sequence
+            &&s.candidate==c.candidate&&s.word==c.word&&s.period==target.period&&s.resource==target.resource,
+            "outing menu completed history replaced/replayed");}
+        if(vm.current_witness().event_envelope_present)return false; // immutable history survives this VM-owned menu callback
+        Need(vm.owns_active_frame(s.main,d.abi.main),"outing menu current main retired");
+        const bool ready=!busy&&d.Ready(vm);
+        if(!s.published&&ready){
+            s.id=++next_id_;s.published=true;s.request=c.request;s.root=c.root;s.travel=c.travel_frame;s.wait=c.wait_frame;s.event=c.event_receipt;
+            s.epilogue=c.epilogue_frame;s.cleanup=o.cleanup_frame;s.completion_sequence=c.completion_sequence;
+            s.candidate=c.candidate;s.word=c.word;s.target=c.selector;s.period=target.period;s.resource=target.resource;
+        }
+        s.ready=s.published&&ready&&!s.borrowed&&!s.retired;return s.ready;
+    }catch(const std::exception& e){data_->Fail(e.what());return false;}
+}
+bool GameCompletedOutingMenuBorrow::Borrow(const GameMainMenuLease& lease){
+    if(!data_)return false;auto& s=data_->state;
+    if(!s.ready||s.revoked||s.borrowed||s.retired||lease.completed_outing_proof!=s.id||lease.script_generation!=s.script_generation
+        ||lease.run_id!=s.run||lease.available_owner!=s.prior_owner||lease.available_generation<=s.prior_generation
+        ||!lease.message_context||!lease.input_epoch)return false;
+    s.borrowed=true;s.ready=false;s.lease=lease;return true;
+}
+bool GameCompletedOutingMenuBorrow::Menu(const GameMainMenuLease& lease,uint64_t generation){
+    if(!data_||!generation||data_->state.menu_generation||!LeaseCurrent(lease,0))return false;
+    data_->state.menu_generation=generation;return true;
+}
+bool GameCompletedOutingMenuBorrow::LeaseCurrent(const GameMainMenuLease& lease,uint64_t generation)const{
+    return data_&&data_->state.published&&data_->state.borrowed&&!data_->state.retired&&!data_->state.revoked
+        &&Data::Lease(data_->state.lease,lease)&&data_->state.menu_generation==generation;
+}
+bool GameCompletedOutingMenuBorrow::Retire(const GameMainMenuLease& lease,uint64_t generation){
+    if(!LeaseCurrent(lease,generation))return false;data_->state.retired=true;data_->state.ready=false;return true;
+}
+void GameCompletedOutingMenuBorrow::Close()noexcept{data_.reset();}
+bool GameActorScript::PollCompletedOutingMenu(){
+    if(!vm_||!runtime_)return false;
+    return completed_outing_menu_.Poll(*vm_,*runtime_,outing_command_,state_.outing,
+        state_.blocked||state_.awaiting_message||state_.awaiting_choice||state_.awaiting_input||state_.inventory_requested
+        ||state_.source_main_input_suppressed48||vm_->callback_depth()||vm_->queued_callbacks());
 }
 GameFsStatus GameActorScript::DrawRuntime(GameGraphics& graphics,const std::function<GameFsStatus(GameGraphics&)>& overlay){
     if(!runtime_)return {GameFsCode::Unavailable,0,"current actor runtime absent"};
@@ -2693,7 +2842,7 @@ void GameActorScript::ObserveWordSelection(const script::FrameTransition& t)noex
     state_.word_accepted_row=ObserveWordRow(row);
 }
 GameActorScriptSnapshot GameActorScript::Snapshot() const {
-    auto out=state_;out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.list_call25=vm_->list_call25();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
+    auto out=state_;out.completed_outing_menu=completed_outing_menu_.Snapshot();out.menu_placement=menu_placement_.Snapshot();out.menu_model_effects=menu_placement_.Effects();out.menu_source_stores=menu_placement_.Stores();out.dictionary=dictionary_.Snapshot();if(records_)out.records=records_->Snapshot();if(vm_){out.owned_conversation=owned_conversation_.Snapshot(*vm_);out.instructions=vm_->executed();out.call_depth=vm_->call_depth();out.random_selections=vm_->random_selections();out.list_call25=vm_->list_call25();out.selected_value_word=vm_->last_random_value().word;out.root_functions_returned=vm_->root_functions_returned();
         out.wordmemo_import_records=dictionary_.ImportedRecordCount();
         if(const auto it=bindings_.find(10);it!=bindings_.end())out.wordmemo_import_rows=dictionary_.ImportedRecordsInRoot(*vm_,it->second);
         out.b4_calls=vm_->b4_calls();out.b4_operand_word=vm_->b4_operand_word();out.b4_result_word=vm_->b4_result_word();
@@ -2738,7 +2887,7 @@ void GameActorScript::Close() {
     notebook_self_before_={};notebook_self_registration_=0;
     menu_mark_.End();
     menu_placement_.End();
-    owned_conversation_.Close();outing_command_.Close();outing_content_=nullptr;
+    owned_conversation_.Close();completed_outing_menu_.Close();input_policy_lifetime_.reset();outing_command_.Close();outing_content_=nullptr;
     ascii_class70_.Close();state_.ascii_class70_live=false;state_.ascii_class70_generation=0;
     state_.ascii_class70_current_word=ascii_class70_.CurrentWord();state_.ascii_class70_other_word=ascii_class70_.OtherWord();
     state_=Snapshot();

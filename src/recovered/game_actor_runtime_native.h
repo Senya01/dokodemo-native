@@ -136,6 +136,7 @@ private:
   friend struct ::dokodemo::StartupRuntimeTestAccess;
   friend class GameActorRuntime;
   friend class GameSceneBgm;
+  friend class GameCompletedOutingMenuBorrow;
   bool Current()const;
   bool BindActor(uint64_t epoch);
   void ReleaseActor(uint64_t epoch);
@@ -352,6 +353,7 @@ public:
 
 private:
   friend class GameOutingCommand;
+  friend class GameCompletedOutingMenuBorrow;
   friend struct ::dokodemo::StartupRuntimeTestAccess;
   std::shared_ptr<GameBackgroundPreparation> destination_;
   std::shared_ptr<const GameOutingData> destination_inputs_;

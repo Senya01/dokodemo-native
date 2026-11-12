@@ -9,6 +9,7 @@ inline bool GameMainMenuCanBorrowTransition(const GameTransitionSnapshot& fade)n
 }
 struct GameMainMenuLease {
     uint64_t script_generation=0,run_id=0,available_owner=0,available_generation=0,message_context=0,input_epoch=0;
+    uint64_t completed_outing_proof=0; // explicit Windows menu-only scope, never conversation authority
 };
 struct GameMainMenuSnapshot {
     bool live=false,full=false,source_scene_nonzero=false,render_live=false,notebook_enabled=false,other_profiles=false;

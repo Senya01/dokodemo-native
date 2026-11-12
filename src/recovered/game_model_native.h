@@ -608,6 +608,7 @@ class GameBackgroundPreparation final {
     GameBackgroundPreparationSnapshot Snapshot()const;
   private:
     friend class GameActorRuntime;
+    friend class GameCompletedOutingMenuBorrow;
     friend struct ::dokodemo::StartupRuntimeTestAccess;
     bool Current(const std::shared_ptr<const void>&,uint64_t)const;
     bool RegistrationsCurrent()const;

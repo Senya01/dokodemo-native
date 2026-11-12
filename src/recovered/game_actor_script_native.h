@@ -12,6 +12,7 @@
 #include "game_profile_native.h"
 #include "rng_native.h"
 #include "game_owned_conversation_native.h"
+#include "game_main_menu_native.h"
 #include <map>
 
 namespace dokodemo::recovered {
@@ -236,7 +237,48 @@ private:
     struct Data;std::unique_ptr<Data> data_;
 };
 
+// WindowsCompletedOutingMenuBorrow: NONMATCHING menu-only admission, not a PSP
+// token or a conversation return. Copies expose no Value/pointer/frame lease.
+struct GameCompletedOutingMenuSnapshot {
+    bool captured=false,callback_returned=false,published=false,ready=false,borrowed=false,retired=false,revoked=false;
+    uint64_t id=0,prior_activation=0,prior_owner=0,prior_generation=0,prior_menu=0;
+    uint64_t script_generation=0,run=0,main=0,actor_epoch=0,module_epoch=0,callback_receipt=0,callback_frame=0;
+    uint64_t request=0,root=0,travel=0,wait=0,event=0,epilogue=0,cleanup=0,completion_sequence=0;
+    uint32_t context=0,candidate=0,word=0,target=0,period=0,resource=0;
+    uint64_t menu_generation=0;
+    GameMainMenuLease lease;
+    std::string error;
+};
+struct GameCompletedOutingMenuAbi {
+    uint32_t main=0x8DDB5,callback=0x8DA28,callback_return=0x8DA49;
+    uint16_t phase=0x9A76,argument=0x9A77;
+    uint32_t idle=0x1383D,idle_pc=0x13856,middle=0x1387B,middle_call=0x138A5,middle_resume=0x138A9;
+    uint32_t main_call=0x8DEE6,main_resume=0x8DEEA;
+};
+class GameCompletedOutingMenuBorrow final {
+public:
+    GameCompletedOutingMenuBorrow();~GameCompletedOutingMenuBorrow();
+    GameCompletedOutingMenuBorrow(const GameCompletedOutingMenuBorrow&)=delete;
+    GameCompletedOutingMenuBorrow& operator=(const GameCompletedOutingMenuBorrow&)=delete;
+    GameCompletedOutingMenuSnapshot Snapshot()const;
+private:
+    friend class GameActorScript;friend class GameReturnedConversationInteraction;
+    friend struct ::dokodemo::StartupRuntimeTestAccess;
+    GameFsStatus Prepare(script::Vm&,GameActorRuntime&,const GameMainMenuLease&,uint64_t prior_activation,
+                         const GameCompletedOutingMenuAbi& = {});
+    GameFsStatus Accept(script::Vm&,const GameMenuCallbackSnapshot&);
+    void Observe(const script::FrameTransition&,script::Vm&)noexcept;
+    bool Poll(script::Vm&,GameActorRuntime&,const GameOutingCommand&,const GameMenuOutingSnapshot&,bool busy);
+    bool Borrow(const GameMainMenuLease&);
+    bool Menu(const GameMainMenuLease&,uint64_t generation);
+    bool LeaseCurrent(const GameMainMenuLease&,uint64_t generation)const;
+    bool Retire(const GameMainMenuLease&,uint64_t generation);
+    void Close()noexcept;
+    struct Data;std::unique_ptr<Data> data_;uint64_t next_id_=0,last_receipt_=0;
+};
+
 struct GameActorScriptSnapshot {
+    GameCompletedOutingMenuSnapshot completed_outing_menu;
     std::vector<GameNotebookStoreWitness> notebook_slot0_stores;
     uint32_t notebook_slot0_stores_dropped=0;
     uint32_t notebook_registrations=0;
@@ -486,6 +528,10 @@ class GameActorScript final {
     GameWordRowObservation ObserveWordRow(uint32_t row)const noexcept;
     void Close();
   private:
+    friend class GameReturnedConversationInteraction;
+    bool PollCompletedOutingMenu();
+    GameCompletedOutingMenuBorrow completed_outing_menu_;
+    std::shared_ptr<const void> input_policy_lifetime_;
     GameInventoryActionAdmission PostInventoryActionImpl(uint64_t,uint32_t,int32_t,bool);
     void CompleteInventoryActionReadback();
     void ObserveInventoryStore(const script::Value&,bool)noexcept;

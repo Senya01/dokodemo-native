@@ -4,6 +4,9 @@
 #include "recovered/game_title_native.h"
 #include "recovered/game_actor_runtime_native.h"
 #include "recovered/game_actor_script_native.h"
+#include "recovered/game_notebook_native.h"
+#include "recovered/game_input_native.h"
+#include "recovered/game_returned_interaction_native.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -13,6 +16,44 @@
 #include <stdexcept>
 namespace dokodemo {
 struct StartupRuntimeTestAccess {
+    static recovered::GameFsStatus MenuPrepare(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,recovered::GameActorRuntime& a,
+        const recovered::GameMainMenuLease& l,const recovered::GameCompletedOutingMenuAbi& abi){return p.Prepare(vm,a,l,1,abi);}
+    static recovered::GameFsStatus MenuAccept(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,const recovered::GameMenuCallbackSnapshot& c){return p.Accept(vm,c);}
+    static void MenuObserve(recovered::GameCompletedOutingMenuBorrow& p,const script::FrameTransition& t,script::Vm& vm){p.Observe(t,vm);}
+    static bool MenuPoll(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,recovered::GameActorRuntime& a,
+        const recovered::GameOutingCommand& c,const recovered::GameMenuOutingSnapshot& o,bool busy=false){return p.Poll(vm,a,c,o,busy);}
+    static bool MenuBorrow(recovered::GameCompletedOutingMenuBorrow& p,const recovered::GameMainMenuLease& l){return p.Borrow(l);}
+    static bool MenuBind(recovered::GameCompletedOutingMenuBorrow& p,const recovered::GameMainMenuLease& l,uint64_t n){return p.Menu(l,n);}
+    static bool MenuCurrent(recovered::GameCompletedOutingMenuBorrow& p,const recovered::GameMainMenuLease& l,uint64_t n){return p.LeaseCurrent(l,n);}
+    static bool MenuRetire(recovered::GameCompletedOutingMenuBorrow& p,const recovered::GameMainMenuLease& l,uint64_t n){return p.Retire(l,n);}
+    static void MenuOnlyRefusals(){
+        recovered::GameReturnedConversationInteraction returned;returned.state_.menu_only=true;recovered::GameActorScript script;
+        recovered::GameInputFrame f;f.buttons=recovered::Circle;f.focused=true;
+        if(returned.Input(f)||returned.PostMenuTeach(script,1,2,3)||returned.PostMenuOuting(script,1,2,3,{}))
+            throw std::runtime_error("menu-only proof leaked conversation/Teach/Outing authority");
+    }
+    static bool MenuOwnerFault(recovered::GameCompletedOutingMenuBorrow& p,script::Vm& vm,recovered::GameActorRuntime& a,
+            const recovered::GameOutingCommand& c,const recovered::GameMenuOutingSnapshot& o,unsigned fault){
+        const auto original=a.manager_switch_;const auto epoch=a.state_.owner_epoch;const auto me=original->state_.loadman.module_epoch;
+        std::shared_ptr<recovered::GameManagerSwitchControl> alias;
+        if(fault==1){alias=std::shared_ptr<recovered::GameManagerSwitchControl>(original.get(),[](auto*){});a.manager_switch_=alias;}
+        if(fault==2)++a.state_.owner_epoch;
+        if(fault==3)++original->state_.loadman.module_epoch;
+        if(fault==4)vm.start();
+        if(fault==11){vm.clock_tick(vm.deadline_tick());(void)vm.run(100);vm.clock_tick(vm.deadline_tick());(void)vm.run(100);}
+        if(fault==12){const auto receipt=p.Snapshot();recovered::GameMenuCallbackSnapshot replay;
+            replay.pending=true;replay.receipt=receipt.callback_receipt;replay.argument=3;(void)p.Accept(vm,replay);}
+        auto changed=o;
+        if(fault==5)++changed.caller;
+        if(fault==6)++changed.receipt;
+        if(fault==7)++changed.frame;
+        if(fault==8)++changed.context;
+        if(fault==9)changed.failed=true;
+        if(fault==10)changed.empty=true;
+        const auto result=p.Poll(vm,a,c,changed,false);
+        a.manager_switch_=original;a.state_.owner_epoch=epoch;original->state_.loadman.module_epoch=me;
+        return !result&&p.Snapshot().revoked&&!p.Snapshot().published;
+    }
     struct Asc6Read {
         std::optional<int32_t> value;uint64_t writes=0;uint32_t pc=0,effects=0,completions=0;
         bool blocked=false,ready=false,complete=false,operand=false;int32_t record=-1,arg=0,field58=0;uint32_t parameter=0;
@@ -1952,7 +1993,96 @@ void CameraTargetRender(){
     runtime.Close();Check(!runtime.Snapshot().camera_target_current&&!runtime.RefreshCamera7980(),"retired current camera control refuses");g.Close();
 }
 
-void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0,bool repeated_bgm=false){
+// Arbitrary synthetic authored UI:220 nodes/32 two-tick clips, no original bytes.
+struct CompletedMenuResources:GameResourceSource{
+    GameFsStatus OpenResource(const std::string& path,PackageView& out)override{
+        if(path.find(".CB2A")==std::string::npos)return {GameFsCode::NotFound,0,"synthetic UI only"};
+        std::vector<uint8_t> b(32+220*8+32*52);Word(b,0,0x30413242);Word(b,8,32);Word(b,12,uint32_t(-220));Word(b,16,32);
+        Word(b,20,uint32_t(-32));Word(b,24,32+220*8);Word(b,28,22);
+        for(unsigned i=0;i<32;++i)Word(b,32+220*8+i*52+48,2);
+        auto owner=std::make_shared<Lease>(std::move(b));out=PackageStorage::Attach(owner,owner->b.size());return {};
+    }
+};
+void CompletedOutingMenuConsumers(GameCompletedOutingMenuBorrow& proof,script::Vm& vm,GameActorRuntime& actor,
+        const GameOutingCommand& command,const GameMenuOutingSnapshot& outer,const GameMainMenuLease& previous,RngNativeOwner& rng,unsigned fault,const std::array<uint32_t,3>& callbacks){
+    using A=dokodemo::StartupRuntimeTestAccess;
+    const auto seed=rng.CurrentSeed64();const auto source_clock=vm.current_witness().clock_tick;
+    if(fault){Check(A::MenuOwnerFault(proof,vm,actor,command,outer,fault),"current completed pipeline refuses wrong owner/module/epoch/run/root/callback/context/failure");return;}
+    const auto poll=[&](bool busy=false){return A::MenuPoll(proof,vm,actor,command,outer,busy);};
+    auto partial=outer;partial.cleanup_returned=false;
+    Check(!A::MenuPoll(proof,vm,actor,command,partial)&&!proof.Snapshot().published,"completed target/root without actual cleanup cannot publish");
+    Check(!poll(true)&&!proof.Snapshot().published,"busy ready receiver cannot publish");
+    Check(poll()&&proof.Snapshot().published&&proof.Snapshot().ready,"actual completed command/cleanup -> SAME nested-ready main publishes");
+    const auto saved=proof.Snapshot();for(unsigned i=0;i<5;++i)Check(poll()&&proof.Snapshot().id==saved.id,"repeated tick cannot mint new identity");
+    Check(saved.prior_activation==1&&saved.prior_owner==previous.available_owner&&saved.prior_generation==previous.available_generation
+        &&saved.callback_returned&&saved.request==command.Snapshot(vm).request&&saved.cleanup==outer.cleanup_frame,"immutable old consumed lease/callback/request lineage retained");
+    GameMainMenuLease lease=previous;lease.available_generation++;lease.input_epoch++;lease.completed_outing_proof=saved.id;
+    auto stale=lease;stale.available_owner++;Check(!A::MenuBorrow(proof,stale),"foreign available owner refuses");
+    stale=lease;stale.script_generation++;Check(!A::MenuBorrow(proof,stale),"foreign script generation refuses");
+    stale=lease;stale.available_generation=previous.available_generation;
+    Check(!A::MenuBorrow(proof,stale)&&!proof.Snapshot().borrowed,"old available packet cannot migrate");
+    GameButtonGate right;right.Begin();GameInputFrame frame;frame.focused=frame.test_injected=true;frame.buttons=Right;
+    Check(!right.Observe(frame,Right),"held old Right cannot open new proof");frame.buttons=0;Check(!right.Observe(frame,Right),"release alone cannot open");
+    frame.buttons=Right;Check(right.Observe(frame,Right)&&A::MenuBorrow(proof,lease),"actual release/fresh Right consumes one new lease");
+    Check(!A::MenuBorrow(proof,lease)&&!poll()&&proof.Snapshot().id==saved.id,"spent successor cannot republish or borrow twice");
+    CompletedMenuResources resources;GameMainMenu menu;
+    const auto opened=menu.Open(resources,lease,true,true,true,false,true);if(!opened)throw std::runtime_error(opened.detail);
+    Check(A::MenuBind(proof,lease,menu.Snapshot().generation),"actual authored menu generation binds borrowed proof");
+    const auto callback=[&](unsigned which,int event){
+        const auto old=vm.current_witness();script::Value code;code.kind=script::Value::Kind::Code;code.word=0x70000000|callbacks[which];
+        Check(vm.post_owner_nil_event(code,event)==0,"actual menu nil callback accepted on exact current context");
+        for(unsigned i=0;i<32&&vm.current_witness().event_envelope_present;++i)Check(vm.run(1).status!=script::Status::Stopped,"actual menu callback/32");
+        const auto now=vm.current_witness();Check(!now.event_envelope_present&&now.frame_id==old.frame_id&&now.current_pc==old.current_pc
+            &&now.caller_frame_id==old.caller_frame_id&&now.operand_cells==old.operand_cells,"same nested caller/operands restored after actual menu32");
+        (void)poll();Check(!proof.Snapshot().revoked&&A::MenuCurrent(proof,lease,menu.Snapshot().generation),"active proof survives its actual menu callback");
+    };
+    callback(0,10);
+    for(unsigned i=0;i<8&&menu.Snapshot().state78==0;++i)Check(bool(menu.Tick()),"actual menu opening clip");
+    uint64_t sequence=0;
+    auto sample=[&](uint32_t buttons){GameInputFrame f;f.buttons=buttons;f.focused=f.test_injected=true;f.sequence=++sequence;
+        f.message_owner_generation=lease.script_generation;f.message_context=lease.message_context;f.returned_owner=lease.available_owner;
+        f.returned_generation=lease.available_generation;f.main_menu_epoch=lease.input_epoch;return f;};
+    auto input=[&](uint32_t buttons){Check(menu.Input(sample(buttons))&&bool(menu.Tick()),"current source menu input/clip");};
+    input(0);input(Circle);Check(menu.Snapshot().state78==1&&menu.Snapshot().unsupported==1,"menu-only proof refuses Teach before close/effects");
+    // Target12 source skips departure row1; ordinary navigation reaches2 then3.
+    input(0);input(Down);input(0);input(Down);Check(menu.Snapshot().row==3,"actual source skip/navigation reaches NOTE row3");
+    input(0);input(Circle);for(unsigned i=0;i<4;++i)Check(bool(menu.Tick()),"actual NOTE submenu clip");
+    Check(menu.Snapshot().substate7C==1&&menu.Snapshot().column==0,"current NOTE firstview only");
+    input(0);input(Down);input(0);input(Circle);Check(menu.Snapshot().state78==1&&menu.Snapshot().unsupported==2,"other notebook leaf refuses before close");
+    input(0);input(Up);input(0);input(Circle);for(unsigned i=0;i<8&&menu.Snapshot().state78!=3;++i)Check(bool(menu.Tick()),"actual menu closing clip");
+    Check(menu.Snapshot().state78==3&&menu.Snapshot().result==3,"real closing clip yields NOTE firstview result3");
+    Check(bool(menu.RetireClosedRender())&&A::MenuCurrent(proof,lease,menu.Snapshot().generation),"hidden parent render retires without losing exact active proof");
+    script::Value registered;registered.kind=script::Value::Kind::Reference;registered.table=script::Table::Global;registered.index=15;
+    const auto rows=GameObserveNotebookRows(vm,lease.script_generation,registered);
+    GameNotebook note;GameNotebookLease child{lease.script_generation,lease.run_id,lease.message_context,menu.Snapshot().generation,
+        lease.available_owner,lease.available_generation,lease.input_epoch};
+    Check(bool(note.Request(rows,child,0)),"real registered empty synthetic NOTE records/current parent lease");
+    callback(1,11);callback(2,18);Check(!vm.context_enabled(),"actual18/3A/32 pauses owning NOTE context");
+    GameTransition fade;Check(fade.Initialize({{0,0}}),"actual child linked transition owner");
+    for(unsigned i=0;i<100&&note.Snapshot().phase!=3;++i){fade.Update();Check(bool(note.Tick(resources,fade)),"real NOTE open/update");}
+    Check(note.Snapshot().phase==3&&note.Snapshot().owner46C&&note.Snapshot().visible,"actual first view owner exists");
+    auto bad=sample(Cross);bad.returned_generation=previous.available_generation;
+    Check(!note.Input(bad)&&note.Snapshot().phase==3,"old owner packets cannot close new NOTE");
+    auto ninput=[&](uint32_t buttons){Check(note.Input(sample(buttons))&&bool(note.Tick(resources,fade)),"real NOTE owned input");};
+    ninput(Cross);Check(note.Snapshot().phase==3,"held Cross from opening is unarmed");ninput(0);ninput(Cross);
+    Check(note.Snapshot().phase==4&&!note.ClosedAndRetired(),"fresh Cross begins actual close, not completion");
+    for(unsigned i=0;i<100&&note.Snapshot().phase!=6;++i){fade.Update();Check(bool(note.Tick(resources,fade)),"real NOTE close/poll");}
+    Check(note.Snapshot().phase==6&&note.Snapshot().polls==1&&!note.ClosedAndRetired(),"poll precedes distinct deferred retirement");
+    Check(bool(note.Tick(resources,fade))&&note.ClosedAndRetired()&&!note.Snapshot().loader469,"actual deferred owner retirement");
+    Check(!vm.context_enabled(),"no child-ready flag may wake its paused owner");
+    vm.resume_modal_context(); // same existing NativeActualClosedNotebookWake after real current close/poll/deferred retirement
+    Check(A::MenuRetire(proof,lease,menu.Snapshot().generation)&&!A::MenuRetire(proof,lease,menu.Snapshot().generation)
+        &&!A::MenuCurrent(proof,lease,menu.Snapshot().generation)&&!poll()&&proof.Snapshot().id==saved.id,"lease spent once; no reopen after retirement");
+    Check(rng.CurrentSeed64()==seed&&vm.current_witness().clock_tick==source_clock&&vm.context_enabled()&&vm.read_slot(script::Table::Global,13).word==0x20000001,
+        "native menu policy does not modify source phase/clock/RNG/context");
+    // A foreign run revokes history; it never registers that VM or mints again.
+    script::Program empty;script::Vm foreign(empty);
+    Check(!A::MenuPoll(proof,foreign,actor,command,outer)&&proof.Snapshot().revoked&&!foreign.current_witness().context_registered,
+        "foreign/retired run cannot reuse immutable completion history");
+    fade.Retire();menu.Close();
+}
+
+void ExecutedDestinationPreparationTests(const std::function<void(const char*,const GameGraphicsFrame&)>& capture={},bool owning_return=false,unsigned return_fault=0,bool repeated_bgm=false,bool menu_proof=false,unsigned menu_fault=0){
   static_assert(!std::is_copy_constructible<GameOutingData>::value,"selected DATA packet is not an editable copied receipt");
   for(unsigned failure=0;failure<(owning_return?1u:3u);++failure){
     auto bytes=SyntheticOutingData();if(repeated_bgm)for(unsigned i=0;i<19;++i)Word(bytes,128+0xD8CC8+i*4,7);
@@ -1992,8 +2122,9 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     auto slot=[&](uint8_t op,uint16_t i){emit({op,uint8_t(i),uint8_t(i>>8)});};
     auto call=[&](uint8_t n){const auto pc=uint32_t(code.size());emit({0x20,n,0,0,0});return pc;};
     uint32_t parent_call=0,parent_resume=0,parent_cleanup_call=0,parent_cleanup_resume=0,cleanup_entry=0,cleanup_return=0;
-    if(owning_return){emit({0x30,0});parent_call=call(0);parent_resume=uint32_t(code.size());emit({0x86});parent_cleanup_call=call(1);
-      parent_cleanup_resume=uint32_t(code.size());emit({0x80,7,0x44,0x38});}
+    uint32_t menu_initial_yield=0,ready_main_call=0,ready_middle_call=0,ready_middle=0,ready_idle=0,ready_pc=0,callback_entry=0,callback_return=0;std::array<uint32_t,3> menu_callbacks{};
+    if(owning_return){emit({0x30,0});if(menu_proof){slot(0x95,13);emit({0x80,1,0x51,0x80,1});menu_initial_yield=uint32_t(code.size());emit({0x44});}parent_call=call(0);parent_resume=uint32_t(code.size());emit({0x86});parent_cleanup_call=call(1);
+      parent_cleanup_resume=uint32_t(code.size());if(menu_proof)ready_main_call=call(0);emit({0x80,7,0x44,uint8_t(menu_proof?0x31:0x38)});}
     const auto root_entry=uint32_t(code.size());
     emit({0x30,24});for(unsigned i=0;i<8;++i){slot(0x99,uint16_t(17+i));emit({0x8E,'A',0,0x51});}slot(0x99,16);emit({0x8B,0x70,1});
     emit({0x4E,13,0,6,0});slot(0x91,13);emit({0x80,1,0x84});GameOutingCommandAbi abi;abi.root=root_entry;abi.candidates=abi.stored=0;abi.produce_call=call(3);
@@ -2027,19 +2158,31 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     if(owning_return){cleanup_entry=uint32_t(code.size());emit({0x30,1});slot(0x95,13);emit({0x80,uint8_t(return_fault==10?2:1),0x51});slot(0x95,14);
       if(return_fault==11)emit({0x80,0});else emit({0x84});emit({0x51});
       cleanup_return=uint32_t(code.size());emit({0x31});}
+    if(menu_proof){
+      ready_middle=uint32_t(code.size());emit({0x30,0});ready_middle_call=call(0);emit({0x31});
+      ready_idle=uint32_t(code.size());emit({0x30,0,0x80,50});ready_pc=uint32_t(code.size());emit({0x44,0x31});
+      callback_entry=uint32_t(code.size());emit({0x30,2});slot(0x95,13);emit({0x80,2,0x51});slot(0x95,14);slot(0x90,1);emit({0x51});callback_return=uint32_t(code.size());emit({0x1C});
+      for(unsigned i=0;i<3;++i){menu_callbacks[i]=uint32_t(code.size());emit({0x30,2});if(i==2)emit({0x3A});emit({0x32});}
+    }
     const auto patch=[&](uint32_t at,uint32_t target){for(unsigned i=0;i<3;++i)code[at+2+i]=uint8_t(target>>(8*i));};patch(abi.produce_call,abi.producer);patch(abi.copy_call,abi.copier);patch(abi.travel_call,abi.travel);
+    if(menu_proof){patch(ready_main_call,ready_middle);patch(ready_middle_call,ready_idle);}
     if(owning_return){patch(parent_call,root_entry);patch(parent_cleanup_call,cleanup_entry);patch(epilogue_call,epilogue_entry);
       abi.epilogue_call=epilogue_call;abi.epilogue=epilogue_entry;abi.field5_clear=epilogue_clear;
       abi.epilogue_return=epilogue_return;abi.travel_return=epilogue_call+5;}
     if(owning_return)for(unsigned i=0;i<3;++i){code[abi.wait_call+1+i]=uint8_t(abi.wait_entry>>(8*i));code[pause_code_patch+i]=uint8_t(abi.pause_entry>>(8*i));}
     if(owning_return&&return_fault==8)abi.field5_clear=cleanup_entry+7;
-    std::vector<uint8_t> ksc(28+code.size()+4*(25+15+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=15;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
+    std::vector<uint8_t> ksc(28+code.size()+4*(25+16+(owning_return?1:0)));Word(ksc,0,0x0043534B);Word(ksc,4,0x20030204);Word(ksc,12,uint32_t(code.size()));ksc[22]=owning_return?1:0;ksc[24]=16;ksc[26]=25;std::copy(code.begin(),code.end(),ksc.begin()+28);
     if(owning_return)Word(ksc,28+code.size(),0x70000000u|abi.event_entry);
     const auto ctx_at=uint32_t(28+code.size()+(owning_return?4:0));Word(ksc,ctx_at,0x90000006);Word(ksc,ctx_at+16*4,0x90000008);
-    const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);
+    const auto global_at=ctx_at+25*4;Word(ksc,global_at,0x90000002);Word(ksc,global_at+8,0xB0000003);Word(ksc,global_at+12,0x90000009);Word(ksc,global_at+16,0x2000000C);Word(ksc,global_at+15*4,0x90000000);
     script::Program program;script::Diagnostic error;Check(program.load_test_fixture(ksc,error),error.text().c_str());script::Vm vm(program);vm.native_reserved_local_nil(true);vm.start();
     Check(bool(actor.BindScriptContextActor1C0FC(vm)),"actual constructor context captures this actor5 owner");auto image=std::make_shared<Lease>(ksc);const auto image_view=PackageStorage::Attach(image,image->b.size());
     GameOutingCommand command;GameMenuOutingSnapshot outer;GameOutingReturnAbi outer_abi;
+    GameCompletedOutingMenuBorrow menu;GameCompletedOutingMenuAbi menu_abi;GameMainMenuLease previous_lease{1,vm.current_witness().run_id,7,1,1,1};
+    menu_abi.main=0;menu_abi.callback=callback_entry;menu_abi.callback_return=callback_return;menu_abi.phase=13;menu_abi.argument=14;
+    menu_abi.idle=ready_idle;menu_abi.idle_pc=ready_pc+1;menu_abi.middle=ready_middle;menu_abi.middle_call=ready_middle_call;
+    menu_abi.middle_resume=ready_middle_call+5;menu_abi.main_call=ready_main_call;menu_abi.main_resume=ready_main_call+5;
+    const auto poll_menu=[&](bool busy=false){return dokodemo::StartupRuntimeTestAccess::MenuPoll(menu,vm,actor,command,outer,busy);};
     if(!owning_return)Check(bool(command.Begin(vm,abi)),"vertical command actual VM root");
     outer_abi.root=abi.root;outer_abi.positive=abi.root_return;outer_abi.caller=0;outer_abi.resume=parent_resume;
     outer_abi.cleanup_call=parent_cleanup_call;outer_abi.cleanup=cleanup_entry;outer_abi.cleanup_return=cleanup_return;
@@ -2050,6 +2193,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         outer.entered=true;outer.frame=t.after.frame_id;outer.caller=t.before.frame_id;outer.caller_entry=t.before.code_entry;
         outer.run=t.after.run_id;outer.context=t.after.context_word;outer.module=t.after.code_sha256;
       }
+      dokodemo::StartupRuntimeTestAccess::MenuObserve(menu,t,vm);
       command.Observe(vm,t);const auto current=command.Snapshot(vm);
       if(current.failed){outer.failed=true;outer.failure=current.failure;}
       else if(owning_return)GameObserveOutingReturn(vm,t,outer,current,outer_abi);
@@ -2073,7 +2217,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
           &&control->Snapshot().current14==12&&control->Snapshot().loadman.rendered_selector4DC==0&&rng.CurrentSeed64()==pending_seed,
           "SAME Content source publication executes BEFORE pause, preserves old render and RNG; no wake/adoption");
         gate.manager_switch_pending=control->Snapshot().pending;
-        Check(bool(flow.Tick(gate))&&vm.callbacks_posted()==0,"ordinary main-flow poll now continues while intended callback has not yet paused");flow.Close();
+        Check(bool(flow.Tick(gate))&&vm.callbacks_posted()==uint64_t(menu_proof?1:0),"ordinary main-flow poll now continues while intended callback has not yet paused");flow.Close();
       }else Check(bool(actor.PublishPendingScene1B238(bgm)),"actual source request publication");
       GameMainSceneData foreign_data;auto foreign_io=std::make_shared<BackgroundFileState>();std::shared_ptr<const GameOutingData> foreign_packet;
       Check(bool(foreign_data.Load(std::make_unique<BackgroundFile>(bytes,foreign_io),hash))&&bool(foreign_data.Outing12(foreign_packet)),"independent live identical DATA is not this BGM owner");
@@ -2129,7 +2273,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       Check(state.attempted&&state.prepared==(failure==0)&&state.failed==(failure!=0)&&state.candidate==1&&state.request==control->Snapshot().requests
         &&state.epoch==dokodemo::StartupRuntimeTestAccess::Scene(actor).epoch&&state.phase==(failure?8u:9u)&&rng.CurrentSeed64()!=before,"real current request stages actual selected job/aux/RNG/support, failure preserves effects");
       Check(control->Snapshot().loadman.stored_bgm4BC==bgm.Snapshot().stored4BC&&control->Snapshot().loadman.rendered_selector4DC==0
-        &&control->Snapshot().current14==12&&vm.callbacks_posted()==0&&observed_store,"actual4BC source store, old render retained, no fabricated adoption/wake");
+        &&control->Snapshot().current14==12&&vm.callbacks_posted()==uint64_t(menu_proof?1:0)&&observed_store,"actual4BC source store, old render retained, no fabricated adoption/wake");
       if(repeated_bgm){const auto b=bgm.Snapshot();
         Check(audio_ios.size()==2&&b.stored4BC==7&&b.selection.previous==0&&b.file.previous_request&&b.previous_file.request==b.file.previous_request
           &&b.file.request>b.previous_file.request&&b.file.latest&&!b.previous_file.latest&&b.previous_file.current&&b.previous_file.bank5C==-1,
@@ -2152,7 +2296,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         std::array<float,4> expected_placement{};Check(bool(data.Placement(12,expected_placement)),"selected held row readback");
         Check(adopted.adopted&&adopted.placement_pc==0x19E94&&adopted.regions_pc==0x19EA0&&adopted.adoption_pc==0x185FC
           &&l.rendered_selector4DC==12&&l.source_selector4DC==12&&l.current_variant4A8==l.staged_variant4AC&&l.scene_phase44==1
-          &&l.render_state20==1&&l.render_state21==1&&old_scene.expired()&&vm.callbacks_posted()==0
+          &&l.render_state20==1&&l.render_state21==1&&old_scene.expired()&&vm.callbacks_posted()==uint64_t(menu_proof?1:0)
           &&primary==expected_placement,"real target placement/control vs primary40, BD28 before26B80, old owner retired, NO callback/wake");
         Check(!actor.AdoptPreparedDestination(vm,command)&&rng.CurrentSeed64()==after,"adoption replay refuses without RNG/placement");
         const auto clock_bgm=bgm.Snapshot();const auto clock_manager=control->Snapshot();
@@ -2190,7 +2334,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         // source18568 continuation/event17 and must never grant ordinary input.
         Check(bool(actor.StartTransition()),"component-only GAME6 opens adopted composition for inspection");
         for(unsigned i=0;i<100&&transition.Snapshot().state==1;++i)transition.Update();
-        Check(bool(actor.Draw(graphics,{},&vm))&&control->Snapshot().loadman.scene_phase44==1&&vm.callbacks_posted()==0,
+        Check(bool(actor.Draw(graphics,{},&vm))&&control->Snapshot().loadman.scene_phase44==1&&vm.callbacks_posted()==uint64_t(menu_proof?1:0),
           "component inspection changes only real radial pixels, not source phase/wake");
         if(capture){GameGraphicsFrame frame;Check(graphics.CopyFront(frame),"component inspection owned frame");capture("synthetic-inspection-extra-GAME6",frame);}
         Check(bool(actor.AdvanceActorFrame(&vm)),"actual target controls/support sampling after adoption");
@@ -2208,12 +2352,25 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
     if(owning_return){
       // Local0 is established by executed synthetic KSC below, not a supplied
       // completion record. Use the module's actual local table image.
+      if(menu_proof){
+        Check(vm.run(100).status==script::Status::Yield&&vm.pc()==menu_initial_yield+1,"executed main creates real initial deadline");
+        Check(bool(dokodemo::StartupRuntimeTestAccess::MenuPrepare(menu,vm,actor,previous_lease,menu_abi)),"actual borrowed prior activation context capture");
+        Check(!poll_menu()&&!menu.Snapshot().published,"constructor/lease alone has no new authority");
+        GameMenuCallbackSnapshot callback;callback.pending=true;callback.event=0;callback.argument=3;callback.menu_generation=1;callback.suspended=vm.current_witness();
+        Check(vm.post_owner_event(([&]{script::Value v;v.kind=script::Value::Kind::Code;v.word=0x70000000u|callback_entry;return v;})(),0,3)==0,"actual arg3 event entered");
+        callback.receipt=vm.last_callback_receipt();callback.callback_frame=vm.current_witness().frame_id;
+        Check(bool(dokodemo::StartupRuntimeTestAccess::MenuAccept(menu,vm,callback)),"bind actual accepted callback receipt");
+        for(unsigned i=0;i<32&&!menu.Snapshot().callback_returned;++i)Check(vm.run(1).status!=script::Status::Stopped,"real callback store/1C restore");
+        Check(menu.Snapshot().callback_returned&&!poll_menu()&&!menu.Snapshot().published,"arg3 alone cannot mint before operation completion");
+        outer.receipt=callback.receipt;outer.menu_generation=callback.menu_generation;
+        vm.clock_tick(vm.deadline_tick());
+      }
       const auto first=vm.run(4096);if(first.status!=script::Status::Yield)throw std::runtime_error("owning wait: "+first.diagnostic.text());
-      auto w=command.Snapshot(vm);Check(w.wait_posted&&!w.paused&&!w.failed&&actor.DestinationPreparation().adopted&&vm.callbacks_posted()==1,
+      auto w=command.Snapshot(vm);Check(w.wait_posted&&!w.paused&&!w.failed&&actor.DestinationPreparation().adopted&&vm.callbacks_posted()==uint64_t(menu_proof?2:1),
         "target prepared/adopted EARLY, actual builtin27/deadline queued; no completion before caller pause");
-      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==1,"event17 cannot replace an in-flight pause callback");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==uint64_t(menu_proof?2:1),"event17 cannot replace an in-flight pause callback");
       Check(vm.run(100).status==script::Status::Yield&&!vm.context_enabled(),"actual3A/32 disables and restores wait caller");
-      w=command.Snapshot(vm);Check(w.paused&&!w.failed&&w.suspended.frame_id==w.wait_frame&&w.suspended.deadline_tick==1&&w.suspended.caller_frame_id==w.travel_frame,
+      w=command.Snapshot(vm);Check(w.paused&&!w.failed&&w.suspended.frame_id==w.wait_frame&&w.suspended.deadline_tick==uint64_t(menu_proof?2:1)&&w.suspended.caller_frame_id==w.travel_frame,
         "actual paused receipt carries correct caller/frame/operands/result/deadline");
       auto& ui=dokodemo::StartupRuntimeTestAccess::SceneUi(*content);
       script::Vm foreign_vm(program);foreign_vm.start();const auto prior=control->Snapshot().loadman;
@@ -2222,15 +2379,15 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
       // Real host clock advances while source is disabled: event return must
       // restore the expired signed deadline as0, rather than forcing a wait.
       if(return_fault==3){
-        vm.start();Check(!command.PostArrival17(vm)&&!actor.TickDestinationContinuation(vm,command,ui,bgm,false)&&vm.callbacks_posted()==0,
+        vm.start();Check(!command.PostArrival17(vm)&&!actor.TickDestinationContinuation(vm,command,ui,bgm,false)&&vm.callbacks_posted()==uint64_t(menu_proof?1:0),
           "restart invalidates request/paused run before any event or phase effects");
         Check(bool(actor.CloseDestination())&&!target_io->live,"restarted command still permits honest resource cleanup");
       }else{
       vm.clock_tick(return_fault==1?0:4);
       for(unsigned i=0;i<8&&!actor.DestinationPreparation().arrival_event_posted;++i){const auto status=actor.TickDestinationContinuation(vm,command,ui,bgm,false);if(!status)throw std::runtime_error(status.detail);}
-      w=command.Snapshot(vm);Check(w.event_posted&&!w.event_returned&&!w.failed&&vm.callbacks_posted()==2&&actor.DestinationPreparation().moving_hide_requested
+      w=command.Snapshot(vm);Check(w.event_posted&&!w.event_returned&&!w.failed&&vm.callbacks_posted()==uint64_t(menu_proof?3:2)&&actor.DestinationPreparation().moving_hide_requested
         &&control->Snapshot().loadman.scene_phase44==4,"real phases1/3/2 -> event17 BEFORE moving hide, no model-ready wake");
-      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"cannot replay event17");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==uint64_t(menu_proof?3:2),"cannot replay event17");
       // Run the real callback and source write, stop immediately after the
       // synthetic GAME6 call so source cleanup can poll its actual animation.
       for(unsigned i=0;i<64&&!source_open;++i){
@@ -2243,7 +2400,7 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         const auto step=vm.run(1);if(step.status==script::Status::Stopped)throw std::runtime_error(step.diagnostic.text());
       }
       if(return_fault==2){
-        w=command.Snapshot(vm);Check(w.failed&&!w.field5_written&&!w.completed&&vm.callbacks_posted()==2,
+        w=command.Snapshot(vm);Check(w.failed&&!w.field5_written&&!w.completed&&vm.callbacks_posted()==uint64_t(menu_proof?3:2),
           "a real source51 cannot launder an unrelated earlier copied-field5 write; no blind digest rebase");
         Check(bool(actor.CloseDestination())&&!target_io->live,"partial event/store effects retain resources until explicit retirement");
       }else{
@@ -2288,15 +2445,16 @@ void ExecutedDestinationPreparationTests(const std::function<void(const char*,co
         Check(bool(actor.CloseDestination())&&!target_io->live,"failed outer cleanup retains target until explicit close");
       }else{
       Check(w.completed&&w.travel_returned&&w.epilogue_returned&&!w.live&&!w.failed&&w.field5_sequence<w.completion_sequence&&returned_old.expired()
-        &&outer.returned&&outer.cleanup_returned&&!outer.failed&&vm.current_witness().frame_id==outer.caller,
+        &&outer.returned&&outer.cleanup_returned&&!outer.failed&&(menu_proof||vm.current_witness().frame_id==outer.caller),
         "real nested epilogue/travel/root retirement then same entered parent cleanup, not a filled completion");
       Check(bool(command.CurrentRequest(vm,actor,after_clear))&&bool(actor.TickDestinationContinuation(vm,command,ui,bgm,true)),
         "normal Content poll after actual owning return does not reborrow retired root or preserve old WIP refusal");
       int32_t returned_period=-1;Check(bool(actor.QueryScenePeriod(15,35,returned_period)),"current adopted clock survives legitimate root/outer cleanup without borrowing retired VM frame");
-      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==2,"completed command cannot rearm old caller");
+      Check(!command.PostArrival17(vm)&&vm.callbacks_posted()==uint64_t(menu_proof?3:2),"completed command cannot rearm old caller");
       script::Vm foreign_after(program);foreign_after.start();GameBackgroundCandidate rejected;const auto seed_after=rng.CurrentSeed64();
       Check(!command.CurrentRequest(foreign_after,actor,rejected)&&!foreign_after.current_witness().context_registered&&rng.CurrentSeed64()==seed_after,
         "completed receipt refuses foreign VM BEFORE registering its context or changing RNG/request effects");
+      if(menu_proof)CompletedOutingMenuConsumers(menu,vm,actor,command,outer,previous_lease,rng,menu_fault,menu_callbacks);
       target_io->fail_close=true;Check(!actor.CloseDestination()&&target_io->live,"owning return does not discard failed-close resources");target_io->fail_close=false;
       Check(bool(actor.CloseDestination())&&!target_io->live,"returned target cleanup retry");
       returned_period=-77;Check(!actor.QueryScenePeriod(15,35,returned_period)&&returned_period==-77,"retired target cannot fall back to old Scene0/default clock");
@@ -2851,6 +3009,8 @@ int main(int argc,char** argv) {
         ExecutedDestinationPreparationTests();
         for(unsigned fault=0;fault<12;++fault)ExecutedDestinationPreparationTests({},true,fault);
         ExecutedDestinationPreparationTests({},true,0,true);
+        for(unsigned fault=0;fault<=12;++fault)ExecutedDestinationPreparationTests({},true,0,false,true,fault);
+        dokodemo::StartupRuntimeTestAccess::MenuOnlyRefusals();
         SceneBgmCurrentOwnerTests();
         BackgroundPreparationTests();
         MathAndSkin();
