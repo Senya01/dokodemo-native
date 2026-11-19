@@ -2,7 +2,18 @@
 
 An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Windows is the application target. Ubuntu x86_64 headless component testing is described below; a Linux game application/window backend is not implemented. A matching PSP rebuild remains unverified.
 
-The current source includes title/new-game/profile entry, room and actor rendering, repeated owned conversations, choices and finite Latin/kana word input. Implemented finite operations include inventory marking, decoration, putaway and confirmed discard; main-menu inventory; empty friend/word notebooks, self-details, the current diary record; and selected Options edit/No/Yes RAM paths. Coverage is bounded by each supported operation, data shape and lifecycle. Original save import, durable state, networking, full text/IME and broad scene progression remain open.
+The source in this repository includes title/new-game/profile entry, room and actor rendering, repeated conversations, choices and limited Latin/kana word input. It supports inventory marking, decoration, putaway and confirmed discard, main-menu inventory, empty friends and word notebooks, self-details, the current diary record, and selected Options edits within a session. Persistent saves, networking, full text/IME and broad scene progression remain open in this branch.
+
+## Windows development progress · 2026-11-19
+
+The Windows development build has reached first-day play with Toro, including word lessons and editing in the notebook, repeated conversations, inventory and room settings, and a trip to the roof and back. These milestones were exercised through the regular Windows game window.
+
+- **Save and resume.** A regular Windows session taught Toro a word and saved from the System menu. A fresh process loaded the six save files, entered the room automatically, and showed the word and its reading in the notebook. The original game running in PPSSPP also loaded that Windows-created save.
+- **Changing days.** A component test advanced a copy of a first-day save to day two, preserved the learned word and the earlier diary entry, then saved and loaded day two again. The regular Windows executable has been checked with a same-day reload. The windowed check across a natural day change is pending.
+
+This section reports on the separate Windows development build. The published source revision is recorded in [SOURCE_SNAPSHOT.json](SOURCE_SNAPSHOT.json).
+
+## Published source checkpoint
 
 Visual work now takes priority. Toro uses actor-only textured color modulation and soft diffuse shading from authored normals; these are explicit Windows approximations, not proved PSP combiner/light equations. Large room/camera/material defects and readable UI are the next visible priorities.
 
