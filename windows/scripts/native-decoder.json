@@ -1,0 +1,105 @@
+{
+  "wheel": "av-19.0.2-cp312-abi3-win_amd64.whl",
+  "sha256": "3ce5a1d7b916d13c16ac58f1756f0fee4af2d53f02bc1403e18550b50d375a22",
+  "url": "https://files.pythonhosted.org/packages/32/5a/743a83666ded197df8b9957e2800bef9a39d52b23be2ca211bbd14b5fb22/av-19.0.2-cp312-abi3-win_amd64.whl",
+  "build_recipe": "https://github.com/PyAV-Org/pyav-ffmpeg/tree/9.0.2-1",
+  "upstream": "https://ffmpeg.org/legal.html",
+  "scope": "Local Windows x64 package. FFmpeg reports LGPL version 3 or later. Separately licensed codec and MinGW runtime dependencies are included by the upstream wheel. Public redistribution and a corresponding source bundle have not been verified.",
+  "files": [
+    {
+      "member": "av-19.0.2.dist-info/licenses/LICENSE.txt",
+      "name": "PyAV-LICENSE.txt",
+      "sha256": "f32ebcb6007dcc05eea369b3820e6391b0a7ef1ed763f30f1aca15dfdbacbe96"
+    },
+    {
+      "member": "av.libs/avcodec-63-2756d4fffb772585dcdece87427716a4.dll",
+      "name": "avcodec-63-2756d4fffb772585dcdece87427716a4.dll",
+      "sha256": "8e13fdedbeefb6a8b5d22b567122ec3c00384add569de9e589e53a86bd08422c"
+    },
+    {
+      "member": "av.libs/avutil-61-e540ec7976bbd26a4a94dc737be3001c.dll",
+      "name": "avutil-61-e540ec7976bbd26a4a94dc737be3001c.dll",
+      "sha256": "ff2ba1b0d884336d53f1aee7b05873c5a3bbb987d0ffc79a49b92ed77579cd19"
+    },
+    {
+      "member": "av.libs/libSvtAv1Enc-7a2b2046575991edd70ef501ca085458.dll",
+      "name": "libSvtAv1Enc-7a2b2046575991edd70ef501ca085458.dll",
+      "sha256": "7a2b2046575991edd70ef501ca085458ebdff3bf96282350057ae1dee0afaf9f"
+    },
+    {
+      "member": "av.libs/libdav1d-5469d6ef7baf7426269a9483c24587b7.dll",
+      "name": "libdav1d-5469d6ef7baf7426269a9483c24587b7.dll",
+      "sha256": "5469d6ef7baf7426269a9483c24587b77bf6cb6a005f2bd98443a396f528e82b"
+    },
+    {
+      "member": "av.libs/libgcc_s_seh-1-3e3b83c1f8de213bb810010a5622b180.dll",
+      "name": "libgcc_s_seh-1-3e3b83c1f8de213bb810010a5622b180.dll",
+      "sha256": "502e8318a096f0bfb26d9f628f768bfab72853eabc1b6b262f2412263aad605b"
+    },
+    {
+      "member": "av.libs/libiconv-2-5e7e51fe6a6e182df6c9f30f41700345.dll",
+      "name": "libiconv-2-5e7e51fe6a6e182df6c9f30f41700345.dll",
+      "sha256": "5e7e51fe6a6e182df6c9f30f4170034575acd10d2079c3f1098411d21a311619"
+    },
+    {
+      "member": "av.libs/libopus-0-278e2dd25a2793d306204c9d966fe0de.dll",
+      "name": "libopus-0-278e2dd25a2793d306204c9d966fe0de.dll",
+      "sha256": "278e2dd25a2793d306204c9d966fe0dee6b4f56659b1ea7b759897e406980d79"
+    },
+    {
+      "member": "av.libs/libsharpyuv-90c3f670f207c806d3e44db799e78832.dll",
+      "name": "libsharpyuv-90c3f670f207c806d3e44db799e78832.dll",
+      "sha256": "90c3f670f207c806d3e44db799e78832750826c47a0cf8dea907603d240f9dbe"
+    },
+    {
+      "member": "av.libs/libstdc++-6-7ad22040206bf70776b13a24ec3f87b2.dll",
+      "name": "libstdc++-6-7ad22040206bf70776b13a24ec3f87b2.dll",
+      "sha256": "1cba2ca3b6f410fa4b03b01b479f7663493ea9903857cd753dc8dbc772f67447"
+    },
+    {
+      "member": "av.libs/libvpl-45cd70cb42c579529a30ad6fc282c626.dll",
+      "name": "libvpl-45cd70cb42c579529a30ad6fc282c626.dll",
+      "sha256": "1a0bc607afbd8a224cc0c2db6fd5efa51245d7715ff1b659c16b47e773009115"
+    },
+    {
+      "member": "av.libs/libvpx-1-dd81d2b55a771749d485047772201cc1.dll",
+      "name": "libvpx-1-dd81d2b55a771749d485047772201cc1.dll",
+      "sha256": "738629b026940c256dfe988a62062bdc96ae5065d13163bf7e579dc95a4634f4"
+    },
+    {
+      "member": "av.libs/libwebp-abac96c4759f9eb9b31588c8a839816c.dll",
+      "name": "libwebp-abac96c4759f9eb9b31588c8a839816c.dll",
+      "sha256": "e253a4adb1c133a690662e46d8c41e0a3b81b0e62d0f3a5e1a1109484a020dca"
+    },
+    {
+      "member": "av.libs/libwebpmux-0b9545d83accdb1110a7efa5d1c54007.dll",
+      "name": "libwebpmux-0b9545d83accdb1110a7efa5d1c54007.dll",
+      "sha256": "ce17228391b86192f201da1ce9c345ff5f7a9c1eca95ab04150491c24032f74e"
+    },
+    {
+      "member": "av.libs/libwinpthread-1-3e9f18fdf7e856e1e9fedd138e84e874.dll",
+      "name": "libwinpthread-1-3e9f18fdf7e856e1e9fedd138e84e874.dll",
+      "sha256": "3e9f18fdf7e856e1e9fedd138e84e874542e8717272fa7fdae5d0d826e88658c"
+    },
+    {
+      "member": "av.libs/libx264-165-0f71f37cf3f3ee0e2ecac2b06829e9ff.dll",
+      "name": "libx264-165-0f71f37cf3f3ee0e2ecac2b06829e9ff.dll",
+      "sha256": "0f71f37cf3f3ee0e2ecac2b06829e9ff3cf2b3e237f25bb14aef6b8de14cd777"
+    },
+    {
+      "member": "av.libs/libx265-ee9d492f3fb55d0a3b564bb1bf4f6822.dll",
+      "name": "libx265-ee9d492f3fb55d0a3b564bb1bf4f6822.dll",
+      "sha256": "efe075f1ee008c722eb71adfe00d926071836d777cc9ef23b59c9ecb9db7d57f"
+    },
+    {
+      "member": "av.libs/swresample-7-4f9462a1fb73b949ccad2774dd941624.dll",
+      "name": "swresample-7-4f9462a1fb73b949ccad2774dd941624.dll",
+      "sha256": "a8bfee136c4c4e49d95b4439b1b80136504b2783cf93638f64bd3ad7de8e0ebe"
+    },
+    {
+      "member": "av.libs/zlib1-4d767210e087ff082d94ef0a09ddc7f8.dll",
+      "name": "zlib1-4d767210e087ff082d94ef0a09ddc7f8.dll",
+      "sha256": "4d767210e087ff082d94ef0a09ddc7f8c04316c64d69d5a7b9ee802ceab407dd"
+    }
+  ]
+}

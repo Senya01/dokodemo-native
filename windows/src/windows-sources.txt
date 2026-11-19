@@ -1,0 +1,11 @@
+src/audio_native.cpp
+src/clock_backend_win32.cpp
+src/startup_runtime_win32.cpp
+src/startup_memory_backend_win32.cpp
+src/gameplay/controller_input_win32.cpp
+src/gameplay/display_win32.cpp
+src/gameplay/title_bgm.cpp
+src/gameplay/title_effects.cpp
+src/platform/audio_ffmpeg_win32.cpp
+src/platform/startup_modules_win32.cpp
+src/rng_backend_win32.cpp

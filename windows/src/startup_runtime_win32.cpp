@@ -1,0 +1,1323 @@
+#include "startup_runtime_win32.h"
+#include "platform/startup_modules_win32.h"
+#include "gameplay/boot_to_display.h"
+#include "recovered/startup_modules.h"
+#include "rng_backend_win32.h"
+#include "clock_backend_win32.h"
+#include "startup_memory_backend_win32.h"
+#include "recovered/startup_flow_native.h"
+#include "recovered/audiocodec_module_native.h"
+#include "recovered/module_manager_native.h"
+#include "core_hash.h"
+#include <windows.h>
+#include <process.h>
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
+#include <filesystem>
+#include <limits>
+#include <mutex>
+#include <new>
+#include <stdexcept>
+#include <string_view>
+#include <utility>
+
+namespace dokodemo {
+namespace {
+std::atomic<uint64_t> next_runtime_owner{1}, next_source_identity{1};
+uint64_t Address(HANDLE h) { return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(h)); }
+int32_t NewSourceIdentity() {
+    const uint64_t value = next_source_identity.fetch_add(1);
+    return value <= uint64_t((std::numeric_limits<int32_t>::max)()) ? static_cast<int32_t>(value) : -1;
+}
+StartupRuntimeStatus Failure(StartupRuntimeCode code, DWORD error = 0, DWORD wait = 0) {
+    StartupRuntimeStatus out; out.code = code; out.win32_error = error; out.wait_result = wait; return out;
+}
+// Adapter return encoding: -1 means an actual native operation/registry validation
+// failed; 0 means success for status calls. Exact PSP error numbers are unknown.
+constexpr int32_t AdapterError = -1;
+constexpr uint32_t HostStagingCoordinate = 0x61000000;
+} // namespace
+// Stable names keep exception and shared-lease RTTI independent of the checkout path.
+namespace startup_storage {
+struct NativeCancelled {};
+struct NativeFailure {};
+// The manager retains this SAME direct borrow, not a vector copy or an opaque
+// success proof. Primitive block ownership stays in each request for explicit
+// fallible Free after manager unload and last borrow release. No destructor Free.
+struct WindowsModuleInputLease final : recovered::NativeModuleInputLease {
+    StartupAllocationBorrow borrow;
+    StartupNativeBlock block;
+    uint32_t bytes = 0, coordinate = 0;
+    bool View(recovered::NativeModuleInputView& out) const noexcept override {
+        try {
+            StartupRawBorrowSpan span;
+            if (!borrow.Span(span) || !span.readable || span.size != bytes ||
+                span.source_base != coordinate || span.handle.owner != block.owner ||
+                span.handle.generation != block.generation || span.handle.serial != block.serial)
+                return false;
+            out.bytes = span.bytes; out.initialized = span.initialized;
+            out.owner = span.handle.owner; out.generation = span.handle.generation; out.serial = span.handle.serial;
+            out.host_address = span.host_address; out.source_coordinate = span.source_base;
+            out.size = bytes; return true;
+        } catch (...) { return false; }
+    }
+};
+}
+
+using startup_storage::NativeCancelled;
+using startup_storage::NativeFailure;
+using startup_storage::WindowsModuleInputLease;
+
+struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
+    struct ThreadContext { Impl* runtime; bool worker; };
+    struct CallbackRecord {
+        uint64_t owner = 0;
+        int32_t uid = 0;
+        DWORD thread = 0;
+        HANDLE notification = nullptr;
+        int (*function)(int, int, void*) = nullptr;
+        void* common = nullptr;
+        std::string name;
+        bool registered = false, dispatching = false;
+        ~CallbackRecord() { if (notification) (void)CloseHandle(notification); }
+    };
+    static thread_local ThreadContext* current_context;
+    mutable std::mutex metadata;
+    StartupRuntimeOptions options;
+    StartupObservation state;
+    std::deque<StartupRuntimeEvent> events;
+    std::unique_ptr<WindowsStartupBackend> backend;
+    recovered::NativeModuleManager modules;
+    std::shared_ptr<gameplay::BootToDisplay> boot_display;
+    std::unique_ptr<CallbackRecord> callback;
+    ThreadContext caller_context{this, false}, worker_context{this, true};
+    HANDLE caller = nullptr, worker = nullptr, cancel = nullptr, exit_event = nullptr;
+    HANDLE media = INVALID_HANDLE_VALUE;
+    DWORD tls_index = TLS_OUT_OF_INDEXES;
+    bool started = false, caller_resumed = false, worker_resumed = false, close_in_progress = false;
+    bool media_activated = false;
+    uint32_t notifications = 0;
+    int32_t worker_uid = 0;
+    struct PendingModuleRequest {
+        StartupModuleObservation data;
+        StartupNativeFile backend_file;
+        recovered::StartupModuleOptions options{};
+        std::wstring native_path;
+        uint32_t input_bytes = 0;
+        const recovered::StartupModuleDescriptor* host_descriptor = nullptr;
+        StartupNativeBlock staging;
+        StartupAllocationBorrow staging_borrow;
+        std::weak_ptr<WindowsModuleInputLease> input;
+    };
+    // Prepare and insert each owner BEFORE acquiring its file/allocation. The
+    // vector can move unique_ptrs; callbacks never retain vector references.
+    std::vector<std::unique_ptr<PendingModuleRequest>> module_requests;
+    uint64_t next_staging_coordinate = HostStagingCoordinate;
+    uint32_t event_module_index = StartupNoCurrentModule;
+    std::atomic<bool> cancelled{false};
+
+    explicit Impl(const StartupRuntimeOptions& input)
+        : options(input), modules(recovered::NativeModuleDomain::Production, input.enable_native_audio_probe,
+                                  input.atrac_decoder_factory) {
+        state.owner = next_runtime_owner.fetch_add(1);
+        state.module_manager_owner = modules.Owner();
+        state.module_generation = modules.Generation();
+    }
+    void EmitLocked(const char* operation, const char* origin, uint32_t pc = 0,
+                    int64_t value = 0, bool returned = false, uint64_t object = 0,
+                    DWORD error = 0, DWORD wait = 0, std::string_view detail = {},
+                    int crt_error = 0, unsigned long dos_error = 0, bool module_relative = false) noexcept {
+        try {
+        StartupRuntimeEvent event;
+        event.ordinal = ++state.last_event; event.owner = state.owner;
+        event.operation = operation; event.origin = origin; event.source_pc = pc;
+        event.thread = GetCurrentThreadId(); event.value = value;
+        event.source_return = returned; event.native_object = object;
+        event.source_pc_domain = !pc ? "host-only" : module_relative ? "module-relative" : "game-module-relative";
+        if (event_module_index < module_requests.size()) {
+            event.module_request_index = event_module_index;
+            event.module = module_requests[event_module_index]->data.token;
+        }
+        event.win32_error = error; event.wait_result = wait;
+        if (!detail.empty()) event.detail.assign(detail.data(), detail.size());
+        event.crt_errno = crt_error; event.dos_errno = dos_error;
+        const size_t event_capacity = options.atrac_decoder_factory ? 1024 : 256;
+        if (events.size() == event_capacity) { events.pop_front(); ++state.dropped_events; }
+        events.push_back(std::move(event));
+        } catch (...) {
+            // Telemetry must never change native ownership or control flow.
+            ++state.dropped_events;
+        }
+    }
+    void Emit(const char* operation, const char* origin, uint32_t pc = 0,
+              int64_t value = 0, bool returned = false, uint64_t object = 0,
+              DWORD error = 0, DWORD wait = 0, std::string_view detail = {}) noexcept {
+        try {
+        std::lock_guard<std::mutex> lock(metadata);
+        EmitLocked(operation, origin, pc, value, returned, object, error, wait, detail);
+        } catch (...) {} //No native control/ownership consequence of telemetry.
+    }
+    void FailLocked(StartupRuntimeStatus status) { state.status = status; }
+    bool IsCurrent(bool is_worker) const {
+        return current_context && current_context->runtime == this &&
+               current_context->worker == is_worker && tls_index != TLS_OUT_OF_INDEXES &&
+               TlsGetValue(tls_index) == current_context;
+    }
+    bool Enter(ThreadContext& context) {
+        const BOOL set = TlsSetValue(tls_index, &context);
+        const DWORD error = set ? 0 : GetLastError();
+        std::lock_guard<std::mutex> lock(metadata);
+        EmitLocked("TlsSetValue-enter", "HostTLS", 0, set, false, tls_index, error,
+                   0, context.worker ? "worker" : "caller");
+        if (!set) { FailLocked(Failure(StartupRuntimeCode::HostFailure, error)); return false; }
+        current_context = &context;
+        (context.worker ? state.worker_state : state.caller_state) = "Running";
+        return true;
+    }
+    void Leave(ThreadContext& context) {
+        const BOOL set = TlsSetValue(tls_index, nullptr);
+        const DWORD error = set ? 0 : GetLastError();
+        current_context = nullptr;
+        std::lock_guard<std::mutex> lock(metadata);
+        EmitLocked("TlsSetValue-leave", "HostTLS", 0, set, false, tls_index, error,
+                   0, context.worker ? "worker" : "caller");
+        if (!set) FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
+    }
+    static unsigned __stdcall CallerThunk(void* opaque) {
+        auto& context = *static_cast<ThreadContext*>(opaque);
+        auto& self = *context.runtime;
+        bool entered = false;
+        try {
+            entered = self.Enter(context);
+            if (entered) {
+                if (self.HostCancelled()) throw NativeCancelled{};
+                self.Emit("NativeEntry1184", "NativeEntry", 0x1184);
+                const auto stop = recovered::RunStartupCaller1184(self);
+                self.Emit("CallerFlowStop", "HostLifecycle", 0, static_cast<int64_t>(stop), false,
+                          0, 0, 0, "No claimed source function v0;15D8 discards caller result");
+            }
+        } catch (const NativeCancelled&) {
+            self.Emit("CallerHostCancelled", "HostLifecycle");
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(self.metadata);
+            if (self.state.status) self.FailLocked(Failure(StartupRuntimeCode::HostFailure));
+            self.EmitLocked("CallerException", "HostLifecycle");
+        }
+        if (entered) self.Leave(context);
+        { std::lock_guard<std::mutex> lock(self.metadata); self.state.caller_state = "Exited"; }
+        return 0; //native CRT thread exit code, not a recovered PSP return.
+    }
+    static unsigned __stdcall WorkerThunk(void* opaque) {
+        auto& context = *static_cast<ThreadContext*>(opaque);
+        auto& self = *context.runtime;
+        bool entered = false;
+        try {
+            entered = self.Enter(context);
+            if (entered) {
+                if (self.HostCancelled()) throw NativeCancelled{};
+                self.Emit("WorkerEntryF7C", "NativeEntry", 0xF7C);
+                const auto stop = recovered::RunStartupWorkerF7C(self);
+                if (stop == recovered::StartupFlowStop::Unsupported ||
+                    stop == recovered::StartupFlowStop::PresentationReady) self.BarrierPump();
+                else self.Emit("WorkerFlowStop", "HostLifecycle", 0, static_cast<int64_t>(stop));
+            }
+        } catch (const NativeCancelled&) {
+            self.Emit("WorkerHostCancelled", "HostLifecycle");
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(self.metadata);
+            if (self.state.status) self.FailLocked(Failure(StartupRuntimeCode::HostFailure));
+            self.EmitLocked("WorkerException", "HostLifecycle");
+        }
+        if (entered) self.Leave(context);
+        { std::lock_guard<std::mutex> lock(self.metadata); self.state.worker_state = "Exited"; }
+        return 0;
+    }
+    uintptr_t Begin(bool is_worker, unsigned stack, unsigned& thread_id) {
+        const uintptr_t result = _beginthreadex(nullptr, stack,
+            is_worker ? &WorkerThunk : &CallerThunk,
+            is_worker ? static_cast<void*>(&worker_context) : static_cast<void*>(&caller_context),
+            CREATE_SUSPENDED, &thread_id);
+        // FIRST action after creation: publish the primitive owning handle. No
+        // allocation/logging may intervene while a suspended native object exists.
+        (is_worker ? worker : caller) = reinterpret_cast<HANDLE>(result);
+        (is_worker ? state.worker_thread_id : state.caller_thread_id) = thread_id;
+        const int crt_error = result ? 0 : errno;
+        unsigned long dos_error = 0;
+        if (!result) (void)_get_doserrno(&dos_error);
+        // Callers hold metadata, so the suspended object is published atomically.
+        EmitLocked("_beginthreadex", "HostThread", is_worker ? 0x11AC : 0,
+                   result ? 1 : 0, false, static_cast<uint64_t>(result), 0, 0,
+                   is_worker ? "worker;source priority16/stack11000/attr4000;commit request11000"
+                             : "native caller scheduling;default host stack;not source CreateThread",
+                   crt_error, dos_error);
+        if (!result) {
+            auto failure = Failure(StartupRuntimeCode::HostFailure);
+            failure.crt_errno = crt_error; failure.dos_errno = dos_error; FailLocked(failure);
+        }
+        return result;
+    }
+    int32_t CreateWorker(const recovered::StartupWorkerRequest& request) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        if (state.closing) throw NativeCancelled{};
+        if (!IsCurrent(false) || worker || !request.name || std::string(request.name) != "main" ||
+            request.entry != 0xF7C || request.priority != 0x10 || request.stack_bytes != 0x11000 ||
+            request.attributes != 0x4000 || request.options) {
+            EmitLocked("CreateThreadAdapter", "SourceAdapter", 0x11AC, AdapterError, true,
+                       0, ERROR_INVALID_PARAMETER, 0, "actual request/owner validation failure");
+            return AdapterError;
+        }
+        // Reserve source ID before creating an OS thread so exhaustion cannot orphan one.
+        const int32_t identity = NewSourceIdentity();
+        if (identity <= 0) {
+            EmitLocked("CreateThreadAdapter", "SourceAdapter", 0x11AC, AdapterError, true,
+                       0, ERROR_NO_SYSTEM_RESOURCES, 0, "source identity space exhausted");
+            return AdapterError;
+        }
+        unsigned id = 0;
+        const uintptr_t native = Begin(true, request.stack_bytes, id);
+        if (!native) {
+            EmitLocked("CreateThreadAdapter", "SourceAdapter", 0x11AC, AdapterError, true);
+            return AdapterError;
+        }
+        worker = reinterpret_cast<HANDLE>(native); worker_uid = identity;
+        state.worker_thread_id = id; state.worker_state = "Suspended";
+        EmitLocked("CreateThreadAdapter", "SourceAdapter", 0x11AC, identity, true,
+                   Address(worker), 0, 0, "main;native positive registry identity;not HANDLE cast");
+        return identity;
+    }
+    void StoreCreatedWorkerUid(int32_t uid) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        state.stored_thread_uid = uid; state.uid_slot_written = true;
+        EmitLocked("StoreCreatedThreadUid", "SourceEffect", 0x11C8, uid, false, 0, 0, 0,
+                   "typed native field;source slot module+F5D7C;no previous slot read/RAM claim");
+    }
+    int32_t StartWorker(int32_t uid, uint32_t bytes, const void* args) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        if (state.closing) throw NativeCancelled{};
+        if (!IsCurrent(false) || uid != worker_uid || uid <= 0 || !worker || worker_resumed || bytes || args) {
+            EmitLocked("StartThreadAdapter", "SourceAdapter", 0x11CC, AdapterError, true,
+                       0, ERROR_INVALID_PARAMETER); return AdapterError;
+        }
+        const DWORD previous = ResumeThread(worker);
+        const DWORD error = previous == DWORD(-1) ? GetLastError() : 0;
+        EmitLocked("ResumeThread", "HostThread", 0x11CC, previous, false, Address(worker), error);
+        if (previous == DWORD(-1)) {
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
+            EmitLocked("StartThreadAdapter", "SourceAdapter", 0x11CC, AdapterError, true, Address(worker), error);
+            return AdapterError;
+        }
+        worker_resumed = true;
+        EmitLocked("StartThreadAdapter", "SourceAdapter", 0x11CC, 0, true, Address(worker));
+        return 0;
+    }
+    recovered::StartupFlowStop SleepCaller() override {
+        if (!IsCurrent(false)) throw NativeFailure{};
+        { std::lock_guard<std::mutex> lock(metadata);
+          state.caller_state = "SourceSleeping";
+          EmitLocked("SleepThread-enter", "SourceCall", 0x1210, 0, false, Address(cancel)); }
+        const DWORD wait = WaitForSingleObject(cancel, INFINITE);
+        const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
+        Emit("CallerCancellationWait", "HostLifecycle", 0x1210, 0, false, Address(cancel), error, wait,
+             "No source SleepThread return; native caller lifetime cancelled");
+        if (wait != WAIT_OBJECT_0) throw NativeFailure{};
+        return recovered::StartupFlowStop::HostCancelled;
+    }
+    static int ExitThunk(int arg1, int arg2, void* common) {
+        auto* context = current_context;
+        if (!context || !context->worker || !context->runtime->IsCurrent(true)) throw NativeFailure{};
+        return recovered::ExitCallback1564(*context->runtime, arg1, arg2, common);
+    }
+    int32_t CreateExitCallback(const recovered::StartupCallbackRequest& request) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        if (state.closing) throw NativeCancelled{};
+        if (!IsCurrent(true) || callback || !request.name || std::string(request.name) != "gameexit" ||
+            request.entry != 0x1564 || request.common) {
+            state.callback_create_result = AdapterError;
+            EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, AdapterError, true,
+                       0, ERROR_INVALID_PARAMETER); return AdapterError;
+        }
+        std::unique_ptr<CallbackRecord> record(new (std::nothrow) CallbackRecord);
+        if (!record) {
+            state.callback_create_result = AdapterError;
+            EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, AdapterError, true,
+                       0, ERROR_NOT_ENOUGH_MEMORY); return AdapterError;
+        }
+        try { record->name = request.name; }
+        catch (const std::bad_alloc&) {
+            state.callback_create_result = AdapterError;
+            EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, AdapterError, true,
+                       0, ERROR_NOT_ENOUGH_MEMORY); return AdapterError;
+        }
+        record->uid = NewSourceIdentity(); record->owner = state.owner;
+        if (record->uid <= 0) {
+            state.callback_create_result = AdapterError;
+            EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, AdapterError, true,
+                       0, ERROR_NO_SYSTEM_RESOURCES); return AdapterError;
+        }
+        record->notification = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        const DWORD error = record->notification ? 0 : GetLastError();
+        if (!record->notification) {
+            EmitLocked("CreateEventW-callback", "HostCallback", 0, 0, false, 0, error);
+            state.callback_create_result = AdapterError;
+            EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, AdapterError, true, 0, error);
+            return AdapterError;
+        }
+        record->thread = GetCurrentThreadId(); record->function = &ExitThunk;
+        record->common = request.common;
+        state.callback_uid = record->uid; state.callback_live = true;
+        state.callback_create_result = record->uid;
+        callback = std::move(record);
+        EmitLocked("CreateEventW-callback", "HostCallback", 0, 1,
+                   false, Address(callback->notification), error);
+        EmitLocked("CreateCallbackAdapter", "SourceAdapter", 0x159C, callback->uid, true,
+                   Address(callback->notification), 0, 0, "gameexit;source1564;commonNULL;worker-owned");
+        return callback->uid;
+    }
+    int32_t RegisterExitCallback(int32_t uid) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        const bool valid = IsCurrent(true) && callback && uid == callback->uid &&
+            callback->owner == state.owner && callback->thread == GetCurrentThreadId() && !state.resources_closed;
+        const int32_t result = valid ? 0 : AdapterError;
+        if (valid) {
+            callback->registered = true;
+            if (notifications) {
+                const BOOL signaled = SetEvent(callback->notification);
+                const DWORD error = signaled ? 0 : GetLastError();
+                EmitLocked("SetEvent-pending-callback", "HostNotification", 0, signaled, false,
+                           Address(callback->notification), error);
+                if (!signaled) { FailLocked(Failure(StartupRuntimeCode::HostFailure, error)); }
+            }
+        }
+        state.callback_register_result = result; state.callback_setup_returned = true;
+        EmitLocked("RegisterExitCallbackAdapter", "SourceAdapter", 0x15A4, result, true,
+                   valid ? Address(callback->notification) : 0, valid ? 0 : ERROR_INVALID_HANDLE,
+                   0, "argument=" + std::to_string(uid));
+        return result;
+    }
+    int Dispatch(recovered::StartupDispatchOrigin origin) {
+        if (!IsCurrent(true)) throw NativeFailure{};
+        int (*function)(int, int, void*) = nullptr;
+        void* common = nullptr;
+        uint32_t count = 0;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            if (!callback || !callback->registered || callback->owner != state.owner ||
+                callback->thread != GetCurrentThreadId() || !notifications || callback->dispatching) return 0;
+            count = notifications; notifications = 0;
+            callback->dispatching = true; function = callback->function; common = callback->common;
+            const BOOL reset = ResetEvent(callback->notification);
+            const DWORD error = reset ? 0 : GetLastError();
+            EmitLocked("ResetEvent-callback", "HostNotification", 0, reset, false,
+                       Address(callback->notification), error);
+            EmitLocked("CallbackDispatch-enter", origin == recovered::StartupDispatchOrigin::SourceCheckCallback
+                       ? "SourceCheckCallback" : "HostBarrierPump", 0x1564, count);
+        }
+        const int result = function(static_cast<int>(count), 0, common); //normal typed C++ ABI
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            callback->dispatching = false;
+            ++state.callback_dispatch_count; state.callback_dispatch_thread = GetCurrentThreadId();
+            EmitLocked("CallbackDispatch-return", origin == recovered::StartupDispatchOrigin::SourceCheckCallback
+                       ? "SourceCheckCallback" : "HostBarrierPump", 0x1574, result, true, 0, 0, 0,
+                       "Native ExitGame returned; no claim about original PSP return");
+        }
+        return 1;
+    }
+    int32_t CheckCallback(uint32_t source_callsite) override {
+        const int dispatched = Dispatch(recovered::StartupDispatchOrigin::SourceCheckCallback);
+        Emit("CheckCallbackAdapter", "SourceAdapter", source_callsite, dispatched, true);
+        // Source contains no delay. This bounded native pacing limits failed-open
+        // service log growth and is separately labelled; no PSP timing is claimed.
+        if (!HostCancelled()) {
+            const DWORD wait = WaitForSingleObject(cancel, 25);
+            const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
+            Emit("HostRetryPacing", "HostAdaptation", 0, 0, false, Address(cancel), error, wait);
+            if (wait == WAIT_FAILED) throw NativeFailure{};
+        }
+        return dispatched;
+    }
+    void ExitGame() override {
+        if (!IsCurrent(true)) throw NativeFailure{};
+        cancelled.store(true);
+        const BOOL signaled = SetEvent(cancel);
+        const DWORD error = signaled ? 0 : GetLastError();
+        std::lock_guard<std::mutex> lock(metadata);
+        state.exit_requested = true;
+        EmitLocked("ExitGameAdapter", "SourceAdapter", 0x156C, 0, false, Address(cancel), error,
+                   0, "void native session-exit request;returns to native callback;no ExitProcess");
+        if (!signaled) FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
+    }
+    int32_t CheckMedium() override {
+        if (!IsCurrent(true)) throw NativeFailure{};
+        DWORD error = 0;
+        if (media == INVALID_HANDLE_VALUE) {
+            media = CreateFileW(options.media_root.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            error = media == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+            Emit("CreateFileW-media", "HostMedia", 0, media != INVALID_HANDLE_VALUE, false, Address(media), error);
+        }
+        BY_HANDLE_FILE_INFORMATION information{};
+        const BOOL inspected = media != INVALID_HANDLE_VALUE && GetFileInformationByHandle(media, &information);
+        if (!inspected && !error) error = GetLastError();
+        const bool ready = inspected && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        if (media != INVALID_HANDLE_VALUE && !ready) {
+            const BOOL closed = CloseHandle(media); const DWORD close_error = closed ? 0 : GetLastError();
+            Emit("CloseRejectedMedia", "HostMedia", 0, closed, false, Address(media), close_error);
+            if (closed) media = INVALID_HANDLE_VALUE;
+        }
+        std::lock_guard<std::mutex> lock(metadata);
+        state.media_live = ready;
+        if (ready) {
+            state.media_volume = information.dwVolumeSerialNumber;
+            state.media_file_index = (uint64_t(information.nFileIndexHigh) << 32) | information.nFileIndexLow;
+        }
+        EmitLocked("CheckMediumAdapter", "SourceAdapter", 0x1458, ready ? 1 : 0, true,
+                   Address(media), error, 0, "native accessible-directory capability;not physical PSP UMD;volume=" +
+                   std::to_string(state.media_volume) + ";fileIndex=" + std::to_string(state.media_file_index));
+        return ready ? 1 : 0;
+    }
+    int32_t Activate(uint32_t mode, const char* device) override {
+        if (!IsCurrent(true)) throw NativeFailure{};
+        BY_HANDLE_FILE_INFORMATION information{};
+        const bool request_valid = mode == 1 && device && std::string(device) == "disc0:";
+        BOOL inspected = FALSE;
+        DWORD error = !request_valid ? ERROR_INVALID_PARAMETER :
+                      media == INVALID_HANDLE_VALUE ? ERROR_INVALID_HANDLE : 0;
+        if (!error) {
+            inspected = GetFileInformationByHandle(media, &information);
+            error = inspected ? 0 : GetLastError();
+        }
+        media_activated = inspected && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY);
+        const int32_t result = media_activated ? 0 : AdapterError;
+        Emit("UmdActivateAdapter", "SourceAdapter", 0x147C, result, true, Address(media), error,
+             0, "native disc0 mapping activation;source ignores result");
+        return result;
+    }
+    int32_t WaitDriveStat(uint32_t mask) override {
+        if (!IsCurrent(true)) throw NativeFailure{};
+        BY_HANDLE_FILE_INFORMATION information{};
+        BOOL inspected = FALSE;
+        DWORD error = mask != 0x22 ? ERROR_INVALID_PARAMETER :
+                      !media_activated || media == INVALID_HANDLE_VALUE ? ERROR_INVALID_HANDLE : 0;
+        if (!error) {
+            inspected = GetFileInformationByHandle(media, &information);
+            error = inspected ? 0 : GetLastError();
+        }
+        const int32_t result = inspected && (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 0 : AdapterError;
+        Emit("UmdWaitDriveStatAdapter", "SourceAdapter", 0x1484, result, true, Address(media), error,
+             0, "ordinary non-CB native ready-state check;source ignores result;no callback dispatch");
+        return result;
+    }
+    PendingModuleRequest* CurrentModule() const noexcept {
+        const auto index = state.current_module_index;
+        return index < module_requests.size() ? module_requests[index].get() : nullptr;
+    }
+    bool FileMatches(const PendingModuleRequest& request) const noexcept {
+        const auto& data = request.data;
+        return request.backend_file && data.file_live && data.request_owner == state.owner &&
+            request.backend_file.owner == data.file_backend_owner &&
+            request.backend_file.generation == data.file_backend_generation &&
+            request.backend_file.serial == data.file_backend_serial;
+    }
+    void BeginModuleRequest(uint32_t callsite, const char* path,
+                            const recovered::StartupModuleOptions& option) override {
+        if (!IsCurrent(true) || !path) throw NativeFailure{};
+        auto request = std::make_unique<PendingModuleRequest>();
+        request->data.path = path;
+        request->options = option;
+        request->data.options.assign(option.begin(), option.end());
+        request->data.wrapper_callsite = callsite;
+        request->data.request_owner = state.owner;
+        request->data.pending = true;
+        // These exact path/size/request facts are source metadata. Entry/Load
+        // support is separately decided by the manager's exact association.
+        const std::string_view source_path(path);
+        std::wstring relative;
+        if (source_path == "disc0:/PSP_GAME/USRDIR/prx/audiocodec.prx" && callsite == 0x4F61C &&
+            option == recovered::StartupOptions4F59C(1)) {
+            relative = L"PSP_GAME\\USRDIR\\prx\\audiocodec.prx"; request->input_bytes = 3232;
+        } else if (source_path == "disc0:/PSP_GAME/USRDIR/prx/libatrac3plus.prx" && callsite == 0x4F640 &&
+                   option == recovered::StartupOptions4F59C(0)) {
+            relative = L"PSP_GAME\\USRDIR\\prx\\libatrac3plus.prx"; request->input_bytes = 19524;
+        } else {
+            constexpr std::string_view prefix = "disc0:/PSP_GAME/USRDIR/prx/";
+            if (!NativeModuleAdaptersEnabled() || source_path.substr(0, prefix.size()) != prefix)
+                throw NativeFailure{};
+            const auto filename = source_path.substr(prefix.size());
+            const auto* host = recovered::FindStartupModule(filename);
+            if (!host || callsite != host->callsite || option != recovered::StartupOptions4F59C(static_cast<int32_t>(host->kind)))
+                throw NativeFailure{};
+            request->host_descriptor = host;
+            request->input_bytes = host->bytes;
+            relative = L"PSP_GAME\\USRDIR\\prx\\";
+            for (const char byte : filename) relative.push_back(static_cast<wchar_t>(byte));
+        }
+        request->native_path = options.media_root;
+        if (!request->native_path.empty() && request->native_path.back() != L'/' && request->native_path.back() != L'\\')
+            request->native_path += L'\\';
+        request->native_path += relative;
+        std::lock_guard<std::mutex> lock(metadata);
+        if (module_requests.size() >= StartupNoCurrentModule) throw NativeFailure{};
+        request->data.request_index = static_cast<uint32_t>(module_requests.size());
+        module_requests.push_back(std::move(request)); // before any OS acquisition
+        state.current_module_index = static_cast<uint32_t>(module_requests.size() - 1);
+        event_module_index = state.current_module_index;
+        state.current_frontier_source_pc = callsite;
+        state.current_frontier_module_relative = false;
+        try { state.current_frontier = "Before source wrapper Open"; } catch (...) { ++state.dropped_events; }
+        EmitLocked("ModuleRequestOwned", "HostModuleRequest", callsite, state.current_module_index,
+                   false, state.owner, 0, 0, path);
+    }
+    int32_t OpenRead(const char* path, uint32_t flags, uint32_t mode) override {
+        auto* request = CurrentModule();
+        if (!IsCurrent(true) || !request || !path || request->data.path != path || flags != 1 || mode != 0 ||
+            !media_activated || request->backend_file) throw NativeFailure{};
+        // Exhaustion must not acquire a file needing an unowned corrective Close.
+        const int32_t identity = NewSourceIdentity();
+        if (identity <= 0) return AdapterError;
+        const auto opened = backend->OpenRead(request->native_path, flags, mode);
+        if (opened.status) request->backend_file = opened.handle; // first, nonthrowing primitive publication
+        std::lock_guard<std::mutex> lock(metadata);
+        auto& data = request->data;
+        if (opened.status) {
+            data.source_fd = identity; data.file_live = true;
+            data.file_native_object = opened.host_handle; data.encoded_file_bytes = opened.file_size;
+            data.file_backend_owner = opened.handle.owner;
+            data.file_backend_generation = opened.handle.generation; data.file_backend_serial = opened.handle.serial;
+        }
+        EmitLocked("IoOpenAdapter", "SourceAdapter", 0x4F514, opened.status ? identity : AdapterError,
+                   true, opened.host_handle, opened.status.win32_error, 0,
+                   "accepted WindowsStartupBackend::OpenRead;separate request owner;flags1/mode0");
+        return opened.status ? identity : AdapterError;
+    }
+    recovered::StartupModuleOutcome ModuleStopResult(recovered::StartupModuleStop stop,
+        const char* frontier, DWORD error = 0, uint32_t source_pc = 0x4F53C, bool module_relative = false) {
+        std::lock_guard<std::mutex> lock(metadata);
+        auto* request = CurrentModule();
+        state.current_frontier_source_pc = source_pc;
+        state.current_frontier_module_relative = module_relative;
+        if (request) {
+            request->data.frontier_source_pc = source_pc;
+            request->data.frontier_module_relative = module_relative;
+        }
+        if (stop == recovered::StartupModuleStop::Unsupported) {
+            state.barrier_source_pc = source_pc; state.barrier_module_relative = module_relative;
+        }
+        else if (stop == recovered::StartupModuleStop::HostFailure)
+            FailLocked(Failure(StartupRuntimeCode::HostFailure, error));
+        try {
+            state.current_frontier = frontier;
+            if (request) request->data.frontier = frontier;
+            // Legacy binding frontier aliases request0, not the active last request.
+            if (request && request->data.request_index == 0) state.module_binding_frontier = frontier;
+            if (stop == recovered::StartupModuleStop::Unsupported) {
+                state.worker_state = "Blocked"; state.barrier = frontier;
+            }
+        } catch (...) { ++state.dropped_events; }
+        EmitLocked("ModuleCallStop", stop == recovered::StartupModuleStop::Unsupported ? "Unsupported" : "HostLifecycle",
+                   source_pc, 0, false, request ? request->data.file_native_object : 0, error, 0, frontier, 0, 0, module_relative);
+        return stop; // no source service v0 or entry result
+    }
+    recovered::StartupModuleOutcome LoadModuleById(int32_t fd, uint32_t flags,
+                               const recovered::StartupModuleOptions& option) override {
+        using Stop = recovered::StartupModuleStop;
+        if (HostCancelled()) return Stop::HostCancelled;
+        auto* request = CurrentModule();
+        if (!IsCurrent(true) || !request || !FileMatches(*request) || fd < 0 || fd != request->data.source_fd || flags != 0 ||
+            option != request->options || request->staging || request->data.module_uid_assigned) throw NativeFailure{};
+        auto& data = request->data;
+        { std::lock_guard<std::mutex> lock(metadata); data.flags = flags;
+          EmitLocked("LoadModuleByID-enter", "SourceCall", 0x4F53C, fd, false, data.file_native_object,
+                     0, 0, "flags0;owned pending options20/path;no completed source Load result"); }
+        if (data.encoded_file_bytes != request->input_bytes)
+            return ModuleStopResult(Stop::Unsupported, "Module file extent differs from the validated exact input");
+        const auto position = backend->Seek64(request->backend_file, 0, 1);
+        Emit("ModuleObserveFilePosition", "HostModuleInput", 0x4F53C, position.position,
+             false, data.file_native_object, position.status.win32_error, 0, "same accepted-backend fd;whence1;no rewind");
+        if (!position.status)
+            return ModuleStopResult(Stop::HostFailure, "Module file-position observation failed", position.status.win32_error);
+        { std::lock_guard<std::mutex> lock(metadata); data.staging_file_position = position.position; }
+        if (position.position != 0)
+            return ModuleStopResult(Stop::Unsupported, "Only actual fresh-open position0 is supported for module input");
+        if (HostCancelled()) return Stop::HostCancelled;
+        SYSTEM_INFO system{}; GetSystemInfo(&system);
+        const uint64_t page = system.dwPageSize;
+        const uint64_t committed = page ? ((uint64_t(request->input_bytes) + page - 1) / page) * page : 0;
+        if (!page || next_staging_coordinate % page || !committed ||
+            next_staging_coordinate + committed > (uint64_t(1) << 32))
+            return ModuleStopResult(Stop::HostFailure, "Host staging coordinate/page geometry exceeds32-bit range");
+        StartupPartitionRequest allocation_request;
+        allocation_request.bytes = request->input_bytes;
+        allocation_request.source_base = static_cast<uint32_t>(next_staging_coordinate);
+        const auto allocation = backend->Allocate(allocation_request);
+        if (!allocation.status)
+            return ModuleStopResult(Stop::HostFailure, "Module staging allocation failed", allocation.status.win32_error);
+        request->staging = allocation.handle; // primitive owner BEFORE mutex/telemetry/text
+        next_staging_coordinate += committed;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            data.staging_live = true; data.staging_owner = allocation.handle.owner;
+            data.staging_generation = allocation.handle.generation; data.staging_serial = allocation.handle.serial;
+            data.staging_host_address = allocation.host_address; data.staging_source_coordinate = allocation.source_base;
+            data.staging_committed_bytes = allocation.committed_bytes; data.staging_page_bytes = allocation.page_bytes;
+            EmitLocked("ModuleStagingAllocated", "HostModuleInput", 0, allocation.requested_bytes, false,
+                       allocation.host_address, 0, 0, "distinct host staging coordinate;NOT PSP module placement");
+        }
+        if (allocation.requested_bytes != request->input_bytes || allocation.source_base != allocation_request.source_base ||
+            allocation.committed_bytes != committed || allocation.page_bytes != page || !allocation.live ||
+            !allocation.readable || !allocation.writable || allocation.host_address % page ||
+            allocation.host_address > (std::numeric_limits<uint64_t>::max)() - committed)
+            return ModuleStopResult(Stop::HostFailure, "Module staging allocation geometry mismatch");
+        for (const auto& other : module_requests) {
+            if (other.get() == request || !other->staging) continue;
+            const auto& old = other->data;
+            if (old.staging_serial == data.staging_serial ||
+                (data.staging_host_address < old.staging_host_address + old.staging_committed_bytes &&
+                 old.staging_host_address < data.staging_host_address + committed) ||
+                (uint64_t(data.staging_source_coordinate) < uint64_t(old.staging_source_coordinate) + old.staging_committed_bytes &&
+                 uint64_t(old.staging_source_coordinate) < uint64_t(data.staging_source_coordinate) + committed))
+                return ModuleStopResult(Stop::HostFailure, "Distinct module staging allocations overlap or alias");
+        }
+        StartupHostStatus borrowed;
+        request->staging_borrow = backend->Borrow(request->staging, borrowed);
+        if (!borrowed) return ModuleStopResult(Stop::HostFailure, "Module staging borrow failed", borrowed.win32_error);
+        { std::lock_guard<std::mutex> lock(metadata); data.staging_borrow_live = true; }
+        StartupRawBorrowSpan span;
+        const auto same_span = [&]() {
+            return span.size == request->input_bytes && span.bytes && span.initialized && span.readable &&
+                span.host_address == allocation.host_address && span.source_base == allocation.source_base &&
+                span.handle.owner == allocation.handle.owner && span.handle.generation == allocation.handle.generation &&
+                span.handle.serial == allocation.handle.serial;
+        };
+        auto access = request->staging_borrow.Span(span);
+        if (!access || !same_span() || !span.writable)
+            return ModuleStopResult(Stop::HostFailure, "Module staging lease geometry/identity failed", access.win32_error);
+        if (HostCancelled()) return Stop::HostCancelled;
+        const auto read = backend->ReadInto(request->backend_file, request->staging, 0, request->input_bytes);
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            data.staging_requested = read.requested; data.staging_transferred = read.transferred;
+            data.staging_host_read = read.host_result; data.staging_read_error = read.status.win32_error;
+            EmitLocked("ModuleReadInto", "HostModuleInput", 0x4F53C, read.transferred, false,
+                       read.destination_host_address, read.status.win32_error, 0, StartupHostCodeName(read.status.code));
+        }
+        access = request->staging_borrow.Span(span);
+        if (!access || !same_span())
+            return ModuleStopResult(Stop::HostFailure, "Module lease changed after input read", access.win32_error);
+        uint32_t known = 0;
+        for (uint32_t i = 0; i < request->input_bytes; ++i) if (span.initialized[i] == 1) ++known;
+        { std::lock_guard<std::mutex> lock(metadata); data.staging_known_bytes = known; }
+        if (!read.status || !read.host_result || read.requested != request->input_bytes ||
+            read.transferred != request->input_bytes || read.file_position != 0 || read.destination_host_address != span.host_address)
+            return ModuleStopResult(Stop::HostFailure, "Module read failed/short/position or destination mismatch", read.status.win32_error);
+        if (known != request->input_bytes)
+            return ModuleStopResult(Stop::HostFailure, "Module input contains unknown bytes");
+        { std::lock_guard<std::mutex> lock(metadata); data.staging_full_read = true; }
+        if (HostCancelled()) return Stop::HostCancelled;
+        const auto digest = core::sha256_hex(span.bytes, request->input_bytes); // same physical span; no payload mirror
+        const bool exact = request->host_descriptor ? digest == request->host_descriptor->sha256 : request->input_bytes == 3232
+            ? digest == "cea81b33d4eab3607da188b0435a8582ffc7c208337c05f7e3139f0133bcb318"
+            : digest == "edfc95810a5881f7f752eee255693e75ba1ade6862b557126c5236c2b47bbca4";
+        { std::lock_guard<std::mutex> lock(metadata);
+          data.staging_hash_matches = exact; data.staging_sha256 = digest;
+          EmitLocked("ModuleEncodedIdentity", "HostModuleInput", 0x4F53C, exact ? 1 : 0, false, span.host_address, 0, 0, digest); }
+        if (!exact) return ModuleStopResult(Stop::Unsupported, "Actual module identity has no supported native definition");
+        if (HostCancelled()) return Stop::HostCancelled;
+        auto lease = std::make_shared<WindowsModuleInputLease>(); // allocations before moving exact borrow
+        lease->block = request->staging; lease->bytes = request->input_bytes; lease->coordinate = allocation.source_base;
+        lease->borrow = std::move(request->staging_borrow);
+        request->input = lease; // weak; coordinator/backend still own primitive allocation
+        recovered::NativeModuleResult loaded;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            loaded = modules.Load(std::move(lease));
+            if (loaded) {
+                data.token = loaded.token; // publish actual registry identity before allocating snapshots/text
+                data.record.token = loaded.token;
+                data.module_uid_assigned = true; data.module_load_returned = loaded.source_return;
+                data.module_load_result = loaded.source_result; data.module_input_live = true;
+                data.record_live = true; data.pending = false;
+                EmitLocked("ModuleRegistryPublished", "WindowsModulePolicy", 0, loaded.token.uid, false,
+                           loaded.token.serial, 0, 0, "owned UID;exact input/source/compiled association;entry NOT run at Load");
+                try {
+                    modules.Snapshot(loaded.token, data.record);
+                    EmitLocked("ModuleRecoveredDescriptor", "RecoveredMetadata", 0x4F53C,
+                               static_cast<int64_t>(data.record.imports.size()), false, 0, 0, 0, data.record.name);
+                    EmitLocked("ModuleDeferredImportPolicy", "WindowsModulePolicy", 0,
+                               static_cast<int64_t>(data.record.imports.size()), false, loaded.token.owner, 0, 0, data.record.policy);
+                    for (const auto& entry : data.record.imports)
+                        EmitLocked("ModuleImportUnresolved", "RecoveredMetadata", entry.source_stub_va,
+                                   entry.nid, false, loaded.token.serial, 0, 0, entry.library, 0, 0, true);
+                    EmitLocked("ModuleExportMetadataRegistered", "WindowsModulePolicy", 0,
+                               static_cast<int64_t>(data.record.exports.size()), false, loaded.token.serial, 0, 0,
+                               "metadata is not a provider or implemented audio service");
+                } catch (...) { ++state.dropped_events; }
+                EmitLocked("LoadModuleByID-return", "SourceAdapter", 0x4F53C, loaded.source_result, loaded.source_return,
+                           loaded.token.serial, 0, 0, "actual registry UID;no PSP placement/GP/relocation claim");
+            }
+        }
+        if (!loaded || !loaded.source_return)
+            return ModuleStopResult(loaded.code == recovered::NativeModuleCode::IdentityMismatch ||
+                loaded.code == recovered::NativeModuleCode::UnsupportedPolicy ? Stop::Unsupported : Stop::HostFailure,
+                "Native module ownership/identity registry load unsupported or failed");
+        return recovered::StartupModuleReturned{loaded.source_result};
+    }
+    recovered::StartupModuleOutcome StartModule(int32_t uid, uint32_t bytes, const void* args,
+        int32_t* status, const void* options_arg) override {
+        using Stop = recovered::StartupModuleStop;
+        if (HostCancelled()) return Stop::HostCancelled;
+        auto* request = CurrentModule();
+        if (!IsCurrent(true) || !request || !request->data.module_uid_assigned || uid != request->data.token.uid)
+            throw NativeFailure{};
+        auto& data = request->data;
+        recovered::NativeModuleResult started_module;
+        uint32_t entry_frontier = 0;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            data.module_start_called = true;
+            EmitLocked("StartModule-enter", "SourceCall", 0x4F560, uid, false, data.token.serial,
+                       0, 0, "bytes0/argsNULL/statusNULL/optionsNULL");
+            if (request->host_descriptor) {
+                if (bytes || args || status || options_arg) throw NativeFailure{};
+                const auto name = request->host_descriptor->filename;
+                auto service = platform::StartHostModule(name);
+                if (service && service->Name() != name) throw NativeFailure{};
+                started_module = modules.StartHostService(data.token, name, std::move(service));
+            } else {
+                started_module = modules.Start(data.token, bytes, args, status, options_arg);
+            }
+            // Primitive lifecycle outcome precedes fallible metadata.
+            data.module_start_returned = started_module.source_return;
+            data.module_start_result = started_module.source_result;
+            data.module_start_entry_returned = started_module.entry_return;
+            data.module_start_entry_result = started_module.entry_result;
+            data.module_initialization_blocked = started_module.code == recovered::NativeModuleCode::UnsupportedEntry;
+            entry_frontier = started_module.frontier_source_pc; // primitive outcome; independent of allocating Snapshot
+            if (data.module_initialization_blocked) {
+                data.record.state = recovered::NativeModuleState::EntryBlocked;
+                modules.InitializationSnapshot(data.token, data.record.initialization); // fixed-size exact effects survive telemetry OOM
+            }
+            try {
+                modules.Snapshot(data.token, data.record);
+                const auto& initialization = data.record.initialization;
+                if (initialization.prefix_entered) for (uint32_t i = 0; i < initialization.writes_count; ++i) {
+                    const auto& write = initialization.writes[i];
+                    EmitLocked("ModuleInitializationWrite", "RecoveredNativePrefix", write.source_pc, write.value,
+                               false, initialization.native_state_address, 0, 0,
+                               "actual private masked AOT record state;input PRX unchanged;ordered write in record snapshot", 0, 0, true);
+                }
+            } catch (...) { ++state.dropped_events; }
+            if (data.module_initialization_blocked)
+                EmitLocked("ModuleEntryDependency", "UnsupportedEntry", started_module.frontier_source_pc,
+                           0x9D3F790C, false, data.token.serial, 0, 0,
+                           data.record.initialization.check_need_mem.entered
+                               ? "libatrac3plus+1684 entered audiocodec CheckNeedMem; nested ME import pending, no result"
+                               : "libatrac3plus request/token;module-relative1684->stub3640;a0=owned record0+44,a1=1000;NO dispatch/result",
+                           0, 0, true);
+            if (started_module.entry_return)
+                EmitLocked(started_module.entry_source_pc == 0xAD8 ? "ModuleStartEntryAD8-return" : "ModuleStartEntry-return",
+                           "RecoveredNativeEntry", started_module.entry_source_pc, started_module.entry_result, true,
+                           data.token.serial, 0, 0, "entry/body result separate from Windows Start service", 0, 0, true);
+            if (started_module.source_return)
+                EmitLocked("StartModule-return", "SourceAdapter", 0x4F560, started_module.source_result, true,
+                           data.token.serial, 0, 0, "explicit Windows service policy;original firmware result UNKNOWN");
+        }
+        if (started_module.code == recovered::NativeModuleCode::UnsupportedEntry ||
+            started_module.code == recovered::NativeModuleCode::NotLinked)
+            return ModuleStopResult(Stop::Unsupported, "Native module entry reached exact unsupported dependency;no body/service result",
+                                    0, entry_frontier, true);
+        if (!started_module || !started_module.source_return)
+            return ModuleStopResult(Stop::HostFailure, "Native module Start validation failed", 0, 0x4F560);
+        return recovered::StartupModuleReturned{started_module.source_result};
+    }
+    recovered::StartupModuleOutcome CloseModuleFile(int32_t fd) override {
+        if (HostCancelled()) return recovered::StartupModuleStop::HostCancelled;
+        auto* request = CurrentModule();
+        if (!IsCurrent(true) || !request || !FileMatches(*request) || fd != request->data.source_fd) throw NativeFailure{};
+        auto& data = request->data;
+        { std::lock_guard<std::mutex> lock(metadata); data.source_close_called = true; }
+        const auto closed = backend->CloseFile(request->backend_file);
+        if (closed) request->backend_file = {}; // retire actual primitive BEFORE telemetry
+        { std::lock_guard<std::mutex> lock(metadata);
+          data.source_close_returned = true; data.source_close_result = closed ? 0 : AdapterError;
+          if (closed) data.file_live = false;
+          bool live = false;
+          try {
+              auto retained = request->input.lock();
+              recovered::NativeModuleInputView view;
+              live = retained && retained->View(view) && view.owner == request->staging.owner &&
+                  view.generation == request->staging.generation && view.serial == request->staging.serial &&
+                  view.host_address == data.staging_host_address && view.size == request->input_bytes &&
+                  core::sha256_hex(view.bytes, view.size) == data.staging_sha256;
+          } catch (...) { ++state.dropped_events; }
+          data.module_input_live = live; data.module_file_closed_while_input_live = closed && live;
+          if (closed) EmitLocked("SourceFileClosedWhileModuleInputLive", "WindowsModulePolicy", 0x4F570,
+              live ? 1 : 0, false, data.staging_host_address, 0, 0, "same fd retired;same actual span/hash retained");
+          EmitLocked("SourceCloseModuleFile", "SourceAdapter", 0x4F570, data.source_close_result,
+                     true, data.file_native_object, closed.win32_error, 0, "close result ignored;wrapper returns actual Load UID"); }
+        return recovered::StartupModuleReturned{closed ? 0 : AdapterError};
+    }
+    void UnsupportedFollowingModule() override {
+        (void)ModuleStopResult(recovered::StartupModuleStop::Unsupported,
+            "Following source wrapper sequence is outside the validated native contract", 0, 0);
+    }
+    bool NativeModuleAdaptersEnabled() const override { return bool(options.atrac_decoder_factory); }
+    void StoreTableModuleUid(uint32_t index, int32_t uid) override {
+        std::lock_guard<std::mutex> lock(metadata);
+        state.table_module_uids.at(index) = uid;
+        EmitLocked("StoreModuleTableUid", "GameStore", 0x4F728, uid);
+    }
+    recovered::StartupFlowStop AfterModuleGates() override {
+        using Stop = recovered::StartupFlowStop;
+        if (HostCancelled()) return Stop::HostCancelled;
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.module_gates_completed = true;
+            state.current_module_index = StartupNoCurrentModule;
+            event_module_index = StartupNoCurrentModule;
+        }
+        auto boot = std::make_shared<gameplay::BootToDisplay>();
+        if (!boot->Initialize()) {
+            (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure, "Native display bootstrap failed",
+                                   0, boot->FrontierPc());
+            return Stop::HostFailure;
+        }
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.reached_100C = true;
+            state.display_initialized = boot->Ready();
+        }
+        platform::WindowsRngInitializationSample clock;
+        if (!platform::CaptureWindowsRngInitialization(clock) ||
+            !boot->InitializeClock(clock.local_date_bytes, clock.conversion.local_civil_epoch_seconds)) {
+            (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure, "Native local clock initialization failed",
+                                   clock.last_error, boot->FrontierPc());
+            return Stop::HostFailure;
+        }
+        const auto archive = std::filesystem::path(options.media_root) / L"PSP_GAME/USRDIR/data/DATA.BP";
+        if (!boot->MountDataArchive(archive)) {
+            (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure, "Native DATA.BP mount failed",
+                                   0, boot->FrontierPc());
+            return Stop::HostFailure;
+        }
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.root_archive_mounted = true;
+        }
+        if (HostCancelled()) return Stop::HostCancelled;
+        // 1068 seeds the RNG from local civil time. 190DC compares the saved date
+        // with the same game calendar used by the running room to stamp that save.
+        platform::WindowsClockCache game_clock;
+        if (!game_clock.RefreshFromWindows()) {
+            (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure, "Unable to read the game calendar",
+                                   0, boot->FrontierPc());
+            return Stop::HostFailure;
+        }
+        boot->SetUpdateCalendar(game_clock.Snapshot().calendar_words);
+        if (!boot->PrepareTitle()) {
+            const char* save_boundary = boot->SaveReadBoundary();
+            if (save_boundary) std::fprintf(stderr, "Reading the saved game: %s\n", save_boundary);
+            (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure,
+                                   save_boundary ? save_boundary : "Cold CLoadMan title preparation failed",
+                                   0, boot->FrontierPc());
+            return Stop::HostFailure;
+        }
+        // Frame submission belongs to one presentation caller. The native
+        // worker remains at the exit callback pump and never touches boot again.
+        const auto frontier = boot->FrontierPc();
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            state.worker_state = "Blocked";
+            state.barrier = "Cold CLoadMan title resource selected; presentation owned by caller";
+            state.current_frontier = state.barrier;
+            state.current_frontier_source_pc = state.barrier_source_pc = frontier;
+            state.current_frontier_module_relative = state.barrier_module_relative = false;
+            boot_display = std::move(boot);
+            state.title_prepared = true;
+            EmitLocked("TitlePresentationHandoff", "HostPresentation", frontier, 0, false);
+        }
+        return Stop::PresentationReady;
+    }
+    bool HostCancelled() const override { return cancelled.load(); }
+    void BarrierPump() {
+        HANDLE notification = nullptr;
+        { std::lock_guard<std::mutex> lock(metadata); if (callback) notification = callback->notification; }
+        for (;;) {
+            // Exit notification precedes cancellation if both were signalled by Close.
+            HANDLE handles[2] = {notification ? notification : exit_event, cancel};
+            const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+            const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
+            Emit("WorkerBarrierWait", "HostBarrierPump", 0, 0, false, 0, error, wait);
+            if (wait == WAIT_OBJECT_0) {
+                (void)Dispatch(recovered::StartupDispatchOrigin::HostBarrierPump);
+                if (HostCancelled()) return;
+                if (!notification) { //no registered callback; an exit request still cancels host lifetime.
+                    cancelled.store(true); (void)SetEvent(cancel); return;
+                }
+            } else if (wait == WAIT_OBJECT_0 + 1) return;
+            else throw NativeFailure{};
+        }
+    }
+    StartupRuntimeStatus QueueExitLocked() {
+        state.exit_requested = true;
+        notifications = (std::min)(notifications + 1u, uint32_t((std::numeric_limits<int>::max)()));
+        const BOOL signaled = SetEvent(exit_event); DWORD error = signaled ? 0 : GetLastError();
+        EmitLocked("SetEvent-exit", "HostNotification", 0, signaled, false, Address(exit_event), error,
+                   0, "coalesced session-exit notifications;arg2=0;commonNULL;no PSP timing claim");
+        if (callback && callback->registered) {
+            const BOOL notified = SetEvent(callback->notification); const DWORD notify_error = notified ? 0 : GetLastError();
+            EmitLocked("SetEvent-callback", "HostNotification", 0, notified, false,
+                       Address(callback->notification), notify_error);
+            if (!notified) error = notify_error;
+        }
+        return error ? Failure(StartupRuntimeCode::HostFailure, error) : StartupRuntimeStatus{};
+    }
+    StartupRuntimeStatus RequestExit() {
+        std::lock_guard<std::mutex> lock(metadata);
+        if (state.resources_closed || state.closing) return Failure(StartupRuntimeCode::Closed);
+        if (!started) return Failure(StartupRuntimeCode::NotStarted);
+        return QueueExitLocked();
+    }
+    bool CloseHandleOwned(HANDLE& handle, const char* operation, bool invalid_sentinel = false) {
+        if (!handle || handle == INVALID_HANDLE_VALUE) return true;
+        const HANDLE original = handle;
+        const BOOL closed = CloseHandle(original); const DWORD error = closed ? 0 : GetLastError();
+        if (closed) handle = invalid_sentinel ? INVALID_HANDLE_VALUE : nullptr;
+        Emit(operation, "HostLifecycle", 0, closed, false, Address(original), error);
+        return closed != FALSE;
+    }
+    StartupRuntimeStatus CleanupFailure(DWORD error = 0) {
+        std::lock_guard<std::mutex> lock(metadata);
+        state.status = Failure(StartupRuntimeCode::HostFailure, error);
+        return state.status;
+    }
+    StartupRuntimeStatus Close(uint32_t timeout) {
+        {
+            std::lock_guard<std::mutex> lock(metadata);
+            if (state.resources_closed) return {};
+            if (close_in_progress) return Failure(StartupRuntimeCode::Busy);
+            if (GetCurrentThreadId() == state.caller_thread_id || GetCurrentThreadId() == state.worker_thread_id)
+                return Failure(StartupRuntimeCode::WrongThread);
+            close_in_progress = true;
+            if (started) (void)QueueExitLocked();
+            state.closing = true;
+        }
+        struct Admission {
+            Impl& self;
+            ~Admission() { std::lock_guard<std::mutex> lock(self.metadata); self.close_in_progress = false; }
+        } admission{*this};
+        cancelled.store(true);
+        if (cancel) {
+            const BOOL signaled = SetEvent(cancel); const DWORD error = signaled ? 0 : GetLastError();
+            Emit("SetEvent-cancel", "HostLifecycle", 0, signaled, false, Address(cancel), error);
+            if (!signaled) return CleanupFailure(error);
+        }
+        // A source StartThread failure can leave a suspended real object. Resume
+        // solely for native cancellation; thunk checks cancel BEFORE source entry.
+        for (unsigned i = 0; i != 2; ++i) {
+            HANDLE handle = i ? worker : caller;
+            bool& resumed = i ? worker_resumed : caller_resumed;
+            if (handle && !resumed) {
+                const DWORD previous = ResumeThread(handle); const DWORD error = previous == DWORD(-1) ? GetLastError() : 0;
+                Emit("ResumeForHostCancellation", "HostLifecycle", 0, previous, false, Address(handle), error);
+                if (previous == DWORD(-1)) return CleanupFailure(error);
+                resumed = true;
+            }
+        }
+        HANDLE handles[2]; DWORD count = 0;
+        if (caller) handles[count++] = caller;
+        if (worker) handles[count++] = worker;
+        if (count) {
+            const DWORD wait = WaitForMultipleObjects(count, handles, TRUE, timeout);
+            const DWORD error = wait == WAIT_FAILED ? GetLastError() : 0;
+            Emit("JoinCallerAndWorker", "HostLifecycle", 0, count, false, 0, error, wait);
+            if (wait != WAIT_OBJECT_0) {
+                const auto status = Failure(wait == WAIT_TIMEOUT ? StartupRuntimeCode::Timeout : StartupRuntimeCode::HostFailure, error, wait);
+                std::lock_guard<std::mutex> lock(metadata); state.status = status; return status;
+            }
+            std::lock_guard<std::mutex> lock(metadata);
+            if (caller) state.caller_joined = true;
+            if (worker) state.worker_joined = true;
+        }
+        // Both contexts have ended. No thread can now access or wait on these objects.
+        bool ok = true;
+        // Reverse publication order; BOTH source contexts are joined. Failure
+        // preserves this owner, earlier modules and backend for honest retry.
+        for (size_t remaining = module_requests.size(); remaining; --remaining) {
+            auto& request = *module_requests[remaining - 1];
+            auto& data = request.data;
+            struct EventModuleScope {
+                Impl& runtime; uint32_t previous;
+                ~EventModuleScope() { runtime.event_module_index = previous; }
+            } event_scope{*this, event_module_index};
+            event_module_index = data.request_index;
+            { std::lock_guard<std::mutex> lock(metadata); data.pending = false; }
+            if (data.module_uid_assigned && !data.module_unloaded) {
+                std::lock_guard<std::mutex> lock(metadata);
+                if (!state.caller_joined || !state.worker_joined) {
+                    state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                }
+                if (data.module_start_returned && !data.module_stop_returned) {
+                    data.module_stop_called = true;
+                    const auto stopped = modules.Stop(data.token);
+                    if (!stopped) {
+                        EmitLocked("HostModuleStopFailed", "HostModulePolicy", 0, 0, false, data.token.serial,
+                                   0, 0, recovered::NativeModuleCodeName(stopped.code));
+                        state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                    }
+                    data.module_stop_returned = true; data.module_stop_result = stopped.entry_result;
+                    if (!stopped.entry_return) {
+                        EmitLocked("ReleaseNativeModuleService", "HostLifecycle", 0, 0, false, data.token.serial);
+                    } else EmitLocked(stopped.entry_source_pc == 0xAE0 ? "ModuleStopEntryAE0-return" : "ModuleStopEntry-return",
+                               "HostPolicyRecoveredNativeEntry", stopped.entry_source_pc, stopped.entry_result,
+                               false, data.token.serial, 0, 0, "host cleanup after BOTH joins;no source Stop service result", 0, 0, true);
+                }
+                if (data.module_initialization_blocked && !data.module_initialization_aborted) {
+                    data.module_initialization_abort_called = true;
+                    const auto aborted = modules.AbortInitialization(data.token);
+                    if (!aborted) {
+                        EmitLocked("HostModuleAbortFailed", "HostModulePolicy", 0, 0, false, data.token.serial,
+                                   0, 0, recovered::NativeModuleCodeName(aborted.code));
+                        state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                    }
+                    data.module_initialization_aborted = true;
+                    data.record.state = recovered::NativeModuleState::InitializationAborted;
+                    modules.InitializationSnapshot(data.token, data.record.initialization);
+                    EmitLocked("HostModuleInitializationAborted", "HostModulePolicy", 0, data.token.uid, false,
+                               data.token.serial, 0, 0, "libatrac partial11A0->1684;no external service/resource;NO sourceStop121C");
+                }
+                try { modules.Snapshot(data.token, data.record); } catch (...) { ++state.dropped_events; }
+                const auto unloaded = modules.Unload(data.token);
+                if (!unloaded) {
+                    EmitLocked("HostModuleUnloadFailed", "HostModulePolicy", 0, 0, false, data.token.serial,
+                               0, 0, recovered::NativeModuleCodeName(unloaded.code));
+                    state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                }
+                data.module_unloaded = true; data.record_live = false; data.record.input_live = false;
+                data.module_input_released = request.input.expired();
+                data.module_input_live = !data.module_input_released;
+                EmitLocked("HostModuleRegistryUnloaded", "HostModulePolicy", 0, data.token.uid, false,
+                           data.token.serial, 0, 0, "reverse host cleanup;imports/exports/UID removed;no source Unload");
+                EmitLocked("ModuleInputLeaseReleased", "HostModulePolicy", 0,
+                           data.module_input_released ? 1 : 0, false, data.staging_host_address);
+                if (!data.module_input_released) {
+                    state.status = Failure(StartupRuntimeCode::HostFailure); return state.status;
+                }
+            }
+            if (!request.input.expired()) return CleanupFailure();
+            if (request.staging) {
+                request.staging_borrow.Reset();
+                { std::lock_guard<std::mutex> lock(metadata); data.staging_borrow_live = false; }
+                Emit("ModuleStagingBorrowReset", "HostLifecycle", 0, 1, false, data.staging_host_address);
+                const auto released = backend->Free(request.staging);
+                if (released) request.staging = {}; // primitive retirement before telemetry
+                {
+                    std::lock_guard<std::mutex> lock(metadata);
+                    if (released) {
+                        data.staging_live = false;
+                        data.staging_freed_after_joins = state.caller_joined && state.worker_joined;
+                    }
+                    EmitLocked("FreeModuleStaging", "HostLifecycle", 0, released ? 1 : 0, false,
+                               data.staging_host_address, released.win32_error, 0, StartupHostCodeName(released.code));
+                }
+                if (!released) return CleanupFailure(released.win32_error);
+            }
+            if (request.backend_file) {
+                const auto closed = backend->CloseFile(request.backend_file);
+                if (closed) request.backend_file = {};
+                { std::lock_guard<std::mutex> lock(metadata);
+                  if (closed) { data.file_live = false; data.host_file_closed = true; }
+                  EmitLocked("HostCloseSourceFile", "HostLifecycle", 0, closed ? 1 : 0, false,
+                             data.file_native_object, closed.win32_error, 0,
+                             "still-open fd cleanup;distinct from source4F570;no invented sourceClose"); }
+                if (!closed) return CleanupFailure(closed.win32_error);
+            }
+        }
+        event_module_index = StartupNoCurrentModule;
+        if (callback) {
+            { std::lock_guard<std::mutex> lock(metadata); callback->registered = false; notifications = 0; }
+            if (!CloseHandleOwned(callback->notification, "CloseCallbackEvent")) ok = false;
+            if (!callback->notification) {
+                std::lock_guard<std::mutex> lock(metadata); callback.reset(); state.callback_live = false;
+                EmitLocked("RetireCallbackRegistry", "HostLifecycle", 0, state.callback_uid, false, 0, 0, 0,
+                           "native cleanup only;no source DeleteCallback/unregister");
+            }
+        }
+        if (!CloseHandleOwned(media, "CloseMediaDirectory", true)) ok = false;
+        { std::lock_guard<std::mutex> lock(metadata); state.media_live = media != INVALID_HANDLE_VALUE; }
+        if (!CloseHandleOwned(caller, "CloseCallerThread")) ok = false;
+        if (!CloseHandleOwned(worker, "CloseWorkerThread")) ok = false;
+        if (!CloseHandleOwned(exit_event, "CloseExitEvent")) ok = false;
+        if (!CloseHandleOwned(cancel, "CloseCancelEvent")) ok = false;
+        if (tls_index != TLS_OUT_OF_INDEXES) {
+            const BOOL freed = TlsFree(tls_index); const DWORD error = freed ? 0 : GetLastError();
+            Emit("TlsFree", "HostTLS", 0, freed, false, tls_index, error);
+            if (freed) tls_index = TLS_OUT_OF_INDEXES; else ok = false;
+        }
+        if (backend) {
+            const auto closed = backend->Close();
+            Emit("CloseAcceptedBackend", "HostLifecycle", 0, closed ? 1 : 0, false, 0, closed.win32_error);
+            if (!closed) ok = false;
+        }
+        std::lock_guard<std::mutex> lock(metadata);
+        boot_display.reset();
+        state.resources_closed = ok;
+        state.status = ok ? StartupRuntimeStatus{} : Failure(StartupRuntimeCode::HostFailure);
+        EmitLocked("RuntimeClose", "HostLifecycle", 0, ok ? 1 : 0);
+        return state.status;
+    }
+};
+thread_local StartupCoordinator::Impl::ThreadContext* StartupCoordinator::Impl::current_context = nullptr;
+
+StartupCoordinator::StartupCoordinator(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+StartupCoordinator::~StartupCoordinator() {
+    if (!impl_) return;
+    try { if (impl_->Close(INFINITE)) return; } catch (...) {}
+    // Hard OS wait/resume/cleanup failure cannot authorize freeing a live context.
+    // Retain the outstanding owner. Normal timeout destruction cooperatively joins.
+    (void)impl_.release();
+}
+std::unique_ptr<StartupCoordinator> StartupCoordinator::Create(const StartupRuntimeOptions& options,
+                                                             StartupRuntimeStatus& status) {
+    status = {};
+    // Allocate the RAII coordinator BEFORE acquiring any native resources.
+    auto owner = std::unique_ptr<StartupCoordinator>(
+        new StartupCoordinator(std::make_unique<Impl>(options)));
+    auto& impl = owner->impl_;
+    StartupHostStatus backend_status;
+    impl->backend = WindowsStartupBackend::Create(backend_status);
+    if (!impl->backend) { status = Failure(StartupRuntimeCode::HostFailure, backend_status.win32_error); return {}; }
+    impl->tls_index = TlsAlloc();
+    const DWORD tls_error = impl->tls_index == TLS_OUT_OF_INDEXES ? GetLastError() : 0;
+    impl->Emit("TlsAlloc", "HostTLS", 0, impl->tls_index != TLS_OUT_OF_INDEXES, false, impl->tls_index,
+               tls_error);
+    if (impl->tls_index == TLS_OUT_OF_INDEXES) {
+        status = Failure(StartupRuntimeCode::HostFailure, tls_error); (void)impl->Close(INFINITE); return {};
+    }
+    impl->cancel = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    DWORD error = impl->cancel ? 0 : GetLastError();
+    impl->Emit("CreateEventW-cancel", "HostLifecycle", 0, impl->cancel != nullptr, false, Address(impl->cancel), error);
+    if (impl->cancel) {
+        impl->exit_event = CreateEventW(nullptr, TRUE, FALSE, nullptr); error = impl->exit_event ? 0 : GetLastError();
+        impl->Emit("CreateEventW-exit", "HostLifecycle", 0, impl->exit_event != nullptr, false, Address(impl->exit_event), error);
+    }
+    if (!impl->cancel || !impl->exit_event) {
+        status = Failure(StartupRuntimeCode::HostFailure, error); (void)impl->Close(INFINITE); return {};
+    }
+    return owner;
+}
+StartupRuntimeStatus StartupCoordinator::Start() {
+    auto& self = *impl_;
+    std::lock_guard<std::mutex> lock(self.metadata);
+    if (self.state.resources_closed || self.state.closing) return Failure(StartupRuntimeCode::Closed);
+    if (self.started) return Failure(StartupRuntimeCode::AlreadyStarted);
+    self.started = true;
+    unsigned id = 0; const uintptr_t native = self.Begin(false, 0, id);
+    if (!native) return self.state.status;
+    self.caller = reinterpret_cast<HANDLE>(native); self.state.caller_thread_id = id;
+    self.state.caller_state = "Suspended";
+    const DWORD previous = ResumeThread(self.caller); const DWORD error = previous == DWORD(-1) ? GetLastError() : 0;
+    self.EmitLocked("ResumeNativeCaller", "HostThread", 0, previous, false, Address(self.caller), error);
+    if (previous == DWORD(-1)) { self.FailLocked(Failure(StartupRuntimeCode::HostFailure, error)); return self.state.status; }
+    self.caller_resumed = true; return {};
+}
+StartupObservation StartupCoordinator::Observe(uint64_t after_event) const {
+    const auto& self = *impl_;
+    std::lock_guard<std::mutex> lock(self.metadata);
+    auto out = self.state;
+    out.module_records = self.modules.Snapshots();
+    out.module_providers = self.modules.Providers();
+    out.module_observations.reserve(self.module_requests.size());
+    for (const auto& request : self.module_requests) {
+        auto data = request->data;
+        if (data.module_uid_assigned && !data.module_unloaded) {
+            data.record_live = self.modules.Snapshot(data.token, data.record);
+            if (data.record_live) data.module_input_live = data.record.input_live;
+        } else if (data.module_unloaded) {
+            data.record_live = false; data.record.input_live = false;
+        }
+        out.module_observations.push_back(std::move(data));
+    }
+    if (!out.module_observations.empty()) {
+        const auto& first = out.module_observations.front(); // EXPLICIT request0 aliases only
+        out.source_fd = first.source_fd; out.file_live = first.file_live;
+        out.file_native_object = first.file_native_object; out.file_backend_owner = first.file_backend_owner;
+        out.file_backend_generation = first.file_backend_generation; out.file_backend_serial = first.file_backend_serial;
+        out.pending_module_owner = first.request_owner; out.pending_module_live = first.pending;
+        out.pending_module_path = first.path; out.pending_module_flags = first.flags; out.pending_module_options = first.options;
+        out.encoded_file_bytes = first.encoded_file_bytes;
+        out.staging_owner = first.staging_owner; out.staging_generation = first.staging_generation;
+        out.staging_serial = first.staging_serial; out.staging_host_address = first.staging_host_address;
+        out.staging_known_bytes = first.staging_known_bytes; out.staging_file_position = first.staging_file_position;
+        out.staging_source_coordinate = first.staging_source_coordinate; out.staging_requested = first.staging_requested;
+        out.staging_transferred = first.staging_transferred; out.staging_read_error = first.staging_read_error;
+        out.staging_live = first.staging_live; out.staging_borrow_live = first.staging_borrow_live;
+        out.staging_host_read = first.staging_host_read; out.staging_full_read = first.staging_full_read;
+        out.staging_hash_matches = first.staging_hash_matches; out.staging_freed_after_joins = first.staging_freed_after_joins;
+        out.staging_sha256 = first.staging_sha256;
+        out.module_uid_assigned = first.module_uid_assigned; out.module_uid = first.token.uid;
+        out.module_load_returned = first.module_load_returned; out.module_start_called = first.module_start_called;
+        out.module_manager_owner = first.token.owner ? first.token.owner : self.modules.Owner();
+        out.module_generation = first.token.generation ? first.token.generation : self.modules.Generation();
+        out.module_serial = first.token.serial; out.module_input_live = first.module_input_live;
+        out.module_file_closed_while_input_live = first.module_file_closed_while_input_live;
+        out.module_stop_called = first.module_stop_called; out.module_unloaded = first.module_unloaded;
+        out.module_input_released = first.module_input_released; out.module_start_returned = first.module_start_returned;
+        out.module_stop_returned = first.module_stop_returned; out.module_start_result = first.module_start_result;
+        out.module_stop_result = first.module_stop_result; out.module_record = first.record;
+        out.module_state = first.record_live || first.module_unloaded ? recovered::NativeModuleStateName(first.record.state) : "";
+        out.module_binding_frontier = first.frontier;
+    }
+    for (const auto& event : self.events) if (event.ordinal > after_event) out.events.push_back(event);
+    return out;
+}
+std::shared_ptr<gameplay::BootToDisplay> StartupCoordinator::BootDisplay() const {
+    std::lock_guard<std::mutex> lock(impl_->metadata);
+    return impl_->state.closing ? nullptr : impl_->boot_display;
+}
+int32_t StartupCoordinator::OpenAtrac(uint32_t codec, std::vector<uint8_t> riff) {
+    std::lock_guard<std::mutex> lock(impl_->metadata);
+    auto* service = impl_->modules.AtracService();
+    if (!service || impl_->state.closing) return -1;
+    const int32_t id = service->Acquire(codec);
+    if (id < 0) return id;
+    try {
+        if (service->OpenRiff(static_cast<uint32_t>(id), std::move(riff))) return id;
+    } catch (...) {
+        service->Release(static_cast<uint32_t>(id));
+        throw;
+    }
+    service->Release(static_cast<uint32_t>(id));
+    return -1;
+}
+bool StartupCoordinator::DecodeAtrac(uint32_t id, audio::AtracPcmFrame& output) {
+    std::lock_guard<std::mutex> lock(impl_->metadata);
+    auto* service = impl_->modules.AtracService();
+    return !impl_->state.closing && service && service->Decode(id, output);
+}
+bool StartupCoordinator::ReleaseAtrac(uint32_t id) {
+    std::lock_guard<std::mutex> lock(impl_->metadata);
+    auto* service = impl_->modules.AtracService();
+    return !impl_->state.closing && service && service->Release(id) == 0;
+}
+StartupRuntimeStatus StartupCoordinator::RequestExit() { return impl_->RequestExit(); }
+StartupRuntimeStatus StartupCoordinator::Close(uint32_t timeout_ms) { return impl_->Close(timeout_ms); }
+const char* StartupRuntimeCodeName(StartupRuntimeCode code) {
+    switch (code) {
+    case StartupRuntimeCode::Ok: return "Ok";
+    case StartupRuntimeCode::AlreadyStarted: return "AlreadyStarted";
+    case StartupRuntimeCode::NotStarted: return "NotStarted";
+    case StartupRuntimeCode::Closed: return "Closed";
+    case StartupRuntimeCode::HostFailure: return "HostFailure";
+    case StartupRuntimeCode::Timeout: return "Timeout";
+    case StartupRuntimeCode::InvalidUid: return "InvalidUid";
+    case StartupRuntimeCode::WrongThread: return "WrongThread";
+    case StartupRuntimeCode::Busy: return "Busy";
+    }
+    return "Unknown";
+}
+} // namespace dokodemo

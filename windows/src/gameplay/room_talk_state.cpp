@@ -1,0 +1,1726 @@
+#include "room_talk_state.h"
+#include "room_friends.h"
+#include "room_inventory.h"
+#include "message_speed.h"
+#include "room_learned_word.h"
+#include "core_hash.h"
+#include "recovered/calendar_native.h"
+#include "recovered/game_primitives.h"
+#include "recovered/rng_native.h"
+#include "recovered/package_storage_native.h"
+#include <algorithm>
+#include <fstream>
+#include <stdexcept>
+#include <utility>
+
+namespace dokodemo::gameplay {
+namespace {
+constexpr unsigned circle=0x2000;
+int ScriptInteger(unsigned bits) {
+    return static_cast<int>((bits & 0x0fffffffu) ^ 0x08000000u)-0x08000000;
+}
+void Require(bool value,const char* error) { if (!value) throw std::runtime_error(error); }
+unsigned Word(const unsigned char* p,unsigned bytes) {
+    unsigned v=0;
+    for(unsigned i=0;i<bytes;++i) v|=unsigned(p[i])<<(8*i);
+    return v;
+}
+recovered::Glyph GlyphAt(std::string_view s,std::size_t at) {
+    recovered::Glyph glyph{};
+    Require(at<s.size() && recovered::read_glyph(reinterpret_cast<const unsigned char*>(s.data()+at),
+                    s.size()-at,glyph),"Invalid CP932 break group");
+    return glyph;
+}
+unsigned TextWidth(std::string_view line,const recovered::PackageView& font) {
+    unsigned width=0;
+    for(std::size_t pos=0;pos<line.size();) {
+        const auto glyph=GlyphAt(line,pos);
+        if(glyph.index!=0x16) {
+            Require(glyph.index>=32 && glyph.index<8224,"Invalid conversation glyph");
+            width+=font.ReadU8(0x3c+glyph.index-32)+2;
+        }
+        pos+=glyph.consumed;
+    }
+    return width?width-2:0;
+}
+}
+
+namespace {
+constexpr std::array<unsigned,3> contact_globals{0x59a8,0x59af,0x59b6};
+constexpr std::array<unsigned,3> contact_sizes{5,6,6};
+}
+
+std::array<KscSaveValue,3> RoomTalkState::ContactHistoryTables() const {
+    std::array<KscSaveValue,3> tables;
+    for (unsigned bank=0; bank<tables.size(); ++bank) {
+        const auto& live=global_arrays_.at(contact_globals[bank]);
+        Require(live.size()==contact_sizes[bank],"Wrong live contact table size");
+        KscSaveValue array{0x90000000u | contact_sizes[bank]};
+        for (const auto& cell : live) {
+            KscSaveValue value;
+            if (cell.kind!=Kind::nil) {
+                if (bank==0) {
+                    Require(cell.kind==Kind::string,"Invalid live contact note");
+                    value.word=0x60000000u;
+                    value.text=cell.text;
+                } else {
+                    Require(cell.kind==Kind::integer,"Invalid live contact flag word");
+                    value.word=0x20000000u | (static_cast<unsigned>(cell.data) & 0x0fffffffu);
+                }
+            }
+            array.children.push_back(std::move(value));
+        }
+        tables[bank]={0xb0000000u,{},{std::move(array)}};
+    }
+    return tables;
+}
+
+std::array<KscSaveValue,2> RoomTalkState::ProgressFlagWords() const {
+    return {KscSaveValue{0x20000000u | (intro_flags_ & 0x0fffffffu)},
+            KscSaveValue{0x20000000u | (outing_enabled_ & 0x0fffffffu)}};
+}
+
+void RoomTalkState::RestoreContactHistory(const std::array<KscSaveValue,3>& tables,
+                                         const std::array<KscSaveValue,2>& progress) {
+    for (const auto& word : progress)
+        Require(word.word>>28==2 && word.children.empty() && word.text.empty(),
+                "Invalid saved room progress word");
+    std::array<std::vector<Value>,3> staged;
+    for (unsigned bank=0; bank<tables.size(); ++bank) {
+        const auto& ref=tables[bank];
+        Require(global_arrays_.at(contact_globals[bank]).size()==contact_sizes[bank],
+                "Contact table owner not initialized");
+        Require(ref.word==0xb0000000u && ref.text.empty() && ref.children.size()==1,
+                "Invalid saved contact table reference");
+        const auto& array=ref.children.front();
+        Require(array.word==(0x90000000u | contact_sizes[bank]) && array.text.empty() &&
+                array.children.size()==contact_sizes[bank],"Wrong saved contact table shape");
+        for (const auto& cell : array.children) {
+            Require(cell.children.empty(),"Unexpected object in saved contact table");
+            Value value;
+            if (bank==0 && (cell.word>>28==5 || cell.word>>28==6)) {
+                Require(cell.text.find('\0')==std::string::npos,"Embedded NUL in saved contact note");
+                value.kind=Kind::string;
+                value.text=cell.text;
+            } else {
+                Require(cell.text.empty(),"Unexpected saved contact text");
+                if (cell.word!=0) {
+                    Require(bank!=0 && cell.word>>28==2,"Invalid saved contact flag or note");
+                    value.kind=Kind::integer;
+                    value.data=ScriptInteger(cell.word);
+                }
+            }
+            staged[bank].push_back(std::move(value));
+        }
+    }
+    for (unsigned bank=0; bank<tables.size(); ++bank)
+        staged[bank].swap(global_arrays_.at(contact_globals[bank]));
+    intro_flags_=progress[0].word & 0x0fffffffu;
+    outing_enabled_=progress[1].word & 0x0fffffffu;
+}
+
+bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile& p,std::string& error) {
+    *this={};
+    if(p.actor!=0) return true;
+    try {
+        std::ifstream file(dir/"toro-introduction.bin",std::ios::binary|std::ios::ate);
+        Require(file && file.tellg()==std::streamoff(1743),"Missing NEKO introduction");
+        std::vector<unsigned char> image(1743);
+        Require(bool(file.seekg(0).read(reinterpret_cast<char*>(image.data()),image.size())) &&
+            core::sha256_hex(image.data(),image.size())=="3b92c05af8a7ddbcf95bceea5537412269f00b75280a6cfff23250826b90415c",
+            "Wrong NEKO introduction");
+        auto* bytes=image.data();
+        const unsigned count=Word(bytes+4,2), suffix=Word(bytes+6,2);
+        const unsigned fallback=Word(bytes+8,2);
+        suffix_.assign(reinterpret_cast<const char*>(bytes+14),suffix);
+        farewell_word_.assign(reinterpret_cast<const char*>(bytes+14+suffix),fallback);
+        std::size_t pos=14+suffix+fallback;
+        for(unsigned i=0;i<2;++i) {
+            const unsigned length=Word(bytes+10+i*2,2);
+            std::string_view set(reinterpret_cast<const char*>(bytes+pos),length);
+            for(std::size_t j=0;j<set.size();) {
+                const auto glyph=GlyphAt(set,j);
+                break_classes_[i].push_back(glyph.index);
+                j+=glyph.consumed;
+            }
+            pos+=length;
+        }
+        for(unsigned i=0;i<count;++i) {
+            const unsigned entry=Word(bytes+pos,4), size=Word(bytes+pos+4,4);
+            pos+=8;
+            code_[entry].assign(bytes+pos,bytes+pos+size);
+            pos+=size;
+        }
+        std::ifstream topics(dir/"toro-topics.bin",std::ios::binary|std::ios::ate);
+        const auto topic_bytes=topics.tellg();
+        Require(topics && topic_bytes>=std::streamoff(16) && topic_bytes<=std::streamoff(1u<<24),
+                "Missing or oversized NEKO topic package");
+        image.resize(static_cast<std::size_t>(topic_bytes));
+        Require(bool(topics.seekg(0).read(reinterpret_cast<char*>(image.data()),image.size())),
+                "Incomplete topic package");
+        bytes=image.data();
+        const auto format=Word(bytes,4);
+        Require(format==0x32505452 || format==0x33505452 || format==0x34505452 || format==0x35505452,
+                "Invalid topic package");
+        const unsigned sections=(format >> 24)-'2'+3;
+        pos=4+4*sections;
+        Require(pos<=image.size(),"Incomplete topic header");
+        for(unsigned section=0;section<sections;++section) {
+            unsigned previous_end=0;
+            for(unsigned i=0;i<Word(bytes+4+4*section,4);++i) {
+                Require(image.size()-pos>=8,"Incomplete topic index");
+                const unsigned at=Word(bytes+pos,4),size=Word(bytes+pos+4,4);
+                pos+=8;
+                Require(at<=0xffffff && size<=0x1000000-at && size<=image.size()-pos &&
+                        at>=previous_end,"Invalid topic range");
+                if(section==0) {
+                    Require(size && bytes[pos]==0x30,"Invalid KSC function entry");
+                    const auto previous=code_.find(at);
+                    if(previous!=code_.end()) {
+                        Require(previous->second.size()==size && std::equal(previous->second.begin(),
+                            previous->second.end(),bytes+pos),"Conflicting projected topic function");
+                        previous_end=at+size; pos+=size; continue;
+                    }
+                    const auto next=code_.lower_bound(at);
+                    Require((next==code_.end() || at+size<=next->first) &&
+                        (next==code_.begin() || std::prev(next)->first+std::prev(next)->second.size()<=at),
+                        "Overlapping topic code");
+                    code_[at].assign(bytes+pos,bytes+pos+size);
+                } else if(section==2) {
+                    Require(size%12==0,"Invalid word filter triples");
+                    auto& predicate=predicates_[at];
+                    for(unsigned j=0;j<size;j+=4) predicate.push_back(Word(bytes+pos+j,4));
+                } else if(section==3) {
+                    Require(size>=8 && size%4==0,"Invalid phrase list size");
+                    const unsigned count=size/4-1;
+                    Require(count<=0xfff && Word(bytes+pos,4)==(0x90000000u|count),
+                            "Invalid phrase list header");
+                    auto& list=phrase_lists_[at];
+                    for(unsigned j=1;j<=count;++j) {
+                        const unsigned entry=Word(bytes+pos+4*j,4), offset=entry&0x0fffffff;
+                        Require(entry>>28==5 && pool_.count(offset),"Phrase has no script-pool string");
+                        list.push_back(offset);
+                    }
+                } else if(section==4) {
+                    const bool labels=at==0x6092 || at==0x9a26;
+                    const unsigned cells=at==0x9a26?3:at==0x6092?4:at==0x59a8?5:6;
+                    Require((labels || at==0x59a8 || at==0x59af || at==0x59b6) &&
+                            size==4*(cells+1) && Word(bytes+pos,4)==(0x90000000u|cells),
+                            "Invalid room script global array");
+                    auto& array=global_arrays_[at];
+                    array.resize(cells);
+                    for(unsigned j=0;j<cells;++j) {
+                        const unsigned cell=Word(bytes+pos+4*(j+1),4);
+                        if(labels) {
+                            const unsigned offset=cell&0x0fffffff;
+                            Require(cell>>28==5 && pool_.count(offset),"Missing table label in script pool");
+                            array[j]={Kind::string,0,pool_.at(offset)};
+                        } else Require(cell==0,"Invalid initial room script global cell");
+                    }
+                } else if(section==5) {
+                    Require(size>=8 && size%4==0,"Invalid procedure list size");
+                    const unsigned count=size/4-1;
+                    Require(count<=0xfff && Word(bytes+pos,4)==(0x90000000u|count),
+                            "Invalid procedure list header");
+                    auto& list=procedure_lists_[at];
+                    for(unsigned j=1;j<=count;++j) {
+                        const unsigned entry=Word(bytes+pos+4*j,4),target=entry&0x0fffffff;
+                        Require(entry>>28==7 && code_.count(target),"Missing script procedure in call list");
+                        list.push_back(target);
+                    }
+                } else {
+                    Require(!pool_.count(at),"Duplicate topic string offset");
+                    pool_[at].assign(reinterpret_cast<const char*>(bytes+pos),size);
+                }
+                // Pool offsets may name a suffix of another CP932 string.
+                previous_end=section==0?at+size:at+1;
+                pos+=size;
+            }
+        }
+        Require(pos==image.size(),"Trailing topic package data");
+        Require(sections<5 || (global_arrays_.count(0x59a8) && global_arrays_.count(0x59af) &&
+                global_arrays_.count(0x59b6)),"Missing room script global array");
+        Require(!code_.count(0x2262) || global_arrays_.count(0x6092),"Missing season name array");
+        for(unsigned entry:{0x123du,0x29b7u,0x4e27u,0x7d43au,0x846abu,0x848f9u,0x84b63u,
+                            0x84d7au,0x84e93u,0x84f41u,0x8506du,0x8528bu,0x89accu,0x8d3e2u})
+            Require(code_.count(entry)!=0,"Missing required NEKO topic");
+        pool_[0xa207]=farewell_word_;
+        nickname_=p.nickname.text(); player_=p.player.text();
+        if(!vocabulary_.Load(dir,p,error) || !fallback_list_.Load(dir,error) || !traits_.Load(dir,error)) return false;
+        global_arrays_[0x243f].resize(6);
+        global_arrays_[0x243f][0]={Kind::integer,0}; // 8E166, initial room selector.
+        if(code_.count(0x13219)) LoadOutings(dir);
+        phase_=Phase::prompt;
+        return true;
+    } catch(const std::exception& e) { error=e.what(); return false; }
+}
+
+bool RoomTalkState::supports_ordinary_topic(unsigned selected_pc) const {
+    return (selected_pc==0x4e27 || selected_pc==0x89acc || selected_pc==0x7d43a ||
+            selected_pc==0x810a0 || selected_pc==0x8121c || selected_pc==0x82bfa || selected_pc==0x8304e ||
+            (selected_pc>=0x846ab && selected_pc<=0x85439)) && code_.count(selected_pc);
+}
+
+bool RoomTalkState::BeginOrdinaryTopic(unsigned selected_pc,bool queued) {
+    if(phase_!=Phase::done || ordinary_ ||
+       (queued?!code_.count(selected_pc):!supports_ordinary_topic(selected_pc))) return false;
+    queued_root_=queued;
+    if(queued) {
+        // 2573 copies the selected queue slot into CT2878 before the call at 25A5.
+        selected_fallback_={Kind::code,int(selected_pc)};
+        indirect_topic_=selected_pc;
+    }
+    phase_=Phase::running; pc_=selected_pc;
+    ordinary_=true; ordinary_return_=ordinary_rejected_=false;
+    frontier_.reset();
+    farewell_=skip_farewell_=actor_wait_=message_wait_=false;
+    last_answer_=-1; delay_=0; result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    return true;
+}
+
+void RoomTalkState::LoadOutings(const std::filesystem::path& dir) {
+    std::ifstream file(dir/"toro-outings.bin",std::ios::binary);
+    auto read=[&](unsigned size) {
+        unsigned char bytes[4]{};
+        Require(size<=4 && bool(file.read(reinterpret_cast<char*>(bytes),size)),"Incomplete outing package");
+        return Word(bytes,size);
+    };
+    Require(read(4)==0x34544f52,"Missing Toro outing data");
+    outing_enabled_=read(4);
+    for(auto& mask : outing_period_masks_) mask=read(1);
+    auto& order=global_arrays_[0x5f92];
+    std::array<bool,133> seen{};
+    for(unsigned i=0;i<132;++i) {
+        const unsigned row=read(1);
+        Require(row>0 && row<seen.size() && !seen[row],"Invalid outing index");
+        seen[row]=true; order.push_back({Kind::integer,int(row)});
+    }
+    auto& destinations=global_arrays_[0x59da];
+    for(unsigned i=0;i<133;++i) {
+        const unsigned kind=read(1),primary=read(2),secondary=read(2),offer=read(1);
+        auto fields=std::make_shared<std::vector<Value>>(9);
+        if(kind) {
+            Require(kind<outing_period_masks_.size() && vocabulary_.HasPredicate(primary) &&
+                    (!secondary || vocabulary_.HasPredicate(secondary)),"Invalid outing descriptor");
+            fields->at(0)={Kind::integer,int(kind)};
+            fields->at(1)={Kind::constant_ref,int(primary)};
+            Require(offer<=1,"Invalid outing offer flag");
+            fields->at(6)={Kind::truth,int(offer)};
+            if(secondary) fields->at(2)={Kind::constant_ref,int(secondary)};
+        } else Require(!primary && !secondary,"Invalid empty outing descriptor");
+        for(unsigned slot : {3u,4u,5u,7u,8u}) {
+            const auto length=read(2);
+            if(length==0xffff) continue;
+            Require(kind!=0,"Unexpected empty outing text");
+            std::string text(length,'\0');
+            Require(bool(file.read(text.data(),length)),"Incomplete outing text");
+            fields->at(slot)={Kind::string,0,std::move(text)};
+        }
+        Require(!kind || fields->at(4).kind==Kind::string,"Missing outing label");
+        destinations.push_back({Kind::array,0,{},0,std::move(fields)});
+    }
+    roof_detail_=read(2);
+    const unsigned table_count=read(2);
+    for(unsigned i=0;i<table_count;++i) {
+        const unsigned ct=read(2),count=read(2);
+        Require(!outing_tables_.count(ct) && count && count<=7,"Invalid rooftop detail list");
+        auto& cells=outing_tables_[ct];
+        std::vector<unsigned> phrases;
+        for(unsigned j=0;j<count;++j) {
+            const auto tag=read(4);
+            if(!tag) cells.emplace_back();
+            else if(tag>>16==0xb003) cells.push_back({Kind::constant_ref,int(tag&0xffff)});
+            else {
+                Require(tag>>28==5,"Invalid rooftop detail type");
+                const unsigned offset=tag&0x0fffffff;
+                std::string text(read(2),'\0');
+                Require(bool(file.read(text.data(),text.size())),"Incomplete rooftop detail text");
+                const auto saved=pool_.emplace(offset,text);
+                Require(saved.first->second==text,"Conflicting rooftop text");
+                cells.push_back({Kind::string,0,std::move(text)});
+                phrases.push_back(offset);
+            }
+        }
+        if(phrases.size()==count) phrase_lists_[ct]=std::move(phrases);
+    }
+    Require(outing_tables_.count(roof_detail_)!=0,"Missing rooftop detail list");
+    global_arrays_[0].resize(8); // The eight mutable destination strings read by the scene.
+    outing_script_cells_[0x2871]={Kind::integer,0};
+    Require(file.peek()==std::char_traits<char>::eof(),"Trailing outing data");
+}
+
+unsigned RoomTalkState::SelectHomeInvitation(unsigned mode,unsigned period,recovered::RngNativeOwner& rng) {
+    Require(mode<=1 && period<6 && outing_current_scene_==0,
+            "Invalid home invitation context");
+    const auto& destinations=global_arrays_.at(0x59da);
+    std::vector<unsigned> eligible;
+    // 2EB8/2F41 scan the descriptor IDs in numerical order. The shuffled
+    // G5F92 index belongs to the player's outing menu, not this selection.
+    for(unsigned id=1;id<destinations.size();++id) {
+        const auto& row=*destinations[id].cells;
+        const unsigned kind=row[0].data;
+        if(!kind || row[8].kind!=Kind::string || row[8].text=="DEFAULT") continue;
+        if(!(outing_period_masks_.at(kind)&(1u<<period))) continue;
+        const bool enabled=(outing_enabled_&(1u<<kind))!=0;
+        if(mode ? enabled : (row[6].data && !enabled)) eligible.push_back(id);
+    }
+    home_invitation_mode_=mode;
+    home_invitation_id_=eligible.empty()?0:eligible.at(rng.NextC3234()%eligible.size());
+    return home_invitation_id_;
+}
+
+bool RoomTalkState::BeginHomeInvitation() {
+    if(!home_invitation_id_ || phase_!=Phase::done || ordinary_ || outing_current_scene_!=0 ||
+       !code_.count(0x12f39)) return false;
+    // Resume the same 12F39 frame after its immediate mode-dependent selector.
+    // 12F4B/12F58 have stored that one RNG selection in local 1.
+    locals_.assign(16,Value{});
+    locals_[0]={Kind::integer,int(home_invitation_mode_)};
+    locals_[1]={Kind::integer,int(std::exchange(home_invitation_id_,0))};
+    phase_=Phase::running; pc_=0x12f59; indirect_topic_=0x12f39;
+    excursion_=ordinary_=true; outing_returning_=false;
+    ordinary_return_=ordinary_rejected_=outing_room_request_=false;
+    eligibility_words_.clear(); outing_snapshot_.reset();
+    frontier_.reset(); last_answer_=-1; delay_=0;
+    farewell_=skip_farewell_=actor_wait_=message_wait_=false;
+    result_={}; stack_.clear(); callers_.clear();
+    return true;
+}
+
+bool RoomTalkState::BeginOuting(unsigned period) {
+    if(phase_!=Phase::done || ordinary_ || !code_.count(0x13219) || period>=6) return false;
+    if(outing_current_scene_!=0) return false;
+    outing_returning_=false; eligibility_words_.clear(); outing_snapshot_.reset();
+    phase_=Phase::running; pc_=0x13219;
+    excursion_=ordinary_=true; outing_period_=period; indirect_topic_=0x13219;
+    ordinary_return_=ordinary_rejected_=false; outing_room_request_=false;
+    frontier_.reset(); last_answer_=-1; delay_=0;
+    farewell_=skip_farewell_=actor_wait_=message_wait_=false;
+    result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    return true;
+}
+
+bool RoomTalkState::BeginOutingReturn() {
+    if(phase_!=Phase::done || ordinary_ || outing_current_scene_==0 || !outing_snapshot_) return false;
+    excursion_=ordinary_=outing_returning_=true; ordinary_return_=ordinary_rejected_=false;
+    phase_=Phase::running; pc_=indirect_topic_=0x1320e;
+    frontier_.reset(); result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    return true;
+}
+
+void RoomTalkState::SetOutingEnvironment(bool game28,bool lamp,unsigned period,unsigned camera_mode) {
+    outing_game28_=game28; outing_lamp_=lamp; outing_period_=period; outing_camera_=camera_mode;
+}
+bool RoomTalkState::TakeOutingInterrupt() { return std::exchange(outing_interrupt_requested_,false); }
+bool RoomTalkState::TakeOutingWideCamera() { return std::exchange(outing_wide_,false); }
+std::optional<bool> RoomTalkState::TakeOutingWipe() { return std::exchange(outing_wipe_,{}); }
+void RoomTalkState::StampContactLocation(std::uint32_t minute) {
+    outing_script_cells_[0x3de7]={Kind::calendar_time,static_cast<int>(minute & 0x0fffffffu)};
+}
+
+RoomContactLocation RoomTalkState::contact_location() const {
+    RoomContactLocation place;
+    place.scene=outing_current_scene_;
+    const auto& slots=global_arrays_.at(0x243f);
+    Require(slots.at(0).kind==Kind::integer,"Invalid contact destination index");
+    place.descriptor_id=unsigned(slots[0].data);
+    if(place.descriptor_id) {
+        const auto& record=slots.at(1);
+        Require(record.kind==Kind::array && record.cells && record.cells->at(0).kind==Kind::integer,
+                "Missing current contact destination type");
+        place.kind=unsigned(record.cells->at(0).data);
+    }
+    const auto transfer=outing_script_cells_.find(0x3de7);
+    if(transfer!=outing_script_cells_.end() && transfer->second.kind==Kind::calendar_time)
+        place.transfer_minute=unsigned(transfer->second.data)&0x0fffffffu;
+    return place;
+}
+
+// The active CT243F descriptor owns both strings through the outing.
+std::vector<std::string> RoomTalkState::current_outing_names() const {
+    const auto& slots = global_arrays_.at(0x243f);
+    const auto& descriptor = slots.at(1);
+    if (!descriptor.cells || descriptor.cells->size() <= 4) return {};
+    return {descriptor.cells->at(4).text, slots.at(3).text};
+}
+
+std::optional<unsigned> RoomTalkState::outing_return_deadline() const {
+    const auto it=outing_script_cells_.find(0x2875);
+    if(!outing_current_scene_ || it==outing_script_cells_.end() || it->second.kind!=Kind::calendar_time)
+        return {};
+    return unsigned(it->second.data)&0x0fffffffu;
+}
+std::array<std::optional<std::string>,8> RoomTalkState::outing_labels() const {
+    std::array<std::optional<std::string>,8> labels{};
+    const auto found=global_arrays_.find(0);
+    if(found!=global_arrays_.end())
+        for(unsigned i=0;i<labels.size();++i)
+            if(const auto& cell=found->second.at(i); cell.kind==Kind::string) labels[i]=cell.text;
+    return labels;
+}
+bool RoomTalkState::FinishOutingScene(unsigned selector) {
+    if(phase_!=Phase::outing_scene || !outing_context_disabled_ || outing_scene_request_!=selector) return false;
+    // 1C57 disabled the event caller. The actual scene owner releases the restored context.
+    outing_context_disabled_=false;
+    outing_current_scene_=selector; outing_scene_request_.reset(); phase_=Phase::running;
+    return true;
+}
+bool RoomTalkState::FinishOutingInventoryRestore() {
+    if(phase_!=Phase::outing_inventory) return false;
+    phase_=Phase::running; return true;
+}
+
+bool RoomTalkState::TakeOutingRoomRequest() {
+    return std::exchange(outing_room_request_,false);
+}
+
+bool RoomTalkState::BeginTeaching() {
+    if(phase_!=Phase::done || ordinary_) return false;
+    phase_=Phase::running; pc_=0x8dba;
+    direct_teaching_=ordinary_=true;
+    counted_contact_=ordinary_return_=ordinary_rejected_=false;
+    frontier_.reset(); last_answer_=-1; delay_=0;
+    farewell_=skip_farewell_=actor_wait_=message_wait_=false;
+    result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    return true;
+}
+
+bool RoomTalkState::BeginOrdinaryFarewell() {
+    if(phase_!=Phase::done || ordinary_) return false;
+    ordinary_=farewell_=true; ordinary_return_=ordinary_rejected_=false;
+    vocabulary_.BeginConversation(); phase_=Phase::running; pc_=0x7d548;
+    locals_.clear(); stack_.clear(); callers_.clear(); result_={}; delay_=0;
+    return true;
+}
+
+bool RoomTalkState::BeginRoomAttentionMessage() {
+    if(phase_!=Phase::done || ordinary_) return false;
+    // 8D8EE chooses DIALOG(0,5,2,100,100) and calls the 8D3E2 text.
+    columns_=5; rows_=2; attention_=true; attention_return_=false;
+    phase_=Phase::running; pc_=0x8d3e2; locals_.clear(); stack_.clear(); callers_.clear();
+    result_={}; delay_=0; return true;
+}
+
+std::vector<unsigned> RoomTalkState::TakeEffects() {
+    std::vector<unsigned> result;
+    result.swap(effects_);
+    return result;
+}
+
+std::vector<std::optional<unsigned>> RoomTalkState::TakeTopicEnqueues() {
+    return std::exchange(topic_enqueues_,{});
+}
+
+bool RoomTalkState::TakeFirstDayDiaryRequest() {
+    return std::exchange(first_day_diary_request_, false);
+}
+
+unsigned RoomTalkState::Read(unsigned n) {
+    auto it=code_.upper_bound(pc_);
+    Require(it!=code_.begin(),"Outside the cold NEKO callback");
+    --it;
+    const unsigned at=pc_-it->first;
+    Require(n<=it->second.size() && at<=it->second.size()-n,"Outside selected KSC routine");
+    pc_+=n;
+    return Word(it->second.data()+at,n);
+}
+
+RoomTalkState::Value RoomTalkState::Pop() {
+    Require(!stack_.empty(),"KSC talk operand underflow");
+    auto value=std::move(stack_.back()); stack_.pop_back();
+    return value;
+}
+
+RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
+    if(v.kind==Kind::frame_ref) return (v.depth==callers_.size()?locals_:callers_.at(v.depth).locals).at(v.data);
+    if(v.kind==Kind::word_field) return DictionaryField(v.data,int(v.depth));
+    if(v.kind==Kind::question_field) {
+        const auto raw=vocabulary_.QuestionField(v.data,unsigned(v.depth));
+        if(!raw) return {};
+        if(raw>>28==5) return {Kind::string,0,vocabulary_.QuestionText(v.data,unsigned(v.depth))};
+        Require(raw>>28==2 || raw>>28==3,"Unexpected prepared question field");
+        return {raw>>28==3?Kind::calendar_time:Kind::integer,ScriptInteger(raw)};
+    }
+    if(v.kind==Kind::element) return v.cells->at(v.data);
+    if(v.kind==Kind::global_element) return global_arrays_.at(v.data).at(v.depth);
+    if(v.kind==Kind::teach_field) return teaching_.at(v.data);
+    if(v.kind==Kind::global_ref && (v.data==21 || v.data==22))
+        return {Kind::string,0,v.data==21?nickname_:player_};
+    throw std::runtime_error("Unknown cold KSC reference");
+}
+
+RoomTalkState::Value RoomTalkState::DictionaryField(int row,int field) const {
+    if(row==600 && field==26) {
+        const auto& saying=vocabulary_.player_saying();
+        return {Kind::string,0,saying,0,{}, {{row,26,0,saying.size()}}};
+    }
+    if(!vocabulary_.HasField(row,field)) return {};
+    if(field==1 || field==2 || field==13) {
+        auto text=vocabulary_.FieldText(row,field);
+        return {Kind::string,0,std::string(text),0,{}, {{row,unsigned(field),0,text.size()}}};
+    }
+    return {Kind::integer,vocabulary_.FieldInt(row,field)};
+}
+
+void RoomTalkState::Assign(const Value& ref,Value value) {
+    if(ref.kind==Kind::frame_ref)
+        (ref.depth==callers_.size()?locals_:callers_.at(ref.depth).locals).at(ref.data)=std::move(value);
+    else if(ref.kind==Kind::teach_field) teaching_.at(ref.data)=std::move(value);
+    else if(ref.kind==Kind::question_field) {
+        if(value.kind==Kind::string) {
+            vocabulary_.WriteQuestionText(ref.data,unsigned(ref.depth),value.text);
+            return;
+        }
+        Require(value.kind==Kind::nil || value.kind==Kind::integer || value.kind==Kind::calendar_time,
+                "Unsupported prepared question value");
+        const unsigned tag=value.kind==Kind::calendar_time?0x30000000u:0x20000000u;
+        vocabulary_.WriteQuestionField(ref.data,unsigned(ref.depth),
+                value.kind==Kind::nil?0:tag|(unsigned(value.data)&0x0fffffffu));
+    }
+    else if(ref.kind==Kind::element) ref.cells->at(ref.data)=std::move(value);
+    else if(ref.kind==Kind::global_element) global_arrays_.at(ref.data).at(ref.depth)=std::move(value);
+    else if(ref.kind==Kind::word_field) {
+        if(ref.data==600 && ref.depth==26 && value.kind==Kind::string)
+            vocabulary_.SetPlayerSaying(value.text);
+        else if(value.kind==Kind::string) vocabulary_.WriteText(ref.data,unsigned(ref.depth),value.text);
+        else if(value.kind==Kind::nil && ref.depth==13) vocabulary_.ClearAlternate(ref.data);
+        else {
+            Require(value.kind==Kind::integer || value.kind==Kind::nil,"Invalid KSC word field value");
+            vocabulary_.WriteNumber(ref.data,unsigned(ref.depth),value.kind==Kind::nil?std::nullopt:std::optional<int>(value.data));
+        }
+    }
+    else if(excursion_ && ref.kind==Kind::constant_ref &&
+            (ref.data==0x2871 || ref.data==0x2874 || ref.data==0x2875 || ref.data==0x3de7 || ref.data==0x3df7))
+        outing_script_cells_[ref.data]=std::move(value);
+    else if(excursion_ && ref.kind==Kind::global_ref && ref.data==0x6105)
+        outing_script_cells_[ref.data]=std::move(value);
+    else if(exchange_inventory_ && ref.kind==Kind::global_ref && (ref.data==0x98c3 || ref.data==0x9a32))
+        friends_cells_[ref.data]=std::move(value);
+    else if(friends_introduction_ && ref.kind==Kind::constant_ref &&
+            (ref.data==0x2869 || ref.data==0x2877 || ref.data==0x2d54 || ref.data==0x2d55))
+        friends_cells_[ref.data]=std::move(value);
+    else if(friends_introduction_ && ref.kind==Kind::constant_ref && ref.data==0x2873 && value.kind==Kind::nil)
+        skip_farewell_=false;
+    else if(ref.kind==Kind::constant_ref && ref.data==0x2878) selected_fallback_=std::move(value);
+    else if(ref.kind==Kind::constant_ref && ref.data==0 && value.kind==Kind::truth)
+        event20_cleanup_=value.data!=0; // 4E/46 around the address-form ASK in 49DE.
+    else if(ref.kind==Kind::constant_ref && ref.data==0x2872) mood_set_tick_=value.data;
+    else if(ref.kind==Kind::constant_ref && ref.data==0x2873 && value.data==2) skip_farewell_=true;
+    else throw std::runtime_error("Unsupported KSC assignment");
+}
+
+RoomTalkState::Value RoomTalkState::ReadText() {
+    Value text{Kind::string};
+    for(unsigned c=Read(1);c;c=Read(1)) {
+        if(c==0x14) {
+            const auto control_pc=pc_-1;
+            const auto local=Read(2);
+            const auto& value=locals_.at(local);
+            if(value.kind==Kind::integer) {
+                // BOOT 75778 converts a tagged script integer with "%d".
+                text.text+=std::to_string(ScriptInteger(unsigned(value.data)));
+                continue;
+            }
+            Require(value.kind==Kind::string,"Unsupported KSC message operand");
+            for(auto operand : value.word_operands) {
+                operand.offset+=text.text.size();
+                operand.control_pc=control_pc;
+                operand.local=local;
+                text.word_operands.push_back(operand);
+            }
+            text.text+=value.text;
+        } else if(c==0x17) {
+            Require(Read(2)==23,"Unknown KSC speech suffix"); text.text+=suffix_;
+        } else text.text+=static_cast<char>(c);
+    }
+    return text;
+}
+
+void RoomTalkState::Message() {
+    message_pc_=pc_-1;
+    auto text=ReadText();
+    message_=std::move(text.text);
+    message_word_operands_=std::move(text.word_operands);
+    message_word_rows_.clear();
+    for(const auto& operand : message_word_operands_) message_word_rows_.push_back(operand.row);
+    message_indirect_topic_=indirect_topic_;
+    message_wait_=true; text_cursor_=group_end_=0; idle_=90; closing_=false;
+    if(lines_.empty()) lines_.emplace_back();
+}
+
+void RoomTalkState::ReturnFromGreeting() {
+    // Cold action6 returns via 89966 and 8DFB5 into the main update. Its
+    // common false cleanup (8E023 -> 8D932) requests camera mode zero at
+    // 8D9AC/8D9AD. 2962 suppresses an unchanged mode; the room camera owns
+    // that state. The later independent idle selector is a different action.
+    wide_camera_requested_=true;
+    phase_=Phase::done;
+}
+
+void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) {
+    const auto argc=args.size();
+    if(exchange_inventory_ && target==0x899f9 && pc_==0x8d1f8) {
+        Require(argc==2 && args[0].kind==Kind::integer && args[0].data==0 &&
+                args[1].kind==Kind::truth && args[1].data,"Invalid meeting farewell");
+        // 899FB clears conversation marks, followed by the source farewell. The
+        // existing room activity owners commit the contact count and 89787 timer.
+        counted_contact_=friend_timer_requested_=true;
+        vocabulary_.BeginConversation();
+        if(skip_farewell_) { actor_command_=74; return; }
+        target=0x7d548; args.clear();
+    }
+    if(exchange_inventory_ && target==0x8d932 && pc_==0x8e029) {
+        Require(argc==1 && args[0].kind==Kind::truth && !args[0].data && callers_.empty() &&
+                !meeting_event_depth_ && blocks_.empty(),"Unbalanced exchange cleanup");
+        exchange_inventory_=nullptr; ordinary_=false; ordinary_return_=true;
+        phase_=Phase::done; indirect_topic_=0;
+        return;
+    }
+    if(friends_introduction_ && target==0x89787 && pc_==0x89a6d && !argc) {
+        // The activity owner applies 89787's clock/RNG together with the ensuing 8D932(false).
+        friend_timer_requested_=true;
+        return;
+    }
+    if(friends_introduction_ && target==0x8d932 && pc_==0x8e029) {
+        Require(argc==1 && args[0].kind==Kind::truth && !args[0].data && callers_.empty() &&
+                friend_timer_requested_,"Unexpected friends introduction cleanup");
+        friends_introduction_=ordinary_=false; ordinary_return_=true;
+        phase_=Phase::done; indirect_topic_=0;
+        return;
+    }
+    if(target==0xf30 && excursion_) {
+        Require(argc==1 && args[0].kind==Kind::constant_ref,"Invalid outing word lookup");
+        result_={Kind::integer,vocabulary_.FirstOutingMatch(args[0].data)};
+        if(result_.data>=0) eligibility_words_[unsigned(locals_.at(7).data)]=unsigned(result_.data);
+        return;
+    }
+    if(target==0x249f) {
+        Require(argc==0 && (selected_fallback_.kind==Kind::code || selected_fallback_.kind==Kind::nil),
+                "Invalid pending topic in CT2878");
+        topic_enqueues_.push_back(selected_fallback_.kind==Kind::code
+            ?std::optional<unsigned>(selected_fallback_.data):std::nullopt);
+        return;
+    }
+    if(target==0x333b) { // Passed giver name; inventory owns builtin11(5) and row generation.
+        Require(argc==1 && args[0].kind==Kind::string && args[0].text==nickname_,"Invalid KSC giver");
+        phase_=Phase::gift; return;
+    }
+    if(target==0x393c && excursion_ && outing_returning_ && pc_==0x3a98) {
+        phase_=Phase::outing_inventory; return;
+    }
+    if(target==0x1c5b && !excursion_) { // Register and wait for the currently open modal to close.
+        Require(gift_slot_>=0,"No active inventory slot");
+        phase_=Phase::inventory; return;
+    }
+    if(target==0xa519) {
+        // The introductory KSC call at 8959A requests the first-day entry;
+        // both the gift path and the no-slot branch join here.
+        Require(argc==1 && args[0].data==0x600000,"Invalid follow-on schedule");
+        if (pc_==0x8959f && args[0].kind==Kind::integer)
+            first_day_diary_request_=true;
+        return;
+    }
+    if(target==0x11b0) {
+        Require(argc==3 && args[0].kind==Kind::constant_ref &&
+            (args[1].kind==Kind::constant_ref || args[1].kind==Kind::nil) &&
+            args[2].kind==Kind::truth,"Invalid word selection");
+        random_bound_=vocabulary_.Candidates(args[0].data,args[1].data,args[2].data!=0);
+        if(random_bound_) { random_use_=RandomUse::word; phase_=Phase::random; return; }
+        result_={Kind::integer,vocabulary_.FinishLookup(0)}; return;
+    }
+    // 0FDD compares the selected written form (row field 1) with each
+    // string in the caller's exclusion list, returning on the first match.
+    if(target==0x0fdd && argc==2 && args[1].kind==Kind::constant_ref) {
+        Require(args[0].kind==Kind::integer,"Invalid word for spelling exclusion");
+        const auto& list=phrase_lists_.at(args[1].data);
+        const auto spelling=vocabulary_.FieldText(args[0].data,1);
+        const bool excluded=std::any_of(list.begin(),list.end(),[&](unsigned offset) {
+            return pool_.at(offset)==spelling;
+        });
+        result_={Kind::truth,excluded}; return;
+    }
+    if(target==0x12e7) {
+        Require(argc==2 && args[0].kind==Kind::integer && args[1].kind==Kind::integer,"Invalid word relation");
+        vocabulary_.LinkWordGroup(args[0].data,args[1].data);
+        return;
+    }
+    if(target==0x1011) {
+        Require(argc==4 && args[0].kind==Kind::integer && args[1].kind==Kind::string &&
+            (args[2].kind==Kind::nil || args[2].kind==Kind::constant_ref) &&
+            args[3].kind==Kind::truth,"Invalid word form lookup");
+        auto form=vocabulary_.ResolveWord(args[0].data,args[1].text,args[2].data,args[3].data!=0);
+        result_={Kind::string,0,std::move(form.text)};
+        if(form.field) result_.word_operands.push_back({args[0].data,form.field,0,form.field_bytes});
+        else result_.word_operands=std::move(args[1].word_operands);
+        return;
+    }
+    if(target==0x497a) {
+        Require(argc==1 && args[0].kind==Kind::integer,"Invalid displayed word row");
+        auto form=vocabulary_.ResolveDisplayName(args[0].data);
+        result_={Kind::string,0,std::move(form.text),0,{}, {{args[0].data,form.field,0,form.field_bytes}}};
+        return;
+    }
+    if(target==0xa9c5 || target==0xa942) {
+        Require(argc==1 && args[0].kind==Kind::integer,"Missing word for trait selection");
+        trait_row_=args[0].data;
+        if(target==0xa9c5) {
+            unasked_traits_=RoomWordTraits::Unasked(trait_row_,vocabulary_.FieldInt(trait_row_,12),
+                                                    vocabulary_.FieldInt(trait_row_,15));
+            if(unasked_traits_.empty()) { result_={Kind::integer,-1}; return; }
+            random_use_=RandomUse::trait; random_bound_=unsigned(unasked_traits_.size());
+        } else { random_use_=RandomUse::repeated_trait; random_bound_=22; }
+        phase_=Phase::random; return;
+    }
+    if(target==0xa8a2) {
+        Require(argc==3 && args[0].kind==Kind::integer && args[1].kind==Kind::integer && args[2].kind==Kind::truth,
+                "Invalid answer to word trait");
+        vocabulary_.RecordTrait(args[0].data,args[1].data,args[2].data!=0);
+        return;
+    }
+    if(target==0xfd1) { vocabulary_.BeginConversation(); return; }
+    if(target==0x27ee) {
+        Require(argc==2,"Expected two rumor output references");
+        random_bound_=rumors_.candidates();
+        if (!random_bound_) { SupplyRumor(args[0],args[1],0); return; }
+        stack_.push_back(args[0]); stack_.push_back(args[1]);
+        random_use_=RandomUse::rumor_pick; phase_=Phase::random;
+        return;
+    }
+    if(target==0x2761) {
+        Require(argc==2,"Expected two meeting rumor fields");
+        if (rumors_.Remember(RumorPair(args[0],args[1]))) return;
+        stack_.push_back(std::move(args[0])); stack_.push_back(std::move(args[1]));
+        random_bound_=3; random_use_=RandomUse::rumor_replace; phase_=Phase::random;
+        return;
+    }
+    // Older packs carry these two fixed introductory predicates without their reducer body.
+    // Other projected lessons execute 92E2 on the actual dictionary criteria below.
+    if(target==0x92e2 && argc==1 && args[0].kind==Kind::constant_ref &&
+       (args[0].data==0xdd98 || args[0].data==0xddaa)) {
+        teaching_={};
+        teaching_[3]={Kind::integer,0x8000};
+        teaching_[4]={Kind::integer,0x80};
+        teaching_[7]={Kind::integer,args[0].data==0xdd98?0x10:0x20};
+        return;
+    }
+    if(target==0x139b) {
+        Require(reserved_word_==-1,"Nested word reservation");
+        reserved_word_=vocabulary_.ReserveWord();
+        result_={Kind::integer,reserved_word_}; return;
+    }
+    if(target==0xdbc) {
+        Require(args.at(0).data==reserved_word_,"Wrong vocabulary reservation on release");
+        vocabulary_.ReleaseWord(reserved_word_); reserved_word_=-1; return;
+    }
+    if(target==0x4929) {
+        Require(argc==3 && args[1].kind==Kind::string && args[2].kind==Kind::integer,
+                "Invalid word keyboard arguments");
+        if(args[2].data==2 && pc_==0x4cb7)
+            keyboard_initial_reading_=args[1].text;
+        else {
+            const bool question= friends_introduction_ && (pc_==0xcf85 || pc_==0xd176);
+            Require(args[2].data==0 && args[1].text.empty() && (reserved_word_>=0 || question),
+                    "Unsupported word keyboard owner");
+        }
+        editor_pair_=Dereference(args[0]);
+        Require(editor_pair_.kind==Kind::array && editor_pair_.cells->size()==2,"Invalid word output pair");
+        phase_=Phase::word_entry; return;
+    }
+    if(target==0xf02) {
+        Require(argc==1 && args[0].kind==Kind::string,"Missing lookup spelling");
+        result_={Kind::integer,vocabulary_.FindWritten(args[0].text)}; return;
+    }
+    if(target==0x1488) {
+        Require(argc==1 && args[0].kind==Kind::integer,"Invalid reading refresh row");
+        vocabulary_.RefreshReading(args[0].data); return;
+    }
+    if(target==0x87a2) {
+        const auto pair=Dereference(args.at(1));
+        Require(pair.kind==Kind::array && pair.cells->size()==2 &&
+                args[0].data==reserved_word_,"Invalid initial dictionary write");
+        vocabulary_.InitializeReserved(reserved_word_,pair.cells->at(0).text,pair.cells->at(1).text);
+        return;
+    }
+    if(target==0x154b) {
+        Require(args.at(0).data==reserved_word_ && args.at(1).data==32,"Wrong final dictionary row");
+        Require(vocabulary_.AcceptReserved(reserved_word_),"Lost dictionary row before acceptance");
+        learned_row_=reserved_word_; ++learned_serial_;
+        learned_written_=vocabulary_.FieldText(reserved_word_,1);
+        learned_reading_=vocabulary_.FieldText(reserved_word_,2);
+        reserved_word_=-1; return;
+    }
+    if(target==0x18a5) {
+        Require(argc==3 && args[1].data==0 && args[2].data==32,"Wrong existing word update");
+        const int row=args[0].data;
+        vocabulary_.WriteNumber(row,0,vocabulary_.FieldInt(row,0)|32); return;
+    }
+    if(target==0x899f9 && direct_teaching_) {
+        Require(argc==2 && args[1].kind==Kind::truth,"Invalid teaching farewell");
+        counted_contact_=args[1].data!=0;
+        vocabulary_.BeginConversation();
+        if(skip_farewell_) { actor_command_=74; return; }
+        target=0x7d548; args.clear();
+    }
+    if(ordinary_ && !code_.count(target)) {
+        frontier_=target; phase_=Phase::frontier; return;
+    }
+    callers_.push_back({pc_,std::move(locals_),indirect_topic_});
+    if (indirect) indirect_topic_=target;
+    pc_=target; locals_=std::move(args); result_={};
+}
+
+void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
+    for(unsigned budget=0;budget<16384;++budget) {
+        if(ordinary_) {
+            const auto after=code_.upper_bound(pc_);
+            if(after==code_.begin() || pc_-std::prev(after)->first>=std::prev(after)->second.size()) {
+                frontier_=pc_; phase_=Phase::frontier; return;
+            }
+        }
+        const auto site=pc_, op=Read(1);
+        if(excursion_) {
+            switch(site) {
+            case 0x13090: case 0x130e0: case 0x130c9: case 0x130d6: case 0x130e9:
+            case 0x1269f: case 0x1c57: case 0x1c59: case 0x1c5a: case 0x1c64: case 0x1c69: case 0x126ad: case 0x13411: case 0x13218:
+                outing_sites_.push_back(site); break;
+            }
+            if(site==0x133c8 || site==0x13015) {
+                const auto& d=*locals_.at(site==0x13015?2:13).cells;
+                const auto& r=*d.at(1).cells;
+                Require(d.at(0).kind==Kind::integer && d.at(2).kind==Kind::integer &&
+                        d.at(3).kind==Kind::string && d.at(4).kind==Kind::string,"Incomplete outing descriptor");
+                const auto id=unsigned(d[0].data),word=unsigned(d[2].data);
+                outing_snapshot_=RoomOutingDescriptor{id,unsigned(r[0].data),word,site==0x13015?-1:int(eligibility_words_.at(id)),
+                    unsigned(r[1].data),unsigned(r[2].data),std::string(vocabulary_.FieldText(word,1)),
+                    r[4].text,d[3].text,d[4].text};
+            }
+        }
+        switch(op) {
+        case 0x18:
+            blocks_.push_back({Read(3),callers_.size(),stack_.size()}); break;
+        case 0x1a:
+            Require(!blocks_.empty() && (blocks_.back().close==site ||
+                    (exchange_inventory_ && blocks_.back().close==0x8d19e && site==0x8d1f0)) &&
+                    blocks_.back().depth==callers_.size() &&
+                    blocks_.back().base==stack_.size(),"Unbalanced outing protected block");
+            blocks_.pop_back(); break;
+        case 0x1b: {
+            Require(exchange_inventory_ && site==0x8d027 && !blocks_.empty(),"Unexpected script unwind");
+            const auto& handler=blocks_.back();
+            Require(handler.close==0x8d19e && callers_.size()==handler.depth+1 &&
+                    handler.base<=stack_.size(),"Invalid meeting cancellation frame");
+            auto parent=std::move(callers_.back()); callers_.pop_back();
+            locals_=std::move(parent.locals); indirect_topic_=parent.indirect_topic;
+            stack_.resize(handler.base); pc_=handler.close;
+            break;
+        }
+        case 0x0d:
+            Require(exchange_inventory_ && site==0x8d19e && !meeting_event_depth_,"Unexpected event lock");
+            ++meeting_event_depth_; break;
+        case 0x0e:
+            Require(exchange_inventory_ && site==0x8d1ac && meeting_event_depth_==1,"Unbalanced event lock");
+            --meeting_event_depth_; break;
+        case 0x0b:
+            stack_.push_back({Kind::integer,instruction_cost_}); instruction_cost_=0; break;
+        case 0x0c: {
+            const auto cost=Pop();
+            Require(cost.kind==Kind::integer,"Invalid saved instruction cost");
+            instruction_cost_=cost.data; break;
+        }
+        case 0x3a:
+            Require(outing_callback_ && site==0x1c59,"Invalid outing callback context");
+            outing_context_disabled_=true; break;
+        case 0x32: {
+            Require(outing_callback_ && outing_context_disabled_ && callers_.empty() && blocks_.empty(),
+                    "Invalid outing callback return");
+            auto saved=std::move(*outing_callback_);
+            outing_callback_.reset();
+            pc_=saved.resume; stack_=std::move(saved.stack); callers_=std::move(saved.calls);
+            locals_=std::move(saved.locals); blocks_=std::move(saved.blocks); result_=std::move(saved.result);
+            phase_=Phase::outing_scene; return;
+        }
+        case 0x8c:
+            Require(excursion_ && site==0x1c5d,"Unsupported callback owner");
+            stack_.push_back({Kind::context}); break;
+        case 0x30: locals_.resize(Read(1)); break;
+        case 0x4e: {
+            const unsigned index=Read(2),length=Read(2);
+            Require(index+length<locals_.size(),"Invalid local KSC array");
+            locals_.at(index)={Kind::array,0,{},0,std::make_shared<std::vector<Value>>(length)};
+            break;
+        }
+        case 0x80: stack_.push_back({Kind::integer,static_cast<std::int8_t>(Read(1))}); break;
+        case 0x81: stack_.push_back({Kind::integer,static_cast<std::int16_t>(Read(2))}); break;
+        case 0x82: stack_.push_back({Kind::integer,static_cast<int>(Read(3))}); break;
+        case 0x84: stack_.push_back({}); break;
+        case 0x85: stack_.push_back({Kind::integer,0}); break;
+        case 0x86: stack_.push_back({Kind::truth,0}); break;
+        case 0x87: stack_.push_back({Kind::truth,1}); break;
+        case 0x89: stack_.push_back(std::move(result_)); result_={}; break;
+        case 0x8d: stack_.push_back({Kind::integer,int(script_ticks_&0x0fffffffu)}); break;
+        case 0x88: stack_.push_back({Kind::string,0,pool_.at(Read(3))}); break;
+        case 0x8e: stack_.push_back(ReadText()); break;
+        case 0x90: stack_.push_back(locals_.at(Read(2))); break;
+        case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
+        case 0x94: case 0x95: {
+            const int id=Read(2);
+            if(op==0x94 && id==0x59a2) stack_.push_back({Kind::integer,int(intro_flags_)});
+            else if(op==0x94 && id==0x9a35 && exchange_inventory_)
+                stack_.push_back({Kind::integer,int(global_arrays_.at(id).size())});
+            else if(op==0x94 && id==0x98c3 && exchange_inventory_) stack_.push_back(friends_cells_.at(id));
+            else if(op==0x94 && id==0x59ae) stack_.push_back({Kind::integer,int(outing_enabled_)});
+            else stack_.push_back({Kind::global_ref,id});
+            break;
+        }
+        case 0x99: stack_.push_back({Kind::constant_ref,static_cast<int>(Read(2))}); break;
+        case 0x98: {
+            const auto index=Read(2);
+            if(index==0) stack_.push_back({Kind::truth,event20_cleanup_}); // event 20 at 8DC38
+            else if(excursion_ && index==0x2874) stack_.push_back({Kind::integer,int(outing_camera_)});
+            else if(excursion_ && index==0x2871) stack_.push_back(outing_script_cells_.at(index));
+            else if(friends_introduction_ && (index==0x2d54 || index==0x2869))
+                stack_.push_back(friends_cells_.at(index));
+            else if(friends_introduction_ && index==0x2873)
+                stack_.push_back(skip_farewell_?Value{Kind::integer,2}:Value{});
+            else if(index==0x2869) stack_.push_back({Kind::integer,0}); // cold room conversation
+            else { Require(index==0x2878,"Unknown indirect topic slot"); stack_.push_back(selected_fallback_); }
+            break;
+        }
+        case 0xf6: {
+            const unsigned mode=Read(1);
+            if(mode==0) {
+                Require(!stack_.empty() && stack_.back().kind==Kind::constant_ref,"Missing phrase array");
+                random_bound_=static_cast<unsigned>(phrase_lists_.at(stack_.back().data).size());
+                random_use_=RandomUse::phrase; phase_=Phase::random; return;
+            }
+            Require(mode==3 && Read(2)==0x6018 && Pop().data==0xd090,"Wrong fallback topic history");
+            random_bound_=fallback_list_.CandidateCount();
+            Require(random_bound_>0,"Empty fallback procedure array");
+            random_use_=RandomUse::fallback; phase_=Phase::random; return;
+        }
+        case 0xf0: {
+            auto ref=Pop();
+            if(excursion_ && ref.kind==Kind::constant_ref && ref.data==0x243f)
+                stack_.push_back({Kind::integer,int(global_arrays_.at(0x243f).size())});
+            else if(excursion_ && ref.kind==Kind::constant_ref && outing_tables_.count(ref.data))
+                stack_.push_back({Kind::array,0,{},0,std::make_shared<std::vector<Value>>(outing_tables_.at(ref.data))});
+            else if(ref.kind==Kind::global_ref && global_arrays_.count(ref.data))
+                stack_.push_back({Kind::array,0,{},0,std::make_shared<std::vector<Value>>(global_arrays_.at(ref.data))});
+            else if(ref.kind==Kind::array) stack_.push_back({Kind::integer,int(ref.cells->size())});
+            else if(ref.kind==Kind::constant_ref && ref.data==0x2446) stack_.push_back({Kind::integer,12});
+            else {
+                auto value=Dereference(ref);
+                if(value.kind==Kind::array) value={Kind::integer,int(value.cells->size())};
+                stack_.push_back(std::move(value));
+            }
+            break;
+        }
+        case 0xf4: {
+            auto index=Pop(),array=Pop();
+            if(array.kind==Kind::frame_ref) array=Dereference(array);
+            if(array.kind==Kind::array) stack_.push_back(array.cells->at(index.data));
+            else if(friends_introduction_ && array.kind==Kind::constant_ref && array.data==0x2b0c) {
+                const unsigned label=phrase_lists_.at(0x2b0c).at(index.data);
+                auto row=std::make_shared<std::vector<Value>>(1,Value{Kind::string,0,pool_.at(label)});
+                stack_.push_back({Kind::array,0,{},0,std::move(row)});
+            }
+            else if(array.kind==Kind::global_ref && global_arrays_.count(array.data) && index.kind==Kind::integer)
+                stack_.push_back(global_arrays_.at(array.data).at(index.data));
+            else if(array.kind==Kind::constant_ref && array.data==0x28f6 && index.kind==Kind::integer)
+                stack_.push_back({Kind::integer,int(outing_period_masks_.at(index.data))});
+            else if(array.kind==Kind::constant_ref && array.data==0x243f && index.kind==Kind::integer)
+                stack_.push_back(global_arrays_.at(0x243f).at(index.data));
+            else if(excursion_ && array.kind==Kind::constant_ref && array.data==0x2df7 && index.data==11)
+                stack_.push_back({Kind::constant_ref,int(roof_detail_)});
+            else if(excursion_ && array.kind==Kind::constant_ref && outing_tables_.count(array.data))
+                stack_.push_back(outing_tables_.at(array.data).at(index.data));
+            else if(array.kind==Kind::global_ref && array.data==9 && (index.data==8 || index.data==9)) {
+                // 204C reads previous-character profile data. New adoption has
+                // no preceding Poképi. The original first handler takes B3.
+                stack_.push_back({});
+            } else if(array.kind==Kind::global_ref && array.data==0x4fad && index.data==gift_slot_)
+                stack_.push_back({Kind::global_ref,-1});
+            else if(array.kind==Kind::global_ref && array.data==0x3dd2 && index.kind==Kind::integer)
+                stack_.push_back({Kind::word_row,index.data});
+            else if(array.kind==Kind::global_ref && array.data==0x58df && index.kind==Kind::integer) {
+                Require(unsigned(index.data)<RoomVocabulary::question_slots,"Invalid prepared question row");
+                stack_.push_back({Kind::question_row,index.data});
+            }
+            else if(array.kind==Kind::question_row && index.kind==Kind::integer)
+                stack_.push_back(Dereference({Kind::question_field,array.data,{},unsigned(index.data)}));
+            else if(array.kind==Kind::word_row && index.kind==Kind::integer)
+                stack_.push_back(DictionaryField(array.data,index.data));
+            else if(array.kind==Kind::constant_ref && array.data==0x2446 && index.kind==Kind::integer)
+                stack_.push_back(teaching_.at(index.data));
+            else if(array.kind==Kind::constant_ref && index.kind==Kind::integer &&
+                    vocabulary_.HasPredicate(array.data)) {
+                Value group{Kind::array,0,{},0,std::make_shared<std::vector<Value>>()};
+                for(int number : vocabulary_.PredicateGroup(array.data,index.data))
+                    group.cells->push_back({Kind::integer,number});
+                stack_.push_back(std::move(group));
+            }
+            else if(array.kind==Kind::constant_ref && RoomWordTraits::IsTextTable(array.data) && index.kind==Kind::integer)
+                stack_.push_back({Kind::string,0,traits_.Label(array.data,index.data)});
+            else if(array.kind==Kind::global_ref && array.data==-1 && index.data==0)
+                stack_.push_back(slot_empty_?Value{}:Value{Kind::integer,0});
+            else throw std::runtime_error("Missing cold KSC indexed value");
+            break;
+        }
+        case 0xf5: {
+            auto index=Pop(),array=Pop();
+            Require(index.kind==Kind::integer,"Invalid KSC field");
+            if(array.kind==Kind::frame_ref) array=Dereference(array);
+            if(excursion_ && array.kind==Kind::constant_ref && array.data==0x243f)
+                stack_.push_back({Kind::global_element,0x243f,{},unsigned(index.data)});
+            else if(array.kind==Kind::constant_ref && array.data==0x2446) stack_.push_back({Kind::teach_field,index.data});
+            else if(array.kind==Kind::global_ref && global_arrays_.count(array.data)) {
+                Require(index.data>=0 && unsigned(index.data)<global_arrays_.at(array.data).size(),
+                        "Room script global index outside array");
+                stack_.push_back({Kind::global_element,array.data,{},unsigned(index.data)});
+            }
+            else if(array.kind==Kind::array) stack_.push_back({Kind::element,index.data,{},0,array.cells});
+            else if(friends_introduction_ && array.kind==Kind::constant_ref && array.data==0x2a3c && index.data==2)
+                stack_.push_back({Kind::element,index.data,{},0,friends_cells_.at(array.data).cells});
+            else if(friends_introduction_ && array.kind==Kind::constant_ref && array.data==0x2a44 &&
+                    (index.data==2 || index.data==8 || index.data==11 || index.data==14))
+                stack_.push_back({Kind::element,index.data,{},0,friends_cells_.at(array.data).cells});
+            else if(array.kind==Kind::question_row)
+                stack_.push_back({Kind::question_field,array.data,{},unsigned(index.data)});
+            else if(array.kind==Kind::word_row) stack_.push_back({Kind::word_field,array.data,{},unsigned(index.data)});
+            else throw std::runtime_error("Unsupported mutable KSC array");
+            break;
+        }
+        case 0x51: {
+            auto value=Pop(),ref=Pop();
+            Assign(ref,std::move(value)); break;
+        }
+        case 0x78: {
+            auto right=Pop(),left=Pop();
+            auto left_value=Dereference(left),right_value=Dereference(right);
+            Assign(left,std::move(right_value)); Assign(right,std::move(left_value)); break;
+        }
+        case 0x14: {
+            auto array=Pop(),slot=Pop();
+            Require(site==0x2db2 && array.kind==Kind::global_ref && array.data==0x5f92 &&
+                    slot.kind==Kind::frame_ref && slot.data==7,"Unknown outing iteration");
+            outing_index_=0;
+            Assign(slot,global_arrays_.at(0x5f92).front()); break;
+        }
+        case 0x15: {
+            const auto loop=Read(3);
+            Require(site==0x2e37 && loop==0x2db3,"Unknown outing loop");
+            const auto& order=global_arrays_.at(0x5f92);
+            if(++outing_index_<order.size()) { locals_.at(7)=order[outing_index_]; pc_=loop; }
+            break;
+        }
+        case 0x5d: {
+            const auto rhs=Pop(),ref=Pop(),lhs=Dereference(ref);
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid subtract assignment");
+            Assign(ref,{Kind::integer,ScriptInteger(unsigned(lhs.data)-unsigned(rhs.data))}); break;
+        }
+        case 0x55: case 0x53: {
+            auto ref=Pop(),value=Dereference(ref);
+            Require(value.kind==Kind::integer,"Cannot increment noninteger");
+            value.data+=op==0x53?1:-1; Assign(ref,std::move(value)); break;
+        }
+        case 0xc9: case 0xc8: {
+            auto rhs=Pop(),lhs=Pop();
+            stack_.push_back({Kind::truth,op==0xc9?(bool(rhs.data)||bool(lhs.data)):(bool(rhs.data)&&bool(lhs.data))}); break;
+        }
+        case 0x12: {
+            const auto target=Read(3);
+            if(Pop().data) pc_=target;
+            break;
+        }
+        case 0x65: case 0x67: {
+            auto value=Pop(),ref=Pop();
+            if(ref.kind==Kind::word_field || ref.kind==Kind::question_field || ref.kind==Kind::element || ref.kind==Kind::global_element || ref.kind==Kind::teach_field ||
+               ref.kind==Kind::frame_ref) {
+                auto current=Dereference(ref);
+                Assign(ref,{Kind::integer,op==0x67?(current.data|value.data):(current.data&value.data)});
+            } else {
+                if(excursion_ && ref.kind==Kind::global_ref && ref.data==0x59ae && op==0x67) {
+                    outing_enabled_|=unsigned(value.data); break;
+                }
+                Require(ref.kind==Kind::global_ref && ref.data==0x59a2 &&
+                        (value.data==1 || value.data==64 || (excursion_ && value.data==0x100)),"Invalid intro completion flag");
+                intro_flags_|=value.data;
+            }
+            break;
+        }
+        case 0xb1: {
+            const auto value=Pop();
+            Require(value.kind==Kind::truth,"Expected a predicate result for logical NOT");
+            stack_.push_back({Kind::truth,!value.data});
+            break;
+        }
+        case 0xb2: case 0xb3: {
+            auto v=Pop(); stack_.push_back({Kind::truth,(v.kind==Kind::nil)==(op==0xb3)}); break;
+        }
+        case 0xb9: { auto v=Pop(); stack_.push_back({Kind::truth,v.data!=0}); break; }
+        case 0xbc: { auto v=Pop(); stack_.push_back({Kind::truth,v.kind==Kind::integer && v.data<0}); break; }
+        case 0xbd: {
+            const auto v=Pop();
+            Require(v.kind==Kind::integer,"Invalid count in KSC nonpositive test");
+            stack_.push_back({Kind::truth,v.data<=0}); break;
+        }
+        case 0xb8: { auto v=Pop(); stack_.push_back({Kind::truth,v.kind==Kind::integer && v.data==0}); break; }
+        case 0xc2: case 0xc3: case 0xc4: case 0xc5: {
+            auto rhs=Pop(),lhs=Pop();
+            Require((lhs.kind==Kind::integer && rhs.kind==Kind::integer) ||
+                    (site==0xa5e9 && lhs.kind==Kind::calendar_time && rhs.kind==Kind::calendar_time),
+                    "Invalid numeric comparison");
+            const bool match=op==0xc2?lhs.data<rhs.data:op==0xc3?lhs.data<=rhs.data:op==0xc4?lhs.data>rhs.data:lhs.data>=rhs.data;
+            stack_.push_back({Kind::truth,match}); break;
+        }
+        case 0xc0: case 0xc1: {
+            auto rhs=Pop(),lhs=Pop();
+            const bool equal=rhs.kind==lhs.kind && rhs.data==lhs.data && rhs.text==lhs.text;
+            stack_.push_back({Kind::truth,equal==(op==0xc0)}); break;
+        }
+        case 0xd4: {
+            auto rhs=Pop(),lhs=Pop();
+            Require((lhs.kind==Kind::integer || lhs.kind==Kind::nil) && rhs.kind==Kind::integer,"Invalid word attribute mask");
+            stack_.push_back({Kind::integer,lhs.data&rhs.data}); break;
+        }
+        case 0xd5: {
+            const auto rhs=Pop(),lhs=Pop();
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid KSC bitwise OR");
+            stack_.push_back({Kind::integer,lhs.data|rhs.data}); break;
+        }
+        case 0xd1: case 0xd2: {
+            const auto divisor=Pop(),dividend=Pop();
+            Require(divisor.kind==Kind::integer && dividend.kind==Kind::integer && divisor.data!=0,
+                    "Invalid KSC integer division");
+            const int value=op==0xd1 ? dividend.data/divisor.data : dividend.data%divisor.data;
+            stack_.push_back({Kind::integer,ScriptInteger(unsigned(value))}); break;
+        }
+        case 0xe2: case 0xe3: {
+            const auto count=Pop(),value=Pop();
+            Require(count.kind==Kind::integer && value.kind==Kind::integer,"Invalid KSC shift");
+            const unsigned shift=unsigned(count.data)&31u;
+            const unsigned bits=unsigned(value.data);
+            unsigned shifted=bits<<shift;
+            if(op==0xe2) // BOOT 73D5C: SRAV of the signed tag-2 payload.
+                shifted=value.data<0 ? ~(~bits>>shift) : bits>>shift;
+            stack_.push_back({Kind::integer,ScriptInteger(shifted)}); break;
+        }
+        case 0xb4: {
+            const auto value=Pop();
+            Require(value.kind==Kind::integer,"Invalid KSC bitwise complement");
+            stack_.push_back({Kind::integer,~value.data}); break;
+        }
+        case 0xd0: case 0xe0: case 0xe1: {
+            const auto rhs=Pop(),lhs=Pop();
+            if(excursion_ && site==0x1259e && lhs.kind==Kind::calendar_time && rhs.kind==Kind::integer) {
+                stack_.push_back({Kind::calendar_time,ScriptInteger(unsigned(lhs.data)+unsigned(rhs.data))}); break;
+            }
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Expected two KSC integers");
+            const unsigned left=unsigned(lhs.data),right=unsigned(rhs.data);
+            const unsigned bits=op==0xd0 ? left*right : op==0xe0 ? left+right : left-right;
+            stack_.push_back({Kind::integer,ScriptInteger(bits)}); break;
+        }
+        case 0x8a: stack_.push_back({Kind::code,int(Read(3))}); break;
+        case 0x10: pc_=Read(3); break;
+        case 0x11: { auto target=Read(3); if(!Pop().data) pc_=target; break; }
+        case 0x13: {
+            const auto key=Pop();
+            for(unsigned tag=Read(4);tag;tag=Read(4)) {
+                const unsigned next=Read(3);
+                if((tag>>28)==2 && key.kind==Kind::integer && int(tag&0x0fffffff)==key.data) break;
+                pc_=next;
+            }
+            break;
+        }
+        case 0x25: {
+            const unsigned table=Read(2),mode=Read(1);
+            Require(mode==0 && procedure_lists_.count(table),"Unsupported KSC procedure selector");
+            pending_procedure_list_=table;
+            random_bound_=static_cast<unsigned>(procedure_lists_.at(table).size());
+            random_use_=RandomUse::procedure; phase_=Phase::random; return;
+        }
+        case 0x20: case 0x21: case 0x22: case 0x23: {
+            const unsigned argc=(op==0x20 || op==0x22)?Read(1):0;
+            const bool indirect=op==0x22 || op==0x23;
+            unsigned target=indirect?0:Read(3);
+            std::vector<Value> args(argc);
+            for(unsigned i=argc;i>0;--i) args[i-1]=Pop();
+            if(indirect) {
+                const auto selected=Pop();
+                Require(selected.kind==Kind::code,"Invalid indirect KSC call");
+                target=selected.data;
+            }
+            Call(target,std::move(args),op==0x23);
+            if(phase_!=Phase::running) return;
+            break;
+        }
+        case 0x70: result_=Pop(); break;
+        case 0x31: {
+            if(callers_.empty()) {
+                if(queued_root_) {
+                    // 25A8..25B1 clears CT2878 after the selected function returns.
+                    selected_fallback_={}; indirect_topic_=0; queued_root_=false;
+                }
+                if(excursion_ && indirect_topic_==0x12f39) {
+                    Require((site==0x12fcb || site==0x13006 || site==0x1308d) &&
+                            result_.kind==Kind::truth && result_.data,"Unexpected invitation return");
+                    if(home_invitation_return_) home_invitation_return_();
+                    excursion_=false;
+                }
+                if(excursion_) {
+                    Require(site==0x13252 || site==0x133a6 || site==0x13411 || site==0x13218,
+                            "Unexpected outing root return");
+                    excursion_=ordinary_=false; ordinary_return_=true; indirect_topic_=0;
+                    phase_=Phase::done; return;
+                }
+                if(direct_teaching_) {
+                    Require(pc_==0x8df1 || pc_==0x8e60 || pc_==0x8f22,"Unexpected teaching root return");
+                    direct_teaching_=ordinary_=false; ordinary_return_=true; phase_=Phase::done; return;
+                }
+                if(attention_) {
+                    // The immediate next message at 8D8FE is the single clear control 04.
+                    Require(pc_==0x8d3f1,"Wrong attention-message return");
+                    message_pc_=0x8d8fe; message_.clear(); lines_.clear();
+                    message_wait_=closing_=new_line_=false; appearance_=scroll_=0;
+                    columns_=9; rows_=4; attention_=false; attention_return_=true;
+                    phase_=Phase::done; return;
+                }
+                if(ordinary_ && (farewell_ || (result_.kind==Kind::truth && !result_.data))) {
+                    ordinary_rejected_=!farewell_;
+                    ordinary_return_=farewell_;
+                    ordinary_=false; phase_=Phase::done; return;
+                }
+                if(farewell_) { ReturnFromGreeting(); return; }
+                // 89590 sets ctx28[2873]=2 if the new gift had no slot.
+                // In that case 89A08..89A19 bypass the farewell entirely.
+                if(skip_farewell_) { actor_command_=74; ReturnFromGreeting(); return; }
+                // 8942E indirect return, 899F9 -> 89A1D normal farewell.
+                // GAME21/22 carries this encounter's changed actor field.
+                vocabulary_.BeginConversation(); // 899FB enters 0FD1 before 89A1D
+                farewell_=true; pc_=0x7d548; locals_.clear(); break;
+            }
+            auto parent=std::move(callers_.back()); callers_.pop_back();
+            pc_=parent.resume; locals_=std::move(parent.locals); indirect_topic_=parent.indirect_topic; break;
+        }
+        case 0x44:
+            delay_=Pop().data;
+            if(queued_outing_callback_ && site==0x1c69) {
+                // 1C64 posted to this context. Deliver at its first scheduler yield,
+                // preserving the caller's next PC, operands and one-tick deadline.
+                Require(delay_==1 && !outing_callback_,"Invalid outing callback deadline");
+                outing_callback_.emplace(OutingCallback{pc_,std::move(stack_),std::move(locals_),
+                                          std::move(callers_),std::move(blocks_),std::move(result_)});
+                pc_=*queued_outing_callback_; queued_outing_callback_.reset();
+                stack_.clear(); locals_.clear(); callers_.clear(); blocks_.clear(); result_={};
+                break;
+            }
+            return;
+        case 0x48: Message(); return;
+        case 0x8b: {
+            const unsigned id=Read(1),argc=Read(1);
+            if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
+                const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
+                Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
+                        mode.kind==Kind::integer && !mode.data && deadline.kind==Kind::integer && !deadline.data &&
+                        outing_scene_request_.has_value(),"Invalid outing completion callback");
+                Require(!queued_outing_callback_ && !outing_callback_,"Outing callback already active");
+                queued_outing_callback_=unsigned(callback.data);
+            } else if(id==0x04 && argc==1) {
+                const auto array=Pop();
+                Require(array.kind==Kind::array,"Expected script array for length");
+                result_={Kind::integer,static_cast<int>(array.cells->size())};
+            } else if(id==9 && argc==0) {
+                Require(calendar_minute_.has_value(),"Missing room calendar minute");
+                result_={Kind::calendar_time,ScriptInteger(*calendar_minute_)};
+            } else if(id==10 && argc==1) {
+                const auto time=Pop();
+                Require(time.kind==Kind::calendar_time,"Expected a KSC time for the calendar date");
+                result_={Kind::integer,ScriptInteger(recovered::CalendarBcdDate68FE0(time.data))};
+            } else if(id==11 && argc==1) {
+                const auto time=Pop();
+                Require(time.kind==Kind::calendar_time,"Expected a KSC time for the clock");
+                result_={Kind::integer,ScriptInteger(recovered::CalendarBcdTime6912C(time.data))};
+            } else if(id==0x51 && argc==3 && excursion_) {
+                auto substitution=Pop(),token=Pop(),text=Pop();
+                Require(substitution.kind==Kind::string && token.kind==Kind::string && !token.text.empty() &&
+                        text.kind==Kind::string,"Invalid outing text substitution");
+                std::size_t start=0;
+                while((start=text.text.find(token.text,start))!=std::string::npos) {
+                    text.text.replace(start,token.text.size(),substitution.text);
+                    start+=substitution.text.size();
+                }
+                result_={Kind::string,0,std::move(text.text)};
+            } else if(id==0x53 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::string || value.kind==Kind::nil,"Invalid KSC text for length");
+                result_={Kind::integer,static_cast<int>(ScriptCharacterCount(value.text))};
+            } else if(id==0x60 && argc==3 && friends_introduction_ && site==0xa7a4) {
+                const auto filter=Pop(),dest=Dereference(Pop()),source=Pop();
+                Require(source.kind==Kind::global_ref && source.data==0x58df &&
+                        filter.kind==Kind::constant_ref && filter.data==0x2a44 &&
+                        dest.kind==Kind::array && dest.cells->size()==1,"Invalid question duplicate lookup");
+                const auto& terms=*friends_cells_.at(filter.data).cells;
+                const auto mask=terms[2];
+                Require(mask.kind==Kind::integer,"Missing question flags");
+                result_={Kind::integer,0};
+                for(unsigned i=0;i<RoomVocabulary::question_slots;++i) {
+                    const auto flags=vocabulary_.QuestionField(i,0);
+                    if((flags&unsigned(mask.data))!=unsigned(mask.data) || (flags&16)) continue;
+                    auto equal=[&](unsigned field,const Value& expected) {
+                        const auto cell=Dereference({Kind::question_field,int(i),{},field});
+                        return cell.kind==expected.kind && cell.data==expected.data && cell.text==expected.text;
+                    };
+                    if(equal(1,terms[8]) && equal(3,terms[11]) && equal(5,terms[14])) {
+                        dest.cells->front()={Kind::integer,int(i)};
+                        result_.data=1; break;
+                    }
+                }
+            } else if(id==0x60 && argc==3 && friends_introduction_ && site==0xa735) {
+                const auto predicate=Pop(),dest=Dereference(Pop()),source=Pop();
+                Require(source.kind==Kind::global_ref && source.data==0x58df &&
+                        dest.kind==Kind::array && dest.cells->size()==RoomVocabulary::question_slots &&
+                        predicate.kind==Kind::constant_ref && predicate.data==0x2a3c,
+                        "Invalid prepared question search");
+                const auto mask=friends_cells_.at(predicate.data).cells->at(2);
+                Require(mask.kind==Kind::integer,"Invalid prepared question mask");
+                unsigned count=0;
+                for(unsigned i=0;i<RoomVocabulary::question_slots;++i) {
+                    const unsigned flags=vocabulary_.QuestionField(i,0)&0x0fffffffu;
+                    if((flags & unsigned(mask.data))==unsigned(mask.data))
+                        dest.cells->at(count++)={Kind::integer,int(i)};
+                }
+                result_={Kind::integer,int(count)};
+            } else if(id==0x60 && argc==3 && exchange_inventory_ && site==0x1798) {
+                const auto filter=Pop(),dest=Pop(),source=Pop();
+                Require(source.kind==Kind::global_ref && source.data==0x3dd2 &&
+                        dest.kind==Kind::constant_ref && dest.data==0x24df &&
+                        filter.kind==Kind::constant_ref && filter.data==0xe25e,"Invalid shiritori word filter");
+                int count=0;
+                for(unsigned i=0;i<vocabulary_.row_count();++i)
+                    if(vocabulary_.FieldInt(i,0)&0x4000) ++count;
+                result_={Kind::integer,count};
+            } else if(id==0x60 && argc==3 && exchange_inventory_ && site==0x8b0f8) {
+                const auto filter=Pop(),dest=Pop(),source=Pop();
+                const auto matches=Dereference(dest);
+                Require(source.kind==Kind::global_ref && source.data==0x4fad &&
+                        filter.kind==Kind::global_ref && filter.data==0x9a2a &&
+                        matches.kind==Kind::array && matches.cells->size()==1,"Invalid gift exchange filter");
+                result_={Kind::integer,0};
+                for(int i=0;i<RoomInventory::slot_count;++i) if(exchange_inventory_->slot_item(i)) {
+                    matches.cells->front()={Kind::integer,i};
+                    result_.data=1;
+                    break;
+                }
+            } else if(id==0x60 && argc==3 && (friends_introduction_ || exchange_inventory_) && site==0xb014) {
+                const auto predicate=Pop(),dest=Pop(),source=Pop();
+                Require(source.kind==Kind::global_ref && source.data==0x3151 &&
+                        dest.kind==Kind::constant_ref && dest.data==0x24df &&
+                        predicate.kind==Kind::constant_ref && predicate.data==0x2b01,
+                        "Invalid friend notebook count operands");
+                result_={Kind::integer,int(CountIntroductionFriends(vocabulary_))};
+            } else if(id==0x63 && argc==2) {
+                const auto filter=Pop(),row=Pop();
+                Require(filter.kind==Kind::constant_ref && row.kind==Kind::word_row,"Invalid word predicate");
+                const auto& p=predicates_.at(filter.data);
+                bool matched=true;
+                for(unsigned i=0;matched && i<p.size();i+=3) {
+                    const auto value=DictionaryField(row.data,p[i]&0xffff);
+                    const unsigned op=p[i+1]&0xffff;
+                    const int rhs=p[i+2]&0x0fffffff;
+                    if(op==0) matched=value.kind==Kind::integer && value.data==rhs;
+                    else if(op==6) matched=(value.data&rhs)==rhs;
+                    else if(op==7) matched=(value.data&rhs)==0;
+                    else if(op==8) matched=(value.data&rhs)!=0;
+                    else throw std::runtime_error("Unknown teaching predicate operator");
+                }
+                result_={Kind::truth,matched};
+            } else if(id==0x21 && argc>0 && ordinary_) {
+                answer_options_.resize(argc);
+                for(unsigned i=argc;i>0;--i) {
+                    auto value=Pop();
+                    Require(value.kind==Kind::string && !value.text.empty(),"Invalid answer label");
+                    answer_options_[i-1]=std::move(value.text);
+                }
+                answer_frame_=answer_cursor_=answer_ticks_=0; answer_close_=false; answer_held_={};
+                phase_=Phase::answer_pending; return;
+            } else if(id==0x22 && argc==2) {
+                Require(Pop().kind==Kind::nil,"Missing default KSC actor");
+                actor_command_=static_cast<unsigned>(Pop().data);
+            } else if(id==0x23 && argc==0) {
+                actor_wait_=true; return;
+            } else if(id==0xf0 && argc==2 && site==0x89532) {
+                auto slot=Pop(),service=Pop();
+                Require(slot.data==gift_slot_ && service.data==41,"Invalid inventory request");
+            } else if(id==0xf0 && argc==2) {
+                const auto v=Pop(),service=Pop();
+                if(service.data==21) { mood_=v.data; result_={Kind::truth,0}; }
+                else if(exchange_inventory_ && site==0x8d0b5 && service.data==49 &&
+                        v.kind==Kind::integer && v.data>=0 && v.data<=2) {
+                    // The selected site now requires the game's communication owner.
+                    frontier_=site; phase_=Phase::frontier; return;
+                }
+                else if(friends_introduction_ && service.data==42 &&
+                        (site==0x8df4f || site==0x8df7a)) {
+                    Require(v.kind==Kind::integer && v.data==(site==0x8df4f?1:0),
+                            "Invalid SYOUKAI channel-1 request");
+                    friends_banner_=bool(v.data);
+                }
+                else if(excursion_ && service.data==28 && v.kind==Kind::nil) result_={Kind::truth,outing_game28_};
+                else if(excursion_ && service.data==40 && v.kind==Kind::nil) result_={Kind::truth,outing_lamp_};
+                else if(excursion_ && service.data==45 && v.kind==Kind::nil) result_={Kind::truth,outing_locked_};
+                else if(excursion_ && service.data==27 && v.kind==Kind::nil) result_={Kind::integer,int(outing_interrupt_)};
+                else if(excursion_ && service.data==26 && v.kind==Kind::nil) outing_interrupt_requested_=true;
+                else if(excursion_ && service.data==44 && v.kind==Kind::integer && !v.data) {
+                    outing_wide_=true; outing_camera_=0;
+                } else if(excursion_ && (service.data==6 || service.data==7) && v.kind==Kind::nil)
+                    outing_wipe_=service.data==6;
+                else if(excursion_ && service.data==12 && site==0x1269f && v.kind==Kind::integer) {
+                    Require(outing_snapshot_ && !outing_scene_request_ &&
+                            (unsigned(v.data)==outing_snapshot_->kind || (outing_returning_ && !v.data)),
+                            "Invalid outing scene request");
+                    outing_scene_request_=unsigned(v.data);
+                } else if(service.data==36 && excursion_ && v.kind==Kind::nil)
+                    result_={Kind::integer,int(outing_period_)};
+                else if(service.data==12 && excursion_ && (site==0x13249 || site==0x133a3) &&
+                        v.kind==Kind::integer && v.data==0) {
+                    outing_room_request_=true;
+                }
+                else if(service.data==22) result_={Kind::integer,mood_};
+                else if(service.data==23) result_={Kind::integer,actor_field50_};
+                else throw std::runtime_error("Unsupported conversation game service");
+            } else if(id==0x11 && argc==1) {
+                random_bound_=Pop().data;
+                // The two synchronous builtin17 calls inside 2092 draw and swap
+                // in this update; a shuffle does not advance the game by 132 frames.
+                if(rng && excursion_ && (site==0x20c0 || site==0x20cb)) {
+                    Require(random_bound_!=0,"Empty outing shuffle");
+                    result_={Kind::integer,int(rng->NextC3234()%random_bound_)};
+                } else { phase_=Phase::random; return; }
+            } else throw std::runtime_error("Unsupported NEKO builtin");
+            break;
+        }
+        default: throw std::runtime_error("Unsupported opcode in cold NEKO introduction");
+        }
+    }
+    throw std::runtime_error("KSC introduction did not yield");
+}
+
+void RoomTalkState::FinishWordEntry(std::string_view written,std::string_view reading) {
+    if(phase_!=Phase::word_entry) return;
+    editor_pair_.cells->at(0)={Kind::string,0,std::string(written)};
+    editor_pair_.cells->at(1)={Kind::string,0,std::string(reading)};
+    editor_pair_={}; keyboard_initial_reading_.reset(); phase_=Phase::running;
+}
+
+std::size_t RoomTalkState::BreakGroupEnd() const {
+    const auto in=[&](unsigned cls,unsigned glyph) {
+        const auto& set=break_classes_[cls];
+        return std::find(set.begin(),set.end(),glyph)!=set.end();
+    };
+    const auto first=GlyphAt(message_,text_cursor_);
+    std::size_t pos=text_cursor_+first.consumed;
+    if(in(1,first.index)) {
+        if(pos<message_.size() && static_cast<unsigned char>(message_[pos])>=32)
+            pos+=GlyphAt(message_,pos).consumed;
+    } else while(pos<message_.size()) {
+        const auto next=GlyphAt(message_,pos);
+        if(!in(0,next.index)) break;
+        pos+=next.consumed;
+    }
+    return pos;
+}
+
+void RoomTalkState::AppendUnit(std::string_view unit,const recovered::PackageView& font) {
+    bool wrap=false;
+    if(text_cursor_>=group_end_) {
+        // 16350..16494 measures the entire nonbreaking group before the
+        // glyph-reveal cursor crosses its first unit.
+        group_end_=BreakGroupEnd();
+        const auto group=message_.substr(text_cursor_,group_end_-text_cursor_);
+        wrap=!lines_.back().empty() && TextWidth(lines_.back()+group,font)>columns_*16;
+    }
+    if(new_line_ || wrap) {
+        lines_.emplace_back(); new_line_=false;
+        if(lines_.size()>rows_) scroll_=18.f;
+    }
+    lines_.back()+=unit;
+}
+
+void RoomTalkState::AdvanceBalloon(const recovered::PackageView& font) {
+    // UI updates consume the normal two game clock units per displayed frame.
+    constexpr int tick=2;
+    const auto timing=MessageSpeed(message_speed_);
+    if(closing_) {
+        appearance_=std::max(0.f,appearance_-.1f*tick);
+        if(appearance_==0) {
+            lines_.clear(); new_line_=false; closing_=false; scroll_=0;
+            if(page_close_) {
+                page_close_=false;
+                message_wait_=text_cursor_<message_.size();
+                if(message_wait_) lines_.emplace_back();
+            }
+        }
+        return;
+    }
+    if(!message_wait_) {
+        if(appearance_>0 && (idle_-=tick)<=0) closing_=true;
+        return;
+    }
+    if(appearance_<1) { appearance_=std::min(1.f,appearance_+.1f*tick); return; }
+    if(scroll_>0) {
+        scroll_=std::max(0.f,scroll_-(18.f/timing.scroll)*tick);
+        if(!scroll_ && lines_.size()>rows_) lines_.erase(lines_.begin());
+        return;
+    }
+    if((glyph_delay_-=tick)>0) return;
+    if(page_close_) { closing_=true; return; }
+    while(text_cursor_<message_.size()) {
+        unsigned c=static_cast<unsigned char>(message_[text_cursor_]);
+        if(c==4) {
+            // D87D4[0] -> 160A4: request closure after the source hold for
+            // the number of displayed lines. D8844[4] gives it no glyph.
+            ++text_cursor_; page_close_=true;
+            glyph_delay_=timing.page*int(lines_.size());
+            return;
+        }
+        if(c==0x16 || c==10) {
+            ++text_cursor_;
+            if(c==10) new_line_=true;
+            glyph_delay_=timing.line; return;
+        }
+        const unsigned count=c>=0x80?2:1;
+        Require(text_cursor_+count<=message_.size() && c>=32,"Invalid NEKO message unit");
+        AppendUnit(std::string_view(message_).substr(text_cursor_,count),font);
+        text_cursor_+=count; glyph_delay_=timing.glyph; return;
+    }
+    message_wait_=false;
+    if(!message_.empty() && message_.back()!=10) new_line_=true;
+}
+
+void RoomTalkState::StepAnswer(std::uint32_t buttons,std::uint32_t edges) {
+    // 1E638 opens SELECT mode zero with 5400 active updates and Cross disabled.
+    if(answer_frame_<10) {
+        if(++answer_frame_==10 && answer_close_) phase_=Phase::running;
+        return;
+    }
+    const unsigned count=static_cast<unsigned>(answer_options_.size());
+    bool moved=false;
+    for(unsigned i=0;i<2;++i) {
+        const unsigned mask=i?0x10:0x40;
+        auto& held=answer_held_[i];
+        if(!(buttons&mask)) { held=0; continue; }
+        const bool first=bool(edges&mask);
+        const bool repeat=held>=10 && !(held%2);
+        ++held;
+        if(moved || (!first && !repeat)) continue;
+        moved=true;
+        if((i && answer_cursor_>0) || (!i && answer_cursor_+1<count) || first) {
+            answer_cursor_=(answer_cursor_+(i?count-1:1))%count;
+            effects_.push_back(6);
+        }
+    }
+    const bool timeout=++answer_ticks_==5400;
+    if(timeout || (edges&circle)) {
+        result_={Kind::integer,timeout?0:int(answer_cursor_+1)};
+        if(!timeout) { last_answer_=int(answer_cursor_+1); effects_.push_back(4); }
+        effects_.push_back(11);
+        answer_close_=true; answer_frame_=0;
+    }
+}
+
+void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,const recovered::PackageView* font,
+                         bool prompt_expired,std::optional<bool> invitation_event,recovered::RngNativeOwner* rng) {
+    const auto edges=buttons&~previous_;
+    const bool edge=(edges&circle)!=0;
+    previous_=buttons; available_=available; consumed_=false; actor_command_.reset();
+    wide_camera_requested_=false;
+    ordinary_return_=ordinary_rejected_=false;
+    attention_return_=false; outing_sites_.clear();
+    ++script_ticks_; // 74DD4 advances the KSC scheduler clock once, independent of DIALOG's tick.
+    try {
+        if(phase_==Phase::unsupported || phase_==Phase::failed) return;
+        if(visible() || message_wait_) {
+            Require(font!=nullptr,"Missing conversation FONT.XFT");
+            AdvanceBalloon(*font);
+        }
+        if(phase_==Phase::prompt && ((available && invitation_event.value_or(edge)) || prompt_expired)) {
+            consumed_=available && invitation_event.value_or(edge); phase_=Phase::running; pc_=0x89556;
+        }
+        if(phase_==Phase::answer_pending) {
+            // MSG (1E0C8) and ASK (1E618) use the same actor's balloon slot.
+            // ASK waits for its +64 state to reach zero before opening SELECT.
+            if(message_wait_ || visible() || closing_) return;
+            effects_.push_back(10);
+            phase_=Phase::answer;
+            return;
+        }
+        if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
+        if(phase_!=Phase::running || message_wait_) return;
+        if(actor_wait_) { if(!actor_ready) return; actor_wait_=false; }
+        if(delay_>0 && --delay_>0) return;
+        Execute(rng);
+    } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }
+}
+
+void RoomTalkState::SupplyGift(int slot) {
+    if(phase_!=Phase::gift) return;
+    gift_slot_=slot; result_={Kind::integer,slot}; phase_=Phase::running;
+}
+std::optional<int> RoomTalkState::inventory_requested() const {
+    if(phase_==Phase::inventory) return gift_slot_;
+    return {};
+}
+void RoomTalkState::FinishInventory(bool emptied_slot) {
+    if(phase_!=Phase::inventory) return;
+    slot_empty_=emptied_slot;
+    // 1C67 pushes one script tick after registering the wakeup handler.
+    delay_=1; phase_=Phase::running;
+}
+std::optional<unsigned> RoomTalkState::random_requested() const {
+    if(phase_==Phase::random) return random_bound_;
+    return {};
+}
+RoomRumors::Pair RoomTalkState::RumorPair(const Value& subject,const Value& statement) {
+    const auto field=[](const Value& value) -> std::optional<std::string> {
+        if (value.kind==Kind::nil) return {};
+        Require(value.kind==Kind::string,"Invalid meeting rumor field");
+        return value.text;
+    };
+    return {field(subject),field(statement)};
+}
+void RoomTalkState::SupplyRumor(const Value& subject,const Value& statement,unsigned pick) {
+    auto pair=rumors_.Take(pick);
+    Assign(subject,pair.first ? Value{Kind::string,0,std::move(*pair.first)} : Value{});
+    Assign(statement,pair.second ? Value{Kind::string,0,std::move(*pair.second)} : Value{});
+}
+void RoomTalkState::SupplyRandom(unsigned value) {
+    if(phase_!=Phase::random || value>=random_bound_) return;
+    if(random_use_==RandomUse::procedure) {
+        const auto target=procedure_lists_.at(pending_procedure_list_).at(value);
+        random_use_=RandomUse::value; phase_=Phase::running;
+        // The selector opens a nested frame. The current room topic still owns the conversation.
+        Call(target,{},false);
+        return;
+    }
+    if(random_use_==RandomUse::rumor_pick || random_use_==RandomUse::rumor_replace) {
+        auto second=Pop();
+        auto first=Pop();
+        if (random_use_==RandomUse::rumor_pick) SupplyRumor(first,second,value);
+        else rumors_.Replace(value,RumorPair(first,second));
+    } else if(random_use_==RandomUse::fallback) {
+        stack_.push_back({Kind::code,int(fallback_list_.Consume(value))});
+    } else if(random_use_==RandomUse::phrase) {
+        // The BOOT selector returns a one-based slot. This vector omits the list header.
+        const auto offset=phrase_lists_.at(stack_.back().data).at(value);
+        stack_.back()={Kind::string,0,pool_.at(offset)};
+    } else if(random_use_==RandomUse::trait) {
+        result_={Kind::integer,int(unasked_traits_.at(value))};
+    } else if(random_use_==RandomUse::repeated_trait) {
+        result_={Kind::integer,int(RoomWordTraits::Repeated(trait_row_,vocabulary_.FieldInt(trait_row_,12),value))};
+    } else {
+        const int picked=random_use_==RandomUse::word?vocabulary_.FinishLookup(value):static_cast<int>(value);
+        result_={Kind::integer,picked};
+    }
+    random_use_=RandomUse::value; phase_=Phase::running;
+}
+}

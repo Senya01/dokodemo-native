@@ -1,0 +1,2 @@
+Public FFmpeg 9.0.2 headers from https://github.com/FFmpeg/FFmpeg/tree/946fcce07b6dcd0331c8cc609192aeff5e1924f8
+libavutil/avconfig.h supplies the x86-64 little-endian public configuration.
