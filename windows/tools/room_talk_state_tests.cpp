@@ -645,6 +645,10 @@ struct RoomTalkOpcodeTests {
         ChildScriptIsolation(0x28);
         ChildScriptForeignFrame(0x28);
         ChildScriptSiblingOrder(0x28);
+        ChildScriptSchedule(0x29);
+        ChildScriptIsolation(0x29);
+        ChildScriptForeignFrame(0x29);
+        ChildScriptSiblingOrder(0x29);
         WordKeyboardResult(0,true);
         WordKeyboardResult(0,false);
         WordKeyboardResult(2,true);

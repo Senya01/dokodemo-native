@@ -1780,7 +1780,7 @@ bool IsChildOpcode(unsigned op) {
     switch(op) {
     case 0x0b: case 0x0c: case 0x0f: case 0x10: case 0x11: case 0x13:
     case 0x18: case 0x1a: case 0x20: case 0x21: case 0x22: case 0x23:
-    case 0x28: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
+    case 0x28: case 0x29: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
     case 0x30: case 0x31: case 0x38: case 0x40: case 0x41: case 0x43: case 0x44:
     case 0x4e: case 0x4f: case 0x50: case 0x51: case 0x52: case 0x53:
     case 0x54: case 0x55: case 0x56: case 0x57: case 0x70: case 0x71:
@@ -2513,7 +2513,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             random_bound_=static_cast<unsigned>(procedure_lists_.at(table).size());
             random_use_=RandomUse::procedure; phase_=Phase::random; return;
         }
-        case 0x28: {
+        case 0x28:
+        case 0x29: {
             const auto argc=op==0x28?Read(1):0u;
             const auto target=Read(3);
             StartChildScript(target,argc);
