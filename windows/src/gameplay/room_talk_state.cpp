@@ -1853,7 +1853,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             result_={};
             break;
         }
-        case 0xfc: {
+        case 0xfc: case 0xfd: {
             auto key=Pop(),table=Pop();
             Require(key.kind==Kind::string && table.kind==Kind::association && table.entries,
                     "Invalid KSC associative table access");
