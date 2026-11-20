@@ -7,6 +7,7 @@
 #include "gameplay/title_effects.h"
 #include "clock_backend_win32.h"
 #include "platform/audio_ffmpeg_win32.h"
+#include "verify_startup_room.h"
 #include <windows.h>
 #include <shellapi.h>
 #include <algorithm>
@@ -25,6 +26,7 @@ using namespace dokodemo;
 using gameplay::BootToDisplay;
 using gameplay::Display;
 enum ExitCode { Success, StartupFailed, BadArguments, TimedOut, CleanupFailed, MissingMedia };
+enum class VerifyMode { startup, audio, power_cycle, startup_to_room };
 constexpr wchar_t title[] = L"Doko Demo Issyo Portable";
 
 fs::path PackageRoot() {
@@ -84,7 +86,7 @@ bool VerifyPowerCycle(StartupCoordinator& session, const fs::path& audio_directo
                       const std::shared_ptr<BootToDisplay>& boot);
 
 int Verify(StartupCoordinator& session, const fs::path& root, const fs::path& capture,
-           bool audio, bool power_cycle) {
+           VerifyMode mode) {
     const auto deadline = GetTickCount64() + 20000;
     while (GetTickCount64() < deadline) {
         auto state = session.Observe(UINT64_MAX);
@@ -96,9 +98,18 @@ int Verify(StartupCoordinator& session, const fs::path& root, const fs::path& ca
                 return StartupFailed;
             while (boot->TitleFrame() < 2) if (!boot->AdvanceTitle()) return StartupFailed;
             if (!VerifyFrame(boot->Screen(), capture)) return StartupFailed;
-            if (power_cycle)
+            if (mode == VerifyMode::power_cycle)
                 return VerifyPowerCycle(session, root / L"assets/audio", boot) ? Success : StartupFailed;
-            return !audio || VerifyAudio(session, root / L"assets/audio/BGM_TITLE.at3") ? Success : StartupFailed;
+            if (mode == VerifyMode::startup_to_room) {
+                try {
+                    gameplay::VerifyStartupRoom(*boot);
+                } catch (const std::exception& error) {
+                    std::fprintf(stderr, "Startup-to-room verification: %s\n", error.what());
+                    return StartupFailed;
+                }
+            }
+            return mode != VerifyMode::audio || VerifyAudio(session, root / L"assets/audio/BGM_TITLE.at3") ?
+                Success : StartupFailed;
         }
         if (Failed(state)) {
             std::fprintf(stderr, "Startup stopped at %x: %s\n", state.barrier_source_pc, state.barrier.c_str());
@@ -582,7 +593,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     const bool audio = argc == 2 && std::wstring_view(argv[1]) == L"--verify-audio";
     const bool capture = argc == 3 && std::wstring_view(argv[1]) == L"--capture-first-frame";
     const bool power_cycle = argc == 2 && std::wstring_view(argv[1]) == L"--verify-power-cycle";
-    const bool verify = power_cycle || audio || capture || (argc == 2 && std::wstring_view(argv[1]) == L"--verify-startup");
+    const bool startup_to_room = argc == 2 && std::wstring_view(argv[1]) == L"--verify-startup-to-room";
+    const auto mode = startup_to_room ? VerifyMode::startup_to_room : power_cycle ? VerifyMode::power_cycle :
+        audio ? VerifyMode::audio : VerifyMode::startup;
+    const bool verify = startup_to_room || power_cycle || audio || capture ||
+        (argc == 2 && std::wstring_view(argv[1]) == L"--verify-startup");
     const fs::path output = capture ? argv[2] : L"";
     LocalFree(argv);
     if (argc != 1 && !verify) return BadArguments;
@@ -590,6 +605,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     const bool null_audio = dokodemo::audio::Win32Player::UsesNullOutput();
     try {
         const auto root = PackageRoot();
+        if (startup_to_room && fs::exists(root / L"savedata")) {
+            std::fprintf(stderr, "Startup-to-room verification requires a fresh installation without savedata\n");
+            return BadArguments;
+        }
         if (!verify) SetProcessDPIAware(); // Present one native LCD pixel per client pixel.
         const auto media = root / L"assets/iso";
         const auto prx = media / L"PSP_GAME/USRDIR/prx";
@@ -609,7 +628,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         StartupRuntimeStatus status;
         auto session = StartupCoordinator::Create(options, status);
         if (session && status && session->Start()) {
-            auto result = verify ? Verify(*session, root, output, audio, power_cycle) : RunWindow(instance, show, *session);
+            auto result = verify ? Verify(*session, root, output, mode) : RunWindow(instance, show, *session);
             if (!session->Close()) return CleanupFailed;
             const auto after = session->Observe(UINT64_MAX);
             if (!after.caller_joined || !after.worker_joined || !after.resources_closed ||

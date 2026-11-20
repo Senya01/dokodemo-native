@@ -103,11 +103,18 @@ def compilation_groups(root):
         groups.extend({"title": f"{name} / {family}", "kind": "files", "items": items}
                       for family, items in sorted(families.items()))
     cmake = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-    entry = re.search(r"add_executable\(dokodemo-game\s+WIN32\s+(src/\S+\.cpp)\s*\)", cmake)
-    if not entry or entry[1] in seen or not (root / entry[1]).is_file():
-        raise ValueError("Expected a dedicated dokodemo-game Windows entry point")
+    executable = re.search(r"add_executable\(dokodemo-game\s+WIN32\s+([^)]*)\)", cmake)
+    if not executable or not executable[1].split():
+        raise ValueError("Expected dokodemo-game Windows sources")
+    items = []
+    for entry in executable[1].split():
+        source = Path(entry)
+        if entry in seen or not source.is_relative_to("src") or source.suffix != ".cpp" or not (root / source).is_file():
+            raise ValueError(f"Invalid or duplicate dokodemo-game source: {entry}")
+        seen.add(entry)
+        items.append({"label": source.name, "source": entry})
     groups.append({"title": "dokodemo-game", "kind": "files",
-                   "items": [{"label": Path(entry[1]).name, "source": entry[1]}]})
+                   "items": items})
     return groups
 
 

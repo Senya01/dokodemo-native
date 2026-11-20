@@ -44,7 +44,7 @@ target_include_directories(dokodemo-win32 PRIVATE src/platform/audio_ffmpeg_head
 target_compile_definitions(dokodemo-win32 PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(dokodemo-win32 PUBLIC dokodemo-core PRIVATE bcrypt xinput9_1_0 gdi32 winmm ws2_32 iphlpapi)
 
-add_executable(dokodemo-game WIN32 src/game/main_win32.cpp)
+add_executable(dokodemo-game WIN32 src/game/main_win32.cpp src/game/verify_startup_room.cpp)
 configure_cpp(dokodemo-game)
 target_compile_definitions(dokodemo-game PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(dokodemo-game PRIVATE dokodemo-win32 user32 gdi32 shell32)
@@ -83,6 +83,11 @@ if(BUILD_TESTING)
         if(NOT EXISTS "${DOKODEMO_GAME_TEST_MEDIA_DIR}/assets/game/post-profile/toro-introduction.bin" OR
            NOT EXISTS "${DOKODEMO_GAME_TEST_MEDIA_DIR}/assets/iso/PSP_GAME/USRDIR/data/DATA.BP")
             message(FATAL_ERROR "Prepare game media with tools/package_game_media.py before enabling local-media tests.")
+        endif()
+        if(EXISTS "${DOKODEMO_GAME_TEST_MEDIA_DIR}/decoder")
+            add_test(NAME game-startup-to-room COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_windows_startup.py"
+                "$<TARGET_FILE:dokodemo-game>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
         endif()
 
         add_executable(post-profile-tests tools/post_profile_tests.cpp)

@@ -751,7 +751,10 @@
             "adoption",
             "toro-intro"
           ],
-          "gap": "Запуск, титул, принятие профиля и вход в комнату проходят разные тесты. Шов титула и комнаты в общей проверке пока открыт."
+          "tests": [
+            "game-startup-to-room"
+          ],
+          "evidence": "Новый сеанс штатного Windows EXE: девять модулей, первый видимый кадр, семь полей профиля, знакомство, подарок и завершённое самостоятельное занятие Торо."
         },
         {
           "id": "contact-to-save",
@@ -895,7 +898,7 @@
     "peer-shiritori": "blocked",
     "peer-network": "blocked",
     "room-frame-input": "passed",
-    "startup-to-room": "blocked",
+    "startup-to-room": "passed",
     "contact-to-save": "blocked",
     "out-and-back": "passed",
     "seam-calendar": "blocked",
@@ -967,7 +970,8 @@
     "startup-logo-sequence": "passed",
     "game-return-letter": "passed",
     "game-readoption": "passed",
-    "game-out-and-back": "passed"
+    "game-out-and-back": "passed",
+    "game-startup-to-room": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -992,6 +996,12 @@
       "routes_passed": 15,
       "routes_total": 15,
       "scope": "Windows Release, headless, null audio. Toro's ordinary destinations, eligibility prepared in memory, native menu and return with a new activity in both scenes."
+    },
+    "game-startup-to-room": {
+      "game_sha256": "348a6df59a1c49fedccd1204b6c4df8f543b78d84366df86d2445c457d82d2e4",
+      "routes_passed": 1,
+      "routes_total": 1,
+      "scope": "Windows Release, fresh temporary installation with local media and decoder. Normal startup worker and game frame path, no window, null audio, midday room clock and controlled input."
     }
   }
 }

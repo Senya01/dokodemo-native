@@ -353,7 +353,8 @@
 <rect x="514" y="267" width="7" height="7" fill="#477fac"/>
 <rect x="698" y="239" width="218" height="45" fill="#1b242c"/>
 <text x="706" y="258" font-size="13" fill="#edf3f8">dokodemo-game</text>
-<text x="908" y="258" font-size="12" fill="#a9bdce" text-anchor="end">1</text>
+<text x="908" y="258" font-size="12" fill="#a9bdce" text-anchor="end">2</text>
 <rect x="706" y="267" width="7" height="7" fill="#477fac"/>
+<rect x="715" y="267" width="7" height="7" fill="#477fac"/>
 </g>
 </svg>

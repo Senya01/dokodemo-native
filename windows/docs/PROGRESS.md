@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **42 of 60** requirements verified and 18 open. The baseline recorded 62 of 62 Windows Release tests. Separate Release checks cover the 10 scheduled-letter routes, the new-adoption route and the 15 outing routes. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **43 of 60** requirements verified and 17 open. The baseline recorded 62 of 62 Windows Release tests. Separate Release checks cover startup to Toro's room, the 10 scheduled-letter routes, the new-adoption route and the 15 outing routes. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -24,6 +24,10 @@ python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs
 ```
 
 With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.
+
+## Startup to Toro's room
+
+Run `cmake --build <build> --config Release --target dokodemo-game` and `ctest --test-dir <build> -C Release -R '^game-startup-to-room$' --output-on-failure`. This test is registered when the local media directory also contains the prepared decoder. It copies the newly built executable to an isolated installation with links to the local media, sends input to the title and room controllers, and renders only to memory. The game's worker opens all nine modules, then the verifier checks the first visible RGB frame. The route enters all seven profile fields, accepts Toro, closes the gift list and verifies that his first independent room activity finishes and schedules its pause. The room clock is held at midday inside the test.
 
 ## Ordinary conversation roster
 
