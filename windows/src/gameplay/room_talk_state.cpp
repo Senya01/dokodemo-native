@@ -1979,7 +1979,7 @@ void RoomTalkState::RegisterScriptContext(unsigned argc) {
 void RoomTalkState::ActivateScriptContext(unsigned argc) {
     Require(argc!=0 && argc<=stack_.size(),"Missing KSC activation operands");
     const auto first=stack_.end()-argc;
-    const auto index=HostNumber(*first);
+    const auto index=first->kind==Kind::context?first->data:HostNumber(*first);
     const auto args=std::next(first);
     const auto transferred=std::none_of(args,stack_.end(),[](const Value& value) {
         return value.kind==Kind::frame_ref || value.kind==Kind::script_local_ref ||
@@ -2010,6 +2010,32 @@ void RoomTalkState::ActivateScriptContext(unsigned argc) {
     stack_.erase(first,stack_.end());
 }
 
+void RoomTalkState::RendezvousScriptContexts(unsigned argc) {
+    Require(argc<=stack_.size(),"Insufficient KSC rendezvous operands");
+    const auto first=stack_.end()-argc;
+    std::vector<ChildScript*> targets;
+    targets.reserve(argc);
+    for(auto operand=first;operand!=stack_.end();++operand) {
+        const int handle=operand->kind==Kind::context?operand->data:HostNumber(*operand);
+        Require(handle>=0 && std::size_t(handle)<registered_scripts_.size(),
+                "Unknown KSC rendezvous context");
+        targets.push_back(&registered_scripts_[handle]);
+    }
+    // 69BA0 increments every supplied context, including repeated handles.
+    // Only a transition to zero moves that context's deadline to the next tick.
+    const auto next_tick=script_ticks_+1;
+    for(auto* target:targets) {
+        auto& credit=target==executing_child_?rendezvous_credit_:target->rendezvous_credit;
+        auto& deadline=target==executing_child_?script_deadline_:target->deadline;
+        if(++credit==0) deadline=next_tick;
+    }
+    stack_.erase(first,stack_.end());
+    result_={};
+    rendezvous_credit_=std::uint16_t(rendezvous_credit_-argc);
+    script_deadline_=next_tick;
+    phase_=Phase::rendezvous;
+}
+
 const script::Program* RoomTalkState::ActiveModule() const {
     return executing_child_?executing_child_->program.get():nullptr;
 }
@@ -2036,7 +2062,7 @@ bool IsChildOpcode(unsigned op) {
     case 0x30: case 0x31: case 0x38: case 0x40: case 0x41: case 0x43: case 0x44:
     case 0x4e: case 0x4f: case 0x50: case 0x51: case 0x52: case 0x53:
     case 0x54: case 0x55: case 0x56: case 0x57: case 0x70: case 0x71:
-    case 0x72: case 0x73: case 0x78: case 0x89: case 0x8a: case 0x8b:
+    case 0x72: case 0x73: case 0x78: case 0x89: case 0x8a: case 0x8b: case 0x8c:
     case 0x8d: case 0x8f: case 0x90: case 0x91: case 0x92: case 0x93:
     case 0x94: case 0x95: case 0xa0: case 0xd0: case 0xd1: case 0xd2:
     case 0xd4: case 0xd5: case 0xd6: case 0xd7: case 0xe0: case 0xe1:
@@ -2056,6 +2082,7 @@ void RoomTalkState::ChildScript::SwapExecution(RoomTalkState& vm) {
     swap(pc,vm.pc_);
     swap(timer_base,vm.script_timer_base_);
     swap(deadline,vm.script_deadline_);
+    swap(rendezvous_credit,vm.rendezvous_credit_);
     swap(indirect_topic,vm.indirect_topic_);
     swap(delay,vm.delay_);
     swap(instruction_cost,vm.instruction_cost_);
@@ -2102,7 +2129,7 @@ void RoomTalkState::StartChildScript(unsigned target,unsigned argc) {
 }
 
 void RoomTalkState::StepScript(ChildScript& child,recovered::RngNativeOwner* rng) {
-    if(child.phase!=Phase::running) return;
+    if(child.phase!=Phase::running && child.phase!=Phase::rendezvous) return;
     child.SwapExecution(*this);
     executing_child_=&child;
     try {
@@ -2251,8 +2278,14 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             return;
         }
         case 0x8c:
-            Require(excursion_ && site==0x1c5d,"Unsupported callback owner");
-            stack_.push_back({Kind::context}); break;
+            if(executing_child_ && executing_child_->registered_root &&
+               executing_child_==&registered_scripts_.at(*executing_child_->registered_root))
+                stack_.push_back({Kind::context,int(*executing_child_->registered_root)});
+            else {
+                Require(!executing_child_ && excursion_ && site==0x1c5d,"Unsupported callback owner");
+                stack_.push_back({Kind::context,-1});
+            }
+            break;
         case 0x30: locals_.resize(Read(1)); break;
         case 0x4e: {
             const unsigned index=Read(2),length=Read(2);
@@ -2962,7 +2995,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             const unsigned id=Read(1),argc=Read(1);
             if(executing_child_)
                 Require(id<=0x10 || id==0x50 || id==0x52 || (id>=0x70 && id<=0x72) ||
-                        (ActiveModule() && (id==0x80 || id==0x90 || id==0x91 || id==0xa0)),
+                        (ActiveModule() && (id==0x26 || id==0x80 || id==0x90 || id==0x91 || id==0xa0)),
                         "Unsupported child KSC service");
             if(id==0x01 && argc==1) {
                 // 6857C returns the original tag, so only kinds with an
@@ -3084,6 +3117,9 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 ActivateScriptContext(argc);
             } else if(id==0x24) {
                 InvokeHostBuiltin(HostBuiltin::command,argc);
+            } else if(id==0x26) {
+                RendezvousScriptContexts(argc);
+                return;
             } else if(id==0x40) {
                 InvokeHostBuiltin(HostBuiltin::query,argc);
             } else if(id==0x42) {
@@ -3573,7 +3609,7 @@ void RoomTalkState::StepRoom(std::uint32_t buttons,std::uint32_t edges,bool acto
         return;
     }
     if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
-    if(phase_!=Phase::running || message_wait_) return;
+    if((phase_!=Phase::running && phase_!=Phase::rendezvous) || message_wait_) return;
     if(scheduled_room_event_ && invitation_event.value_or(false) && scheduled_deadline_ &&
        scheduled_deadline_->kind==Kind::calendar_time && !blocks_.empty()) {
         const auto block=blocks_.back();
@@ -3598,6 +3634,12 @@ void RoomTalkState::AdvanceScript(recovered::RngNativeOwner* rng) {
     if(SignedClock(script_deadline_)>0 &&
        SignedClock(script_ticks_)<SignedClock(script_deadline_)) return;
     script_deadline_=0;
+    if(phase_==Phase::rendezvous) {
+        // 74CBC tests the signed 16-bit balance before resuming and clears it.
+        if(rendezvous_credit_&0x8000u) return;
+        rendezvous_credit_=0;
+        phase_=Phase::running;
+    }
     if(delay_>0 && --delay_>0) return;
     Execute(rng);
 }

@@ -893,6 +893,74 @@ struct RoomTalkOpcodeTests {
         CheckValue(second.result,Kind::integer,82,0xa0);
     }
 
+    static void ScriptContextRendezvous() {
+        const std::vector<std::uint8_t> waiting{
+            0x8c,0x80,1,0x8b,0x26,2,0x80,41,0x70,0x38
+        };
+        const std::vector<std::uint8_t> signalling{
+            0x43,0x80,0,0x8b,0x26,1,0x80,99,0x70,0x38
+        };
+        RoomTalkState vm;
+        vm.BindScriptModuleReader([&](const std::string& name,std::vector<std::uint8_t>& bytes) {
+            const auto& code=name=="waiting"?waiting:signalling;
+            bytes={'K','S','C',0,4,2,3,0x20,0,0,0,0,static_cast<std::uint8_t>(code.size()),0,0,0,
+                   0,0,0,0,0,0,0,0,0,0,0,0};
+            bytes.insert(bytes.end(),code.begin(),code.end());
+            return true;
+        });
+        ScriptModuleBuiltin(vm,{Kind::string,0,"waiting"},0);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"signalling"},1);
+        ScriptModuleBuiltin(vm,{Kind::integer,0},0,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,1},1,0x90,Value{});
+        const auto step=[&] {
+            vm.Step(0,true,true,nullptr,false);
+            if(!vm.error_.empty()) throw std::runtime_error(vm.error_);
+        };
+        auto& first=vm.registered_scripts_.at(0);
+        auto& second=vm.registered_scripts_.at(1);
+        vm.code_.insert_or_assign(0,std::vector<unsigned char>{
+            0x8b,0xa0,1,0x89,0x80,1,0x8b,0xa0,1,0x89,0x0f
+        });
+        vm.pc_=0;
+        vm.stack_={{Kind::integer,52},{Kind::integer,0}};
+        step();
+        step();
+        const auto waiting_phase=RoomTalkState::Phase::rendezvous;
+        if(first.phase!=waiting_phase || first.rendezvous_credit!=0xffffu ||
+           second.rendezvous_credit!=1 || second.phase!=RoomTalkState::Phase::running)
+            throw std::runtime_error("BI26 did not account for each context independently");
+        step();
+        if(first.phase!=waiting_phase || second.phase!=waiting_phase ||
+           first.rendezvous_credit || second.rendezvous_credit ||
+           first.deadline!=vm.script_ticks_+1 || second.deadline!=first.deadline)
+            throw std::runtime_error("BI26 resumed before the zero transition's next tick");
+        step();
+        if(first.phase!=RoomTalkState::Phase::done || second.phase!=RoomTalkState::Phase::done ||
+           vm.phase_!=RoomTalkState::Phase::suspended || vm.stack_.size()!=3)
+            throw std::runtime_error("BI26 did not restore both continuations");
+        CheckValue(first.result,Kind::integer,41,0x26);
+        CheckValue(second.result,Kind::integer,99,0x26);
+        CheckValue(vm.stack_[0],Kind::integer,52,0x26);
+
+        vm.pc_=0;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,0x26,0,0x89,0x0f});
+        step();
+        if(vm.phase_!=waiting_phase) throw std::runtime_error("Empty BI26 did not yield");
+        step();
+        if(vm.phase_!=RoomTalkState::Phase::suspended) throw std::runtime_error("Empty BI26 lost its continuation");
+        CheckValue(vm.stack_.back(),Kind::nil,0,0x26);
+
+        vm.pc_=0;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,0x26,2,0x0f});
+        vm.stack_={{Kind::integer,0},{Kind::integer,-1}};
+        vm.Step(0,true,true,nullptr,false);
+        if(vm.error_.find("Unknown KSC rendezvous context")==std::string::npos ||
+           first.rendezvous_credit || second.rendezvous_credit)
+            throw std::runtime_error("Invalid BI26 target partially updated the registry");
+    }
+
     static void ScriptModuleArchive(const std::filesystem::path& game) {
         BootToDisplay boot;
         if(!boot.Initialize() || !boot.InitializeClock({},168) ||
@@ -925,6 +993,7 @@ struct RoomTalkOpcodeTests {
         ScriptMapRegistration();
         ScriptContextRegistration();
         ScriptContextActivation();
+        ScriptContextRendezvous();
         HostCommand();
         HostQuery();
         HostNotification();

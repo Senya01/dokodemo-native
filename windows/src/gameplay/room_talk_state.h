@@ -194,7 +194,7 @@ public:
     bool event20_cleanup_enabled() const { return event20_cleanup_; }
 private:
     friend struct RoomTalkOpcodeTests;
-    enum class Phase { unsupported,prompt,running,suspended,gift,inventory,random,answer_pending,answer,word_entry,outing_scene,outing_inventory,scheduled_diary,scheduled_farewell,meeting,frontier,done,failed };
+    enum class Phase { unsupported,prompt,running,suspended,rendezvous,gift,inventory,random,answer_pending,answer,word_entry,outing_scene,outing_inventory,scheduled_diary,scheduled_farewell,meeting,frontier,done,failed };
     enum class Kind { nil,integer,truth,frame_ref,global_ref,global_element,constant_ref,word_row,word_field,array,element,teach_field,string,code,calendar_time,context,question_row,question_field,fixed14,script_local_ref,script_local_array,association,association_ref };
     struct Value {
         Kind kind=Kind::nil;
@@ -243,6 +243,7 @@ private:
     void RegisterScriptMap(unsigned argc);
     void RegisterScriptContext(unsigned argc);
     void ActivateScriptContext(unsigned argc);
+    void RendezvousScriptContexts(unsigned argc);
     const script::Program* ActiveModule() const;
     std::vector<Value>& ActiveScriptLocals();
     const std::vector<Value>& ActiveScriptLocals() const;
@@ -306,6 +307,7 @@ private:
         Phase phase=Phase::done;
         std::uint64_t generation=0;
         unsigned pc=0,timer_base=0,deadline=0,indirect_topic=0;
+        std::uint16_t rendezvous_credit=0;
         int delay=0,instruction_cost=1;
         std::vector<Value> stack,locals;
         std::vector<Frame> calls;
@@ -325,6 +327,7 @@ private:
     ChildScript* executing_child_=nullptr; // Set only for the duration of a child slice.
     std::uint64_t child_generation_=0;
     unsigned child_budget_=0;
+    std::uint16_t rendezvous_credit_=0;
     void StartChildScript(unsigned target,unsigned argc);
     void StepRegisteredScripts(recovered::RngNativeOwner* rng);
     void StepScript(ChildScript& child,recovered::RngNativeOwner* rng);
