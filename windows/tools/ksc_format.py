@@ -17,7 +17,8 @@ NO_IMMEDIATE = set(bytes.fromhex(
     "00 03 08 0B 0C 0D 0E 14 1A 1B 1C 23 31 32 38 3A 3B 41 44 "
     "50 51 52 53 55 57 5B 5D 5F 61 64 65 67 6D 70 78 "
     "84 85 86 87 89 8C 8D B0 B1 B2 B3 B4 B8 B9 BA BB BC BD "
-    "C0 C1 C2 C3 C4 C5 C8 C9 D0 D1 D2 D4 D5 D6 E0 E1 E2 E3 F0 F4 F5"))
+    "C0 C1 C2 C3 C4 C5 C8 C9 D0 D1 D2 D4 D5 D6 E0 E1 E2 E3 F0 F4 F5 "
+    "D7"))
 FIXED = {0x10: 3, 0x11: 3, 0x12: 3, 0x15: 3, 0x18: 3,
          0x20: 4, 0x21: 3, 0x22: 1, 0x28: 4, 0x29: 3,
          0x30: 1, 0x43: 1, 0x4E: 4, 0x71: 2, 0x72: 2, 0x73: 2, 0x75: 2,
