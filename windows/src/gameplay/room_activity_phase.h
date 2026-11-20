@@ -49,6 +49,7 @@ public:
     void EnterUnscheduledLoop();
     void SetAmbientDeadline(std::uint32_t minute) { next_event_=minute; }
     bool BeginOrdinary();
+    bool BeginCalendarEvent();
     void ReleaseUnavailableContact();
     void ReturnToRoom(std::uint32_t minute, int mood, recovered::RngNativeOwner& rng,
                       bool reset_contact_timer = true);

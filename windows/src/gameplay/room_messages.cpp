@@ -48,7 +48,7 @@ void RoomMessages::RestoreUsedDescriptors(const KscSaveValue& ref) {
         saved[i]=field.word;
     }
     // The graph is loaded into a fresh actor whose compiled descriptor flags start clear.
-    // A0BD iterates the actual descriptor count; unused high bits stay in the saved owner.
+    // Keep unused high bits in the saved owner.
     for (unsigned id=0; id<used_.size(); ++id)
         used_.set(id,(saved[id/28] & (1u << (id%28)))!=0);
     saved_used_=saved;
@@ -101,7 +101,7 @@ void RoomMessages::ValidateSaveTable(const KscSaveValue& ref) {
         const auto tag = field.word >> 28;
         const bool value_ok = field.word == 0 || (text_column ? is_text :
             (i == 0 ? field.word == 1 || tag == 1 || tag == 2 : tag == 2));
-        if ((i==1 && (field.word&mask)>=135) || !value_ok || !field.children.empty() || (!is_text && !field.text.empty()) ||
+        if ((i==1 && (field.word&mask)>=descriptor_limit) || !value_ok || !field.children.empty() || (!is_text && !field.text.empty()) ||
             field.text.find('\0') != field.text.npos)
             throw std::invalid_argument("Invalid G44C8 field");
     }

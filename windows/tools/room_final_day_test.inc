@@ -444,6 +444,174 @@ int CheckExtendedReturn(const std::filesystem::path& install) {
     return 0;
 }
 
+int CheckReturnLetter(const std::filesystem::path& install, const std::filesystem::path& donor,
+                      unsigned answer, bool live) {
+    using namespace dokodemo::gameplay;
+    Require(answer<2,"Invalid return-letter answer");
+    const auto slot=install/"savedata"/"UCJS10002000";
+    Require(!std::filesystem::exists(slot),"Return-letter test requires an empty private slot");
+    const auto original=ReadRetailSlot(donor);
+    auto input=DecodeRetailUtilityRequest(original,RetailSaveProfile{});
+    const auto reader=input.profile.ReadProfile();
+    auto sender=reader;
+    sender.actor=reader.actor==3 && live ? 1u : (reader.actor+(live?3u:2u))%5;
+    Require(sender.nickname.Assign("PreviousActor") && sender.player.Assign("PreviousPlayer"),
+            "Invalid test sender profile");
+    input.profile.Adopt(sender);
+    input.profile.RememberLetterSender();
+    input.profile.Adopt(reader);
+    input.profile.SetFullMenuMode();
+    const auto sender_record=input.profile.ReadLetterSender();
+    Require(sender_record && sender_record->actor==sender.actor && sender_record->nickname=="PreviousActor" &&
+            sender_record->player=="PreviousPlayer","Farewell sender did not survive the next adoption");
+
+    auto clock=input.profile.SavedAt();
+    clock[1]=clock[2]=live?59:0;
+    clock[3]=live?23:12;
+    auto owners=RoomSaveOwners::FromActorGraph(input.actor);
+    const auto midnight=[](const auto& calendar) {
+        return dokodemo::recovered::CalendarScalar7C660(
+            dokodemo::recovered::CalendarRecord689B8({int(calendar[6]),int(calendar[5]),int(calendar[4]),0,0}));
+    };
+    owners.day_words[0].children.at(0).word=0x20000003;
+    owners.day_words[1].children.at(0).word=0x30000000|midnight(clock);
+    owners.progress_flags[0].children.at(0).word=0x20000001;
+    owners.progression_words[0].children.at(0).word=0x2000000e;
+    owners.progression_words[1].children.at(0).word=0x20000004;
+    const RoomMessages empty;
+    owners.used_diaries=empty.UsedDescriptorsSaveTable();
+    owners.diary_staging=empty.SaveTable();
+    input.profile.StampForSave(clock);
+    const auto baseline=BuildRetailUtilityRequest(input.profile,owners.ToActorGraph(),input.word_history);
+    WriteRetailSlot(slot,install,baseline);
+    const auto previous_date=clock;
+    if (++clock[4]>static_cast<unsigned>(ProfileMonthDays(clock[6],clock[5]))) {
+        clock[4]=1;
+        if (++clock[5]>12) { clock[5]=1; ++clock[6]; }
+    }
+    if(live) clock[1]=clock[2]=clock[3]=0;
+    const auto initialize=[&](BootToDisplay& boot,const auto& calendar) {
+        std::array<std::uint8_t,16> date{};
+        for (unsigned i=0;i<6;++i) {
+            date[2*i]=static_cast<std::uint8_t>(calendar[6-i]);
+            date[2*i+1]=static_cast<std::uint8_t>(calendar[6-i]>>8);
+        }
+        Require(boot.Initialize() && boot.InitializeClock(date,168) &&
+                boot.MountDataArchive(install/"assets/iso/PSP_GAME/USRDIR/data/DATA.BP") &&
+                boot.PrepareTitle() && boot.Title().title_complete(),"Could not cold-load the letter room");
+    };
+    std::vector<std::uint8_t> staged;
+    {
+        BootToDisplay boot;
+        initialize(boot,live?previous_date:clock);
+        const auto step=[&](unsigned buttons=0) {
+            if (!boot.AdvanceTitle(buttons))
+                throw std::runtime_error(boot.SaveReadBoundary()?boot.SaveReadBoundary():"Return letter update failed");
+        };
+        unsigned previous_activity=0;
+        if(live) {
+            for(unsigned i=0;i<1800 && !boot.RoomActivity().started_command;++i) {
+                step();
+                for(const auto& event:boot.DepartureEvents())
+                    Require(std::string_view(event.name)!="scheduled-room-event","Letter started a day early");
+            }
+            Require(bool(boot.RoomActivity().started_command),"Could not start activity on the prior day");
+            previous_activity=boot.RoomActivity().serial;
+            boot.SetUpdateCalendar(clock);
+        }
+        const auto resumed=[&] {
+            return boot.RoomActivity().serial>previous_activity && bool(boot.RoomActivity().started_command);
+        };
+        bool offered=false, navigation=false, moved=false;
+        unsigned starts=0, returns=0, choices=0, accepted=0, buttons=0;
+        for (unsigned i=0;i<5200 && !(returns && resumed());++i) {
+            const auto held=std::exchange(buttons,0u);
+            step(held);
+            if (held==0x2000 && choices>accepted &&
+                boot.RoomConversation().chosen_option==int(choices==2?answer+1:1))
+                accepted=choices;
+            for (const auto& event:boot.DepartureEvents()) {
+                const std::string_view name=event.name;
+                if (name=="scheduled-room-event" || name=="scheduled-room-return") {
+                    Require(event.values[0].second==7 && event.values[1].second==4,"Wrong scheduled letter day");
+                    name=="scheduled-room-event" ? ++starts : ++returns;
+                } else if (name=="scheduled-actor-command" && event.values[0].second==79) {
+                    offered=true;
+                } else if (name=="scheduled-navigation") {
+                    navigation=event.values[0].second!=0;
+                } else if (name=="scheduled-room-choice") {
+                    Require(event.values[0].second==2,"Expected two letter responses");
+                    ++choices;
+                } else if (name=="letter-diary-staged") {
+                    const auto& bytes=event.text.at(0);
+                    staged.assign(bytes.begin(),bytes.end());
+                }
+            }
+            if (!held && choices>accepted && boot.RoomConversation().option_count) {
+                if (choices==2 && answer && !moved) { buttons=0x40; moved=true; }
+                else buttons=0x2000;
+            } else if (!held && offered && navigation && choices==0 && i%4==0) {
+                buttons=0x2000;
+            }
+        }
+        const auto after_activity=boot.RoomActivity();
+        const bool untouched=ReadRetailSlot(slot)==baseline;
+        std::cout<<"Letter actor "<<reader.actor<<" "<<(live?"live":"cold")
+                 <<" start="<<starts<<" offer="<<offered<<" options="<<choices
+                 <<" accepted="<<accepted<<" returned="<<returns<<" activity="<<after_activity.started_command.value_or(0)
+                 <<" serial="<<previous_activity<<"->"<<after_activity.serial<<" untouched="<<untouched
+                 <<" staged="<<staged.size()<<std::endl;
+        Require(starts==1 && offered && choices==2 && accepted==2 && returns==1 && !staged.empty() &&
+                resumed() && untouched,"Incomplete letter room or premature save");
+        const auto wait=[&](unsigned ticks) { while(ticks--) step(); };
+        const auto press=[&](unsigned button) { step(button); step(); };
+        for(unsigned i=0;i<80 && !boot.RoomTeaching().menu_open;++i) { press(0x20); wait(8); }
+        Require(boot.RoomTeaching().menu_open && boot.RoomTeaching().menu_cursor==0,"Letter did not restore controls");
+        wait(12);
+        press(0x10);
+        Require(boot.RoomTeaching().menu_cursor==6,"Letter room did not expose System");
+        press(0x2000); wait(30); press(0x40); press(0x2000);
+        bool wrote=false;
+        for(unsigned i=0;i<170 && !wrote;++i) {
+            step();
+            for(const auto& event:boot.DepartureEvents())
+                if(std::string_view(event.name)=="system-save-written") wrote=true;
+        }
+        Require(wrote,"Letter room did not save on request");
+    }
+    const auto written=ReadRetailSlot(slot);
+    const auto readback=DecodeRetailUtilityRequest(written,RetailSaveProfile{});
+    const auto restored_sender=readback.profile.ReadLetterSender();
+    const auto saved=RoomSaveOwners::FromActorGraph(readback.actor);
+    const auto& diary=saved.diary_staging.children.at(0);
+    constexpr unsigned descriptors[5][5]{{130,134,131,132,133},{132,131,133,134,135},
+        {132,135,131,133,134},{134,137,135,133,136},{131,134,132,133,130}};
+    const auto descriptor=descriptors[reader.actor][sender.actor];
+    Require(saved.progress_flags[0].children.at(0).word==0x20000081 &&
+            saved.progression_words[1].children.at(0).word==0x20000004 &&
+            diary.children.at(1).word==(0x20000000|descriptor) && diary.children.at(3).word==0x20500000 &&
+            EncodeKscSaveGraph(diary)==staged && diary.children.at(2).text.find("PreviousPlayer")!=std::string::npos &&
+            diary.children.at(2).text.find("$_O")==std::string::npos &&
+            restored_sender && restored_sender->actor==sender.actor &&
+            restored_sender->nickname=="PreviousActor" && restored_sender->player=="PreviousPlayer" &&
+            (saved.used_diaries.children.at(0).children.at(descriptor/28).word&(1u<<(descriptor%28))),
+            "Protected save lost the letter flags, selected descriptor or formatted text");
+    BootToDisplay restarted;
+    initialize(restarted,clock);
+    for(unsigned i=0;i<1800 && !restarted.RoomActivity().started_command;++i) {
+        if(!restarted.AdvanceTitle(0))
+            throw std::runtime_error(restarted.SaveReadBoundary()?restarted.SaveReadBoundary():"Letter reload failed");
+        for(const auto& event:restarted.DepartureEvents())
+            Require(std::string_view(event.name)!="scheduled-room-event","Committed letter replayed after reload");
+    }
+    Require(restarted.RoomActivity().started_command && written==ReadRetailSlot(slot) && original==ReadRetailSlot(donor),
+            "Read-only restart did not restore the room or changed a protected slot");
+    std::cout<<"Letter actor "<<reader.actor<<" "<<(live?"live":"cold")
+             <<" choice "<<answer+1<<" descriptor "<<descriptor
+             <<" saved and cold-resumed without replay\n";
+    return 0;
+}
+
 int CheckExtendedPenultimate(const std::filesystem::path& install, const std::filesystem::path& donor) {
     using namespace dokodemo::gameplay;
     const auto destination=install/"savedata"/"UCJS10002000";

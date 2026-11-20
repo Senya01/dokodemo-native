@@ -17,6 +17,12 @@ public:
     RetailSaveProfile() noexcept;
     void Adopt(const AcceptedProfile& profile) noexcept;
     void AdoptReplacing(const AcceptedProfile& profile) noexcept;
+    struct LetterSender {
+        unsigned actor;
+        std::string nickname, player;
+    };
+    void RememberLetterSender() noexcept;
+    std::optional<LetterSender> ReadLetterSender() const;
     void SetOptions(const std::array<int, 3>& values) noexcept;
     void EnterFirstDayRoom(unsigned actor) noexcept;
     void SetFullMenuMode() noexcept;

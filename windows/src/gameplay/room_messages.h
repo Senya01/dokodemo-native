@@ -24,9 +24,10 @@ public:
     static void ValidateSaveTable(const KscSaveValue& ref);
     void RestoreSaveTable(const KscSaveValue& ref);
 private:
+    static constexpr unsigned descriptor_limit=138; // INU's largest source table.
     bool AdmitsPriority(unsigned candidate) const;
     std::array<KscSaveValue,7> fields_{};
-    std::bitset<135> used_; // Bit 24 in each descriptor's first integer.
+    std::bitset<descriptor_limit> used_; // Bit 24 in each descriptor's first integer.
     std::array<std::uint32_t,5> saved_used_{}; // Persist the original NIL vs integer word tags.
 };
 

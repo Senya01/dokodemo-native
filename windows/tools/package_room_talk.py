@@ -365,10 +365,67 @@ def project_local_table(bits):
     return result
 
 
+LETTER_LAYOUTS = (
+    # Event table, diary table, callback, response, and diary selector.
+    (0x98a2, 0x408f, 0x895a2, 0x89325, 0xa4d2),
+    (0x940b, 0x408f, 0x674b9, 0x6723f, 0xafb0),
+    (0x96a0, 0x4090, 0x633e2, 0x63162, 0xa40e),
+    (0x972d, 0x4090, 0x675f2, 0x6737a, 0xb109),
+    (0x94f1, 0x4093, 0x673eb, 0x67175, 0xadda),
+)
+
+
+def project_return_letter(bits, actor):
+    header = parse_header(bits)
+    table, diary, entry, response, selector = LETTER_LAYOUTS[actor]
+    motion, callback = actor_event_row(bits, header, table, 7)
+    require(motion == 79 and callback == entry and bits[28+entry+16:28+entry+21] ==
+            bytes((0x20, 1)) + selector.to_bytes(3, "little"),
+            "Unexpected scheduled letter callback")
+    instructions = parse_code(bits)
+    entries = (entry, response, 0x9492) if actor == 4 else (entry, response)
+    blocks = named_room_blocks(bits, instructions, entries)
+    strings = sorted({ref["target"] for row in contact_rows(instructions, blocks)
+                      for ref in row["references"] if ref["kind"] == "pool"})
+
+    def text(offset):
+        start = header.pool_start + offset
+        return bits[start:bits.index(0, start, header.pool_end)]
+
+    g = lambda i: struct.unpack_from("<I", bits, header.global_start+4*i)[0]
+    require(g(diary) >> 16 == 0x9000, "Invalid letter descriptor table")
+    descriptors = {}
+    for index in range(g(diary) & 0xffff):
+        ref = g(diary+1+index)
+        require(ref >> 16 == 0xb004, "Invalid diary descriptor reference")
+        row = ref & 0xffff
+        flags = g(row+1)
+        if flags & 0xf00000 != 0x500000:
+            continue
+        sender = flags & 15
+        require((flags & ~15) == (0x20500000 | actor << 4) and sender < 5
+                and sender not in descriptors and g(row) == 0x90000006
+                and g(row+6) >> 28 == 5, "Invalid sender diary descriptor")
+        descriptors[sender] = (index, text(g(row+6) & 0xfffffff))
+    require(len(descriptors) == 5, "Missing letter sender descriptor")
+
+    out = bytearray(struct.pack("<6I", table, motion, entry, selector, len(blocks), len(strings)))
+    for pc, body in sorted(blocks.items()):
+        out.extend(struct.pack("<2I", pc, len(body)) + body)
+    for offset in strings:
+        raw = text(offset)
+        out.extend(struct.pack("<2I", offset, len(raw)) + raw)
+    for sender in range(5):
+        index, raw = descriptors[sender]
+        out.extend(struct.pack("<2I", index, len(raw)) + raw)
+    return out
+
+
 def room_talk_media(root,boot):
     files = {}
     locals_blob = bytearray(b"RLS1")
-    for species in ("NEKO","ROBO","USAGI","INU","KAERU"):
+    letters = bytearray(b"RLT1")
+    for index, species in enumerate(("NEKO","ROBO","USAGI","INU","KAERU")):
         archive = BparArchive(root.payload(root.by_name("KS"+species+".BPM")))
         actor = archive.payload(archive.by_name(species+".KSC"))
         bits = actor.read(0,actor.size)
@@ -381,6 +438,10 @@ def room_talk_media(root,boot):
         image = Region(projected)
         files[Path(f"assets/game/post-profile/{name}-introduction.bin")] = image, image.sha256()
         locals_blob.extend(project_local_table(bits))
+        letter = project_return_letter(bits, index)
+        letters.extend(struct.pack("<I", len(letter)) + letter)
     locals_image = Region(bytes(locals_blob))
     files[Path("assets/game/post-profile/room-ksc-locals.bin")] = locals_image, locals_image.sha256()
+    letters_image = Region(bytes(letters))
+    files[Path("assets/game/post-profile/room-return-letters.bin")] = letters_image, letters_image.sha256()
     return files

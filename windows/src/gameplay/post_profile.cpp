@@ -931,6 +931,7 @@ void PostProfile::Data::AdvanceFarewell() {
     case Action::wait_for_cover:
         // GAME75's room-manager request waits for the closing transition.
         if (switching || travel_cover!=TravelCover::closed) return;
+        save_profile.RememberLetterSender();
         DepartureEvent("farewell-cover-closed", {{"game",75},{"site",int(sites.game75)},{"mode",int(talk.farewell_mode())}});
         break;
     case Action::write_slot:
@@ -1059,8 +1060,9 @@ void PostProfile::Data::LoadScheduledCompanion() {
 
 void PostProfile::Data::StartRoomEvent() {
     const auto midnight=activity.DaySaveWords()[1].word & 0x0fffffffu;
+    const auto sender=save_profile.ReadLetterSender();
     const RoomTalkState::ScheduledProgress progress{topics.total_contacts(),save_profile.MainDiaryCount(),
-        CalendarMinute(profile->adopted_at)};
+        CalendarMinute(profile->adopted_at),sender?std::optional<unsigned>{sender->actor}:std::nullopt};
     if (!talk.BeginScheduledRoomEvent(scheduled_room_event,midnight,progress))
         throw std::runtime_error("Missing scheduled room event media: "+std::to_string(scheduled_room_event));
     input_gate.RequestAction();
@@ -1077,6 +1079,7 @@ bool PostProfile::Data::StageDiary(const std::vector<RoomTalkState::ScheduledDia
 
     const auto& request=*available[rng.NextC3234()%available.size()];
     auto text=request.text;
+    const auto sender=save_profile.ReadLetterSender();
     for (std::size_t at=0; (at=text.find("$_",at))!=std::string::npos;) {
         if (text.compare(at,5,"$_YOU")==0) {
             const auto name=profile->player.text();
@@ -1086,6 +1089,12 @@ bool PostProfile::Data::StageDiary(const std::vector<RoomTalkState::ScheduledDia
             const auto name=profile->nickname.text();
             text.replace(at,4,name);
             at+=name.size();
+        } else if (sender && text.compare(at,6,"$_OYOU")==0) {
+            text.replace(at,6,sender->player);
+            at+=sender->player.size();
+        } else if (sender && text.compare(at,5,"$_OME")==0) {
+            text.replace(at,5,sender->nickname);
+            at+=sender->nickname.size();
         } else {
             at+=2;
         }
@@ -1133,12 +1142,12 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word&0x0fffffffu);
         if (loaded_save && activity.day_number()<1)
             EnterDepartedRoom(previous_day,*rng);
-        if ((activity.day_number()<1 && !actor_departed) || event>6)
+        if ((activity.day_number()<1 && !actor_departed) || event>7)
             throw std::runtime_error("This saved actor's scheduled scene is not available");
         UpdateHomeDecorations(minute,*rng);
         if (!actor_departed) activity.Enter(minute,*rng);
         if (loaded_save && !actor_departed) {
-            if (event==2 || event==4) LoadScheduledCompanion();
+            if (event==2 || event==4 || event==7) LoadScheduledCompanion();
             scheduled_room_event=event>=2?event:0;
             actor.EnterWithoutInvitation();
             talk.EnterWithoutIntroduction();
@@ -1154,12 +1163,12 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         if (!rng) return false;
         topics.ResetMessageDay(minute);
         const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word&0x0fffffffu);
-        if (activity.day_number()<1 || event>6)
+        if (activity.day_number()<1 || event>7)
             throw std::runtime_error("This actor's scheduled scene is not available");
         UpdateHomeDecorations(minute,*rng);
         if (event>=2) {
-            if (!activity.BeginOrdinary()) throw std::logic_error("Cannot suspend a room activity for the scheduled scene");
-            if (event==2 || event==4) LoadScheduledCompanion();
+            if (!activity.BeginCalendarEvent()) throw std::logic_error("Cannot suspend a room activity for the scheduled scene");
+            if (event==2 || event==4 || event==7) LoadScheduledCompanion();
             scheduled_room_event=event;
             StartRoomEvent();
         }
@@ -1178,11 +1187,11 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         const unsigned event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
         if (loaded_save && activity.day_number()<1)
             EnterDepartedRoom(previous_day,*rng);
-        if (event>6) throw std::runtime_error("Unsupported Robo stay event at 6BC4D");
+        if (event>7) throw std::runtime_error("Unsupported Robo stay event at 6BC4D");
         UpdateHomeDecorations(minute,*rng); // 6C039 / 6C046 / 6C05B
         if (!actor_departed) activity.Enter(minute,*rng); // 6BCC1..6BCD1
         if (loaded_save && !actor_departed && event!=1) {
-            if (event==2 || event==4) LoadScheduledCompanion();
+            if (event==2 || event==4 || event==7) LoadScheduledCompanion();
             scheduled_room_event=event;
             actor.EnterWithoutInvitation();
             talk.EnterWithoutIntroduction();
@@ -1199,11 +1208,11 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         topics.ResetMessageDay(minute);
         RecordTable("diary-staging-clear",topics.messages().SaveTable(),{{"root",26}});
         const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
-        if (activity.day_number()<1 || event>6)
+        if (activity.day_number()<1 || event>7)
             throw std::runtime_error("Unsupported Robo stay event at 6BC4D");
         if (event>=2) {
-            if (!activity.BeginOrdinary()) throw std::logic_error("Cannot suspend Robo's activity for a scheduled event");
-            if (event==2 || event==4) LoadScheduledCompanion();
+            if (!activity.BeginCalendarEvent()) throw std::logic_error("Cannot suspend Robo's activity for a scheduled event");
+            if (event==2 || event==4 || event==7) LoadScheduledCompanion();
             scheduled_room_event=event;
             StartRoomEvent();
         }
@@ -1230,8 +1239,8 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         UpdateHomeDecorations(minute,*rng); // 8DDFC schedules 3A91/393C before the room deadlines.
         if (!actor_departed) activity.Enter(minute,*rng);
         const auto scheduled=actor_departed?0:activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
-        if (loaded_save && !actor_departed && (scheduled<=6 && scheduled!=1)) {
-            if (scheduled==2 || scheduled==4) LoadScheduledCompanion();
+        if (loaded_save && !actor_departed && scheduled!=1) {
+            if (scheduled==2 || scheduled==4 || scheduled==7) LoadScheduledCompanion();
             actor.EnterWithoutInvitation();
             talk.EnterWithoutIntroduction();
             topics.ResumeDay(minute);
@@ -1241,6 +1250,26 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         if (scheduled==1) input_gate.RequestAction(); // 8DDA3: dispatch first-day introduction.
         else if (scheduled && !scheduled_room_event)
             throw std::runtime_error("Unsupported room event at 8DD8C: "+std::to_string(scheduled));
+    } else if (profile && profile->actor==0 && !actor_departed && introduction_done && !switching &&
+               !menu.active() && !awaiting_entrance && !scheduled_room_event && talk.finished() &&
+               activity.state()==RoomActivityPhase::State::other_source_path && activity.alternate_pc()==0x1b34) {
+        if (!rng) return false;
+        const int previous_day=activity.day_number();
+        if (activity.RegisterDay(minute)) {
+            topics.ResetMessageDay(minute);
+            RecordTable("diary-staging-clear",topics.messages().SaveTable(),{{"root",26}});
+        }
+        if (activity.day_number()<1) {
+            EnterDepartedRoom(previous_day,*rng);
+        } else {
+            UpdateHomeDecorations(minute,*rng);
+            if (!activity.BeginCalendarEvent()) throw std::logic_error("Cannot enter Toro's new room day");
+            scheduled_room_event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word&0x0fffffffu);
+            if (scheduled_room_event==2 || scheduled_room_event==4 || scheduled_room_event==7)
+                LoadScheduledCompanion();
+            if (scheduled_room_event) StartRoomEvent();
+            else activity.ReturnToRoom(minute,talk.mood(),*rng);
+        }
     }
     if (!actor_departed && !actor.Advance(minute))
         throw std::runtime_error(actor.error().empty() ? "Room actor update failed" : actor.error());
@@ -1309,7 +1338,8 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         if (scheduled_camera) scheduled_camera_held=*scheduled_camera==3; // 23580 -> 8490 holds the current view.
         if (const auto requests=talk.scheduled_diaries(); !requests.empty()) {
             if (!rng) throw std::runtime_error("Missing scheduled diary selector RNG");
-            const auto event=scheduled_room_event==6?"return-diary-staged":"farewell-diary-staged";
+            const auto event=scheduled_room_event==7?"letter-diary-staged":
+                             scheduled_room_event==6?"return-diary-staged":"farewell-diary-staged";
             talk.FinishScheduledDiary(StageDiary(requests,*rng,event));
         }
         if (scheduled_room_event==3 || scheduled_room_event==5) {
@@ -2140,7 +2170,8 @@ RoomConversationSnapshot PostProfile::conversation_snapshot() const {
     const auto& talk = data_->talk;
     status.invitation_ready=talk.prompt_visible();
     const bool named_greeting=data_->profile && data_->profile->actor>=1;
-    if (status.serial || named_greeting) {
+    const bool scheduled=talk.scheduled_room_event_active();
+    if (status.serial || named_greeting || scheduled) {
         status.word_entry_interactive = data_->word_open && data_->word_entry.phase() == RoomWordEntry::Phase::editing;
         if (talk.visible()) {
             status.message_pc = talk.message_pc();
@@ -2152,7 +2183,7 @@ RoomConversationSnapshot PostProfile::conversation_snapshot() const {
             if (status.message_revealed) status.displayed_lines = talk.lines();
         }
         if (talk.answer_interactive()) status.option_count = static_cast<unsigned>(talk.answer_options().size());
-        if (status.topic_pc || named_greeting) status.chosen_option = talk.last_answer();
+        if (status.topic_pc || named_greeting || scheduled) status.chosen_option = talk.last_answer();
     }
     return status;
 }

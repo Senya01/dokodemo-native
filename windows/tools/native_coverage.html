@@ -170,10 +170,11 @@
   const titles = new Map(checks.map(part => [part.id, part.title]));
   const summary = {passed:0, failed:0, blocked:0, unverified:0};
   for (const part of checks) summary[verification.states[part.id]]++;
-  const build = verification.game_sha256 ? " Сборка " + verification.game_sha256.slice(0, 12) + "." : " Запуск ещё не приложен.";
+  const build = verification.game_sha256 ? " Базовая сборка " + verification.game_sha256.slice(0, 12) + "." : " Запуск ещё не приложен.";
   root.querySelector(".verdict").textContent =
     (verification.ready ? "Все требования пройдены." : "Полная готовность не подтверждена.") + build
-    + (verification.source_revision ? " Снимок приёмки от " + verification.source_revision.slice(0, 7) + "." : "");
+    + (verification.source_revision ? " Снимок приёмки от " + verification.source_revision.slice(0, 7) + "." : "")
+    + (verification.supplemental ? " В итог включены дополнительные проверки." : "");
   const checkMap = root.querySelector(".check-map");
   const openOnly = root.querySelector(".open-only");
   const checkDetail = root.querySelector(".check-detail");
@@ -188,8 +189,8 @@
     root.querySelector(".check-state").textContent = stateLabel[tile.dataset.result];
     root.querySelector(".check-expect").textContent = part.expect;
     const gap = root.querySelector(".check-gap");
-    gap.hidden = !part.gap;
-    gap.textContent = part.gap || "";
+    gap.hidden = !(part.gap || part.evidence);
+    gap.textContent = part.gap || part.evidence || "";
     const tests = root.querySelector(".check-tests");
     tests.hidden = !part.tests?.length;
     tests.textContent = (part.tests || []).map(name =>

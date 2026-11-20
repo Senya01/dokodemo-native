@@ -154,6 +154,14 @@ bool RoomActivityPhase::BeginOrdinary() {
     return true;
 }
 
+bool RoomActivityPhase::BeginCalendarEvent() {
+    if (state_==State::other_source_path && alternate_pc_==0x1b34) {
+        alternate_pc_=0;
+        state_=State::select;
+    }
+    return BeginOrdinary();
+}
+
 void RoomActivityPhase::ReleaseUnavailableContact() {
     if (state_ == State::ordinary) {
         entry_delay_ = 1;

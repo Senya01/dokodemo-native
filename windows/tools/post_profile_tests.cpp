@@ -17,6 +17,7 @@
 #include "gameplay/room_activity_phase.h"
 #include "gameplay/profile_adoption.h"
 #include "gameplay/profile_date.h"
+#include "recovered/calendar_native.h"
 #include "recovered/package_storage_native.h"
 #include "recovered/rng_native.h"
 #include <algorithm>
@@ -1808,6 +1809,10 @@ int main(int argc, char **argv) try {
         }
     }
     if(argc==3 && std::string_view(argv[2])=="--robo-home") return CheckRoboIntroduction(argv[1],0,true);
+    if(argc==5 && std::string_view(argv[2])=="--return-letter-slot")
+        return CheckReturnLetter(argv[1],argv[3],std::stoul(argv[4]),false);
+    if(argc==5 && std::string_view(argv[2])=="--return-letter-live")
+        return CheckReturnLetter(argv[1],argv[3],std::stoul(argv[4]),true);
     if(argc==4 && std::string_view(argv[2])=="--robo-contact") {
         const std::string_view answer=argv[3];
         Require(answer=="1" || answer=="2","Invalid Robo contact answer");

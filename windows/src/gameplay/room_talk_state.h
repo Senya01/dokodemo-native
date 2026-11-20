@@ -44,6 +44,7 @@ public:
     struct ScheduledProgress {
         unsigned contacts, diary_count;
         std::uint32_t adoption_minute;
+        std::optional<unsigned> letter_sender;
     };
     bool BeginScheduledRoomEvent(unsigned event, std::uint32_t midnight, ScheduledProgress progress);
     bool scheduled_room_event_active() const { return scheduled_room_event_ != 0; }
@@ -269,6 +270,13 @@ private:
     unsigned scheduled_room_event_=0;
     std::uint32_t scheduled_midnight_=0;
     ScheduledProgress scheduled_progress_{};
+    struct LetterScript {
+        unsigned callback, diary_selector;
+        struct Descriptor { unsigned id; std::string text; };
+        std::array<Descriptor,5> descriptors;
+    };
+    std::optional<LetterScript> letter_script_;
+    void LoadReturnLetter(const std::filesystem::path& dir);
     unsigned farewell_mode_=0;
     bool ScheduledFarewell() const { return scheduled_room_event_==3 || scheduled_room_event_==5; }
     unsigned FarewellReturnPc() const {

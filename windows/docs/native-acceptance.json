@@ -566,7 +566,7 @@
         },
         {
           "id": "return-letter",
-          "title": "Письмо события 7 и поздние дни",
+          "title": "Письмо по расписанию · событие 7",
           "tiles": [
             "story-toro-extension",
             "story-after",
@@ -576,7 +576,10 @@
             "story-kaeru"
           ],
           "expect": "Письмо по расписанию, возврат к управлению и последующая холодная загрузка проходят у применимых персонажей.",
-          "gap": "Событие 7 остаётся открытым. Отдельные поздние ветки требуют покрытия."
+          "tests": [
+            "game-return-letter"
+          ],
+          "evidence": "10 из 10 маршрутов на подготовленных слотах: холодный вход и смена дня в открытой комнате, по два маршрута на каждого из пяти персонажей."
         },
         {
           "id": "re-adopt",
@@ -874,7 +877,7 @@
     "kaeru-days": "passed",
     "toro-calendar": "passed",
     "toro-ending": "blocked",
-    "return-letter": "blocked",
+    "return-letter": "passed",
     "re-adopt": "blocked",
     "save-format": "passed",
     "save-game": "passed",
@@ -955,10 +958,20 @@
     "game-usagi-penultimate": "passed",
     "game-usagi-save": "passed",
     "native-framebuffer": "passed",
-    "startup-logo-sequence": "passed"
+    "startup-logo-sequence": "passed",
+    "game-return-letter": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
   "source_revision": "b45b7cb4fee0fab9b1bdfa1b41d760b590cd4b29",
-  "scope": "Local Windows Release acceptance snapshot, executed without windows or audio output."
+  "scope": "Local Windows Release acceptance snapshot, executed without windows or audio output.",
+  "supplemental": {
+    "game-return-letter": {
+      "test_binary_sha256": "af43061f4d6e1d7558d6400a9855c9fd9d3cfe6dd597b0b74fdb11b02ba07324",
+      "letter_media_sha256": "6f84397fc3df43202d1092dee93e4d52aeb3e628204f8d7d07ec01ee3a6bcec5",
+      "routes_passed": 10,
+      "routes_total": 10,
+      "scope": "Windows Release, headless, null audio, locally prepared day-three slots, cold entry and one-second midnight transition."
+    }
+  }
 }

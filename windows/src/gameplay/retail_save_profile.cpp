@@ -79,6 +79,24 @@ void RetailSaveProfile::AdoptReplacing(const AcceptedProfile& profile) noexcept 
     RestrictRoomMenus();
 }
 
+void RetailSaveProfile::RememberLetterSender() noexcept {
+    // GAME75 at 1D264 copies the current actor and the two fixed-width names.
+    auto* base=bytes_.data();
+    WriteWord(base+0x64,ReadWord(base+0x24));
+    std::copy_n(base+0x28,32,base+0x68);
+}
+
+std::optional<RetailSaveProfile::LetterSender> RetailSaveProfile::ReadLetterSender() const {
+    // GAME20(8/9) tests for a present nickname before using the sender index.
+    const auto* base=bytes_.data();
+    const auto actor=ReadWord(base+0x64);
+    const auto* nick_end=std::find(base+0x68,base+0x78,0);
+    const auto* player_end=std::find(base+0x78,base+0x88,0);
+    if(actor>=5 || nick_end==base+0x68 || nick_end==base+0x78 || player_end==base+0x88)
+        return {};
+    return LetterSender{actor,std::string(base+0x68,nick_end),std::string(base+0x78,player_end)};
+}
+
 void RetailSaveProfile::SetOptions(const std::array<int, 3>& values) noexcept {
     for (std::size_t i = 0; i < values.size(); ++i)
         WriteWord(bytes_.data() + 0x10 + 4 * i, values[i]);

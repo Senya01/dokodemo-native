@@ -262,7 +262,11 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
             Require(p.actor-2<std::size(scripts),"Unsupported introduction actor");
             alternate_greeting_=&scripts[p.actor-2];
         }
-        if(p.actor>=1) return LoadNamedGreeting(dir,p,error);
+        if(p.actor>=1) {
+            if(!LoadNamedGreeting(dir,p,error)) return false;
+            LoadReturnLetter(dir);
+            return true;
+        }
         std::ifstream file(dir/"toro-introduction.bin",std::ios::binary|std::ios::ate);
         Require(file && file.tellg()==std::streamoff(1743),"Missing NEKO introduction");
         std::vector<unsigned char> image(1743);
@@ -410,9 +414,85 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
         global_arrays_[0x243f].resize(6);
         global_arrays_[0x243f][0]={Kind::integer,0}; // 8E166, initial room selector.
         if(code_.count(0x13219)) LoadOutings(dir);
+        LoadReturnLetter(dir);
         phase_=Phase::prompt;
         return true;
     } catch(const std::exception& e) { error=e.what(); return false; }
+}
+
+void RoomTalkState::LoadReturnLetter(const std::filesystem::path& dir) {
+    std::ifstream file(dir/"room-return-letters.bin",std::ios::binary|std::ios::ate);
+    if(!file) return; // Existing media can still run stays without event 7.
+    const auto size=file.tellg();
+    Require(size>=24 && size<=32768,"Invalid return-letter resource size");
+    std::vector<unsigned char> image(static_cast<std::size_t>(size));
+    Require(bool(file.seekg(0).read(reinterpret_cast<char*>(image.data()),size)) &&
+            std::string_view(reinterpret_cast<const char*>(image.data()),4)=="RLT1",
+            "Invalid return-letter resource");
+    const auto* at=image.data()+4;
+    const auto* limit=image.data()+image.size();
+    const auto take=[&](std::size_t count) {
+        Require(count<=std::size_t(limit-at),"Truncated return-letter data");
+        const auto* value=at;
+        at+=count;
+        return value;
+    };
+    const auto read=[&] { return Word(take(4),4); };
+    for(unsigned index=0;index<5;++index) {
+        const auto length=read();
+        const auto* bytes=take(length);
+        if(index!=actor_number_) continue;
+        const auto* next=at;
+        const auto* image_end=limit;
+        at=bytes;
+        limit=next;
+        const auto table=read(),motion=read(),callback=read(),selector=read(),blocks=read(),strings=read();
+        const auto expected=alternate_greeting_?alternate_greeting_->schedule.table:robo_greeting_?0x940bu:0x98a2u;
+        Require(table==expected && motion==79 && blocks>=2 && blocks<=3,"Invalid letter event table");
+        for(unsigned i=0;i<blocks;++i) {
+            const auto pc=read(),count=read();
+            const auto* body=take(count);
+            Require(count>=3 && pc<0x1000000 && count<=0x1000000-pc && body[0]==0x30 && body[count-1]==0x31,
+                    "Invalid letter procedure");
+            const auto found=code_.lower_bound(pc);
+            if(found!=code_.end() && found->first==pc) {
+                Require(found->second.size()==count && std::equal(found->second.begin(),found->second.end(),body),
+                        "Conflicting letter procedure");
+            } else {
+                Require((found==code_.end() || pc+count<=found->first) &&
+                        (found==code_.begin() || std::prev(found)->first+std::prev(found)->second.size()<=pc),
+                        "Overlapping letter procedure");
+                code_.emplace_hint(found,pc,std::vector<unsigned char>(body,body+count));
+            }
+        }
+        for(unsigned i=0;i<strings;++i) {
+            const auto offset=read(), count=read();
+            const auto* raw=take(count);
+            std::string value(reinterpret_cast<const char*>(raw),count);
+            const auto [existing, inserted]=pool_.try_emplace(offset,value);
+            Require(value.find('\0')==value.npos && (inserted || existing->second==value),
+                    "Conflicting letter text");
+        }
+        LetterScript script{callback,selector,{}};
+        for(auto& descriptor:script.descriptors) {
+            descriptor.id=read();
+            const auto count=read();
+            const auto* raw=take(count);
+            descriptor.text.assign(reinterpret_cast<const char*>(raw),count);
+            Require(descriptor.id<138 && count>0 && descriptor.text.find('\0')==descriptor.text.npos,
+                    "Invalid letter diary descriptor");
+        }
+        const auto& body=code_.at(callback);
+        Require(at==limit && body.size()>0x15 && body[0x10]==0x20 && body[0x11]==1 &&
+                Word(body.data()+0x12,3)==selector,"Incomplete return-letter entry");
+        auto& rows=global_arrays_[table];
+        rows.resize(8);
+        rows[7]={Kind::array,0,{},0,std::make_shared<std::vector<Value>>(
+            std::initializer_list<Value>{{Kind::integer,int(motion)},{Kind::code,int(callback)}})};
+        letter_script_=std::move(script);
+        limit=image_end;
+    }
+    Require(at==limit,"Unexpected return-letter resource tail");
 }
 
 bool RoomTalkState::LoadNamedGreeting(const std::filesystem::path& dir,const AcceptedProfile& profile,
@@ -614,7 +694,7 @@ bool RoomTalkState::TakeRoboContactGreetingReturn() {
 bool RoomTalkState::BeginScheduledRoomEvent(unsigned event, std::uint32_t midnight, ScheduledProgress progress) {
     const unsigned entry=alternate_greeting_?alternate_greeting_->schedule.wrapper:robo_greeting_?0x6779au:0x89883u;
     const auto rows=global_arrays_.find(alternate_greeting_?alternate_greeting_->schedule.table:robo_greeting_?0x940bu:0x98a2u);
-    if(event<2 || event>6 || phase_!=Phase::done || ordinary_ || !code_.count(entry) ||
+    if(event<2 || event>7 || phase_!=Phase::done || ordinary_ || !code_.count(entry) ||
        rows==global_arrays_.end() || rows->second.size()<=event || rows->second[event].kind!=Kind::array) return false;
     scheduled_room_event_=event;
     scheduled_midnight_=midnight;
@@ -653,6 +733,10 @@ std::array<std::optional<unsigned>,2> RoomTalkState::TakeScheduledStayWrites() {
 
 std::vector<RoomTalkState::ScheduledDiary> RoomTalkState::scheduled_diaries() const {
     if(phase_!=Phase::scheduled_diary) return {};
+    if(scheduled_room_event_==7) {
+        const auto& letter=letter_script_->descriptors.at(*scheduled_progress_.letter_sender);
+        return {{letter.id,0x500000,letter.text}};
+    }
     if(alternate_greeting_) {
         const auto& offsets=named_scheduled_diary_offsets_;
         if(scheduled_room_event_==6) return {{7,0x900000,pool_.at(offsets[0])}};
@@ -1280,6 +1364,14 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect,b
     }
     const auto argc=args.size();
     const auto* source=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
+    if(scheduled_room_event_==7 && letter_script_ && target==letter_script_->diary_selector &&
+       pc_==letter_script_->callback+0x15) {
+        Require(argc==1 && args[0].kind==Kind::integer && args[0].data==0x500000,
+                "Invalid return-letter diary priority");
+        if(scheduled_progress_.letter_sender) phase_=Phase::scheduled_diary;
+        else result_={Kind::truth,0};
+        return;
+    }
     if(scheduled_room_event_ && ((robo_greeting_ && target==0x1a89 && pc_==0x676b5) ||
                                  (source && target==0x1a9e && pc_==source->callbacks[0]+0x9a))) {
         Require(argc==2 && args[0].kind==Kind::calendar_time &&
@@ -2746,7 +2838,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                          (scheduled_room_event_==6 && site==(named?named->callbacks[4]+0xb:robo_greeting_?0x674edu:0x895d6u) && value.data==8) ||
                          (scheduled_room_event_==4 && site==(named?named->callbacks[2]+0x3e:robo_greeting_?0x6769au:0x89783u) && value.data==16) ||
                          (scheduled_room_event_==3 && site==(named?named->callbacks[1]+0x18:robo_greeting_?0x67519u:0x89602u) && value.data==4) ||
-                         (scheduled_room_event_==5 && site==(named?named->callbacks[3]+0xb:robo_greeting_?0x675adu:0x89696u) && value.data==32)),
+                         (scheduled_room_event_==5 && site==(named?named->callbacks[3]+0xb:robo_greeting_?0x675adu:0x89696u) && value.data==32) ||
+                         (scheduled_room_event_==7 && letter_script_ && site==letter_script_->callback+8 && value.data==128)),
                         "Invalid intro completion flag");
                 intro_flags_|=value.data;
             }
@@ -2955,7 +3048,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                     return;
                 }
                 if(scheduled_room_event_) {
-                    const unsigned flag=scheduled_room_event_==6?8:scheduled_room_event_==4?16:2;
+                    const unsigned flag=scheduled_room_event_==7?128:scheduled_room_event_==6?8:scheduled_room_event_==4?16:2;
                     Require(site==(alternate_greeting_?alternate_greeting_->schedule.wrapper+0xe3:robo_greeting_?0x6787du:0x89966u) && (intro_flags_&flag) && scheduled_count_contact_ &&
                             blocks_.empty(),"Incomplete scheduled room return");
                     scheduled_room_event_=0;
