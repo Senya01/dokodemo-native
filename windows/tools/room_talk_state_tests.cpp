@@ -750,6 +750,32 @@ struct RoomTalkOpcodeTests {
             throw std::runtime_error("Package bytecode was accepted by the original-image path");
     }
 
+    static void ScriptMapRegistration() {
+        const std::vector<std::uint8_t> map{
+            'k','s','m',0, 2,0,0,0, 'a',0,'b','c',0,0,0,0,
+            2,0,0,0, 0,0,0,0, 11,0,0,0, 16,0,0,0, 17,0,0,0
+        };
+        RoomTalkState vm;
+        vm.BindScriptModuleReader([&](const std::string& name,std::vector<std::uint8_t>& bytes) {
+            bytes=map;
+            if(name=="short") bytes.pop_back();
+            if(name=="bad-name") bytes.assign({'k','s','m',0,1,0,0,0,'a','b','c','d'});
+            if(name=="wrong-kind") bytes[0]='x';
+            return true;
+        });
+        ScriptModuleBuiltin(vm,{Kind::integer,0},-1,0x91);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"map"},0);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"short"},1);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"bad-name"},2);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"wrong-kind"},3);
+        for(int i=1;i<=3;++i) ScriptModuleBuiltin(vm,{Kind::integer,i},-1,0x91);
+        for(int i=0;i<8;++i) ScriptModuleBuiltin(vm,{Kind::integer,0},i,0x91);
+        ScriptModuleBuiltin(vm,{Kind::integer,0},-1,0x91);
+        if(vm.script_maps_.size()!=8 || vm.script_maps_[0].names!=std::vector<std::string>{"a","bc"} ||
+           vm.script_maps_[0].records!=std::vector<std::array<std::uint32_t,2>>{{0,11},{16,17}})
+            throw std::runtime_error("KSC metadata map did not retain its names and aligned records");
+    }
+
     static void ScriptModuleArchive(const std::filesystem::path& game) {
         BootToDisplay boot;
         if(!boot.Initialize() || !boot.InitializeClock({},168) ||
@@ -773,6 +799,7 @@ struct RoomTalkOpcodeTests {
 
     static void Run() {
         ScriptModuleLoad();
+        ScriptMapRegistration();
         HostCommand();
         HostQuery();
         HostNotification();

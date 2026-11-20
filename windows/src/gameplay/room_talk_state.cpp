@@ -1876,6 +1876,41 @@ void RoomTalkState::LoadScriptModule(unsigned argc) {
     result_={Kind::integer,index};
 }
 
+void RoomTalkState::RegisterScriptMap(unsigned argc) {
+    Require(argc!=0 && argc<=stack_.size(),"Missing KSC map module index");
+    const auto first=stack_.size()-argc;
+    const auto index=HostNumber(stack_[first]);
+    stack_.resize(first);
+    result_={Kind::integer,-1};
+    // E58AC contains eight map slots before the count at E58CC.
+    if(index<0 || std::size_t(index)>=script_modules_.size() || script_maps_.size()>=8) return;
+    const auto& bytes=script_modules_[index].bytes;
+    if(bytes.size()<12 || bytes[0]!='k' || bytes[1]!='s' || bytes[2]!='m') return;
+    auto offset=std::size_t{8};
+    const auto name_count=Word(bytes.data()+4,4);
+    if(name_count>bytes.size()-offset) return;
+    ScriptMap map;
+    for(unsigned i=0;i<name_count;++i) {
+        const auto start=bytes.begin()+offset;
+        const auto end=std::find(start,bytes.end(),std::uint8_t{0});
+        if(end==bytes.end()) return;
+        map.names.emplace_back(start,end);
+        offset=std::size_t(end-bytes.begin())+1;
+    }
+    // 65ECC advances to the next aligned position before reading 8-byte rows.
+    offset=(offset+3)&~std::size_t{3};
+    if(offset>bytes.size() || bytes.size()-offset<4) return;
+    const auto record_count=Word(bytes.data()+offset,4);
+    offset+=4;
+    if(record_count>(bytes.size()-offset)/8) return;
+    map.records.reserve(record_count);
+    for(unsigned i=0;i<record_count;++i,offset+=8)
+        map.records.push_back({Word(bytes.data()+offset,4),Word(bytes.data()+offset+4,4)});
+    const auto handle=int(script_maps_.size());
+    script_maps_.push_back(std::move(map));
+    result_={Kind::integer,handle};
+}
+
 namespace {
 constexpr unsigned script_instruction_limit=16384;
 
@@ -2901,6 +2936,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 return;
             } else if(id==0x80) {
                 LoadScriptModule(argc);
+            } else if(id==0x91) {
+                RegisterScriptMap(argc);
             } else if(id==0x24) {
                 InvokeHostBuiltin(HostBuiltin::command,argc);
             } else if(id==0x40) {

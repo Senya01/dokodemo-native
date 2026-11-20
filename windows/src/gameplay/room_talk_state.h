@@ -229,7 +229,13 @@ private:
     ScriptModuleReader script_module_reader_;
     struct ScriptModule { std::string name; std::vector<std::uint8_t> bytes; };
     std::vector<ScriptModule> script_modules_;
+    struct ScriptMap {
+        std::vector<std::string> names;
+        std::vector<std::array<std::uint32_t,2>> records;
+    };
+    std::vector<ScriptMap> script_maps_;
     void LoadScriptModule(unsigned argc);
+    void RegisterScriptMap(unsigned argc);
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;
