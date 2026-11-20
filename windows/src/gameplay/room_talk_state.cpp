@@ -2636,6 +2636,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                         predicate.kind==Kind::constant_ref && predicate.data==0x2b01,
                         "Invalid friend notebook count operands");
                 result_={Kind::integer,int(CountIntroductionFriends(vocabulary_))};
+            } else if(id==0x35 && argc==5) {
+                Require(script_locals_.size()>=7 && stack_.size()>=5,
+                        "KSC local argument cells are unavailable");
+                const auto start=stack_.size()-5;
+                for(unsigned i=0;i<5;++i) script_locals_.at(2+i)=std::move(stack_.at(start+i));
+                stack_.resize(start);
+                result_={};
             } else if(id==0x61 && argc==2) {
                 result_={Kind::integer,ApplyArrayRecords(false)};
             } else if(id==0x62 && argc==3) {

@@ -14,6 +14,340 @@
 #include <stdexcept>
 
 using namespace dokodemo;
+
+namespace dokodemo::gameplay {
+struct RoomTalkOpcodeTests {
+    using Value = RoomTalkState::Value;
+    using Kind = RoomTalkState::Kind;
+
+    static RoomTalkState Execute(std::vector<unsigned char> code,int initial,std::vector<Value> arguments) {
+        RoomTalkState interpreter;
+        interpreter.phase_=RoomTalkState::Phase::running;
+        interpreter.locals_.push_back({Kind::integer,initial});
+        interpreter.stack_=std::move(arguments);
+        // Production dispatch reads the operation, then yields for a DELAY.
+        code.insert(code.end(),{0x85,0x44});
+        const auto end=code.size();
+        interpreter.code_.emplace(0,std::move(code));
+        interpreter.Execute(nullptr);
+        if(interpreter.pc_!=end) throw std::runtime_error("Synthetic KSC program did not reach DELAY");
+        return interpreter;
+    }
+
+    static RoomTalkState Execute(unsigned opcode,int initial,std::vector<Value> arguments) {
+        return Execute(std::vector<unsigned char>{static_cast<unsigned char>(opcode)},initial,std::move(arguments));
+    }
+
+    static void CheckValue(const Value& actual, Kind kind, int expected, unsigned opcode) {
+        if(actual.kind!=kind || actual.data!=expected)
+            throw std::runtime_error("Unexpected KSC value for opcode "+std::to_string(opcode));
+    }
+
+    static void Builtins() {
+        const auto check=[](unsigned char id,std::vector<Value> args,Kind type,int expected) {
+            const auto argc=static_cast<unsigned char>(args.size());
+            args.insert(args.begin(),{Kind::integer,57});
+            const auto vm=Execute({0x8b,id,argc,0x89},0,std::move(args));
+            if(vm.stack_.size()!=2) throw std::runtime_error("Wrong builtin stack effect");
+            CheckValue(vm.stack_[0],Kind::integer,57,id);
+            CheckValue(vm.stack_[1],type,expected,id);
+        };
+        check(0x01,{{}},Kind::integer,0);
+        check(0x01,{{Kind::truth,1}},Kind::integer,1);
+        check(0x01,{{Kind::integer,-1}},Kind::integer,2);
+        check(0x01,{{Kind::calendar_time,112}},Kind::integer,3);
+        check(0x01,{{Kind::fixed14,112}},Kind::integer,4);
+        check(0x01,{{Kind::code,0x1234}},Kind::integer,7);
+        check(0x02,{{Kind::integer,12},{Kind::string,0,"abc"}},Kind::nil,0);
+        check(0x02,{},Kind::nil,0);
+        check(0x03,{{Kind::integer,-9}},Kind::truth,1);
+        check(0x03,{{Kind::truth,0}},Kind::truth,0);
+        check(0x05,{{Kind::integer,0x4001}},Kind::integer,1);
+        check(0x05,{{Kind::integer,-1}},Kind::integer,-1);
+        check(0x06,{{Kind::integer,0x4201}},Kind::integer,0x201);
+        check(0x06,{{Kind::integer,0x2000}},Kind::integer,-8192);
+        check(0x0d,{{Kind::string,0,"A"}},Kind::integer,0x41);
+        check(0x0d,{{Kind::string,0,"\x82\xa0"}},Kind::integer,0xa082);
+        check(0x10,{{Kind::integer,-37}},Kind::integer,37);
+        check(0x10,{{Kind::integer,-0x08000000}},Kind::integer,-0x08000000);
+        check(0x50,{{Kind::string,0,"\x82\xa0" "A"},{Kind::string,0,"A"}},Kind::integer,2);
+        check(0x50,{{Kind::string,0,"abc"},{Kind::string,0,"a"}},Kind::nil,0);
+        check(0x50,{{Kind::string,0,"abc"},{Kind::string,0,"x"}},Kind::nil,0);
+        check(0x50,{{Kind::string,0,"abc"},{Kind::string,0,""}},Kind::nil,0);
+        const auto pair=Execute({0x8b,0x07,2,0x89},0,{{Kind::integer,-9000},{Kind::integer,9000}});
+        CheckValue(pair.stack_.at(0),Kind::fixed14,-0x08000000+8191,0x07);
+        check(0x05,{pair.stack_.at(0)},Kind::integer,-8192);
+        check(0x06,{pair.stack_.at(0)},Kind::integer,8191);
+        const auto as_text=Execute({0x8b,0x08,1,0x89},0,{{Kind::integer,-1234}});
+        const auto byte_text=Execute({0x8b,0x0e,1,0x89},0,{{Kind::integer,0xa082}});
+        const auto truncated=Execute({0x8b,0x0e,1,0x89},0,{{Kind::integer,0x0041}});
+        const std::string kana="\x81\x5b\x82\xa1\x82\xef\x82\xc1";
+        const auto first=Execute({0x8b,0x71,1,0x89},0,{{Kind::string,0,kana}});
+        const auto last=Execute({0x8b,0x72,1,0x89},0,{{Kind::string,0,kana}});
+        const auto invalid=Execute({0x8b,0x72,1,0x89},0,{{Kind::string,0,kana+"A"}});
+        const auto skipped=Execute({0x8b,0x71,1,0x89},0,{{Kind::string,0,"\x82\xc1"}});
+        if(first.stack_.at(0).text!="\x82\xa2" || last.stack_.at(0).text!="\x82\xa6")
+            throw std::runtime_error("Wrong KSC normalized kana endpoint");
+        CheckValue(invalid.stack_.at(0),Kind::nil,0,0x72);
+        CheckValue(skipped.stack_.at(0),Kind::nil,0,0x71);
+        if(as_text.stack_.at(0).text!="-1234" || byte_text.stack_.at(0).text!="\x82\xa0" ||
+           truncated.stack_.at(0).text!="A") throw std::runtime_error("Wrong KSC text conversion");
+    }
+
+    static void ArraysAndLimits() {
+        constexpr int limits[]={-0x08000000,0x07ffffff,-8192,8191,0};
+        for(unsigned char key:{0,1,2,3,4,255}) {
+            const auto vm=Execute({0xa0,key},0,{});
+            CheckValue(vm.stack_.at(0),Kind::integer,limits[std::min<unsigned>(key,4)],0xa0);
+        }
+        for(unsigned opcode:{0x56u,0x57u}) {
+            const auto vm=Execute({
+                0x30,8,                   // frame
+                0x4e,0,0,3,0, 0x4e,4,0,2,0, // two owned arrays with different lengths
+                0x80,9, 0x80,8, 0x80,7, 0x80,3, 0x71,0,0,
+                0x80,12, 0x80,34, 0x80,2, 0x71,4,0,
+                0x91,0,0, 0x91,4,0, static_cast<unsigned char>(opcode)
+            },0,{});
+            const auto& dst=*vm.locals_.at(0).cells;
+            const auto& src=*vm.locals_.at(4).cells;
+            CheckValue(dst.at(0),Kind::integer,12,opcode);
+            CheckValue(dst.at(1),Kind::integer,34,opcode);
+            CheckValue(dst.at(2),Kind::nil,0,opcode);
+            CheckValue(src.at(0),Kind::integer,12,opcode);
+            CheckValue(src.at(1),Kind::integer,34,opcode);
+            if(vm.stack_.size()!=1-(opcode&1u)) throw std::runtime_error("Wrong array copy stack effect");
+            if(opcode==0x56) CheckValue(vm.stack_.back(),Kind::frame_ref,4,opcode);
+        }
+        const auto short_target=Execute({
+            0x30,8,
+            0x4e,0,0,1,0, 0x4e,4,0,2,0,
+            0x80,12, 0x80,34, 0x80,2, 0x71,4,0,
+            0x91,0,0, 0x91,4,0, 0x57,
+            0x91,4,0, 0x91,4,0, 0x57
+        },0,{});
+        CheckValue(short_target.locals_.at(0).cells->at(0),Kind::integer,12,0x57);
+        CheckValue(short_target.locals_.at(4).cells->at(1),Kind::integer,34,0x57);
+        if(short_target.locals_.at(0).cells->size()!=1) throw std::runtime_error("Array copy resized the target");
+    }
+
+    static void ReferenceOperations() {
+        const auto cleared=Execute({0x91,0,0,0x4f,0x89},42,{});
+        CheckValue(cleared.locals_.at(0),Kind::nil,0,0x4f);
+        CheckValue(cleared.stack_.at(0),Kind::frame_ref,0,0x4f);
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.code_.emplace(0,std::vector<unsigned char>{
+            0x30,4, 0x4e,0,0,2,0, 0x80,12, 0x80,34, 0x80,2, 0x71,0,0,
+            0x91,0,0, 0xf7,0, 0x4f, 0x85,0x44
+        });
+        vm.Execute(nullptr);
+        if(vm.random_requested()!=2) throw std::runtime_error("Wrong F7 array bound");
+        vm.SupplyRandom(2);
+        if(vm.random_requested()!=2) throw std::runtime_error("F7 accepted an invalid draw");
+        vm.SupplyRandom(1);
+        CheckValue(vm.stack_.back(),Kind::element,1,0xf7);
+        CheckValue(vm.Dereference(vm.stack_.back()),Kind::integer,34,0xf7);
+        vm.Execute(nullptr);
+        CheckValue(vm.locals_.at(0).cells->at(0),Kind::integer,12,0xf7);
+        CheckValue(vm.locals_.at(0).cells->at(1),Kind::nil,0,0xf7);
+        if(vm.random_requested() || !vm.stack_.empty()) throw std::runtime_error("F7 did not resume once");
+    }
+
+    static void BulkTables() {
+        const auto row=[](std::vector<Value> entries) {
+            return Value{Kind::array,0,{},0,std::make_shared<std::vector<Value>>(std::move(entries))};
+        };
+        const auto ints=[&](std::initializer_list<int> entries) {
+            std::vector<Value> cells;
+            for(int entry:entries) cells.push_back({Kind::integer,entry});
+            return row(std::move(cells));
+        };
+        const auto first=ints({3,7}), second=ints({0,7}), targets=row({first,second});
+        const auto condition=ints({0,8,2, 1,0,7}), actions=ints({1,0,42, 0,3,1});
+        const auto selected=Execute({0x8b,0x62,3,0x89},0,{targets,condition,actions});
+        CheckValue(selected.stack_.at(0),Kind::integer,1,0x62);
+        CheckValue(first.cells->at(0),Kind::integer,2,0x62);
+        CheckValue(first.cells->at(1),Kind::integer,42,0x62);
+        CheckValue(second.cells->at(1),Kind::integer,7,0x62);
+        const auto no_match=Execute({0x8b,0x62,3,0x89},0,{targets,row({}),ints({0,0,101})});
+        CheckValue(no_match.stack_.at(0),Kind::integer,0,0x62);
+        CheckValue(first.cells->at(0),Kind::integer,2,0x62);
+        const auto updates=ints({0,1,8, 0,2,9, 99,16,0, 1,0,12345});
+        const auto applied=Execute({0x8b,0x61,2,0x89},0,{targets,updates});
+        CheckValue(applied.stack_.at(0),Kind::integer,0,0x61);
+        for(const auto& target:{first,second}) {
+            CheckValue(target.cells->at(0),Kind::integer,8,0x61);
+            CheckValue(target.cells->at(1),Kind::integer,12345,0x61);
+        }
+    }
+
+    static void Timers() {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.script_ticks_=100;
+        vm.code_.emplace(0,std::vector<unsigned char>{
+            0x80,5,0x41,0x8d,0x80,3,0x40,0x8d,0x43,0x8d,0x85,0x44
+        });
+        vm.Execute(nullptr);
+        CheckValue(vm.stack_.at(0),Kind::integer,-5,0x41);
+        if(vm.pc_!=7 || vm.script_deadline_!=108) throw std::runtime_error("KSC base-relative wait");
+        for(unsigned tick=101;tick<108;++tick) {
+            vm.Step(0,false,false,nullptr);
+            if(vm.script_ticks_!=tick || vm.pc_!=7) throw std::runtime_error("KSC deadline resumed early");
+        }
+        vm.Step(0,false,false,nullptr);
+        if(vm.pc_!=9 || vm.script_deadline_!=109) throw std::runtime_error("KSC one-tick yield");
+        CheckValue(vm.stack_.at(1),Kind::integer,3,0x40);
+        vm.Step(0,false,false,nullptr);
+        if(vm.pc_!=12 || vm.script_deadline_!=0) throw std::runtime_error("KSC one-tick resume");
+        CheckValue(vm.stack_.at(2),Kind::integer,4,0x43);
+    }
+
+    static void StopAndSuspend() {
+        for(unsigned char opcode:{0x0f,0x38}) {
+            RoomTalkState vm;
+            vm.phase_=RoomTalkState::Phase::running;
+            vm.code_.emplace(0,std::vector<unsigned char>{opcode,0x85,0x44});
+            vm.Execute(nullptr);
+            vm.Step(0,false,false,nullptr);
+            if(vm.pc_!=1 || !vm.stack_.empty() || vm.ordinary_source_return() ||
+               vm.phase_!=(opcode==0x0f?RoomTalkState::Phase::suspended:RoomTalkState::Phase::done))
+                throw std::runtime_error("KSC stop or suspend state mismatch");
+        }
+    }
+
+    static void LocalTables(const std::filesystem::path& directory) {
+        for(unsigned actor=0;actor<5;++actor) {
+            RoomTalkState vm;
+            vm.phase_=RoomTalkState::Phase::running;
+            vm.actor_number_=actor;
+            vm.LoadScriptLocals(directory);
+            if(vm.script_locals_.size()!=15) throw std::runtime_error("Missing actor KSC local table");
+            const auto& original=vm.script_locals_.at(8);
+            if(original.kind!=Kind::string || original.text.empty())
+                throw std::runtime_error("Missing packed actor KSC local string");
+            const auto initial=original.text;
+            vm.code_.emplace(0,std::vector<unsigned char>{
+                0x93,7,0,0x85,0xf4,              // alias array's first member
+                0x92,8,0,                         // same initial string via direct slot
+                0x80,42,0x80,1,0x72,7,0,         // replace one array member
+                0x93,7,0,0x85,0xf4, 0x92,8,0,    // read again via both paths
+                0x92,7,0,0x85,0xf5,0x4f,         // clear through indexed reference
+                0x92,8,0, 0x93,7,0,0xf0,         // verify direct value and original length
+                0x85,0x44
+            });
+            vm.Execute(nullptr);
+            if(vm.stack_.size()!=6 || vm.stack_[0].text!=initial || vm.stack_[1].text!=initial)
+                throw std::runtime_error("Actor local table accesses disagree");
+            CheckValue(vm.stack_[2],Kind::integer,42,0x72);
+            CheckValue(vm.stack_[3],Kind::integer,42,0x92);
+            CheckValue(vm.stack_[4],Kind::nil,0,0xf5);
+            CheckValue(vm.stack_[5],Kind::integer,7,0xf0);
+            if(vm.script_locals_.at(9).kind!=Kind::string)
+                throw std::runtime_error("Array initializer changed an untouched actor local");
+            vm.stack_={{Kind::context}};
+            vm.pc_=0;
+            vm.code_.at(0)={0x97,8,0, 0x80,63,0x51, 0x92,8,0, 0x85,0x44};
+            vm.Execute(nullptr);
+            CheckValue(vm.stack_.at(0),Kind::integer,63,0x97);
+            vm.stack_={{Kind::context}};
+            vm.pc_=0;
+            vm.code_.at(0)={0x96,8,0, 0x85,0x44};
+            vm.Execute(nullptr);
+            CheckValue(vm.stack_.at(0),Kind::integer,63,0x96);
+            vm.stack_={{Kind::integer,7},{Kind::integer,12},{Kind::truth,1},
+                       {Kind::integer,50},{Kind::integer,75},{Kind::integer,100}};
+            vm.pc_=0;
+            vm.code_.at(0)={0x8b,0x35,5,0x89,0x85,0x44};
+            vm.Execute(nullptr);
+            if(vm.stack_.size()!=2) throw std::runtime_error("Wrong local argument stack effect");
+            CheckValue(vm.stack_[0],Kind::integer,7,0x35);
+            CheckValue(vm.stack_[1],Kind::nil,0,0x35);
+            CheckValue(vm.script_locals_.at(2),Kind::integer,12,0x35);
+            CheckValue(vm.script_locals_.at(3),Kind::truth,1,0x35);
+            CheckValue(vm.script_locals_.at(6),Kind::integer,100,0x35);
+            CheckValue(vm.script_locals_.at(7),Kind::script_local_array,7,0x35);
+        }
+    }
+
+    static void ContextTables() {
+        const auto elapsed=Execute(0x9a,0,{{Kind::context}});
+        CheckValue(elapsed.stack_.at(0),Kind::integer,0,0x9a);
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.friends_introduction_=true;
+        vm.global_arrays_.emplace(0x12,std::vector<Value>{{Kind::integer,8},{Kind::integer,9}});
+        vm.friends_cells_[0x2a3c]={Kind::array,0,{},0,
+            std::make_shared<std::vector<Value>>(2,Value{Kind::integer,9})};
+        vm.code_.emplace(0,std::vector<unsigned char>{
+            0x80,72, 0x80,1,0x73,0x12,0,
+            0x80,73, 0x80,1,0x75,0x3c,0x2a, 0x85,0x44
+        });
+        vm.Execute(nullptr);
+        CheckValue(vm.global_arrays_.at(0x12).at(0),Kind::integer,72,0x73);
+        CheckValue(vm.global_arrays_.at(0x12).at(1),Kind::integer,9,0x73);
+        CheckValue(vm.friends_cells_.at(0x2a3c).cells->at(0),Kind::integer,73,0x75);
+        CheckValue(vm.friends_cells_.at(0x2a3c).cells->at(1),Kind::integer,9,0x75);
+    }
+
+    static void Run() {
+        Builtins();
+        ContextTables();
+        StopAndSuspend();
+        Timers();
+        BulkTables();
+        ReferenceOperations();
+        ArraysAndLimits();
+        constexpr int max=0x07ffffff, min=-0x08000000;
+        struct Compound { unsigned even; int lhs,rhs,result; };
+        const Compound assignments[]={
+            {0x5a,max,1,min}, {0x5c,min,1,max}, {0x5e,0x04000000,2,min},
+            {0x60,-11,4,-2}, {0x60,min,-1,min}, {0x62,-11,4,-3},
+            {0x64,0x37,0x0e,0x06}, {0x66,0x37,0x0e,0x3f},
+            {0x68,0x37,0x0e,0x39}, {0x6a,-17,34,-5}, {0x6c,0x04000001,33,min+2},
+        };
+        for(const auto& test:assignments) {
+            // The handheld's statement-only AND/OR also have room-specific
+            // modes and their regression paths are separate.
+            const unsigned forms=test.even==0x64 || test.even==0x66 ? 1 : 2;
+            for(unsigned form=0;form<forms;++form) {
+                const auto opcode=test.even+form;
+                const auto vm=Execute(opcode,test.lhs,{{Kind::frame_ref,0},{Kind::integer,test.rhs}});
+                CheckValue(vm.locals_.at(0),Kind::integer,test.result,opcode);
+                if(vm.stack_.size()!=1-form) throw std::runtime_error("Wrong compound stack effect");
+                if(!form) CheckValue(vm.stack_.back(),Kind::integer,test.result,opcode);
+            }
+        }
+        for(unsigned opcode:{0x52u,0x53u,0x54u,0x55u}) {
+            const auto initial=opcode<0x54?max:min, updated=opcode<0x54?min:max;
+            const auto vm=Execute(opcode,initial,{{Kind::frame_ref,0}});
+            CheckValue(vm.locals_.at(0),Kind::integer,updated,opcode);
+            if(vm.stack_.size()!=(opcode==0x52?1u:0u)) throw std::runtime_error("Wrong increment stack effect");
+            if(opcode==0x52) CheckValue(vm.stack_.back(),Kind::integer,initial,opcode);
+        }
+        const auto negate=Execute(0xb0,0,{{Kind::integer,min}});
+        CheckValue(negate.stack_.at(0),Kind::integer,min,0xb0);
+        for(int value:{-1,0,1}) {
+            const auto positive=Execute(0xba,0,{{Kind::integer,value}});
+            CheckValue(positive.stack_.at(0),Kind::truth,value>0,0xba);
+        }
+        const auto xor_vm=Execute(0xd6,0,{{Kind::integer,0x37},{Kind::integer,0x0e}});
+        CheckValue(xor_vm.stack_.at(0),Kind::integer,0x39,0xd6);
+        const auto and_not=Execute(0xd7,0,{{Kind::integer,0x37},{Kind::integer,0x0e}});
+        CheckValue(and_not.stack_.at(0),Kind::integer,0x31,0xd7);
+        for(unsigned opcode:{0x60u,0x61u,0x62u,0x63u}) {
+            bool refused=false;
+            try {
+                (void)Execute(opcode,5,{{Kind::frame_ref,0},{Kind::integer,0}});
+            } catch(const std::runtime_error& error) {
+                refused=std::string_view(error.what()).find("by zero")!=std::string_view::npos;
+            }
+            if(!refused) throw std::runtime_error("KSC compound zero divisor was not rejected");
+        }
+    }
+};
+}
+
 void CheckFaceQuestions(const std::filesystem::path&,const recovered::PackageView&,gameplay::RoomTalkState);
 namespace {
 void Check(bool value,const char* what) { if(!value) throw std::runtime_error(what); }
@@ -3258,7 +3592,18 @@ void CheckFriendsExchange(const std::filesystem::path&, const recovered::Package
 
 int main(int argc,char** argv) {
     try {
+        gameplay::RoomTalkOpcodeTests::Run();
+        if(argc==2 && std::string_view(argv[1])=="--integer-opcodes") {
+            std::cout<<"KSC integer, array and builtin tests passed\n";
+            return 0;
+        }
+        if(argc==3 && std::string_view(argv[1])=="--ksc-locals") {
+            gameplay::RoomTalkOpcodeTests::LocalTables(argv[2]);
+            std::cout<<"KSC local tables passed for five packed actors\n";
+            return 0;
+        }
         Check(argc==3 || argc==4 || argc==5,"Expected post-profile dir and FONT.XFT");
+        gameplay::RoomTalkOpcodeTests::LocalTables(argv[1]);
         auto lease=std::make_shared<Font>();
         std::ifstream file(argv[2],std::ios::binary);
         lease->data.assign(std::istreambuf_iterator<char>(file),{});
