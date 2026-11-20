@@ -1843,7 +1843,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x5a: case 0x5b: case 0x5c: case 0x5d: case 0x5e:
-        case 0x5f: case 0x60: {
+        case 0x5f: case 0x60: case 0x61: {
             const auto rhs=Pop(),ref=Pop(),lhs=Dereference(ref);
             Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid integer compound assignment");
             const Value result{Kind::integer,IntegerCompound(op,lhs.data,rhs.data)};
