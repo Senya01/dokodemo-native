@@ -151,7 +151,10 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     using namespace dokodemo::gameplay;
     Require((scene>=1 && scene<=13) || scene==17 || scene==18,
             "The ordinary destination roster does not include this scene");
-    auto saved=DecodeRetailUtilityRequest(ReadRetailSlot(input),RetailSaveProfile{});
+    const auto original=ReadRetailSlot(input);
+    auto saved=DecodeRetailUtilityRequest(original,RetailSaveProfile{});
+    Require(saved.profile.ReadProfile().actor==0 && !std::filesystem::exists(install/"savedata"),
+            "The outing test needs a Toro slot and an isolated installation without saves");
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
     const auto day=owners.day_words[0].children.at(0).word&0x0fffffff;
     // Use a private copy of the saved learned word for destinations whose
@@ -171,13 +174,15 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     clock[1]=clock[2]=0;
     clock[3]=scene==7?23:12;
     ResumeDayRoom run(install,saved,clock);
+    run.Start(day,day);
+    const auto initial_serial=run.room.activity_snapshot().serial;
     auto field=[](const RoomDepartureEvent& event,std::string_view name,int fallback=-1) {
         for (const auto& [key,value]:event.values)
             if (name==key) return value;
         return fallback;
     };
     bool arrived=false,handed_off=false,returned=false,home_control=false;
-    unsigned model=0,away=0;
+    unsigned model=0,away=0,away_serial=0;
     auto step=[&](unsigned key=0) {
         run.Step(key);
         for (const auto& event:run.room.departure_events()) {
@@ -195,8 +200,11 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         if (status.boundary_pc)
             throw std::runtime_error("Destination source boundary "+std::to_string(status.boundary_pc));
         const auto activity=run.room.activity_snapshot();
-        if (handed_off && !returned && activity.inputs.scene==scene && activity.started_command)
+        if (handed_off && !returned && activity.inputs.scene==scene && activity.started_command &&
+            activity.serial>initial_serial) {
             away=*activity.started_command;
+            away_serial=activity.serial;
+        }
     };
     auto key=[&](unsigned button) {
         step();step(button);
@@ -206,7 +214,6 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         for (unsigned i=0;i<1800 && !ready();++i) step();
         Require(ready(),error);
     };
-    run.Start(day,day);
     run.OpenMenu();
     key(0x40);
     Require(run.room.teaching_snapshot().menu_cursor==1,"Missing outing menu entry");
@@ -225,11 +232,14 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     until([&]{return home_control;},"No source return from destination");
     until([&]{
         const auto activity=run.room.activity_snapshot();
-        return activity.inputs.scene==0 && activity.started_command.has_value();
+        return activity.inputs.scene==0 && activity.started_command.has_value() && activity.serial>away_serial;
     },"Returned room did not resume its own activity");
-    Require(returned,"No home scene adoption");
+    Require(returned && ReadRetailSlot(input)==original && !std::filesystem::exists(install/"savedata"),
+            "No home scene adoption or the outing modified save data");
+    const auto active=run.room.activity_snapshot();
     std::cout << "Destination " << scene << " model " << model << " RGB " << image.visible
-              << " ASC " << away << " then home ASC " << *run.room.activity_snapshot().started_command
+              << " ASC " << away << " then home ASC " << *active.started_command
+              << ", activity serials " << initial_serial << " -> " << away_serial << " -> " << active.serial
               << " at update " << run.frames << '\n';
     return 0;
 }

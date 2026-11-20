@@ -784,7 +784,10 @@
             "destination-media",
             "clock-scheduler"
           ],
-          "gap": "Ресурсы, команды KSC и целевые поездки проверены отдельно. В общей проверке нет воспроизводимого входа, который проходит всю связку."
+          "tests": [
+            "game-out-and-back"
+          ],
+          "evidence": "15 из 15 обычных мест Торо: меню, отрисовка сцены, новое занятие вне дома, ручной возврат и новое занятие дома. Доступ к местам подготовлен в памяти."
         },
         {
           "id": "seam-calendar",
@@ -894,7 +897,7 @@
     "room-frame-input": "passed",
     "startup-to-room": "blocked",
     "contact-to-save": "blocked",
-    "out-and-back": "blocked",
+    "out-and-back": "passed",
     "seam-calendar": "blocked",
     "seam-links": "blocked",
     "model-completeness": "blocked"
@@ -963,7 +966,8 @@
     "native-framebuffer": "passed",
     "startup-logo-sequence": "passed",
     "game-return-letter": "passed",
-    "game-readoption": "passed"
+    "game-readoption": "passed",
+    "game-out-and-back": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -982,6 +986,12 @@
       "routes_passed": 1,
       "routes_total": 1,
       "scope": "Windows Release, headless, null audio, completed Toro slot with a learned word and a controlled friend card. Empty room, title, Robo adoption, System save and independent cold notebook."
+    },
+    "game-out-and-back": {
+      "test_binary_sha256": "f5fb003ffdec9b2f0d4aca83f570441e53c025fbbfc6e081c3ad67c2746b3738",
+      "routes_passed": 15,
+      "routes_total": 15,
+      "scope": "Windows Release, headless, null audio. Toro's ordinary destinations, eligibility prepared in memory, native menu and return with a new activity in both scenes."
     }
   }
 }

@@ -96,6 +96,13 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}"
                 "${DOKODEMO_GAME_DEPARTED_TEST_SLOT}")
         endif()
+        set(DOKODEMO_GAME_OUTING_TEST_SLOT "" CACHE PATH "Local Toro slot with a learned word for the outing routes")
+        if(DOKODEMO_GAME_OUTING_TEST_SLOT)
+            add_test(NAME game-out-and-back COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_outings.py"
+                "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}"
+                "${DOKODEMO_GAME_OUTING_TEST_SLOT}")
+        endif()
         add_test(NAME game-robo-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --robo-introduction 1)
         foreach(actor IN ITEMS usagi inu kaeru)
             add_test(NAME game-${actor}-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --${actor}-introduction)
