@@ -1852,7 +1852,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(!(op&1u)) stack_.push_back(result);
             break;
         }
-        case 0x52: case 0x53: case 0x55: {
+        case 0x52: case 0x53: case 0x54: case 0x55: {
             const auto ref=Pop(),value=Dereference(ref);
             Require(value.kind==Kind::integer,"Invalid KSC increment or decrement");
             const auto bits=op<0x54 ? unsigned(value.data)+1u : unsigned(value.data)-1u;
