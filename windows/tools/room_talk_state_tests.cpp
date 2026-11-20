@@ -357,24 +357,39 @@ struct RoomTalkOpcodeTests {
         }
     }
 
-    static void CallbackReturn(unsigned char opcode) {
+    static void CallbackReturn(unsigned char opcode,bool enable=true) {
         RoomTalkState interpreter;
         interpreter.phase_=RoomTalkState::Phase::running;
         interpreter.excursion_=true;
         interpreter.pc_=0x1c69;
         interpreter.queued_outing_callback_=0x1c59;
-        interpreter.code_.emplace(0x1c59,std::vector<unsigned char>{0x3a,0x3b,opcode});
+        std::vector<unsigned char> handler{0x3a};
+        if(enable) handler.push_back(0x3b);
+        if(opcode==0x1c) {
+            // The nonlocal return must abandon the callback's ordinary frame.
+            handler.insert(handler.end(),{0x20,0,0x00,0x10,0,0x38});
+            interpreter.code_.emplace(0x1000,std::vector<unsigned char>{0x30,1,opcode});
+        } else handler.push_back(opcode);
+        interpreter.code_.emplace(0x1c59,std::move(handler));
         interpreter.code_.emplace(0x1c69,std::vector<unsigned char>{0x44,0x89,0x90,0,0,0x43});
+        if(!enable) interpreter.outing_scene_request_=12;
         interpreter.locals_={{Kind::integer,51}};
         interpreter.result_={Kind::integer,52};
         interpreter.stack_={{Kind::integer,53},{Kind::integer,1}};
 
-        // Execute the real callback delivery and return. The caller resumes
-        // on the next update without a scene-completion acknowledgement.
+        // Execute the real callback delivery and return. Only a disabled
+        // caller must wait for the scene owner before consuming another opcode.
         interpreter.Step(0,true,true,nullptr,false);
-        if(!interpreter.error_.empty() || interpreter.phase_!=RoomTalkState::Phase::running ||
-           interpreter.pc_!=0x1c6a || interpreter.outing_callback_)
-            throw std::runtime_error("KSC callback did not restore a runnable caller: "+interpreter.error_);
+        const auto expected=enable?RoomTalkState::Phase::running:RoomTalkState::Phase::outing_scene;
+        if(!interpreter.error_.empty() || interpreter.phase_!=expected ||
+           interpreter.pc_!=0x1c6a || interpreter.outing_callback_ || !interpreter.callers_.empty())
+            throw std::runtime_error("KSC callback did not restore its caller: "+interpreter.error_);
+        if(!enable) {
+            interpreter.Step(0,true,true,nullptr,false);
+            if(interpreter.pc_!=0x1c6a || interpreter.FinishOutingScene(13) ||
+               !interpreter.FinishOutingScene(12))
+                throw std::runtime_error("KSC callback resumed without its scene owner");
+        }
         interpreter.Step(0,true,true,nullptr,false);
         if(!interpreter.error_.empty() || interpreter.pc_!=0x1c6f || interpreter.stack_.size()!=3)
             throw std::runtime_error("KSC callback did not resume its saved instruction stream");
@@ -385,6 +400,8 @@ struct RoomTalkOpcodeTests {
 
     static void Run() {
         CallbackReturn(0x32);
+        CallbackReturn(0x1c);
+        CallbackReturn(0x1c,false);
         Builtins();
         DebugText();
         Associations();

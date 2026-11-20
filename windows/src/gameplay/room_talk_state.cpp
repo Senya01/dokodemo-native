@@ -1798,9 +1798,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             Require(outing_callback_.has_value(),"No active KSC callback to re-enable its caller");
             // 6E44C forces the effective run flag on when the caller is restored.
             outing_callback_->run_override=true; break;
+        case 0x1c:
         case 0x32: {
-            Require(outing_callback_ && callers_.empty() && blocks_.empty(),
-                    "Invalid outing callback return");
+            // 1C joins 32 at 6D95C when there is no active exception
+            // block. Its return discards the callback's procedure frames.
+            Require(outing_callback_ && blocks_.empty() && (op==0x1c || callers_.empty()),
+                    "No supported KSC callback continuation to restore");
             auto saved=std::move(*outing_callback_);
             outing_callback_.reset();
             pc_=saved.resume; stack_=std::move(saved.stack); callers_=std::move(saved.calls);
