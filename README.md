@@ -3,8 +3,8 @@
 <!-- native-progress:start -->
 **Windows port verification: 83.3% (50 of 60 requirements).**
 
-[![Windows acceptance](windows/docs/native-progress.svg?v=3e27109d3d36)](windows/docs/PROGRESS.md#acceptance-and-code-map)
-[![KSC room dispatch IDs](windows/docs/native-code-progress.svg?v=9ff460fb0451)](windows/docs/PROGRESS.md#acceptance-and-code-map)
+[![Windows acceptance](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-progress.svg?v=3e27109d3d36)](windows/docs/PROGRESS.md#acceptance-and-code-map)
+[![KSC room dispatch IDs](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-code-progress.svg?v=9ff460fb0451)](windows/docs/PROGRESS.md#acceptance-and-code-map)
 <!-- native-progress:end -->
 
 [![Native code map](windows/docs/native-code-map.svg)](windows/docs/native-coverage.html)

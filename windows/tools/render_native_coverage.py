@@ -57,12 +57,14 @@ def update_readme(path: Path, verification: dict, acceptance_badge: str, code_ba
     passed, total = acceptance_counts(verification)
     percent = format_progress_percent(passed, total)
     scope = "windows/docs/PROGRESS.md#acceptance-and-code-map"
+    # GitHub's redirect for relative image URLs drops the cache key.
+    badges = "https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs"
     acceptance_version = sha256(acceptance_badge.encode("utf-8")).hexdigest()[:12]
     code_version = sha256(code_badge.encode("utf-8")).hexdigest()[:12]
     progress = (
         f"\n**Windows port verification: {percent} ({passed} of {total} requirements).**\n\n"
-        f"[![Windows acceptance](windows/docs/native-progress.svg?v={acceptance_version})]({scope})\n"
-        f"[![KSC room dispatch IDs](windows/docs/native-code-progress.svg?v={code_version})]({scope})\n"
+        f"[![Windows acceptance]({badges}/native-progress.svg?v={acceptance_version})]({scope})\n"
+        f"[![KSC room dispatch IDs]({badges}/native-code-progress.svg?v={code_version})]({scope})\n"
     )
     updated = original[:original.index(start) + len(start)] + progress + original[original.index(end):]
     if original != updated:
