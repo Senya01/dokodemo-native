@@ -1651,6 +1651,16 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x71: InitializeArray(op); break;
+        case 0x4f: {
+            auto ref=Pop();
+            // The BOOT handler leaves the destination reference in the
+            // result register after clearing the cell it addresses.
+            Require(ref.kind==Kind::frame_ref || ref.kind==Kind::element || ref.kind==Kind::script_local_ref,
+                    "Expected an owned KSC reference to clear");
+            Assign(ref,{});
+            result_=std::move(ref);
+            break;
+        }
         case 0xa0: {
             // The selector chooses a signed 28-bit or 14-bit limit in 71764.
             constexpr int limits[]={-0x08000000,0x07ffffff,-8192,8191};
