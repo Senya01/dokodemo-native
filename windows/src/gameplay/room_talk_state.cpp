@@ -2879,6 +2879,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 InvokeHostBuiltin(HostBuiltin::command,argc);
             } else if(id==0x40) {
                 InvokeHostBuiltin(HostBuiltin::query,argc);
+            } else if(id==0x42) {
+                InvokeHostBuiltin(HostBuiltin::notify,argc);
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&

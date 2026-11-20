@@ -690,9 +690,20 @@ struct RoomTalkOpcodeTests {
         if(calls!=1) throw std::runtime_error("Unexpected number of KSC host queries");
     }
 
+    static void HostNotification() {
+        CheckValue(HostBuiltin(0x42,{{Kind::integer,92},{Kind::integer,5}}),Kind::nil,0,0x42);
+        RoomTalkState::ScriptHostCallbacks callbacks;
+        int state=0;
+        callbacks.notify=[&](int selector,int value) { state=selector*100+value; };
+        CheckValue(HostBuiltin(0x42,{{Kind::string,0," 12"},{Kind::fixed14,3*0x4000+4}},callbacks),
+                   Kind::nil,0,0x42);
+        if(state!=1205) throw std::runtime_error("KSC host notification was lost or reordered");
+    }
+
     static void Run() {
         HostCommand();
         HostQuery();
+        HostNotification();
         ChildScriptSchedule(0x28);
         ChildScriptIsolation(0x28);
         ChildScriptForeignFrame(0x28);
