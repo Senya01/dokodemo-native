@@ -322,22 +322,29 @@ int MakePenultimateWindowSlot(const std::filesystem::path& install, const std::f
 }
 
 int CheckPenultimateSlot(const std::filesystem::path& install, const std::filesystem::path& original,
-                         bool press_circle) {
+                         bool press_circle, bool linked=false) {
     using namespace dokodemo::gameplay;
     namespace fs=std::filesystem;
     const auto input=fs::canonical(original);
     const auto directory=fs::canonical(install);
     const auto output=directory/"savedata"/"UCJS10002000";
-    Require(input.filename()=="UCJS10002000" && !fs::exists(output.parent_path()) &&
-            !fs::is_symlink(fs::symlink_status(output.parent_path())),
-            "Supply a fresh separate installation without savedata");
+    if (linked) Require(input==fs::canonical(output),"Linked stay must resume its own saved slot");
+    else Require(input.filename()=="UCJS10002000" && !fs::exists(output.parent_path()) &&
+                 !fs::is_symlink(fs::symlink_status(output.parent_path())),
+                 "Supply a fresh separate installation without savedata");
     const auto original_bytes=ReadRetailSlot(input);
     auto saved=DecodeRetailUtilityRequest(original_bytes,RetailSaveProfile{});
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
-    RequirePenultimateInput(owners);
+    if (linked) {
+        Require(owners.day_words[0].children.at(0).word==0x2000000cu &&
+                owners.progression_words[0].children.at(0).word==0x2000000eu &&
+                (owners.progress_flags[0].children.at(0).word&7)==1,"Expected a completed linked day 12");
+    } else {
+        RequirePenultimateInput(owners);
+        owners.day_words[0].children.at(0).word=0x2000000c;
+        saved.actor=owners.ToActorGraph();
+    }
     const auto original_page=saved.profile.FirstDayDiary();
-    owners.day_words[0].children.at(0).word=0x2000000c;
-    saved.actor=owners.ToActorGraph();
     const auto date=saved.profile.SavedAt();
     const auto choice=0x2000u;
     ResumeDayRoom run(directory,saved,{0,0,53,14,date[4]+1,date[5],date[6]});
@@ -392,7 +399,7 @@ int CheckPenultimateSlot(const std::filesystem::path& install, const std::filesy
             selected==std::vector<int>{1,0,1,0,1,0,1,0} && secondary==std::vector<int>{280,39,281,282} &&
             !primary.empty() && primary.back()==74,"Incomplete scheduled event, actor commands, or room return");
 
-    run.CheckWord();
+    if (!linked) run.CheckWord();
     run.Save();
     Require(std::distance(fs::directory_iterator(output),fs::directory_iterator{})==6,
             "System did not produce the six expected slot members");
@@ -406,10 +413,10 @@ int CheckPenultimateSlot(const std::filesystem::path& install, const std::filesy
             page->text==original_page->text,"System save lost the first diary page");
     ResumeDayRoom independent(directory,saved_again,run.calendar);
     independent.Start(13,13);
-    independent.CheckWord();
-    Require(independent.scheduled==0 && ReadRetailSlot(input)==original_bytes,
+    if (!linked) independent.CheckWord();
+    Require(independent.scheduled==0 && (linked || ReadRetailSlot(input)==original_bytes),
             "Completed event started again or input slot changed");
     std::cout<<"System save bit 2, six protected slot files, reload 13->13 and ASC "
-             <<*independent.room.first_activity()<<", notebook row 163, no event replay\n";
+             <<*independent.room.first_activity()<<", no event replay\n";
     return 0;
 }

@@ -562,7 +562,10 @@
             "story-toro-extension"
           ],
           "expect": "Из свежего слота последовательно проходят предпоследний день, оба финала, загрузка и продолжение в том же проверяемом билде.",
-          "gap": "Этапы ранее проверялись на подготовленных слотах. В этой общей проверке пока нет автономной последовательности, которая воспроизводит их и проверяет переходы."
+          "tests": [
+            "game-toro-ending"
+          ],
+          "evidence": "Новый профиль Торо от титула до первого сохранения, последовательные даты и сцена предпоследнего дня. Обычный финал на дне 14 и продлённый на дне 24 прошли на ветках одного слота, обе завершились холодным входом в пустую комнату. Условия продления подготовлены на развилке."
         },
         {
           "id": "return-letter",
@@ -905,7 +908,7 @@
     "inu-days": "passed",
     "kaeru-days": "passed",
     "toro-calendar": "passed",
-    "toro-ending": "blocked",
+    "toro-ending": "passed",
     "return-letter": "passed",
     "re-adopt": "passed",
     "save-format": "passed",
@@ -997,7 +1000,8 @@
     "game-peer-gift": "passed",
     "game-peer-shiritori": "passed",
     "game-seam-links": "passed",
-    "game-save-recovery": "passed"
+    "game-save-recovery": "passed",
+    "game-toro-ending": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1062,6 +1066,12 @@
     "game-save-recovery": {
       "test_binary_sha256": "0ec74d79b9cb360360ce58f1ab146fb70b16dbac0c0f3af7ab15ba83ce4b8e0f",
       "scope": "Windows Release, independent headless processes, null audio. Local protected donor and two test generations. Six files with three fault cases each, 11 thrown faults, 11 process exits, six sharing denials, and orphan staging and backup checks."
+    },
+    "game-toro-ending": {
+      "test_binary_sha256": "d6ff59932311a038aec4ca15766b7f0d1fd1e26ddfba0979d998bab3dd4781e8",
+      "routes_passed": 2,
+      "routes_total": 2,
+      "scope": "Windows Release, headless, null audio. Fresh Toro adoption and native daily saves; ordinary and extended endings branched from day 13. Controlled time, answers and extended-stay qualification before the fork; cold Continue in both branches."
     }
   }
 }

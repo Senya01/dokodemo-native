@@ -5,7 +5,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 | Area | Verified scope |
 | --- | --- |
 | Core play | Native startup, character selection, room activities, ordinary contacts, language lessons, inventory, notebooks, options and diary |
-| Character stories | First-day entry for all five, ordinary and extended endings on prepared saves, and re-adoption with preserved vocabulary |
+| Character stories | First-day entry for all five, Toro's linked ordinary and extended endings, and focused endings for the other Pokepi, and re-adoption with preserved vocabulary |
 | Persistence | Protected Windows save and resume, natural day-one to day-two transition and another cold load. The original game also loaded a Windows-created first-day slot in an isolated test |
 | Travel | All 15 destinations in Toro's ordinary menu reached the destination and returned. The component renderer exercised 54 scene registrations |
 | Local meetings | Independent Windows processes exercised discovery, visit cancellation, card and gift exchange, and shiritori on loopback |
@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **49 of 60** requirements verified and 11 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **50 of 60** requirements verified and 10 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -101,6 +101,12 @@ Configure the local-media build with `-DOKODEMO_GAME_RECOVERY_TEST_SLOT=<UCJS100
 
 The matrix damages, removes and truncates a staged copy of each of the six files. Invalid DATA.BIN or PARAM.SFO prevents loading and replacement. Preview damage allows gameplay to load, and the next successful save rewrites the previews. The matrix also executes 11 injected exceptions, 11 process exits at the same transaction boundaries, and six real Windows sharing conflicts. Fresh processes check the selected generation and retained file bytes. A deferred rollback keeps the backup available for recovery and reports the original write error. Abandoned stages and invalid backups are checked independently. The interruption model is Windows process exit.
 
+## Toro's linked stay and endings
+
+With local media configured, build `post-profile-tests` in Release and run `ctest --test-dir <build> -C Release -R '^game-toro-ending$' --output-on-failure`. The test creates a new profile at the title and saves the first day through System. Each following date uses the prior day's protected save. Ordinary dates resume control, run an activity and write the next checkpoint. The day-13 scene exercises both actor records; the day-14 save branches into departure or the 24-day extension. Each final branch returns to the title and **Continue** opens the departed room from a cold load.
+
+The test controls the game clock and scripted choices. The extended branch prepares the qualifying friendship counters, dictionary and diary at the day-13 fork; it then advances through the regular extended days and events 6, 4 and 5 in the game loop. This connects Toro's main stay and both endings on Release with local media.
+
 ## Open coverage
 
-A continuous playthrough from a new game to the ending remains unverified. Some special branches remain open. Physical controller input, peer compatibility with a PSP and byte-accurate matching outside individually recorded checks remain unverified. The [Windows build guide](../README.md) describes the checks available with locally prepared media.
+Continuous routes across all characters and optional branches remain unverified. Some special branches remain open. Physical controller input, peer compatibility with a PSP and byte-accurate matching outside individually recorded checks remain unverified. The [Windows build guide](../README.md) describes the checks available with locally prepared media.

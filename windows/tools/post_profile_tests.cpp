@@ -1,4 +1,5 @@
 #include "gameplay/boot_to_display.h"
+#include "game/verify_startup_room.h"
 #include "gameplay/post_profile.h"
 #include "gameplay/retail_save_slot.h"
 #include "gameplay/retail_slot_files.h"
@@ -103,6 +104,7 @@ Frame Visible(const std::vector<uint8_t> &vram, std::size_t offset) {
 #include "roof_scene_test.inc"
 #include "room_day_resume_test.inc"
 #include "room_final_day_test.inc"
+#include "room_toro_stay_test.inc"
 #include "room_replacement_slot_test.inc"
 #include "room_meeting_test.inc"
 void FirstActivityPhase() {
@@ -1908,6 +1910,8 @@ int main(int argc, char **argv) try {
         return CheckFinalDaySlot(argv[1],argv[3],true);
     if (argc==4 && std::string_view(argv[2])=="--final-day-slot")
         return CheckFinalDaySlot(argv[1],argv[3]);
+    if (argc==3 && std::string_view(argv[2])=="--toro-ending-linked")
+        return CheckToroLinkedStay(argv[1]);
     if (argc==6) {
         const std::string_view operation=argv[2];
         using dokodemo::gameplay::MeetingMode;

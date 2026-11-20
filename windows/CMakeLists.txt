@@ -90,10 +90,13 @@ if(BUILD_TESTING)
                 "$<TARGET_FILE:dokodemo-game>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
         endif()
 
-        add_executable(post-profile-tests tools/post_profile_tests.cpp)
+        add_executable(post-profile-tests tools/post_profile_tests.cpp src/game/verify_startup_room.cpp)
         configure_cpp(post-profile-tests)
         target_link_libraries(post-profile-tests PRIVATE dokodemo-win32)
         add_test(NAME game-post-profile COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+        add_test(NAME game-toro-ending COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_toro_ending.py"
+            "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
         set(DOKODEMO_GAME_RECOVERY_TEST_SLOT "" CACHE PATH "Local protected slot for the recovery matrix")
         if(DOKODEMO_GAME_RECOVERY_TEST_SLOT)
             add_executable(retail-slot-recovery-tests tools/retail_slot_recovery_tests.cpp)

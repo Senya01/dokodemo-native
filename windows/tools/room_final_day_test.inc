@@ -207,7 +207,7 @@ void AdvanceTestDate(dokodemo::gameplay::RetailSaveProfile::Calendar& calendar) 
     ++calendar[6];
 }
 
-int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false) {
+int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false, bool linked=false) {
     using namespace dokodemo::gameplay;
     const auto slot=install/"savedata"/"UCJS10002000";
     const auto request=ReadRetailSlot(slot);
@@ -267,7 +267,7 @@ int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false) 
     Require(boot.Notebook().list_ready && boot.Notebook().resource==8,"The empty room did not open the word memo");
     const auto actor=saved.profile.ReadProfile().actor;
     const auto& word=owners.dictionary.children.at(0).children.at(163).children.at(0).children;
-    if (actor>=1) press(0x80);
+    if (actor>=1 || linked) press(0x80);
     else for (int tab=2;tab<=5;++tab) press(0x20);
     auto note=boot.Notebook();
     const auto rows=note.count;
@@ -275,7 +275,7 @@ int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false) 
         press(0x40);
         note=boot.Notebook();
     }
-    if (actor>=2 && word.at(1).text.empty()) {
+    if ((actor>=2 || linked) && word.at(1).text.empty()) {
         Require(note.tab==13 && note.count==0,"The empty room gained a new word");
     } else {
         Require(!word.at(1).text.empty() && note.row==163 && note.written==word.at(1).text &&
@@ -622,7 +622,8 @@ int CheckReturnLetter(const std::filesystem::path& install, const std::filesyste
     return 0;
 }
 
-int CheckExtendedPenultimate(const std::filesystem::path& install, const std::filesystem::path& donor) {
+int CheckExtendedPenultimate(const std::filesystem::path& install, const std::filesystem::path& donor,
+                             bool linked=false) {
     using namespace dokodemo::gameplay;
     const auto destination=install/"savedata"/"UCJS10002000";
     Require(!std::filesystem::exists(destination.parent_path()),"Expected a fresh penultimate test install");
@@ -631,23 +632,21 @@ int CheckExtendedPenultimate(const std::filesystem::path& install, const std::fi
     const auto species=saved.profile.ReadProfile().actor;
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
     Require((owners.progress_flags[0].children.at(0).word&15)==15 &&
-            owners.day_words[0].children.at(0).word==0x2000000e &&
+            owners.day_words[0].children.at(0).word==(linked?0x20000016u:0x2000000eu) &&
             owners.progression_words[0].children.at(0).word==0x20000018,
-            "Expected protected day 14 after event 6");
+            "Expected a protected extended stay after event 6");
     auto now=saved.profile.SavedAt();
-    // Advance the checkpoint to the end of day 22. The product computes
-    // day 23 and runs the source scheduler on the next date from this point.
-    for (unsigned i=0;i<9;++i) {
-        if (++now[4]>static_cast<unsigned>(ProfileMonthDays(now[6],now[5]))) {
-            now[4]=1;
-            if (++now[5]>12) { now[5]=1; ++now[6]; }
-        }
+    if (linked) AdvanceTestDate(now);
+    else {
+        // The focused event probe stages the prior day. The linked stay
+        // arrives with the day counter and midnight from the real loop.
+        for (unsigned i=0;i<9;++i) AdvanceTestDate(now);
+        owners.day_words[0].children.at(0).word=0x20000016;
+        owners.day_words[1].children.at(0).word+=8*1440;
+        saved.actor=owners.ToActorGraph();
     }
     now[3]=14;
     now[2]=53;
-    owners.day_words[0].children.at(0).word=0x20000016;
-    owners.day_words[1].children.at(0).word+=8*1440;
-    saved.actor=owners.ToActorGraph();
     ResumeDayRoom run(install,saved,now);
     unsigned next=0, answers=0;
     bool deadline=false, returned=false, secondary=false;
