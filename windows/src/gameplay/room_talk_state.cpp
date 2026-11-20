@@ -746,6 +746,7 @@ void RoomTalkState::StartTopic(unsigned pc) {
     frontier_.reset();
     farewell_=skip_farewell_=actor_wait_=message_wait_=false;
     last_answer_=-1; delay_=0; result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    control_resumes_.clear();
 }
 
 void RoomTalkState::ReleaseOrdinaryFrontier() {
@@ -758,6 +759,7 @@ void RoomTalkState::ReleaseOrdinaryFrontier() {
     indirect_topic_=0;
     robo_contact_greeting_=false;
     locals_.clear(); stack_.clear(); callers_.clear(); blocks_.clear();
+    control_resumes_.clear();
     phase_ = Phase::done;
 }
 
@@ -1996,6 +1998,7 @@ void RoomTalkState::ActivateScriptContext(unsigned argc) {
             target.stack.clear();
             target.calls.clear();
             target.blocks.clear();
+            target.control_resumes.clear();
             target.pc=target.program->header().entrypoint;
             target.timer_base=script_ticks_;
             target.deadline=0;
@@ -2036,6 +2039,41 @@ void RoomTalkState::RendezvousScriptContexts(unsigned argc) {
     phase_=Phase::rendezvous;
 }
 
+void RoomTalkState::EnterProtectedHandler(unsigned flags) {
+    Require(!blocks_.empty(),"No KSC protected block to transfer");
+    const auto block=blocks_.back();
+    Require(block.depth==callers_.size() && block.base<=stack_.size() && HasCodeAt(block.close),
+            "Unsupported KSC protected transfer");
+    // 6D060 releases operands above the protected block. 6D2AC..6D320 save
+    // the requested state, prior stack cursor and next PC in the handler frame.
+    control_resumes_.push_back({block,pc_,flags,stack_.size(),blocks_.size()-1,{}});
+    blocks_.pop_back();
+    stack_.resize(block.base);
+    pc_=block.close;
+}
+
+void RoomTalkState::ResumeProtectedHandler() {
+    Require(!control_resumes_.empty(),"No KSC protected continuation");
+    auto resume=control_resumes_.back();
+    Require(resume.outer_blocks==blocks_.size() && resume.block.base==stack_.size() &&
+            resume.block.depth==callers_.size() && HasCodeAt(resume.pc),
+            "Unbalanced KSC protected continuation");
+    // 6C6FC reads the saved cursor and state. Raising the operand cursor
+    // exposes nil in slots released by the transfer, never the old values.
+    const auto state=(resume.flags>>24)&15u;
+    const bool enabled=resume.run_override.value_or((resume.flags&0x00800000u)!=0);
+    Require(state==0 || state==1 || state==2 || state==3 || state==8,
+            "Unsupported KSC protected state");
+    stack_.resize(resume.operands);
+    pc_=resume.pc;
+    resume.block.restored=true;
+    blocks_.push_back(resume.block);
+    control_resumes_.pop_back();
+    if(state==0) phase_=Phase::done;
+    else if(!enabled || state==1 || state==8) phase_=Phase::suspended;
+    else phase_=state==3?Phase::rendezvous:Phase::running;
+}
+
 const script::Program* RoomTalkState::ActiveModule() const {
     return executing_child_?executing_child_->program.get():nullptr;
 }
@@ -2057,9 +2095,11 @@ bool IsChildOpcode(unsigned op) {
     // services need a separate host owner and cannot use the root's state.
     switch(op) {
     case 0x0b: case 0x0c: case 0x0f: case 0x10: case 0x11: case 0x13:
-    case 0x18: case 0x1a: case 0x20: case 0x21: case 0x22: case 0x23:
+    case 0x18: case 0x19: case 0x1a: case 0x1b: case 0x1c:
+    case 0x20: case 0x21: case 0x22: case 0x23:
     case 0x28: case 0x29: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
-    case 0x30: case 0x31: case 0x38: case 0x40: case 0x41: case 0x43: case 0x44:
+    case 0x30: case 0x31: case 0x38: case 0x3a: case 0x3b:
+    case 0x40: case 0x41: case 0x43: case 0x44:
     case 0x4e: case 0x4f: case 0x50: case 0x51: case 0x52: case 0x53:
     case 0x54: case 0x55: case 0x56: case 0x57: case 0x70: case 0x71:
     case 0x72: case 0x73: case 0x78: case 0x89: case 0x8a: case 0x8b: case 0x8c:
@@ -2090,6 +2130,7 @@ void RoomTalkState::ChildScript::SwapExecution(RoomTalkState& vm) {
     swap(locals,vm.locals_);
     swap(calls,vm.callers_);
     swap(blocks,vm.blocks_);
+    swap(control_resumes,vm.control_resumes_);
     swap(result,vm.result_);
 }
 
@@ -2212,8 +2253,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             return;
         case 0x18:
             blocks_.push_back({Read(3),callers_.size(),stack_.size()}); break;
+        case 0x19:
+            ResumeProtectedHandler();
+            return;
         case 0x1a:
-            Require(!blocks_.empty() && (blocks_.back().close==site ||
+            Require(!blocks_.empty() && (blocks_.back().restored || blocks_.back().close==site ||
                     (scheduled_room_event_ && blocks_.back().close==(alternate_greeting_?0x1a8du:robo_greeting_?0x1a78u:0x1a77u) &&
                      site==(alternate_greeting_?0x1a95u:robo_greeting_?0x1a80u:0x1a7fu)) ||
                     (exchange_inventory_ && blocks_.back().close==0x8d19e && site==0x8d1f0)) &&
@@ -2221,11 +2265,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                     blocks_.back().base==stack_.size(),"Unbalanced outing protected block");
             blocks_.pop_back(); break;
         case 0x1b: {
-            if(ScheduledFarewell() && site==farewell_sites().reset) {
+            if(!executing_child_ && ScheduledFarewell() && site==farewell_sites().reset) {
                 Require(farewell_stage_==FarewellStage::reset && !callers_.empty() &&
                         callers_.back().resume==FarewellReturnPc(),"Invalid farewell script unwind");
                 callers_.clear();
                 blocks_.clear();
+                control_resumes_.clear();
                 stack_.clear();
                 locals_.clear();
                 ordinary_=false;
@@ -2234,7 +2279,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 phase_=Phase::done;
                 return;
             }
-            Require(exchange_inventory_ && site==0x8d027 && !blocks_.empty(),"Unexpected script unwind");
+            if(executing_child_ || !exchange_inventory_ || site!=0x8d027) {
+                EnterProtectedHandler(0x08000000u);
+                break;
+            }
+            Require(!blocks_.empty(),"Unexpected script unwind");
             const auto& handler=blocks_.back();
             Require(handler.close==0x8d19e && callers_.size()==handler.depth+1 &&
                     handler.base<=stack_.size(),"Invalid meeting cancellation frame");
@@ -2257,14 +2306,29 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             instruction_cost_=cost.data; break;
         }
         case 0x3a:
+            if(!control_resumes_.empty()) {
+                control_resumes_.back().run_override=false;
+                break;
+            }
             Require(outing_callback_ && site==0x1c59,"Invalid outing callback context");
             outing_callback_->run_override=false; break;
         case 0x3b:
+            if(!control_resumes_.empty()) {
+                control_resumes_.back().run_override=true;
+                break;
+            }
             Require(outing_callback_.has_value(),"No active KSC callback to re-enable its caller");
             // 6E44C forces the effective run flag on when the caller is restored.
             outing_callback_->run_override=true; break;
         case 0x1c:
         case 0x32: {
+            if(op==0x1c && !blocks_.empty()) {
+                const auto flags=Pop();
+                Require(flags.kind==Kind::integer,"Invalid KSC protected state flags");
+                EnterProtectedHandler(unsigned(flags.data));
+                script_deadline_=0;
+                break;
+            }
             // 1C joins 32 at 6D95C when there is no active exception
             // block. Its return discards the callback's procedure frames.
             Require(outing_callback_ && blocks_.empty() && (op==0x1c || callers_.empty()),
@@ -2273,6 +2337,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             outing_callback_.reset();
             pc_=saved.resume; stack_=std::move(saved.stack); callers_=std::move(saved.calls);
             locals_=std::move(saved.locals); blocks_=std::move(saved.blocks); result_=std::move(saved.result);
+            control_resumes_=std::move(saved.control_resumes);
             delay_=saved.delay;
             phase_=saved.run_override.value_or(true)?Phase::running:Phase::outing_scene;
             return;
@@ -2978,9 +3043,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 // preserving the caller's next PC, operands and one-tick deadline.
                 Require(delay_==1 && !outing_callback_,"Invalid outing callback deadline");
                 outing_callback_.emplace(OutingCallback{pc_,std::move(stack_),std::move(locals_),
-                                          std::move(callers_),std::move(blocks_),std::move(result_),delay_,{}});
+                                          std::move(callers_),std::move(blocks_),std::move(result_),delay_,{},
+                                          std::move(control_resumes_)});
                 pc_=*queued_outing_callback_; queued_outing_callback_.reset();
                 stack_.clear(); locals_.clear(); callers_.clear(); blocks_.clear(); result_={};
+                control_resumes_.clear();
                 delay_=0;
                 break;
             }

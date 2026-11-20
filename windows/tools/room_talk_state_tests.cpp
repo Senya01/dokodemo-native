@@ -961,6 +961,70 @@ struct RoomTalkOpcodeTests {
             throw std::runtime_error("Invalid BI26 target partially updated the registry");
     }
 
+    static void ProtectedContinuation() {
+        const auto program=[](bool suspend) {
+            std::vector<std::uint8_t> code{0x18,0,0,0,0x80,25,0x83,0,0,0x80,2,0x1c,
+                                           0x70,0x1a,0x80,47,0x70,0x38};
+            code[1]=static_cast<std::uint8_t>(code.size());
+            if(suspend) code.push_back(0x3a);
+            code.push_back(0x19);
+            return code;
+        };
+        for(bool suspend:{false,true}) {
+            RoomTalkState vm;
+            vm.code_.emplace(0,program(suspend));
+            vm.phase_=RoomTalkState::Phase::running;
+            vm.stack_={{Kind::integer,63}};
+            vm.locals_={{Kind::integer,14}};
+            vm.Step(0,true,true,nullptr,false);
+            const auto phase=suspend?RoomTalkState::Phase::suspended:RoomTalkState::Phase::running;
+            if(!vm.error_.empty() || vm.phase_!=phase || vm.pc_!=12 || vm.stack_.size()!=2 ||
+               vm.blocks_.size()!=1 || !vm.control_resumes_.empty())
+                throw std::runtime_error("Protected handler did not restore its cursor and state: "+vm.error_);
+            CheckValue(vm.stack_[0],Kind::integer,63,0x19);
+            CheckValue(vm.stack_[1],Kind::nil,0,0x19);
+            CheckValue(vm.locals_[0],Kind::integer,14,0x19);
+            vm.Step(0,true,true,nullptr,false);
+            if(suspend) {
+                if(vm.pc_!=12 || vm.phase_!=phase)
+                    throw std::runtime_error("Disabled protected continuation kept running");
+            } else {
+                if(!vm.error_.empty() || !vm.finished() || !vm.blocks_.empty() || vm.stack_.size()!=1)
+                    throw std::runtime_error("Protected block did not close after continuing");
+                CheckValue(vm.result_,Kind::integer,47,0x19);
+            }
+        }
+
+        RoomTalkState module;
+        module.BindScriptModuleReader([&](const std::string&,std::vector<std::uint8_t>& bytes) {
+            const auto code=program(false);
+            bytes={'K','S','C',0,4,2,3,0x20,0,0,0,0,static_cast<std::uint8_t>(code.size()),0,0,0,
+                   0,0,0,0,0,0,0,0,0,0,0,0};
+            bytes.insert(bytes.end(),code.begin(),code.end());
+            return true;
+        });
+        ScriptModuleBuiltin(module,{Kind::string,0,"protected"},0);
+        ScriptModuleBuiltin(module,{Kind::integer,0},0,0x90,Value{});
+        ScriptModuleBuiltin(module,{Kind::integer,0},0,0xa0);
+        module.code_.insert_or_assign(5,std::vector<unsigned char>{0x0f});
+        module.Step(0,true,true,nullptr,false);
+        module.Step(0,true,true,nullptr,false);
+        const auto& context=module.registered_scripts_.at(0);
+        if(!module.error_.empty() || context.phase!=RoomTalkState::Phase::done || !context.blocks.empty() ||
+           !module.control_resumes_.empty())
+            throw std::runtime_error("Registered protected continuation leaked into its caller");
+        CheckValue(context.result,Kind::integer,47,0x19);
+
+        RoomTalkState unowned;
+        unowned.code_.emplace(0,std::vector<unsigned char>{0x19});
+        unowned.phase_=RoomTalkState::Phase::running;
+        unowned.stack_={{Kind::integer,63}};
+        unowned.Step(0,true,true,nullptr,false);
+        if(unowned.error_.find("No KSC protected continuation")==std::string::npos ||
+           unowned.stack_.size()!=1)
+            throw std::runtime_error("Unowned KSC protected resume was accepted");
+    }
+
     static void ScriptModuleArchive(const std::filesystem::path& game) {
         BootToDisplay boot;
         if(!boot.Initialize() || !boot.InitializeClock({},168) ||
@@ -994,6 +1058,7 @@ struct RoomTalkOpcodeTests {
         ScriptContextRegistration();
         ScriptContextActivation();
         ScriptContextRendezvous();
+        ProtectedContinuation();
         HostCommand();
         HostQuery();
         HostNotification();

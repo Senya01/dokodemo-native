@@ -301,8 +301,17 @@ private:
     std::optional<std::string> keyboard_initial_reading_;
     void OpenWordKeyboard(int mode,std::string initial,Value destination);
     void LoadOutings(const std::filesystem::path& dir);
-    struct ControlBlock { unsigned close; std::size_t depth,base; };
+    struct ControlBlock { unsigned close; std::size_t depth,base; bool restored=false; };
+    struct ControlResume {
+        ControlBlock block;
+        unsigned pc,flags;
+        std::size_t operands,outer_blocks;
+        std::optional<bool> run_override;
+    };
     std::vector<ControlBlock> blocks_;
+    std::vector<ControlResume> control_resumes_;
+    void EnterProtectedHandler(unsigned flags);
+    void ResumeProtectedHandler();
     struct ChildScript {
         Phase phase=Phase::done;
         std::uint64_t generation=0;
@@ -312,6 +321,7 @@ private:
         std::vector<Value> stack,locals;
         std::vector<Frame> calls;
         std::vector<ControlBlock> blocks;
+        std::vector<ControlResume> control_resumes;
         Value result;
         std::vector<std::size_t> children;
         std::shared_ptr<const script::Program> program;
@@ -343,6 +353,7 @@ private:
         Value result;
         int delay;
         std::optional<bool> run_override;
+        std::vector<ControlResume> control_resumes;
     };
     std::optional<OutingCallback> outing_callback_;
     std::optional<unsigned> queued_outing_callback_;
