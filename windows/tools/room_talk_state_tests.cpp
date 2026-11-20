@@ -818,6 +818,81 @@ struct RoomTalkOpcodeTests {
             throw std::runtime_error("KSC context overflow or execution before activation");
     }
 
+    static void ScriptContextActivation() {
+        std::vector<std::uint8_t> code{
+            0x38,0x30,2,
+            0x93,0,0,0x90,0,0,0x90,1,0,0xe0,0x51,
+            0x93,1,0,0x88,0,0,0,0x51
+        };
+        const auto child_operand=code.size()+1;
+        code.insert(code.end(),{0x29,0,0,0,0x43,0x92,0,0,0x70,0x38});
+        code[child_operand]=static_cast<std::uint8_t>(code.size());
+        code.insert(code.end(),{0x93,2,0,0x92,0,0,0x51,0x38});
+        std::vector<std::uint8_t> image{
+            'K','S','C',0,4,2,3,0x20,1,0,0,0,static_cast<std::uint8_t>(code.size()),0,0,0,
+            4,0,0,0,0,0,3,0,0,0,0,0
+        };
+        image.insert(image.end(),code.begin(),code.end());
+        image.insert(image.end(),{'m','o','d',0,0,0,0,0,0,0,0,0,0,0,0,0});
+        RoomTalkState vm;
+        vm.pool_.emplace(0,"root");
+        vm.script_locals_.assign(3,Value{Kind::integer,61});
+        vm.BindScriptModuleReader([&](const std::string&,std::vector<std::uint8_t>& bytes) {
+            bytes=image;
+            return true;
+        });
+        ScriptModuleBuiltin(vm,{Kind::string,0,"exec"},0);
+        ScriptModuleBuiltin(vm,{Kind::integer,0},0,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,0},1,0x90,Value{});
+        const auto step=[&] {
+            vm.Step(0,true,true,nullptr,false);
+            if(!vm.error_.empty()) throw std::runtime_error(vm.error_);
+        };
+        auto& first=vm.registered_scripts_.at(0);
+        auto& second=vm.registered_scripts_.at(1);
+        const auto activate=[&](int handle,Value a,Value b,int expected) {
+            vm.pc_=0;
+            vm.phase_=RoomTalkState::Phase::running;
+            vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,0xa0,3,0x89,0x0f});
+            vm.stack_={{Kind::integer,66},{Kind::integer,handle},std::move(a),std::move(b)};
+            step();
+            if(vm.stack_.size()!=2 || vm.phase_!=RoomTalkState::Phase::suspended)
+                throw std::runtime_error("A0 did not return to its own caller");
+            CheckValue(vm.stack_[0],Kind::integer,66,0xa0);
+            CheckValue(vm.stack_[1],Kind::integer,expected,0xa0);
+        };
+        activate(-1,{Kind::integer,1},{Kind::integer,2},-1);
+        activate(0,{Kind::frame_ref,0},{Kind::integer,2},-1);
+        CheckValue(first.script_locals[0],Kind::nil,0,0xa0);
+        const auto initial_generation=first.generation;
+        activate(0,{Kind::integer,27},{Kind::integer,15},0);
+        if(first.pc!=1 || first.timer_base!=vm.script_ticks_ || first.generation==initial_generation)
+            throw std::runtime_error("A0 did not arm a fresh activation at entry");
+        CheckValue(first.script_locals[0],Kind::nil,0,0xa0);
+        step();
+        CheckValue(first.script_locals[0],Kind::integer,42,0xa0);
+        if(first.script_locals[1].text!="mod")
+            throw std::runtime_error("Registered KSC used its caller's string pool");
+        CheckValue(first.script_locals[2],Kind::integer,42,0xa0);
+        CheckValue(second.script_locals[0],Kind::nil,0,0xa0);
+        CheckValue(vm.script_locals_[0],Kind::integer,61,0xa0);
+        step();
+        CheckValue(first.result,Kind::integer,42,0xa0);
+        if(first.phase!=RoomTalkState::Phase::done)
+            throw std::runtime_error("Activated KSC context did not finish");
+        const auto generation=first.generation;
+        activate(0,{Kind::integer,11},{Kind::integer,9},0);
+        CheckValue(first.script_locals[0],Kind::integer,42,0xa0);
+        activate(1,{Kind::integer,87},{Kind::integer,-5},0);
+        step();
+        step();
+        if(first.generation==generation || first.phase!=RoomTalkState::Phase::done ||
+           second.phase!=RoomTalkState::Phase::done)
+            throw std::runtime_error("Registered KSC did not finish both lifetimes");
+        CheckValue(first.result,Kind::integer,20,0xa0);
+        CheckValue(second.result,Kind::integer,82,0xa0);
+    }
+
     static void ScriptModuleArchive(const std::filesystem::path& game) {
         BootToDisplay boot;
         if(!boot.Initialize() || !boot.InitializeClock({},168) ||
@@ -849,6 +924,7 @@ struct RoomTalkOpcodeTests {
         ScriptModuleLoad();
         ScriptMapRegistration();
         ScriptContextRegistration();
+        ScriptContextActivation();
         HostCommand();
         HostQuery();
         HostNotification();

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -1001,6 +1002,10 @@ bool RoomTalkState::TakeFirstDayDiaryRequest() {
 }
 
 bool RoomTalkState::HasCodeAt(unsigned pc) const {
+    if(const auto* module=ActiveModule()) {
+        const auto* command=module->command(pc);
+        return command && command->opcode>=0;
+    }
     const auto after=code_.upper_bound(pc);
     if(after==code_.begin()) return false;
     const auto& [start,bytes]=*std::prev(after);
@@ -1008,6 +1013,13 @@ bool RoomTalkState::HasCodeAt(unsigned pc) const {
 }
 
 unsigned RoomTalkState::Read(unsigned n) {
+    if(const auto* module=ActiveModule()) {
+        const auto limit=module->header().code_size;
+        Require(pc_<=limit && n<=limit-pc_,"Outside registered KSC bytecode");
+        const auto value=Word(module->bytes().data()+28+pc_,n);
+        pc_+=n;
+        return value;
+    }
     auto it=code_.upper_bound(pc_);
     Require(it!=code_.begin(),"Outside the cold NEKO callback");
     --it;
@@ -1037,7 +1049,7 @@ RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
         return {raw>>28==3?Kind::calendar_time:Kind::integer,ScriptInteger(raw)};
     }
     if(v.kind==Kind::association_ref) return v.entries->at(v.text);
-    if(v.kind==Kind::script_local_ref) return script_locals_.at(v.data);
+    if(v.kind==Kind::script_local_ref) return ActiveScriptLocals().at(v.data);
     if(v.kind==Kind::element) return v.cells->at(v.data);
     if(v.kind==Kind::global_element) return global_arrays_.at(v.data).at(v.depth);
     if(v.kind==Kind::teach_field) return teaching_.at(v.data);
@@ -1098,7 +1110,7 @@ void RoomTalkState::Assign(const Value& ref,Value value) {
                 value.kind==Kind::code,"Unsupported associative table value");
         ref.entries->at(ref.text)=std::move(value);
     }
-    else if(ref.kind==Kind::script_local_ref) script_locals_.at(ref.data)=std::move(value);
+    else if(ref.kind==Kind::script_local_ref) ActiveScriptLocals().at(ref.data)=std::move(value);
     else if(ref.kind==Kind::element) ref.cells->at(ref.data)=std::move(value);
     else if(ref.kind==Kind::global_element) global_arrays_.at(ref.data).at(ref.depth)=std::move(value);
     else if(ref.kind==Kind::word_field) {
@@ -1716,9 +1728,10 @@ void RoomTalkState::InitializeArray(unsigned opcode) {
     std::vector<Value>* cells=nullptr;
     std::size_t begin=0,capacity=0;
     if(opcode==0x72) {
-        const auto& row=script_locals_.at(index);
+        auto& script_locals=ActiveScriptLocals();
+        const auto& row=script_locals.at(index);
         Require(row.kind==Kind::script_local_array,"Expected a KSC script-local array");
-        cells=&script_locals_;
+        cells=&script_locals;
         begin=row.depth+1;
         capacity=unsigned(row.data);
     } else if(opcode==0x73) {
@@ -1759,10 +1772,11 @@ void RoomTalkState::RememberProcedure(unsigned table,unsigned index,unsigned tar
         break;
     }
     case 2: {
-        auto& row=script_locals_.at(index);
+        auto& script_locals=ActiveScriptLocals();
+        auto& row=script_locals.at(index);
         Require(row.kind==Kind::script_local_array && row.depth==index && row.data>0,
                 "Invalid KSC script-local procedure ring");
-        remember(script_locals_,index+1,unsigned(row.data),row.procedure_cursor);
+        remember(script_locals,index+1,unsigned(row.data),row.procedure_cursor);
         break;
     }
     case 3: {
@@ -1956,9 +1970,57 @@ void RoomTalkState::RegisterScriptContext(unsigned argc) {
         }
     }
     const auto handle=int(registered_scripts_.size());
+    context.registered_root=unsigned(handle);
     context.generation=++child_generation_;
     registered_scripts_.push_back(std::move(context));
     result_={Kind::integer,handle};
+}
+
+void RoomTalkState::ActivateScriptContext(unsigned argc) {
+    Require(argc!=0 && argc<=stack_.size(),"Missing KSC activation operands");
+    const auto first=stack_.end()-argc;
+    const auto index=HostNumber(*first);
+    const auto args=std::next(first);
+    const auto transferred=std::none_of(args,stack_.end(),[](const Value& value) {
+        return value.kind==Kind::frame_ref || value.kind==Kind::script_local_ref ||
+               value.kind==Kind::script_local_array;
+    });
+    result_={Kind::integer,-1};
+    if(index>=0 && std::size_t(index)<registered_scripts_.size() && transferred) {
+        auto& target=registered_scripts_[index];
+        // 67F5C copies the ordered arguments. 67F1C resets the cursor and clock
+        // and enables the context while preserving its loaded local table.
+        if(&target!=executing_child_) {
+            std::vector<Value> locals(args,stack_.end());
+            target.locals=std::move(locals);
+            target.stack.clear();
+            target.calls.clear();
+            target.blocks.clear();
+            target.pc=target.program->header().entrypoint;
+            target.timer_base=script_ticks_;
+            target.deadline=0;
+            target.delay=0;
+            target.instruction_cost=1;
+            target.indirect_topic=0;
+            target.generation=++child_generation_;
+            target.phase=Phase::running;
+            result_={Kind::integer,0};
+        }
+    }
+    stack_.erase(first,stack_.end());
+}
+
+const script::Program* RoomTalkState::ActiveModule() const {
+    return executing_child_?executing_child_->program.get():nullptr;
+}
+
+const std::vector<RoomTalkState::Value>& RoomTalkState::ActiveScriptLocals() const {
+    return executing_child_ && executing_child_->registered_root
+        ? registered_scripts_.at(*executing_child_->registered_root).script_locals : script_locals_;
+}
+
+std::vector<RoomTalkState::Value>& RoomTalkState::ActiveScriptLocals() {
+    return const_cast<std::vector<Value>&>(std::as_const(*this).ActiveScriptLocals());
 }
 
 namespace {
@@ -2030,15 +2092,33 @@ void RoomTalkState::StartChildScript(unsigned target,unsigned argc) {
     fresh.timer_base=script_ticks_;
     fresh.locals=std::move(args);
     fresh.phase=Phase::running;
+    if(executing_child_) {
+        fresh.program=executing_child_->program;
+        fresh.registered_root=executing_child_->registered_root;
+    }
     fresh.children.swap(slot.children);
     slot=std::move(fresh);
     stack_.erase(first,stack_.end());
 }
 
-void RoomTalkState::StepChildren(recovered::RngNativeOwner* rng) {
-    if(root_children_.empty() || phase_==Phase::failed || phase_==Phase::unsupported) return;
-    child_budget_=script_instruction_limit;
-    std::vector<const std::vector<std::size_t>*> pending{&root_children_};
+void RoomTalkState::StepScript(ChildScript& child,recovered::RngNativeOwner* rng) {
+    if(child.phase!=Phase::running) return;
+    child.SwapExecution(*this);
+    executing_child_=&child;
+    try {
+        AdvanceScript(rng);
+    } catch(const std::exception& e) {
+        child.SwapExecution(*this);
+        executing_child_=nullptr;
+        throw std::runtime_error("Child KSC PC "+std::to_string(child.pc)+": "+e.what());
+    }
+    child.SwapExecution(*this);
+    executing_child_=nullptr;
+}
+
+void RoomTalkState::StepScriptTree(const std::vector<std::size_t>& roots,recovered::RngNativeOwner* rng) {
+    if(roots.empty()) return;
+    std::vector<const std::vector<std::size_t>*> pending{&roots};
     while(!pending.empty()) {
         const auto& siblings=*pending.back();
         pending.pop_back();
@@ -2046,22 +2126,25 @@ void RoomTalkState::StepChildren(recovered::RngNativeOwner* rng) {
         // context's first child. Queue descendants for the corresponding unwind.
         for(const auto index:siblings) {
             auto& child=child_scripts_[index];
-            if(child.phase==Phase::running) {
-                child.SwapExecution(*this);
-                executing_child_=&child;
-                try {
-                    AdvanceScript(rng);
-                } catch(const std::exception& e) {
-                    child.SwapExecution(*this);
-                    executing_child_=nullptr;
-                    throw std::runtime_error("Child KSC PC "+std::to_string(child.pc)+": "+e.what());
-                }
-                child.SwapExecution(*this);
-                executing_child_=nullptr;
-            }
+            StepScript(child,rng);
             if(!child.children.empty()) pending.push_back(&child.children);
         }
     }
+}
+
+void RoomTalkState::StepRegisteredScripts(recovered::RngNativeOwner* rng) {
+    // 66320 links newly registered roots at the head of the list that 74DFC
+    // walks. Contexts created during a slice join the next walk.
+    for(auto i=registered_scripts_.size();i>0;--i) {
+        auto& context=registered_scripts_[i-1];
+        StepScript(context,rng);
+        StepScriptTree(context.children,rng);
+    }
+}
+
+void RoomTalkState::StepChildren(recovered::RngNativeOwner* rng) {
+    if(phase_==Phase::failed || phase_==Phase::unsupported) return;
+    StepScriptTree(root_children_,rng);
 }
 
 void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
@@ -2205,7 +2288,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x87: stack_.push_back({Kind::truth,1}); break;
         case 0x89: stack_.push_back(std::move(result_)); result_={}; break;
         case 0x8d: stack_.push_back({Kind::integer,ScriptInteger(script_ticks_-script_timer_base_)}); break;
-        case 0x88: stack_.push_back({Kind::string,0,pool_.at(Read(3))}); break;
+        case 0x88: {
+            const auto offset=Read(3);
+            const auto* module=ActiveModule();
+            stack_.push_back({Kind::string,0,module?module->pool_bytes(offset):pool_.at(offset)});
+            break;
+        }
         case 0x8e: stack_.push_back(ReadText()); break;
         case 0x8f: {
             // 77224 allocates a fresh associative table and moves its handle
@@ -2243,11 +2331,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x92:
-            stack_.push_back(script_locals_.at(Read(2)));
+            stack_.push_back(ActiveScriptLocals().at(Read(2)));
             break;
         case 0x93: {
             const unsigned index=Read(2);
-            Require(index<script_locals_.size(),"Invalid KSC local reference");
+            Require(index<ActiveScriptLocals().size(),"Invalid KSC local reference");
             stack_.push_back({Kind::script_local_ref,int(index)});
             break;
         }
@@ -2268,6 +2356,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0x94: case 0x95: {
             const int id=Read(2);
+            Require(!ActiveModule(),"Registered KSC global table access is not bound");
             const unsigned flags=contact_scripts[actor_number_].flags;
             if(op==0x94 && unsigned(id)==flags)
                 stack_.push_back({Kind::integer,int(intro_flags_)});
@@ -2368,7 +2457,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(array.kind==Kind::script_local_array) {
                 Require(index.kind==Kind::integer && index.data>=0 && index.data<array.data,
                         "Invalid KSC local array index");
-                stack_.push_back(script_locals_.at(array.depth+1+unsigned(index.data)));
+                stack_.push_back(ActiveScriptLocals().at(array.depth+1+unsigned(index.data)));
                 break;
             }
             // The two actor scripts address the same verified trait forms at different slots.
@@ -2872,7 +2961,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x8b: {
             const unsigned id=Read(1),argc=Read(1);
             if(executing_child_)
-                Require(id<=0x10 || id==0x50 || id==0x52 || (id>=0x70 && id<=0x72),
+                Require(id<=0x10 || id==0x50 || id==0x52 || (id>=0x70 && id<=0x72) ||
+                        (ActiveModule() && (id==0x80 || id==0x90 || id==0x91 || id==0xa0)),
                         "Unsupported child KSC service");
             if(id==0x01 && argc==1) {
                 // 6857C returns the original tag, so only kinds with an
@@ -2990,6 +3080,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 RegisterScriptContext(argc);
             } else if(id==0x91) {
                 RegisterScriptMap(argc);
+            } else if(id==0xa0) {
+                ActivateScriptContext(argc);
             } else if(id==0x24) {
                 InvokeHostBuiltin(HostBuiltin::command,argc);
             } else if(id==0x40) {
@@ -3443,6 +3535,8 @@ void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,c
     attention_return_=false; outing_sites_.clear();
     ++script_ticks_; // 74DD4 advances the KSC scheduler clock once, independent of DIALOG's tick.
     try {
+        child_budget_=script_instruction_limit;
+        if(phase_!=Phase::unsupported && phase_!=Phase::failed) StepRegisteredScripts(rng);
         StepRoom(buttons,edges,actor_ready,font,prompt_expired,invitation_event,rng,secondary_ready);
         StepChildren(rng);
     } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }

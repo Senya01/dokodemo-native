@@ -242,6 +242,10 @@ private:
     void LoadScriptModule(unsigned argc);
     void RegisterScriptMap(unsigned argc);
     void RegisterScriptContext(unsigned argc);
+    void ActivateScriptContext(unsigned argc);
+    const script::Program* ActiveModule() const;
+    std::vector<Value>& ActiveScriptLocals();
+    const std::vector<Value>& ActiveScriptLocals() const;
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;
@@ -310,17 +314,21 @@ private:
         std::vector<std::size_t> children;
         std::shared_ptr<const script::Program> program;
         std::optional<unsigned> map_index;
+        std::optional<unsigned> registered_root;
         std::vector<Value> script_locals;
         void SwapExecution(RoomTalkState& vm);
     };
     // A flat pool keeps slot indices stable and releases deep trees iteratively.
     std::deque<ChildScript> child_scripts_;
     std::vector<std::size_t> root_children_;
-    std::vector<ChildScript> registered_scripts_;
+    std::deque<ChildScript> registered_scripts_;
     ChildScript* executing_child_=nullptr; // Set only for the duration of a child slice.
     std::uint64_t child_generation_=0;
     unsigned child_budget_=0;
     void StartChildScript(unsigned target,unsigned argc);
+    void StepRegisteredScripts(recovered::RngNativeOwner* rng);
+    void StepScript(ChildScript& child,recovered::RngNativeOwner* rng);
+    void StepScriptTree(const std::vector<std::size_t>& roots,recovered::RngNativeOwner* rng);
     void StepChildren(recovered::RngNativeOwner* rng);
     void AdvanceScript(recovered::RngNativeOwner* rng);
     std::uint64_t FrameOwner() const { return executing_child_?executing_child_->generation:0; }
