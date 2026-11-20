@@ -357,7 +357,34 @@ struct RoomTalkOpcodeTests {
         }
     }
 
+    static void CallbackReturn(unsigned char opcode) {
+        RoomTalkState interpreter;
+        interpreter.phase_=RoomTalkState::Phase::running;
+        interpreter.excursion_=true;
+        interpreter.pc_=0x1c69;
+        interpreter.queued_outing_callback_=0x1c59;
+        interpreter.code_.emplace(0x1c59,std::vector<unsigned char>{0x3a,0x3b,opcode});
+        interpreter.code_.emplace(0x1c69,std::vector<unsigned char>{0x44,0x89,0x90,0,0,0x43});
+        interpreter.locals_={{Kind::integer,51}};
+        interpreter.result_={Kind::integer,52};
+        interpreter.stack_={{Kind::integer,53},{Kind::integer,1}};
+
+        // Execute the real callback delivery and return. The caller resumes
+        // on the next update without a scene-completion acknowledgement.
+        interpreter.Step(0,true,true,nullptr,false);
+        if(!interpreter.error_.empty() || interpreter.phase_!=RoomTalkState::Phase::running ||
+           interpreter.pc_!=0x1c6a || interpreter.outing_callback_)
+            throw std::runtime_error("KSC callback did not restore a runnable caller: "+interpreter.error_);
+        interpreter.Step(0,true,true,nullptr,false);
+        if(!interpreter.error_.empty() || interpreter.pc_!=0x1c6f || interpreter.stack_.size()!=3)
+            throw std::runtime_error("KSC callback did not resume its saved instruction stream");
+        CheckValue(interpreter.stack_[0],Kind::integer,53,opcode);
+        CheckValue(interpreter.stack_[1],Kind::integer,52,opcode);
+        CheckValue(interpreter.stack_[2],Kind::integer,51,opcode);
+    }
+
     static void Run() {
+        CallbackReturn(0x32);
         Builtins();
         DebugText();
         Associations();

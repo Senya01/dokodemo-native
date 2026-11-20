@@ -941,9 +941,8 @@ std::array<std::optional<std::string>,8> RoomTalkState::outing_labels() const {
     return labels;
 }
 bool RoomTalkState::FinishOutingScene(unsigned selector) {
-    if(phase_!=Phase::outing_scene || !outing_context_disabled_ || outing_scene_request_!=selector) return false;
-    // 1C57 disabled the event caller. The actual scene owner releases the restored context.
-    outing_context_disabled_=false;
+    if(phase_!=Phase::outing_scene || outing_scene_request_!=selector) return false;
+    // The actual scene owner releases the caller suspended by the callback.
     outing_current_scene_=selector; outing_scene_request_.reset(); phase_=Phase::running;
     return true;
 }
@@ -1794,15 +1793,21 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0x3a:
             Require(outing_callback_ && site==0x1c59,"Invalid outing callback context");
-            outing_context_disabled_=true; break;
+            outing_callback_->run_override=false; break;
+        case 0x3b:
+            Require(outing_callback_.has_value(),"No active KSC callback to re-enable its caller");
+            // 6E44C forces the effective run flag on when the caller is restored.
+            outing_callback_->run_override=true; break;
         case 0x32: {
-            Require(outing_callback_ && outing_context_disabled_ && callers_.empty() && blocks_.empty(),
+            Require(outing_callback_ && callers_.empty() && blocks_.empty(),
                     "Invalid outing callback return");
             auto saved=std::move(*outing_callback_);
             outing_callback_.reset();
             pc_=saved.resume; stack_=std::move(saved.stack); callers_=std::move(saved.calls);
             locals_=std::move(saved.locals); blocks_=std::move(saved.blocks); result_=std::move(saved.result);
-            phase_=Phase::outing_scene; return;
+            delay_=saved.delay;
+            phase_=saved.run_override.value_or(true)?Phase::running:Phase::outing_scene;
+            return;
         }
         case 0x8c:
             Require(excursion_ && site==0x1c5d,"Unsupported callback owner");
@@ -2449,9 +2454,10 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 // preserving the caller's next PC, operands and one-tick deadline.
                 Require(delay_==1 && !outing_callback_,"Invalid outing callback deadline");
                 outing_callback_.emplace(OutingCallback{pc_,std::move(stack_),std::move(locals_),
-                                          std::move(callers_),std::move(blocks_),std::move(result_)});
+                                          std::move(callers_),std::move(blocks_),std::move(result_),delay_,{}});
                 pc_=*queued_outing_callback_; queued_outing_callback_.reset();
                 stack_.clear(); locals_.clear(); callers_.clear(); blocks_.clear(); result_={};
+                delay_=0;
                 break;
             }
             return;

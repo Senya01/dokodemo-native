@@ -263,11 +263,12 @@ private:
         std::vector<Frame> calls;
         std::vector<ControlBlock> blocks;
         Value result;
+        int delay;
+        std::optional<bool> run_override;
     };
     std::optional<OutingCallback> outing_callback_;
     std::optional<unsigned> queued_outing_callback_;
     int instruction_cost_=1;
-    bool outing_context_disabled_=false;
     std::map<unsigned,std::vector<Value>> outing_tables_;
     std::function<void()> home_invitation_return_;
     unsigned home_invitation_mode_=0,home_invitation_id_=0;
