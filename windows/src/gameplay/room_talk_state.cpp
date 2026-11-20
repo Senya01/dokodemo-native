@@ -1023,6 +1023,7 @@ RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
         Require(raw>>28==2 || raw>>28==3,"Unexpected prepared question field");
         return {raw>>28==3?Kind::calendar_time:Kind::integer,ScriptInteger(raw)};
     }
+    if(v.kind==Kind::association_ref) return v.entries->at(v.text);
     if(v.kind==Kind::script_local_ref) return script_locals_.at(v.data);
     if(v.kind==Kind::element) return v.cells->at(v.data);
     if(v.kind==Kind::global_element) return global_arrays_.at(v.data).at(v.depth);
@@ -1072,6 +1073,12 @@ void RoomTalkState::Assign(const Value& ref,Value value) {
         const unsigned tag=value.kind==Kind::calendar_time?0x30000000u:0x20000000u;
         vocabulary_.WriteQuestionField(ref.data,unsigned(ref.depth),
                 value.kind==Kind::nil?0:tag|(unsigned(value.data)&0x0fffffffu));
+    }
+    else if(ref.kind==Kind::association_ref) {
+        Require(value.kind==Kind::nil || value.kind==Kind::integer || value.kind==Kind::truth ||
+                value.kind==Kind::string || value.kind==Kind::calendar_time || value.kind==Kind::fixed14 ||
+                value.kind==Kind::code,"Unsupported associative table value");
+        ref.entries->at(ref.text)=std::move(value);
     }
     else if(ref.kind==Kind::script_local_ref) script_locals_.at(ref.data)=std::move(value);
     else if(ref.kind==Kind::element) ref.cells->at(ref.data)=std::move(value);
@@ -1812,8 +1819,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             auto ref=Pop();
             // The BOOT handler leaves the destination reference in the
             // result register after clearing the cell it addresses.
-            Require(ref.kind==Kind::frame_ref || ref.kind==Kind::element || ref.kind==Kind::script_local_ref,
-                    "Expected an owned KSC reference to clear");
+            Require(ref.kind==Kind::frame_ref || ref.kind==Kind::element || ref.kind==Kind::script_local_ref ||
+                    ref.kind==Kind::association_ref,"Expected an owned KSC reference to clear");
             Assign(ref,{});
             result_=std::move(ref);
             break;
@@ -1837,6 +1844,15 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x8d: stack_.push_back({Kind::integer,ScriptInteger(script_ticks_-script_timer_base_)}); break;
         case 0x88: stack_.push_back({Kind::string,0,pool_.at(Read(3))}); break;
         case 0x8e: stack_.push_back(ReadText()); break;
+        case 0x8f: {
+            // 77224 allocates a fresh associative table and moves its handle
+            // to the operand stack, clearing the result register.
+            Value table{Kind::association};
+            table.entries=std::make_shared<std::map<std::string,Value>>();
+            stack_.push_back(std::move(table));
+            result_={};
+            break;
+        }
         case 0x90: stack_.push_back(locals_.at(Read(2))); break;
         case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
         case 0x92:
@@ -2290,9 +2306,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x25: {
+            const unsigned arguments=op==0x24?Read(1):0;
             const unsigned table=Read(2),mode=Read(1);
             Require(mode==0 && procedure_lists_.count(table),"Unsupported KSC procedure selector");
+            Require(arguments<=stack_.size(),"Insufficient KSC procedure arguments");
             pending_procedure_list_=table;
+            pending_procedure_arguments_=arguments;
             random_bound_=static_cast<unsigned>(procedure_lists_.at(table).size());
             random_use_=RandomUse::procedure; phase_=Phase::random; return;
         }
@@ -2431,6 +2450,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 case Kind::calendar_time: result_={Kind::integer,3}; break;
                 case Kind::fixed14: result_={Kind::integer,4}; break;
                 case Kind::code: result_={Kind::integer,7}; break;
+                case Kind::association: result_={Kind::integer,10}; break;
                 default: throw std::runtime_error("Unsupported KSC tag query");
                 }
             } else if(id==0x02) {
@@ -3026,8 +3046,11 @@ void RoomTalkState::SupplyRandom(unsigned value) {
     if(random_use_==RandomUse::procedure) {
         const auto target=procedure_lists_.at(pending_procedure_list_).at(value);
         random_use_=RandomUse::value; phase_=Phase::running;
-        // The selector opens a nested frame. The current room topic still owns the conversation.
-        Call(target,{},false);
+        // Both selectors open the nested frame after the draw. Opcode 24
+        // carries the arguments in caller order.
+        std::vector<Value> arguments(std::exchange(pending_procedure_arguments_,0));
+        for(std::size_t i=arguments.size();i>0;--i) arguments[i-1]=Pop();
+        Call(target,std::move(arguments),false);
         return;
     }
     if(random_use_==RandomUse::rumor_pick || random_use_==RandomUse::rumor_replace) {

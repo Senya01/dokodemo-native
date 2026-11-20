@@ -179,7 +179,7 @@ public:
 private:
     friend struct RoomTalkOpcodeTests;
     enum class Phase { unsupported,prompt,running,suspended,gift,inventory,random,answer_pending,answer,word_entry,outing_scene,outing_inventory,scheduled_diary,scheduled_farewell,meeting,frontier,done,failed };
-    enum class Kind { nil,integer,truth,frame_ref,global_ref,global_element,constant_ref,word_row,word_field,array,element,teach_field,string,code,calendar_time,context,question_row,question_field,fixed14,script_local_ref,script_local_array };
+    enum class Kind { nil,integer,truth,frame_ref,global_ref,global_element,constant_ref,word_row,word_field,array,element,teach_field,string,code,calendar_time,context,question_row,question_field,fixed14,script_local_ref,script_local_array,association,association_ref };
     struct Value {
         Kind kind=Kind::nil;
         int data=0;
@@ -187,6 +187,7 @@ private:
         std::size_t depth=0;
         std::shared_ptr<std::vector<Value>> cells;
         std::vector<RoomMessageWord> word_operands;
+        std::shared_ptr<std::map<std::string,Value>> entries;
     };
     struct Frame { unsigned resume; std::vector<Value> locals; unsigned indirect_topic; };
     Phase phase_=Phase::unsupported;
@@ -321,7 +322,7 @@ private:
     bool attention_=false,attention_return_=false;
     unsigned columns_=9,rows_=4;
     enum class RandomUse { rumor_pick,rumor_replace,value,word,fallback,trait,repeated_trait,phrase,procedure,array_reference };
-    unsigned pending_procedure_list_=0;
+    unsigned pending_procedure_list_=0,pending_procedure_arguments_=0;
     RandomUse random_use_=RandomUse::value;
     void StepAnswer(std::uint32_t buttons,std::uint32_t edges);
     unsigned Read(unsigned n);
