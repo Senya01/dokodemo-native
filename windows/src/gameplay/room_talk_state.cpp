@@ -20,6 +20,9 @@ int ScriptInteger(unsigned bits) {
     return static_cast<int>((bits & 0x0fffffffu) ^ 0x08000000u)-0x08000000;
 }
 void Require(bool value,const char* error) { if (!value) throw std::runtime_error(error); }
+int SignedClock(unsigned bits) {
+    return bits<=0x7fffffffu ? int(bits) : int(std::int64_t(bits)-0x100000000ll);
+}
 unsigned ArithmeticShiftRight(int value,unsigned count) {
     const unsigned bits=unsigned(value);
     return value<0 ? ~(~bits>>count) : bits>>count;
@@ -1677,7 +1680,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x86: stack_.push_back({Kind::truth,0}); break;
         case 0x87: stack_.push_back({Kind::truth,1}); break;
         case 0x89: stack_.push_back(std::move(result_)); result_={}; break;
-        case 0x8d: stack_.push_back({Kind::integer,int(script_ticks_&0x0fffffffu)}); break;
+        case 0x8d: stack_.push_back({Kind::integer,ScriptInteger(script_ticks_-script_timer_base_)}); break;
         case 0x88: stack_.push_back({Kind::string,0,pool_.at(Read(3))}); break;
         case 0x8e: stack_.push_back(ReadText()); break;
         case 0x90: stack_.push_back(locals_.at(Read(2))); break;
@@ -2194,6 +2197,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             auto parent=std::move(callers_.back()); callers_.pop_back();
             pc_=parent.resume; locals_=std::move(parent.locals); indirect_topic_=parent.indirect_topic; break;
         }
+        case 0x40: {
+            const auto offset=Pop();
+            Require(offset.kind==Kind::integer,"Invalid KSC deadline offset");
+            script_deadline_=script_timer_base_+unsigned(ScriptInteger(unsigned(offset.data)));
+            return;
+        }
         case 0x44:
             delay_=Pop().data;
             if(queued_outing_callback_ && site==0x1c69) {
@@ -2666,12 +2675,17 @@ void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,c
             // 8DA99 plays the confirm cue, then 8DA9E unwinds to the 1A44 handler.
             scheduled_sound_=RoomSound{5,0,4,128,true};
             blocks_.pop_back(); stack_.resize(block.base); pc_=block.close;
-            actor_wait_=false; delay_=0;
+            actor_wait_=false; delay_=0; script_deadline_=0;
         }
         if(actor_wait_) {
             if(!(actor_wait_secondary_?secondary_ready:actor_ready)) return;
             actor_wait_=false;
         }
+        // 74C2C checks a positive signed deadline against the signed
+        // scheduler clock. Expired and nonpositive deadlines clear.
+        if(SignedClock(script_deadline_)>0 &&
+           SignedClock(script_ticks_)<SignedClock(script_deadline_)) return;
+        script_deadline_=0;
         if(delay_>0 && --delay_>0) return;
         Execute(rng);
     } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }
