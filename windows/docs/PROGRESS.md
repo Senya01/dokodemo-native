@@ -8,6 +8,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 | Character stories | First-day entry for all five, Toro's linked ordinary and extended endings, and focused endings for the other Pokepi, and re-adoption with preserved vocabulary |
 | Persistence | Protected Windows save and resume, natural day-one to day-two transition and another cold load. The original game also loaded a Windows-created first-day slot in an isolated test |
 | Travel | All 15 destinations in Toro's ordinary menu reached the destination and returned. The component renderer exercised 54 scene registrations |
+| Alternate outings | Robo, Usagi, Inu and Kaeru use their own destination lists, learned-word conditions and period masks |
 | Local meetings | Independent Windows processes exercised discovery, visit cancellation, card and gift exchange, and shiritori on loopback |
 | Platform | Native rendering and audio, keyboard input, XInput mapping and recovery, and software suspend and resume checks |
 
@@ -75,7 +76,9 @@ The automated route opens the normal outing menu, enters and draws each of Toro'
 
 Configure the Windows CMake build with local media and `-DOKODEMO_GAME_OUTING_TEST_SLOT=<UCJS10002000 directory>` pointing to a Toro slot with a lesson in row 163. Build `post-profile-tests`, then run `ctest --test-dir <build> -C Release -R '^game-out-and-back$' --output-on-failure`. CTest sets null audio. The runner uses temporary installs beside the package and sends game frames to memory.
 
-Local media preparation checks the source menu dispatch, startup flag, destination roster and period masks for each of the five characters. The default destination kinds are 12 for Toro, 19 for Robo, 3 for Usagi, 16 for Inu and 11 for Kaeru. The headless `game-starting-outings` test starts a new room for each of the four alternate characters and checks the default flag in the protected System save. Robo's test also checks the flag after the day-two save. The alternate characters' departure and return callbacks are still open.
+Local media preparation checks the source menu dispatch, startup flag, destination roster and period masks for each of the five characters. The default destination kinds are 12 for Toro, 19 for Robo, 3 for Usagi, 16 for Inu and 11 for Kaeru. The headless `game-starting-outings` test starts a new room for each of the four alternate characters and checks the default flag in the protected System save. Robo's test also checks the flag after the day-two save.
+
+For the alternate outings, regenerate the local media with the current packer so each character has an outing catalog, dictionary predicates and scene activity commands. `game-named-outings` creates four fresh protected saves, cancels an outing, then drives each default destination twice. The test checks ordered departure commands 174 and 175, a drawn destination, an away activity, the return menu and a new home activity. It supplies a controlled learned dictionary entry for Usagi's cafe. The Windows implementation uses the local source text and scene selection rules with native travel and cancellation. Alternate destinations, seasonal coverage and location-specific tasks remain open.
 
 ## Peer card exchange
 

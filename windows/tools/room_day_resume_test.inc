@@ -149,18 +149,20 @@ int CheckNamedContactSlot(const std::filesystem::path& game,const std::filesyste
 int CheckDestinationSlot(const std::filesystem::path& install,const std::filesystem::path& input,
                          unsigned scene) {
     using namespace dokodemo::gameplay;
-    Require((scene>=1 && scene<=13) || scene==17 || scene==18,
-            "The ordinary destination roster does not include this scene");
     const auto original=ReadRetailSlot(input);
     auto saved=DecodeRetailUtilityRequest(original,RetailSaveProfile{});
-    Require(saved.profile.ReadProfile().actor==0 && !std::filesystem::exists(install/"savedata"),
-            "The outing test needs a Toro slot and an isolated installation without saves");
+    const auto actor=saved.profile.ReadProfile().actor;
+    const bool named=actor!=0;
+    Require((scene>=1 && scene<=13) || scene==17 || scene==18 || (named && scene>=14 && scene<=19),
+            "The ordinary destination roster does not include this scene");
+    Require(!std::filesystem::exists(install/"savedata"),
+            "The outing test needs an isolated installation without saves");
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
     const auto day=owners.day_words[0].children.at(0).word&0x0fffffff;
     // Use a private copy of the saved learned word for destinations whose
     // NEKO predicates require an eligible word of a different category.
     auto& word=owners.dictionary.children.at(0).children.at(163).children.at(0).children;
-    if (scene==5 || scene==6 || scene==10 || scene==13) {
+    if (!named && (scene==5 || scene==6 || scene==10 || scene==13)) {
         Require(!word.at(1).text.empty(),"Expected a learned word in the fixture");
         word.at(0).word=0x20000024u;
         word.at(7).word=0x20000008u;
@@ -168,14 +170,31 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         word.at(11).word=0x20000000u;
         word.at(12).word=0x20000006u;
     }
-    owners.progress_flags[1].children.at(0).word=0x20000000u|(1u<<scene);
-    saved.actor=owners.ToActorGraph();
+    if (named) {
+        Require(owners.progress_flags[1].children.at(0).word==(0x20000000u|(1u<<scene)),
+                "The new actor's initial destination does not match the expected scene");
+        if(actor==2) {
+            // Usagi's cafe requires learned vocabulary. Use a private
+            // word from the donor dictionary with the fields required by CT2113.
+            auto& rows=owners.dictionary.children.at(0).children;
+            Require(!rows.at(1).children.at(0).children.at(1).text.empty(),"Missing Usagi word fixture");
+            rows.at(163)=rows.at(1);
+            auto& fields=rows.at(163).children.at(0).children;
+            fields.at(0).word=0x20000024u;
+            fields.at(3).word=fields.at(4).word=fields.at(11).word=0x20000000u;
+            fields.at(7).word=0x20000008u;
+            saved.actor=owners.ToActorGraph();
+        }
+    } else {
+        owners.progress_flags[1].children.at(0).word=0x20000000u|(1u<<scene);
+        saved.actor=owners.ToActorGraph();
+    }
     auto clock=saved.profile.SavedAt();
     clock[1]=clock[2]=0;
     clock[3]=scene==7?23:12;
     ResumeDayRoom run(install,saved,clock);
     run.Start(day,day);
-    const auto initial_serial=run.room.activity_snapshot().serial;
+    auto initial_serial=run.room.activity_snapshot().serial;
     auto field=[](const RoomDepartureEvent& event,std::string_view name,int fallback=-1) {
         for (const auto& [key,value]:event.values)
             if (name==key) return value;
@@ -183,6 +202,8 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     };
     bool arrived=false,handed_off=false,returned=false,home_control=false;
     unsigned model=0,away=0,away_serial=0;
+    std::vector<int> motions;
+    std::string unavailable;
     auto step=[&](unsigned key=0) {
         run.Step(key);
         for (const auto& event:run.room.departure_events()) {
@@ -195,6 +216,11 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
             if (name=="control" && field(event,"scene")==int(scene)) handed_off=true;
             if (name=="consumed" && field(event,"scene")==0) returned=true;
             if (name=="return" && field(event,"scene")==0) home_control=true;
+            if (name=="task") motions.push_back(field(event,"command"));
+            if (name=="outing-unavailable")
+                unavailable="; refused at "+std::to_string(field(event,"site"))+
+                    ", activity "+std::to_string(field(event,"activity"))+
+                    ", conversation "+std::to_string(field(event,"conversation"));
         }
         const auto status=run.room.conversation_snapshot();
         if (status.boundary_pc)
@@ -212,35 +238,65 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     };
     auto until=[&](auto ready,const char* error) {
         for (unsigned i=0;i<1800 && !ready();++i) step();
-        Require(ready(),error);
+        if(!ready()) {
+            const auto talk=run.room.conversation_snapshot();
+            const auto active=run.room.activity_snapshot();
+            throw std::runtime_error(std::string(error)+" (topic "+std::to_string(talk.topic_pc)+
+                ", reply "+std::to_string(talk.chosen_option)+", dialogue running "+std::to_string(talk.running)+
+                ", active scene "+std::to_string(active.inputs.scene)+", serial "+std::to_string(active.serial)+
+                ", arrived "+std::to_string(arrived)+", handoff "+std::to_string(handed_off)+unavailable+")");
+        }
     };
-    run.OpenMenu();
-    key(0x40);
-    Require(run.room.teaching_snapshot().menu_cursor==1,"Missing outing menu entry");
-    key(0x2000);
-    until([&]{return run.room.conversation_snapshot().option_count>=2;},"No eligible destination choice");
-    key(0x2000);
-    until([&]{return handed_off && away;},"No active destination handoff and ASC");
-    const auto image=Visible(run.frame,((run.frames-1)%2)*surface);
-    Require(arrived && image.visible>1000,"Destination was not drawn");
-    for (unsigned i=0;i<80 && !run.room.teaching_snapshot().menu_open;++i) key(0x20);
-    Require(run.room.teaching_snapshot().menu_cursor==0,"Away menu did not open");
-    for(unsigned i=0;i<30;++i) step();
-    key(0x40);
-    Require(run.room.teaching_snapshot().menu_cursor==2,"The away menu did not select return home");
-    key(0x2000);
-    until([&]{return home_control;},"No source return from destination");
-    until([&]{
-        const auto activity=run.room.activity_snapshot();
-        return activity.inputs.scene==0 && activity.started_command.has_value() && activity.serial>away_serial;
-    },"Returned room did not resume its own activity");
-    Require(returned && ReadRetailSlot(input)==original && !std::filesystem::exists(install/"savedata"),
-            "No home scene adoption or the outing modified save data");
-    const auto active=run.room.activity_snapshot();
-    std::cout << "Destination " << scene << " model " << model << " RGB " << image.visible
-              << " ASC " << away << " then home ASC " << *active.started_command
-              << ", activity serials " << initial_serial << " -> " << away_serial << " -> " << active.serial
-              << " at update " << run.frames << '\n';
+    auto open_outing=[&] {
+        run.OpenMenu();
+        key(0x40);
+        Require(run.room.teaching_snapshot().menu_cursor==1,"Missing outing menu entry");
+        key(0x2000);
+        until([&]{return run.room.conversation_snapshot().option_count>=2;},"No eligible destination choice");
+    };
+    if(named) {
+        open_outing();
+        const auto cancel=run.room.conversation_snapshot().option_count;
+        key(0x10);
+        key(0x2000);
+        until([&]{
+            const auto talk=run.room.conversation_snapshot();
+            return talk.completed && talk.chosen_option==int(cancel);
+        },"The actor's outing did not accept the cancel choice");
+        Require(!arrived && !handed_off && !returned && motions.empty(),"Cancelled outing changed scenes");
+        initial_serial=run.room.activity_snapshot().serial;
+    }
+    for(unsigned trip=0;trip<(named?2u:1u);++trip) {
+        arrived=handed_off=returned=home_control=false;
+        model=away=away_serial=0;
+        motions.clear();
+        unavailable.clear();
+        open_outing();
+        key(0x2000);
+        until([&]{return handed_off && away;},"No active destination handoff and ASC");
+        const auto image=Visible(run.frame,((run.frames-1)%2)*surface);
+        Require(arrived && image.visible>1000,"Destination was not drawn");
+        if(named) Require(motions==std::vector<int>{174,175},"Wrong actor departure motion order");
+        for (unsigned i=0;i<80 && !run.room.teaching_snapshot().menu_open;++i) key(0x20);
+        Require(run.room.teaching_snapshot().menu_cursor==0,"Away menu did not open");
+        for(unsigned i=0;i<30;++i) step();
+        key(0x40);
+        Require(run.room.teaching_snapshot().menu_cursor==2,"The away menu did not select return home");
+        key(0x2000);
+        until([&]{return home_control;},"No source return from destination");
+        until([&]{
+            const auto activity=run.room.activity_snapshot();
+            return activity.inputs.scene==0 && activity.started_command.has_value() && activity.serial>away_serial;
+        },"Returned room did not resume its own activity");
+        Require(returned && ReadRetailSlot(input)==original && !std::filesystem::exists(install/"savedata"),
+                "No home scene adoption or the outing modified save data");
+        const auto active=run.room.activity_snapshot();
+        std::cout << "Actor " << actor << " trip " << trip+1 << " destination " << scene << " model " << model
+                  << " RGB " << image.visible << " ASC " << away << " then home ASC " << *active.started_command
+                  << ", activity serials " << initial_serial << " -> " << away_serial << " -> " << active.serial
+                  << " at update " << run.frames << '\n';
+        initial_serial=active.serial;
+    }
     return 0;
 }
 

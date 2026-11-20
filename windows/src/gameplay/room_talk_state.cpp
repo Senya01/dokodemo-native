@@ -270,6 +270,7 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
         if(p.actor>=1) {
             outing_enabled_=1u<<named_starting_outings[p.actor-1];
             if(!LoadNamedGreeting(dir,p,error)) return false;
+            LoadNamedOutings(dir);
             LoadReturnLetter(dir);
             return true;
         }
@@ -948,6 +949,188 @@ unsigned RoomTalkState::SelectHomeInvitation(unsigned mode,unsigned period,recov
     return home_invitation_id_;
 }
 
+void RoomTalkState::LoadNamedOutings(const std::filesystem::path& dir) {
+    const char* names[]{"robo-outings.bin","usagi-outings.bin","inu-outings.bin","kaeru-outings.bin"};
+    const auto path=dir/names[actor_number_-1];
+    std::ifstream file(path,std::ios::binary);
+    if(!file) {
+        Require(!std::filesystem::exists(path),"Cannot read actor outing data");
+        return;
+    }
+    const auto read=[&](unsigned size) {
+        unsigned char bytes[4]{};
+        Require(bool(file.read(reinterpret_cast<char*>(bytes),size)),"Truncated actor outing data");
+        return Word(bytes,size);
+    };
+    const auto text=[&] {
+        const auto size=read(2);
+        Require(size<=512,"Invalid actor outing text length");
+        std::string result(size,'\0');
+        Require(bool(file.read(result.data(),size)),"Truncated actor outing text");
+        return result;
+    };
+    Require(read(4)==0x31554f4e,"Invalid actor outing header");
+    named_outing_departure_=read(4);
+    named_outing_return_=read(4);
+    Require(named_outing_departure_ && named_outing_return_ &&
+            read(1)==named_starting_outings[actor_number_-1],"Actor outing profile mismatch");
+    for(auto& mask:outing_period_masks_) {
+        mask=read(1);
+        Require(mask<64,"Invalid actor outing period");
+    }
+    for(auto& message:named_outing_messages_) {
+        message={read(4),text()};
+        Require(message.site && !message.pattern.empty(),"Missing actor outing message");
+    }
+    for(auto& choice:named_outing_choices_) {
+        choice=text();
+        Require(!choice.empty(),"Missing actor outing option");
+    }
+    for(unsigned i=0;i<133;++i) {
+        NamedOutingDestination destination{read(1),read(2),read(2),text(),text(),text()};
+        Require(destination.kind<outing_period_masks_.size() &&
+                (destination.kind ? i && !destination.label.empty() && vocabulary_.HasPredicate(destination.primary) &&
+                    (!destination.secondary || vocabulary_.HasPredicate(destination.secondary))
+                    : !destination.primary && !destination.secondary && destination.label.empty()),
+                "Invalid actor outing destination");
+        named_outing_destinations_.push_back(std::move(destination));
+    }
+    Require(file.peek()==std::char_traits<char>::eof(),"Trailing actor outing data");
+}
+
+void RoomTalkState::NamedOutingSpeech(unsigned line,const std::string& label,unsigned verb) {
+    const auto& source=named_outing_messages_.at(line);
+    std::string result;
+    for(std::size_t i=0;i<source.pattern.size();++i) {
+        const auto unit=static_cast<unsigned char>(source.pattern[i]);
+        if(unit!=0x14 && unit!=0x17) {
+            result+=source.pattern[i];
+            continue;
+        }
+        Require(i+2<source.pattern.size(),"Incomplete actor outing message operand");
+        const auto operand=Word(reinterpret_cast<const unsigned char*>(source.pattern.data()+i+1),2);
+        i+=2;
+        if(unit==0x17) result+=operand==0x17?suffix_:pool_.at(speech_suffixes_.at(operand));
+        else {
+            Require(operand<=1,"Unknown actor outing message operand");
+            result+=operand?named_outing_choices_.at(verb):label;
+        }
+    }
+    StartMessage(source.site,{Kind::string,0,std::move(result)});
+}
+
+bool RoomTalkState::BeginNamedOuting(unsigned period,bool returning,recovered::RngNativeOwner& rng) {
+    if(!has_named_outings() || ordinary_ || phase_!=Phase::done || period>=6 ||
+       (returning ? !outing_current_scene_ || !outing_snapshot_ : outing_current_scene_!=0)) return false;
+    phase_=Phase::running;
+    ordinary_=true;
+    ordinary_return_=ordinary_rejected_=counted_contact_=false;
+    frontier_.reset();
+    last_answer_=-1;
+    indirect_topic_=named_outing_entry(returning);
+    outing_returning_=returning;
+    if(returning) {
+        named_outing_stage_=NamedOutingStage::prepare_return;
+        return true;
+    }
+    outing_snapshot_.reset();
+    named_outing_options_.clear();
+    std::vector<unsigned> eligible;
+    for(unsigned id=1;id<named_outing_destinations_.size();++id) {
+        const auto& item=named_outing_destinations_[id];
+        if(item.kind && (outing_enabled_ & (1u<<item.kind)) &&
+           (outing_period_masks_[item.kind] & (1u<<period)) && vocabulary_.FirstOutingMatch(item.primary)>=0)
+            eligible.push_back(id);
+    }
+    unsigned kinds=0;
+    while(!eligible.empty() && named_outing_options_.size()<4) {
+        const auto id=eligible[rng.NextC3234()%eligible.size()];
+        const unsigned kind=1u<<named_outing_destinations_[id].kind;
+        if(!(kinds&kind)) named_outing_options_.push_back(id);
+        kinds|=kind;
+        eligible.erase(std::find(eligible.begin(),eligible.end(),id));
+    }
+    named_outing_stage_=named_outing_options_.empty()?NamedOutingStage::finish:NamedOutingStage::menu;
+    NamedOutingSpeech(named_outing_options_.empty()?0:1);
+    return true;
+}
+
+void RoomTalkState::AdvanceNamedOuting(recovered::RngNativeOwner& rng,bool actor_ready) {
+    switch(named_outing_stage_) {
+    case NamedOutingStage::menu:
+        answer_options_.clear();
+        for(const auto id:named_outing_options_) answer_options_.push_back(named_outing_destinations_[id].label);
+        answer_options_.push_back(named_outing_choices_[0]);
+        answer_frame_=answer_cursor_=answer_ticks_=0;
+        answer_close_=false; answer_held_={};
+        phase_=Phase::answer_pending;
+        named_outing_stage_=NamedOutingStage::answer;
+        return;
+    case NamedOutingStage::answer: {
+        if(last_answer_<=0 || unsigned(last_answer_)>named_outing_options_.size()) {
+            outing_interrupt_requested_=!actor_ready && outing_interrupt_!=0;
+            named_outing_stage_=NamedOutingStage::finish;
+            return;
+        }
+        const auto id=named_outing_options_[last_answer_-1];
+        const auto& item=named_outing_destinations_[id];
+        const int eligible=vocabulary_.FirstOutingMatch(item.primary);
+        const unsigned count=vocabulary_.Candidates(item.primary,item.secondary,true);
+        const int preferred=vocabulary_.FinishLookup(count?rng.NextC3234()%count:0);
+        const int row=preferred>=0?preferred:eligible;
+        Require(row>=0,"Actor outing lost the selected dictionary word");
+        const auto written=vocabulary_.DisplayName(unsigned(row));
+        const auto expand=[&](std::string value) {
+            for(std::size_t at=0;(at=value.find("$_WORD",at))!=std::string::npos;at+=written.size())
+                value.replace(at,6,written);
+            return value;
+        };
+        outing_snapshot_=RoomOutingDescriptor{id,item.kind,unsigned(row),eligible,item.primary,item.secondary,
+                                             written,item.label,expand(item.title),expand(item.description)};
+        NamedOutingSpeech(2,item.label,item.kind==8?2:1);
+        named_outing_stage_=NamedOutingStage::depart;
+        return;
+    }
+    case NamedOutingStage::depart:
+        if(visible() || closing_) return;
+        actor_command_=174;
+        named_outing_stage_=NamedOutingStage::walk;
+        return;
+    case NamedOutingStage::walk:
+        if(!actor_ready) return;
+        actor_command_=175;
+        named_outing_stage_=NamedOutingStage::scene_request;
+        return;
+    case NamedOutingStage::prepare_return:
+        outing_interrupt_requested_=!actor_ready && outing_interrupt_!=0;
+        named_outing_stage_=NamedOutingStage::scene_request;
+        return;
+    case NamedOutingStage::scene_request:
+        if(!actor_ready) return;
+        outing_scene_request_=outing_returning_?0:outing_snapshot_->kind;
+        phase_=Phase::outing_scene;
+        return;
+    case NamedOutingStage::arrived:
+        named_outing_stage_=NamedOutingStage::finish;
+        if(!outing_returning_) {
+            const auto& destination=*outing_snapshot_;
+            if(!destination.title.empty())
+                StartMessage(indirect_topic_,{Kind::string,0,destination.title+"\n"+destination.description});
+        }
+        return;
+    case NamedOutingStage::finish:
+        // Both cancel and return can leave an earlier ASC in flight. Keep
+        // ownership until it can actually accept the next ambient request.
+        if(visible() || closing_ || !actor_ready) return;
+        named_outing_stage_=NamedOutingStage::inactive;
+        ordinary_=false;
+        ordinary_return_=true;
+        phase_=Phase::done;
+        return;
+    case NamedOutingStage::inactive: return;
+    }
+}
+
 bool RoomTalkState::BeginHomeInvitation() {
     if(!home_invitation_id_ || phase_!=Phase::done || ordinary_ || outing_current_scene_!=0 ||
        !code_.count(0x12f39)) return false;
@@ -1000,14 +1183,19 @@ void RoomTalkState::StampContactLocation(std::uint32_t minute) {
 RoomContactLocation RoomTalkState::contact_location() const {
     RoomContactLocation place;
     place.scene=outing_current_scene_;
-    const auto& slots=global_arrays_.at(0x243f);
-    Require(slots.at(0).kind==Kind::integer,"Invalid contact destination index");
-    place.descriptor_id=unsigned(slots[0].data);
-    if(place.descriptor_id) {
-        const auto& record=slots.at(1);
-        Require(record.kind==Kind::array && record.cells && record.cells->at(0).kind==Kind::integer,
-                "Missing current contact destination type");
-        place.kind=unsigned(record.cells->at(0).data);
+    if(actor_number_==0) {
+        const auto& slots=global_arrays_.at(0x243f);
+        Require(slots.at(0).kind==Kind::integer,"Invalid contact destination index");
+        place.descriptor_id=unsigned(slots[0].data);
+        if(place.descriptor_id) {
+            const auto& record=slots.at(1);
+            Require(record.kind==Kind::array && record.cells && record.cells->at(0).kind==Kind::integer,
+                    "Missing current contact destination type");
+            place.kind=unsigned(record.cells->at(0).data);
+        }
+    } else if(place.scene && outing_snapshot_) {
+        place.kind=outing_snapshot_->kind;
+        place.descriptor_id=outing_snapshot_->destination;
     }
     const auto transfer=outing_script_cells_.find(0x3de7);
     if(transfer!=outing_script_cells_.end() && transfer->second.kind==Kind::calendar_time)
@@ -1017,6 +1205,10 @@ RoomContactLocation RoomTalkState::contact_location() const {
 
 // The active CT243F descriptor owns both strings through the outing.
 std::vector<std::string> RoomTalkState::current_outing_names() const {
+    if(actor_number_!=0)
+        return outing_current_scene_ && outing_snapshot_
+            ? std::vector<std::string>{outing_snapshot_->label,outing_snapshot_->title}
+            : std::vector<std::string>{};
     const auto& slots = global_arrays_.at(0x243f);
     const auto& descriptor = slots.at(1);
     if (!descriptor.cells || descriptor.cells->size() <= 4) return {};
@@ -1041,6 +1233,11 @@ bool RoomTalkState::FinishOutingScene(unsigned selector) {
     if(phase_!=Phase::outing_scene || outing_scene_request_!=selector) return false;
     // The actual scene owner releases the caller suspended by the callback.
     outing_current_scene_=selector; outing_scene_request_.reset(); phase_=Phase::running;
+    if(named_outing_stage_!=NamedOutingStage::inactive) {
+        if(calendar_minute_) StampContactLocation(*calendar_minute_);
+        named_outing_stage_=NamedOutingStage::arrived;
+        outing_wipe_=true;
+    }
     return true;
 }
 bool RoomTalkState::FinishOutingInventoryRestore() {
@@ -1342,8 +1539,12 @@ RoomTalkState::Value RoomTalkState::ReadText() {
 }
 
 void RoomTalkState::Message() {
-    message_pc_=pc_-1;
-    auto text=ReadText();
+    const auto site=pc_-1;
+    StartMessage(site,ReadText());
+}
+
+void RoomTalkState::StartMessage(unsigned site,Value text) {
+    message_pc_=site;
     message_=std::move(text.text);
     message_word_operands_=std::move(text.word_operands);
     message_word_rows_.clear();
@@ -3776,6 +3977,11 @@ void RoomTalkState::StepRoom(std::uint32_t buttons,std::uint32_t edges,bool acto
     }
     if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
     if((phase_!=Phase::running && phase_!=Phase::rendezvous) || message_wait_) return;
+    if(named_outing_stage_!=NamedOutingStage::inactive) {
+        Require(rng!=nullptr,"Actor outing requires game RNG");
+        AdvanceNamedOuting(*rng,actor_ready);
+        return;
+    }
     if(scheduled_room_event_ && invitation_event.value_or(false) && scheduled_deadline_ &&
        scheduled_deadline_->kind==Kind::calendar_time && !blocks_.empty()) {
         const auto block=blocks_.back();

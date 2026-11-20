@@ -91,6 +91,10 @@ public:
     using ScriptModuleReader=std::function<bool(const std::string&,std::vector<std::uint8_t>&)>;
     void BindScriptModuleReader(ScriptModuleReader reader) { script_module_reader_=std::move(reader); }
     bool BeginOuting(unsigned period);
+    bool has_named_outings() const { return named_outing_departure_ != 0; }
+    bool BeginNamedOuting(unsigned period,bool returning,recovered::RngNativeOwner& rng);
+    bool named_outing_parked() const { return actor_number_!=0 && phase_==Phase::outing_scene; }
+    unsigned named_outing_entry(bool returning) const { return returning ? named_outing_return_ : named_outing_departure_; }
     bool TakeOutingRoomRequest();
     bool BeginOutingReturn();
     RoomContactLocation contact_location() const;
@@ -381,6 +385,22 @@ private:
     bool outing_wide_=false,outing_returning_=false;
     unsigned outing_enabled_=0,outing_period_=0,outing_index_=0;
     std::array<unsigned,20> outing_period_masks_{};
+    struct NamedOutingDestination {
+        unsigned kind, primary, secondary;
+        std::string title, label, description;
+    };
+    struct NamedOutingMessage { unsigned site; std::string pattern; };
+    enum class NamedOutingStage { inactive, menu, answer, depart, walk, prepare_return, scene_request, arrived, finish };
+    NamedOutingStage named_outing_stage_=NamedOutingStage::inactive;
+    unsigned named_outing_departure_=0,named_outing_return_=0;
+    std::array<NamedOutingMessage,3> named_outing_messages_{};
+    std::array<std::string,3> named_outing_choices_;
+    std::vector<NamedOutingDestination> named_outing_destinations_;
+    std::vector<unsigned> named_outing_options_;
+    void LoadNamedOutings(const std::filesystem::path& dir);
+    void AdvanceNamedOuting(recovered::RngNativeOwner& rng,bool actor_ready);
+    void NamedOutingSpeech(unsigned line,const std::string& label={},unsigned verb=1);
+    void StartMessage(unsigned site,Value text);
     bool excursion_=false,outing_room_request_=false;
     bool direct_teaching_=false,counted_contact_=false;
     std::optional<unsigned> learned_row_;

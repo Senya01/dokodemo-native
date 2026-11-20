@@ -361,8 +361,6 @@ def actor_outing_source(root, spec):
 
 def room_outing_media(root):
     data, h, mask, periods, indices, rows = actor_outing_source(root, OUTING_ACTORS[0])
-    for spec in OUTING_ACTORS[1:]:
-        actor_outing_source(root, spec)
     result = bytearray(b"ROT5" + struct.pack("<I20B132B", mask, *(v&255 for v in periods+indices)))
     for row in rows:
         kind, primary, secondary = row[:3]
@@ -395,7 +393,66 @@ def room_outing_media(root):
             else:
                 require(not tag or tag >> 16 == 0xb003, "Invalid destination display rule")
     resource = Region(bytes(result))
-    return {Path("assets/game/post-profile/toro-outings.bin"): (resource, resource.sha256())}
+    files = {Path("assets/game/post-profile/toro-outings.bin"): (resource, resource.sha256())}
+    for spec in OUTING_ACTORS[1:]:
+        resource = Region(named_outing_media(root, spec))
+        files[Path(f"assets/game/post-profile/{spec[0].lower()}-outings.bin")] = (resource, resource.sha256())
+    return files
+
+
+def named_outing_media(root, spec):
+    data, h, _, periods, _indices, rows = actor_outing_source(root, spec)
+    depart, back = spec[4:6]
+    instructions = parse_code(data)
+    indices = {row["code_offset"]: i for i, row in enumerate(instructions)}
+
+    def pool(ref):
+        if not ref:
+            return b""
+        require(ref >> 28 == 5, "Invalid outing string reference")
+        start = h.pool_start + (ref & 0x0fffffff)
+        return data[start:data.index(0, start, h.pool_end)]
+
+    def speech(call, last=False):
+        target, = instructions[indices[call]]["references"]
+        start = indices[target["target"]]
+        messages = []
+        for index in range(start, len(instructions) - 1):
+            item = instructions[index]
+            if index != start and item["opcode"] == 0x30:
+                break
+            if item["opcode"] == 0x48:
+                end = instructions[index + 1]["offset"]
+                require(data[end - 1] == 0, "Unterminated outing message")
+                messages.append((item["code_offset"], data[item["offset"] + 1:end - 1]))
+        require(messages, "Missing outing message")
+        return messages[-1 if last else 0]
+
+    def pool_at(pc):
+        ref, = instructions[indices[pc]]["references"]
+        require(ref["kind"] == "pool", "Invalid outing menu string")
+        return pool(0x50000000 | ref["target"])
+
+    out = bytearray(struct.pack("<4sIIB20B", b"NOU1", depart, back, spec[2], *(v & 255 for v in periods)))
+
+    def text(value):
+        require(len(value) <= 512, "Oversized outing display string")
+        out.extend(struct.pack("<H", len(value)) + value)
+
+    for site, raw in (speech(depart + 0x29, last=True), speech(depart + 0x3a), speech(depart + 0x1d7, last=True)):
+        out.extend(struct.pack("<I", site))
+        text(raw)
+    for pc in (depart + 0xe6, depart + 0x1bc, depart + 0x1c8):
+        text(pool_at(pc))
+    for row in rows:
+        kind, primary, secondary = row[:3]
+        require(kind == 0 and not any(row) or kind >> 28 == 2 and 0 < (kind & 255) < len(periods) and
+                primary >> 16 == 0xb003 and (not secondary or secondary >> 16 == 0xb003) and row[4] >> 28 == 5,
+                "Invalid alternate outing descriptor")
+        out.extend(struct.pack("<BHH", kind & 255, primary & 65535, secondary & 65535))
+        for ref in (row[3], row[4], row[5]):
+            text(pool(ref))
+    return bytes(out)
 
 
 def collect(data):

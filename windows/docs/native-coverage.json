@@ -117,7 +117,7 @@
           "id": "gfx-destinations",
           "status": "basic",
           "title": "Other game scenes",
-          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Some destination effects and additional routes remain open.",
+          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Robo, Usagi, Inu and Kaeru each travelled to their default destination twice and returned. Some destination effects and additional routes remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {

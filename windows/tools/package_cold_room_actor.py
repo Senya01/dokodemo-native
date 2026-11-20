@@ -1,16 +1,15 @@
-"""Pack the selected scene-zero ASC requests, control data and their DVS/DAKs."""
+"""Pack room and destination ASC requests, control data and their DVS/DAKs."""
 import struct
 from pathlib import Path
 
 from extract_bpar import BparArchive
 from iso_reader import Region, require
 from model_formats import parse_asc
-from ksc_format import parse_header
+from ksc_format import parse_code, parse_header
 from package_post_profile import mesh_blob
 from package_room_activity_selector import project_activity_rows
 from package_room_activity_topic import project_topic_bodies, scheduled_room_row
-from package_room_common_topic import collect_named_contacts
-from ksc_format import parse_code
+from package_room_common_topic import OUTING_ACTORS, collect_named_contacts
 from package_room_talk import (NAMED_INTROS, NAMED_PENULTIMATE, actor_event_row, named_actor_entries,
                                named_room_blocks, robo_event_row, robo_room_blocks)
 
@@ -127,8 +126,14 @@ def cold_room_actor_media(root, boot, *, effect_test=False):
 
         if 1 <= actor <= 4:
             rows = project_activity_rows(script_file, species)
-            activity_ids.update(row[1] for row in struct.iter_unpack("<7H", rows[8:]) if row[0] == 0)
+            activity_ids.update(row[1] for row in struct.iter_unpack("<7H", rows[8:]))
             requests.update(activity_ids)
+            depart = OUTING_ACTORS[actor][4]
+            require(script[depart+0x1df] == 0x21, "Unknown actor outing preparation")
+            preparation = int.from_bytes(script[depart+0x1e0:depart+0x1e3], "little")
+            require(at(preparation+0x33, "81 ae 00 20 01") and
+                    at(preparation+0x3e, "81 af 00 20 01"), "Unknown actor outing motion")
+            requests.update((174,175))
             # Mood variants and the seated second controller share the room locomotion owner.
             requests.update((2, 3, 4, 6, 7, 8, 10, 11, 12, 13))
 
@@ -264,7 +269,7 @@ def cold_room_actor_media(root, boot, *, effect_test=False):
         ordered = sorted(motions)
         dak = [species + "/" + asc["names"][i]["name"].upper() + ".DAK" for i in ordered]
         model = mesh_blob(group, species + "/" + body + ".DVS", dak, species + "/GIM")
-        control = bytearray(b"CSA5" if actor == 0 else b"CSA4")
+        control = bytearray(b"CSA5" if actor < 5 else b"CSA4")
         def words(values):
             control.extend(struct.pack("<" + "I" * len(values), *values))
         anchor, = struct.unpack("<I", boot.read(code + 0xd7df8 + 4 * actor, 4))
@@ -295,7 +300,7 @@ def cold_room_actor_media(root, boot, *, effect_test=False):
         else:
             control.extend(boot.read(data+0x4180,12))
             control.extend(boot.read(code+0xd7ee0,4))
-        if actor == 0:
+        if actor < 5:
             control.extend(boot.read(data+0x4180+16*12,12))  # D2D0, roof selector 12
         for stride in range(0,32,4):
             ptr, = struct.unpack("<I",boot.read(data+0x4060+32*actor+stride,4))

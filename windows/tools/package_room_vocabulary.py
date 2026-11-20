@@ -5,7 +5,7 @@ from pathlib import Path
 from extract_bpar import BparArchive
 from iso_reader import Region, require
 from ksc_format import parse_code, parse_dic, parse_header
-from package_room_common_topic import collect_named_contacts, common_topic_vocabulary, contact_predicate_terms
+from package_room_common_topic import OUTING_ACTORS, collect_named_contacts, common_topic_vocabulary, contact_predicate_terms, outing_rows
 
 
 FILTERS = (0x282D, 0x2837, 0x28DC, 0x28E2, 0x2931, 0x2AF0, 0x2AFF, 0xD4BF, 0xD4DB, 0xD4F8,
@@ -85,12 +85,15 @@ def project(script, dictionary, *, robo=False, alternate=None):
     if robo or alternate:
         species = "ROBO" if robo else next(name for name, layout in ALTERNATE_LAYOUTS.items() if layout==alternate)
         _, generic_filters, generic_phrases=collect_named_contacts(script,species,parse_code(script))
-        filters=sorted(set(filters)|generic_filters)
+        roster=next(spec[6] for spec in OUTING_ACTORS if spec[0]==species)
+        outing_filters={ref & 65535 for row in outing_rows(script,h,roster) for ref in row[1:3] if ref}
+        filters=sorted(set(filters)|generic_filters|outing_filters)
         exclusions=sorted(set(exclusions)|generic_phrases.keys())
     out.extend(struct.pack('<H', len(filters)))
+    extension_filter = 0x291e if robo else {0x251c: 0x257e, 0x23fa: 0x2464, 0x2498: 0x24fa}.get(sayings, 0x286a)
     for ct in filters:
         entries = array(h.constant_start, ct)
-        if ct in (0x2464, 0x24fa, 0x257e, 0x286a, 0x291e):
+        if ct == extension_filter:
             # BI60 receives the two terms directly, not a BI96 group table.
             require(entries == [0x20000000, 0x20000006, 0x20000020,
                                 0x20000000, 0x20000007, 0x20000010],

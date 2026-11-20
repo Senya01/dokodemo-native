@@ -65,7 +65,7 @@ bool ColdRoomActor::Load(const std::filesystem::path &dir, unsigned actor, int p
         }
         for (unsigned i = 0, n = f.Count(1294); i < n; ++i) {
             auto &words = next.commands_[f.Word()];
-            words.resize(f.Count(128));
+            words.resize(f.Count(136)); // Kaeru ASC300 contains 136 source words.
             for (auto &w : words)
                 w = f.Word();
         }
