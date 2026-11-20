@@ -2327,6 +2327,10 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 case Kind::code: result_={Kind::integer,7}; break;
                 default: throw std::runtime_error("Unsupported KSC tag query");
                 }
+            } else if(id==0x02) {
+                Require(argc<=stack_.size(),"Invalid KSC discard argument count");
+                stack_.resize(stack_.size()-argc);
+                result_={};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
