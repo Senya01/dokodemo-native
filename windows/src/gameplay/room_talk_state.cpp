@@ -2324,7 +2324,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             }
             break;
         }
-        case 0x25: {
+        case 0x24: case 0x25: {
             const unsigned arguments=op==0x24?Read(1):0;
             const unsigned table=Read(2),mode=Read(1);
             Require(mode==0 && procedure_lists_.count(table),"Unsupported KSC procedure selector");

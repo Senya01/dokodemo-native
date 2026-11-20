@@ -290,8 +290,62 @@ struct RoomTalkOpcodeTests {
         CheckValue(vm.friends_cells_.at(0x2a3c).cells->at(1),Kind::integer,9,0x75);
     }
 
+    static void ProcedureArguments() {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.procedure_lists_.emplace(42,std::vector<unsigned>{0x100,0x200});
+        vm.code_.emplace(0,std::vector<unsigned char>{
+            0x80,15, 0x80,19,
+            0x24,2,42,0,0, 0x89,0x85,0x44
+        });
+        vm.code_.emplace(0x100,std::vector<unsigned char>{0x85,0x70,0x31});
+        vm.code_.emplace(0x200,std::vector<unsigned char>{
+            0x90,0,0, 0x90,1,0, 0xe1,0x70,0x31
+        });
+        vm.Execute(nullptr);
+        if(vm.random_requested()!=2 || vm.stack_.size()!=2)
+            throw std::runtime_error("Wrong KSC procedure selection arguments");
+        vm.SupplyRandom(1);
+        if(vm.pc_!=0x200 || vm.locals_.size()!=2)
+            throw std::runtime_error("Wrong KSC selected frame");
+        CheckValue(vm.locals_[0],Kind::integer,15,0x24);
+        CheckValue(vm.locals_[1],Kind::integer,19,0x24);
+        vm.Execute(nullptr);
+        CheckValue(vm.stack_.at(0),Kind::integer,-4,0x24);
+        if(!vm.callers_.empty() || vm.pc_!=12)
+            throw std::runtime_error("Wrong KSC selected procedure return");
+    }
+
+    static void Associations() {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.pool_.emplace(1,"fruit");
+        vm.pool_.emplace(2,"vegetable");
+        vm.code_.emplace(0,std::vector<unsigned char>{
+            0x30,2,
+            0x91,0,0,0x8f,0x51, 0x91,1,0,0x8f,0x51,
+            0x90,0,0,0x88,1,0,0,0xfd,0x80,42,0x51,
+            0x90,0,0,0x88,1,0,0,0xfc,
+            0x90,0,0,0x88,2,0,0,0xfc,
+            0x90,1,0,0x88,1,0,0,0xfc,
+            0x90,0,0,0x88,1,0,0,0xfd,0x70,
+            0x90,0,0,0x88,1,0,0,0xfc,
+            0x85,0x44
+        });
+        vm.Execute(nullptr);
+        if(vm.stack_.size()!=4) throw std::runtime_error("Wrong associative table stack effect");
+        CheckValue(vm.stack_[0],Kind::integer,42,0xfc);
+        CheckValue(vm.stack_[1],Kind::nil,0,0xfc);
+        CheckValue(vm.stack_[2],Kind::nil,0,0x8f);
+        CheckValue(vm.stack_[3],Kind::nil,0,0xfd);
+        if(vm.locals_.at(0).entries->size()!=1 || !vm.locals_.at(1).entries->empty())
+            throw std::runtime_error("KSC associative table allocations were shared");
+    }
+
     static void Run() {
         Builtins();
+        Associations();
+        ProcedureArguments();
         ContextTables();
         StopAndSuspend();
         Timers();
