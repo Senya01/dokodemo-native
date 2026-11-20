@@ -1588,6 +1588,9 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x0f:
             phase_=Phase::suspended; // 6B9AC sets the context to state 1.
             return;
+        case 0x38:
+            phase_=Phase::done; // 6E41C exits the context without a procedure return.
+            return;
         case 0x18:
             blocks_.push_back({Read(3),callers_.size(),stack_.size()}); break;
         case 0x1a:
