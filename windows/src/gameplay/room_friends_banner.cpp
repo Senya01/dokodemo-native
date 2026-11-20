@@ -19,9 +19,16 @@ void RoomFriendsBanner::Set(bool show) {
 
 void RoomFriendsBanner::Step() {
     if (frame_ && frame_<9) ++frame_;
+    if (navigation_frame_ && navigation_frame_<8) ++navigation_frame_;
+}
+
+void RoomFriendsBanner::SetNavigation(bool show) {
+    // GAME43 addresses control 0. SYOUKAI clip 1 ends at frame 8.
+    navigation_frame_=show?1u:0u;
 }
 
 bool RoomFriendsBanner::Draw(std::vector<std::uint8_t>& vram,std::size_t offset) const {
-    return !frame_ || scene_.Draw(2,{{2,int(frame_)}},vram,offset);
+    return (!navigation_frame_ || scene_.Draw(1,{{1,int(navigation_frame_)}},vram,offset)) &&
+           (!frame_ || scene_.Draw(2,{{2,int(frame_)}},vram,offset));
 }
 }

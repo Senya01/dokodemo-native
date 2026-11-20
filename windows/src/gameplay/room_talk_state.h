@@ -1,4 +1,5 @@
 #pragma once
+#include "room_meeting_channel.h"
 #include "profile_adoption.h"
 #include "room_conversation_flow.h"
 #include "room_activity_event.h"
@@ -6,6 +7,7 @@
 #include "room_fallback.h"
 #include "room_fallback_list.h"
 #include "room_word_traits.h"
+#include "room_sound.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -32,6 +34,40 @@ class RoomTalkState {
 public:
     bool Load(const std::filesystem::path& post_profile,const AcceptedProfile& profile,std::string& error);
     bool BeginOrdinaryTopic(unsigned selected_pc,bool queued=false);
+    bool BeginRoboContactGreeting();
+    unsigned named_contact_entry() const;
+    unsigned attention_entry() const;
+    bool BeginNamedContact();
+    bool TakeRoboContactGreetingReturn();
+    struct ScheduledProgress {
+        unsigned contacts, diary_count;
+        std::uint32_t adoption_minute;
+    };
+    bool BeginScheduledRoomEvent(unsigned event, std::uint32_t midnight, ScheduledProgress progress);
+    bool scheduled_room_event_active() const { return scheduled_room_event_ != 0; }
+    std::optional<bool> TakeScheduledNavigation();
+    std::optional<RoomSound> TakeScheduledSound();
+    struct FarewellSites { unsigned game75, game46, reset; };
+    FarewellSites farewell_sites() const;
+    std::vector<unsigned> TakeScheduledActorSelections();
+    std::optional<unsigned> TakeScheduledCamera();
+    std::optional<std::uint32_t> TakeScheduledActivityDeadline();
+    std::array<std::optional<unsigned>,2> TakeScheduledStayWrites();
+    struct ScheduledDiary {
+        unsigned descriptor, priority;
+        const std::string& text;
+    };
+    std::vector<ScheduledDiary> scheduled_diaries() const;
+    ScheduledDiary expired_stay_diary() const;
+    void FinishScheduledDiary(bool recorded);
+    bool TakeScheduledMenuRestriction();
+    enum class FarewellAction { wait_for_cover, write_slot, wait_for_slot };
+    std::optional<FarewellAction> pending_farewell_action() const;
+    void FinishFarewellAction(FarewellAction action);
+    bool TakeFarewellComplete();
+    unsigned farewell_mode() const { return farewell_mode_; }
+    std::optional<bool> TakeScheduledReturn();
+    std::optional<unsigned> TakeScheduledActorCommand(unsigned record);
     bool BeginOrdinaryFarewell();
     void EnterWithoutIntroduction() { phase_=Phase::done; }
     unsigned SelectHomeInvitation(unsigned mode,unsigned period,recovered::RngNativeOwner& rng);
@@ -58,6 +94,9 @@ public:
     bool BeginTeaching();
     bool BeginFriendsIntroduction();
     bool BeginFriendsExchange(unsigned argument,const RoomInventory& inventory);
+    void EnablePeerMeetings() { peer_meetings_enabled_=true; }
+    std::optional<MeetingPlace> meeting_request() const { return meeting_request_; }
+    void FinishPeerMeeting(bool completed);
     bool friends_reset_contact_timer() const { return friend_timer_requested_; }
     std::optional<bool> TakeFriendsBanner();
     void SetMessageSpeed(unsigned speed) { message_speed_ = speed; }
@@ -88,6 +127,7 @@ public:
     bool ordinary_source_return() const { return ordinary_return_; }
     bool ordinary_rejected() const { return ordinary_rejected_; }
     std::optional<unsigned> ordinary_frontier() const { return frontier_; }
+    void ReleaseOrdinaryFrontier();
     bool word_entry_requested() const { return phase_==Phase::word_entry; }
     void FinishWordEntry(std::string_view written,std::string_view reading);
     bool answer_visible() const { return phase_==Phase::answer; }
@@ -103,7 +143,7 @@ public:
     bool TakeFirstDayDiaryRequest();
     void Step(std::uint32_t buttons,bool available,bool actor_ready,const recovered::PackageView* font,
               bool prompt_expired=false,std::optional<bool> invitation_event={},
-              recovered::RngNativeOwner* rng=nullptr);
+              recovered::RngNativeOwner* rng=nullptr,bool secondary_ready=false);
     bool busy_for_room_input() const { return visible() || answer_visible() || gift_requested() ||
                                              word_entry_requested() || phase_==Phase::answer_pending || phase_==Phase::inventory; }
     bool gift_requested() const { return phase_==Phase::gift; }
@@ -120,6 +160,7 @@ public:
     void SetMood(int mood) { mood_=mood; mood_set_tick_=script_ticks_; }
     void SetActorField50(int value) { actor_field50_=value; }
     void SetCalendarMinute(uint32_t minute) { calendar_minute_=minute; }
+    void SetRoomDay(int day) { room_day_=day; }
     bool finished() const { return phase_==Phase::done; }
     bool wide_camera_requested() const { return wide_camera_requested_; }
     const std::string& error() const { return error_; }
@@ -136,7 +177,7 @@ public:
     const std::optional<std::string>& keyboard_initial_reading() const { return keyboard_initial_reading_; }
     bool event20_cleanup_enabled() const { return event20_cleanup_; }
 private:
-    enum class Phase { unsupported,prompt,running,gift,inventory,random,answer_pending,answer,word_entry,outing_scene,outing_inventory,frontier,done,failed };
+    enum class Phase { unsupported,prompt,running,gift,inventory,random,answer_pending,answer,word_entry,outing_scene,outing_inventory,scheduled_diary,scheduled_farewell,meeting,frontier,done,failed };
     enum class Kind { nil,integer,truth,frame_ref,global_ref,global_element,constant_ref,word_row,word_field,array,element,teach_field,string,code,calendar_time,context,question_row,question_field };
     struct Value {
         Kind kind=Kind::nil;
@@ -150,6 +191,7 @@ private:
     Phase phase_=Phase::unsupported;
     std::map<unsigned,std::vector<unsigned char>> code_;
     std::map<unsigned,std::string> pool_;
+    std::string nil_inline_text_;
     std::map<unsigned,std::vector<unsigned>> predicates_;
     std::map<unsigned,std::vector<unsigned>> phrase_lists_;
     std::map<unsigned,std::vector<unsigned>> procedure_lists_;
@@ -160,6 +202,8 @@ private:
     bool friends_introduction_=false,friend_timer_requested_=false;
     const RoomInventory* exchange_inventory_=nullptr;
     unsigned meeting_event_depth_=0;
+    bool peer_meetings_enabled_=false;
+    std::optional<MeetingPlace> meeting_request_;
     std::optional<bool> friends_banner_;
     std::map<unsigned,Value> friends_cells_;
     bool event20_cleanup_=true; // CT0 starts as tagged true in NEKO.KSC.
@@ -172,6 +216,34 @@ private:
     int trait_row_=-1;
     Value selected_fallback_;
     bool queued_root_=false;
+    unsigned scheduled_room_event_=0;
+    std::uint32_t scheduled_midnight_=0;
+    ScheduledProgress scheduled_progress_{};
+    unsigned farewell_mode_=0;
+    bool ScheduledFarewell() const { return scheduled_room_event_==3 || scheduled_room_event_==5; }
+    unsigned FarewellReturnPc() const {
+        if (alternate_greeting_)
+            return alternate_greeting_->schedule.callbacks[scheduled_room_event_-2] +
+                   (scheduled_room_event_==5 ? 0x76 : 0x9e);
+        if (robo_greeting_) return scheduled_room_event_==5 ? 0x67618 : 0x6759f;
+        return scheduled_room_event_==5 ? 0x89701 : 0x89688;
+    }
+    std::optional<bool> scheduled_navigation_;
+    std::optional<RoomSound> scheduled_sound_;
+    std::optional<Value> scheduled_deadline_;
+    std::optional<std::uint32_t> scheduled_activity_deadline_;
+    std::optional<unsigned> scheduled_camera_request_;
+    std::array<std::optional<unsigned>,2> scheduled_stay_writes_;
+    bool scheduled_menu_restriction_=false;
+    enum class FarewellStage { inactive, requested, cover_wait, covered, writing,
+                               written, slot_wait, acknowledged, reset, complete };
+    FarewellStage farewell_stage_=FarewellStage::inactive;
+    std::optional<bool> scheduled_count_contact_;
+    std::vector<unsigned> scheduled_selections_;
+    std::array<std::optional<unsigned>,2> scheduled_actor_commands_;
+    unsigned scheduled_camera_=0;
+    bool scheduled_secondary_=false, actor_wait_secondary_=false;
+    bool scheduled_return_=false;
     std::vector<std::optional<unsigned>> topic_enqueues_;
     std::array<Value,12> teaching_;
     int reserved_word_=-1;
@@ -200,7 +272,8 @@ private:
     std::optional<unsigned> outing_scene_request_;
     std::optional<bool> outing_wipe_;
     std::vector<unsigned> outing_sites_;
-    unsigned roof_detail_=0,outing_interrupt_=0,outing_camera_=0,outing_current_scene_=0;
+    std::array<unsigned,19> outing_details_{};
+    unsigned outing_interrupt_=0,outing_camera_=0,outing_current_scene_=0;
     bool outing_game28_=false,outing_lamp_=false,outing_locked_=false,outing_interrupt_requested_=false;
     bool outing_wide_=false,outing_returning_=false;
     unsigned outing_enabled_=0,outing_period_=0,outing_index_=0;
@@ -225,7 +298,8 @@ private:
     Value result_;
     unsigned pc_=0,message_pc_=0,previous_=0,random_bound_=0;
     unsigned script_ticks_=0,mood_set_tick_=0,intro_flags_=0;
-    std::optional<uint32_t> calendar_minute_;
+    std::optional<uint32_t> calendar_minute_, adoption_minute_;
+    std::optional<int> room_day_;
     std::size_t text_cursor_=0,group_end_=0;
     unsigned message_speed_=2;
     int delay_=0,glyph_delay_=0,idle_=0,gift_slot_=-1;
@@ -253,6 +327,27 @@ private:
     void Execute(recovered::RngNativeOwner* rng);
     void Call(unsigned target,std::vector<Value> args,bool indirect);
     void ReturnFromGreeting();
+    struct NamedSchedule {
+        unsigned table, wrapper, contact_cleanup;
+        unsigned event_cell, location_cell, motion_cell, midnight_global;
+        std::array<unsigned,5> callbacks; // Calendar events 2–6 in source order.
+        unsigned farewell, utility_save, reset, diary_count, contacts_global;
+    };
+    struct GreetingScript {
+        const char* filename;
+        unsigned entry, farewell, flags, gift, gift_open, inventory, modal_wait, skip_farewell, diary, diary_resume,
+                 dictionary;
+        NamedSchedule schedule;
+    };
+    const GreetingScript* alternate_greeting_=nullptr;
+    std::array<unsigned,5> named_scheduled_diary_offsets_{};
+    std::map<unsigned,unsigned> speech_suffixes_;
+    unsigned ContactGlobal(unsigned bank) const;
+    bool LoadNamedGreeting(const std::filesystem::path& dir,const AcceptedProfile& profile,std::string& error);
+    bool robo_greeting_=false;
+    unsigned actor_number_=0;
+    bool robo_contact_greeting_=false, robo_contact_greeting_return_=false;
+    void StartTopic(unsigned pc);
     void AdvanceBalloon(const recovered::PackageView& font);
     void AppendUnit(std::string_view unit,const recovered::PackageView& font);
     std::size_t BreakGroupEnd() const;

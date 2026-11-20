@@ -1,6 +1,6 @@
 # Windows game
 
-This source tree builds the standalone `dokodemo-game.exe`. It contains the Windows game target, room and roof gameplay, first-day save and resume, and the game-day transition. The root CMake project builds the earlier recovery application and its own tests.
+This source tree builds the standalone native Windows game, `dokodemo-game.exe`. The [progress report](docs/PROGRESS.md) covers all five Poképi, save and resume, outings, conversations, and Windows peer meetings. The root CMake project builds the earlier recovery application.
 
 ## Build
 
@@ -21,7 +21,7 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The six component tests use synthetic inputs and run with `DOKODEMO_TEST_AUDIO=null`.
+The default CTest suite covers synthetic components, controller mapping and the null audio queue. CTest sets `DOKODEMO_TEST_AUDIO=null` for each test.
 
 ## Local game data
 
@@ -35,6 +35,22 @@ python -B tools/package_native_decoder.py --output build/game
 
 The decoder installer also accepts `--wheel <path-to-pinned-wheel>` for offline preparation. Game data, generated headers, decoder binaries and save files belong in local directories ignored by Git.
 
-## Verification scope
+## Optional local-media tests
 
-The first-day Windows route was verified across two ordinary processes with a saved learned word. A separate run of the original game in PPSSPP loaded the Windows-created slot. The day-two transition, prior diary entry, and second-day re-save and reload passed component testing. The ordinary Windows check at this checkpoint covered same-day reload.
+Prepare the game media into `build/game` using the command above. Point CMake at the prepared package and run the tests without opening a game window.
+
+```powershell
+$env:DOKODEMO_TEST_AUDIO = 'null'
+$media = (Resolve-Path build/game).Path
+cmake -S . -B build "-DDOKODEMO_GAME_TEST_MEDIA_DIR=$media"
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The conversation roster test covers all 3,118 entries under controlled inputs. The room tests draw to memory. Keep save files and any local test fixtures in ignored directories.
+
+To check the Windows peer transport on loopback, run the following command with a fresh output directory and `DOKODEMO_TEST_AUDIO=null` already set.
+
+```powershell
+python -B tools/test_room_meetings.py channel build/Release/room-meeting-channel-tests.exe build/peer-test
+```

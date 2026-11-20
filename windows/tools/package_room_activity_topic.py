@@ -6,7 +6,7 @@ from extract_bpar import BparArchive
 from iso_reader import Region, require
 from ksc_format import parse_code, parse_header
 from package_room_secondary_topics import project_secondary_topics
-from package_room_common_topic import phrase_entries, project_common_topic, table
+from package_room_common_topic import common_topic_exclusions, phrase_entries, project_common_topic, table
 from package_room_trait_topic import project_trait_topic
 from package_room_teaching_category import project_teaching_category
 from package_room_word_reuse import project_word_reuse
@@ -49,8 +49,18 @@ def project_topic_bodies(data, rows):
     teaching=(0x8dba,0x8af9,0x8a57,0x87f8,0x7fe9,0x7f28,0x7b32,0x7c8b,0x71f6,0x715e,0x8134,0x8895,0x8947,0x89b6,0x4dd5,0x4414,0x3fad,0x4182,0x6abe,0x3e19,0xbfe)
     starts=[r['code_offset'] for r in rows if r['opcode']==0x30]
     ranges.extend((s,starts[starts.index(s)+1]) for s in teaching)
+    # 8DFB1 calls the shared action-6 owner. Event 2 reads G98A2[2].
+    _, callback = scheduled_room_row(data, h)
+    scheduled = (0x89883, 0x8940d, 0x1a44, 0x1ed8, 0x89434, 0x89257, 0x8927e,
+                 0x891e2, 0x89212, 0x2216, 0x2227, 0x21d2, 0x21ec, 0x2254, 0x7c068,
+                 callback & 0x0fffffff, scheduled_room_row(data, h, 3)[1] & 0x0fffffff,
+                 0x1f05, 0x7c385, 0x8d9ca, scheduled_room_row(data, h, 6)[1] & 0x0fffffff, 0x7c780,
+                 scheduled_room_row(data, h, 4)[1] & 0x0fffffff, 0x7c9df,
+                 scheduled_room_row(data, h, 5)[1] & 0x0fffffff, 0x7cbdf)
+    ranges.extend((s, starts[starts.index(s)+1]) for s in scheduled)
     for start,end in ranges:
-        require(code[start] == 0x30 and code[end-1] == 0x31 and code[end] == 0x30,
+        end_opcode = 0x1b if start == 0x8d9ca else 0x31
+        require(code[start] == 0x30 and code[end-1] == end_opcode and code[end] == 0x30,
                 "NEKO topic bounds changed")
         blocks[start] = code[start:end]
         for row in rows:
@@ -67,6 +77,18 @@ def project_topic_bodies(data, rows):
     blocks.update(reuse)
     strings.update(reuse_strings)
     return blocks, strings
+
+
+def scheduled_room_row(data, header, event=2):
+    _, rows = table(data, header.global_start, 0x98a2)
+    require(len(rows) == 8 and rows[event] >> 16 == 0xb004,
+            "Invalid scheduled room event row")
+    _, values = table(data, header.global_start, rows[event] & 0xffff)
+    require(len(values) == 2 and values[0] >> 28 == 2 and values[1] >> 28 == 7,
+            "Invalid scheduled room event motion or callback")
+    require(struct.unpack_from("<I", data, header.constant_start + 4*0x2874)[0] == 0x20000000,
+            "Invalid initial scheduled room camera selector")
+    return values
 
 
 def room_activity_topic_media(root):
@@ -101,9 +123,20 @@ def room_activity_topic_media(root):
     # The sixth argument to the night ghost lookup is iterated by 0FDD.
     for operand in (0x462fa,0x3491f):
         include_strings(struct.unpack_from("<H",code,operand)[0])
+    for ct in common_topic_exclusions(data):
+        include_strings(ct)
+    ranges=iter(sorted(blocks.items()))
+    start, body=next(ranges)
     for row in rows:
         at=row["code_offset"]
-        if code[at:at+2] == b"\xf6\x00" and any(start <= at < start+len(body) for start,body in blocks.items()):
+        while at>=start+len(body):
+            next_block=next(ranges,None)
+            if next_block is None:
+                break
+            start,body=next_block
+        if not start<=at<start+len(body):
+            continue
+        if code[at:at+2] == b"\xf6\x00":
             if at == 0x1253e:
                 # 1246F draws from G0's current sign slot rules. ROT3 carries the
                 # three CT2DF7[11] fallback lists indexed by the live locals.
@@ -114,7 +147,6 @@ def room_activity_topic_media(root):
             ct = struct.unpack_from("<H", code, at-2)[0]
             include_strings(ct)
         if code[at:at+3]!=bytes.fromhex("8b6302") or code[at-3]!=0x99: continue
-        if not any(start<=at<start+len(body) for start,body in blocks.items()): continue
         ct=int.from_bytes(code[at-2:at],"little")
         pos=h.constant_start+4*ct
         header=struct.unpack_from("<I",data,pos)[0]
@@ -123,6 +155,23 @@ def room_activity_topic_media(root):
     # Fresh script globals: five optional statements and two independent bit arrays.
     # Runtime owns mutable instances; these are only their initial cells.
     initial_globals = {}
+    scheduled_rows = [word for event in (2, 3, 6, 4, 5) for word in scheduled_room_row(data, h, event)]
+    initial_globals[0x98a2] = struct.pack("<11I", 0x9000000a, *scheduled_rows)
+    _, diary_refs = table(data,h.global_start,0x408f)
+    diaries = [table(data,h.global_start,ref & 0xffff)[1] for ref in diary_refs]
+    for priority, expected in ((0x700000, (8,)), (0x900000, (7,)), (0x800000, (10, 11)), (0xa00000, (9,))):
+        require(tuple(i for i,row in enumerate(diaries) if row[0]&0xf00000==priority)==expected,
+                "Unexpected scheduled diary descriptors")
+    for descriptor, priority, offset in ((8, 0x700000, 0x3ff), (7, 0x900000, 0x379),
+                                         (10, 0x800000, 0x4ce), (11, 0x800000, 0x545),
+                                         (9, 0xa00000, 0x477)):
+        require(diaries[descriptor][0]==0x20000000|priority and
+                diaries[descriptor][1]==0 and diaries[descriptor][-1]==0x50000000|offset,
+                "Unexpected scheduled Toro diary")
+        begin = h.pool_start+offset
+        strings[offset] = data[begin:data.index(0,begin,h.pool_end)]
+        require(strings[offset].count(b"$_YOU")== (0 if descriptor==9 else 2 if descriptor==11 else 1),
+                "Unexpected scheduled diary substitution")
     # 89FC4 and 8A0CB substitute the chosen kind of exchange in Toro's lines.
     start=h.global_start+4*0x9a26
     header,*labels=struct.unpack_from("<4I",data,start)
@@ -150,9 +199,19 @@ def room_activity_topic_media(root):
         require(offset<h.pool_end-h.pool_start,"Season name outside script pool")
         pos = h.pool_start+offset
         strings[offset] = data[pos:data.index(0,pos,h.pool_end)]
+    if 0x2275 in blocks:
+        weekday=0x6097
+        weekday_start=h.global_start+4*weekday
+        weekday_header,*names=struct.unpack_from("<8I",data,weekday_start)
+        require(weekday_header==0x90000007 and all(word>>28==5 for word in names),
+                "Invalid weekday name array")
+        initial_globals[weekday]=data[weekday_start:weekday_start+32]
+        for word in names:
+            begin=h.pool_start+(word&0xfffffff)
+            strings[word&0xfffffff]=data[begin:data.index(0,begin,h.pool_end)]
     # The alien-story and rumor callers both dispatch a mode-zero procedure.
     procedure_lists = {}
-    for site in (0x4f55e,0x7d8f2):
+    for site in (0x4f55e,0x7d8f2,0x97b8,0x9bed):
         require(code[site] == 0x25 and code[site+3] == 0, "Wrong continuation call")
         ct = struct.unpack_from("<H", code, site+1)[0]
         start = h.constant_start + 4*ct

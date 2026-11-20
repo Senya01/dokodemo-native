@@ -192,7 +192,7 @@ GameVector4 Skin(const model::Geometry &g, uint32_t vertex, const std::vector<Ga
 struct Pose {
     GameVector4 position{{0, 0, 0, 1}}, rotation{{0, 0, 0, 1}};
     float opacity = 1.f;
-    float texture_offset_v = 0;
+    float texture_offset_u = 0, texture_offset_v = 0;
     int material = -1;
     float light_level = 0;
     std::array<float,3> light_color{};
@@ -330,6 +330,52 @@ std::array<float,3> SampleCurve(const model::DakSection& track, size_t key, unsi
     }
     return value;
 }
+std::array<float,3> SampleTransformNoise(uint32_t time, uint32_t flags, float spacing,
+                                         const std::array<float,3>& amplitude) {
+    // BOOT 87BC8 seeds the vector sampler by source key index. Use the
+    // software lane recurrence without changing the actor or game RNG.
+    // Hardware investigations: github.com/hrydgard/ppsspp/issues/16946.
+    const float interval=80.f*spacing;
+    Need(interval>=1.f && interval<4294967296.f,"invalid procedural transform spacing");
+    const auto index=std::min(32766u,uint32_t(float(time)/interval));
+    const auto sample=[&](uint32_t seed) {
+        uint32_t linear=seed, shift=seed, older=seed, recent=seed, carry=seed;
+        std::array<float,3> values{};
+        for (unsigned axis=0;axis<values.size();++axis) {
+            linear=69069u*linear+1u;
+            shift^=shift<<13;
+            shift^=shift>>17;
+            shift^=shift<<5;
+            const uint32_t next=2u*recent+older+carry;
+            carry=uint32_t((uint64_t(older)+(recent>>1)+carry)>>32);
+            older=recent;
+            recent=next;
+            const auto bits=(linear+shift+recent)&0x7fffffu;
+            values[axis]=(float(bits)/4194304.f-1.f)*amplitude[axis];
+            if (flags&(0x10u<<axis)) values[axis]+=amplitude[axis];
+        }
+        return values;
+    };
+    const auto start=sample(index);
+    if (index==32766) return start;
+    const float t=std::clamp((float(time)-std::trunc(interval*float(index)))/interval,0.f,1.f);
+    const auto before=sample(index-1), end=sample(index+1), after=sample(index+2);
+    std::array<float,3> value{};
+    for (unsigned axis=0;axis<value.size();++axis) {
+        const float out=.5f*(end[axis]-before[axis]), in=.5f*(after[axis]-start[axis]);
+        const float delta=end[axis]-start[axis];
+        value[axis]=start[axis]+t*(out+t*(3.f*delta-2.f*out-in+t*(-2.f*delta+out+in)));
+    }
+    return value;
+}
+GameVector4 MultiplyRotation(const GameVector4& a,const GameVector4& b) {
+    return {
+        a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],
+        a[3]*b[1]+a[1]*b[3]+a[2]*b[0]-a[0]*b[2],
+        a[3]*b[2]+a[2]*b[3]+a[0]*b[1]-a[1]*b[0],
+        a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2],
+    };
+}
 void Animate(std::vector<Pose> &pose, const Motion &clip, uint32_t time, std::array<float,3>* ambient=nullptr) {
     for (const auto &obj : clip.tracks.objects) {
         if (obj.targetNodeIndex < 0 && !ambient) continue;
@@ -346,8 +392,30 @@ void Animate(std::vector<Pose> &pose, const Motion &clip, uint32_t time, std::ar
                     FloatWord(Word(clip.bytes, at + 4)), FloatWord(Word(clip.bytes, at + 8)));
                 continue;
             }
-            if (!track.count || track.type == 0x40)
-                continue; // cold title has no motion event callback
+            if (track.subtype==11 && (track.type==1 || track.type==2)) {
+                const auto at=track.proceduralTrailer.offset;
+                const auto& bytes=clip.bytes;
+                const std::array<float,3> amplitude{FloatWord(Word(bytes,at+8)),
+                    FloatWord(Word(bytes,at+12)),FloatWord(Word(bytes,at+16))};
+                const auto noise=SampleTransformNoise(time,Word(bytes,at),FloatWord(Word(bytes,at+4)),amplitude);
+                if (track.type==1) {
+                    const auto prefix=track.prefix.offset;
+                    const float scale=FloatWord(Word(bytes,prefix+12));
+                    for (unsigned axis=0;axis<noise.size();++axis)
+                        p.position[axis]=FloatWord(Word(bytes,prefix+4*axis))+scale*noise[axis];
+                } else {
+                    // 87E18 applies a sampled angular perturbation to the
+                    // track's base pose. Use ordinary quaternion math here.
+                    const float angle=std::sqrt(noise[0]*noise[0]+noise[1]*noise[1]+noise[2]*noise[2]);
+                    const float scale=angle>0.f ? std::sin(angle*.5f)/angle : .5f;
+                    p.rotation=NormalizeQuaternion(MultiplyRotation(p.rotation,{
+                        scale*noise[0],scale*noise[1],scale*noise[2],std::cos(angle*.5f)}));
+                }
+                continue;
+            }
+            // BOOT 8A13C dispatches timed callbacks separately from pose tracks.
+            if (!track.count || track.type == 0x40 || track.type == 0x41)
+                continue;
             const auto stride = size_t(track.components), count = size_t(track.count);
             size_t key = 0;
             while (key + 1 < count && track.keyWords.at((key + 1) * stride) <= time)
@@ -359,20 +427,21 @@ void Animate(std::vector<Pose> &pose, const Motion &clip, uint32_t time, std::ar
                 }
                 continue;
             }
-            if (track.type == 0x21) {
-                // BOOT 8A054 -> 8AE40 -> 88E0C: the selected scalar curve
-                // writes node+1F4. 8D4A0 emits this as the GE V offset.
-                Need(track.subtype == 15 && stride == 4, "unsupported texture V curve");
+            if (track.type == 0x20 || track.type == 0x21) {
+                // BOOT 8A054/8A06C use the same curve for node+1F4/+1F0.
+                // 8D494/8D4A0 submit these as the texture U and V offsets.
+                Need(track.subtype == 15 && stride == 4, "unsupported texture offset curve");
+                auto& texture_offset = track.type==0x20 ? p.texture_offset_u : p.texture_offset_v;
                 const auto at = key * stride;
                 const auto& words = track.keyWords;
                 const float start = FloatWord(words.at(at+1));
-                p.texture_offset_v = start;
+                texture_offset = start;
                 if (key+1 < count && time > words[at] && words.at(at+3) != 0x7fc00000) {
                     const auto next = at + stride;
                     const float end = FloatWord(words.at(next+1));
                     const float out = FloatWord(words.at(at+3)), in = FloatWord(words.at(next+2));
                     const float t = float(time-words[at]) / float(words[next]-words[at]);
-                    p.texture_offset_v += t * (out + t * (3.f*(end-start) - 2.f*out - in
+                    texture_offset += t * (out + t * (3.f*(end-start) - 2.f*out - in
                                                    + t * (2.f*(start-end) + out + in)));
                 }
                 continue;
@@ -515,9 +584,13 @@ void ReadMesh(Reader& reader, Actor& actor, unsigned clip_count, bool build_acto
             for (unsigned j=0; j<4; ++j) {
                 const auto a=ModelTransform(m,local[j]), b=ModelTransform(m,local[(j+1)%4]);
                 r.corners[j]=a;
-                const float nx=b[1]-a[1], ny=a[0]-b[0];
+                float nx=b[1]-a[1], ny=a[0]-b[0];
+                // Some authored rectangles are rotated 180 degrees about an
+                // in-plane axis. Their XY projection reverses the winding.
+                const float inward=nx*(r.center[0]-a[0])+ny*(r.center[1]-a[1]);
+                Need(inward!=0,"degenerate room region");
+                if (inward<0) { nx=-nx; ny=-ny; }
                 r.planes[j]={nx,ny,-nx*a[0]-ny*a[1]};
-                Need(nx*r.center[0]+ny*r.center[1]+r.planes[j][2]>0,"invalid room region winding");
             }
         }
     }
@@ -597,7 +670,7 @@ bool DrawMesh(const Actor& actor,const std::vector<Pose>& pose, const GameMatrix
             v.clip = ModelTransform(camera, pos);
             if (texture) {
                 auto uv = g.uv.at(j);
-                v.u = uv.x;
+                v.u = uv.x + pose[i].texture_offset_u;
                 v.v = uv.y + pose[i].texture_offset_v;
             }
             if (!g.rgba.empty()) {
@@ -725,7 +798,7 @@ bool RoomMesh::Load(const std::filesystem::path& path,std::string& error, bool b
     Need(reader.U32()==0x314d5352,"unexpected room mesh bundle");
     auto data=std::make_shared<Data>();
     const unsigned count=reader.U32();
-    Need(count<=128,"room mesh motion count");
+    Need(count<=256,"room mesh motion count");
     ReadMesh(reader,data->mesh,count,build_actor_regions);
     data->actor_regions_built = build_actor_regions;
     ReadTextures(reader,data->textures);
@@ -834,6 +907,31 @@ std::vector<std::pair<unsigned,uint32_t>> RoomMesh::SoundKeys(unsigned clip) con
                 const auto word = track.keyWords[i + 1];
                 if ((word >> 24) == 6)
                     keys.emplace_back(track.keyWords[i], word);
+            }
+        }
+    }
+    return keys;
+}
+std::vector<RoomMotionEffectKey> RoomMesh::EffectKeys(unsigned clip) const {
+    std::vector<RoomMotionEffectKey> keys;
+    const auto& motion = data_->mesh.clips.at(clip);
+    for (const auto& object : motion.tracks.objects) {
+        for (const auto& track : object.sections) {
+            if (track.type != 0x41) continue;
+            Need(track.components == 3, "invalid room motion effect key");
+            for (std::size_t i=0;i<track.keyWords.size();i+=3) {
+                const auto control = track.keyWords.at(i+1);
+                std::array<int,3> offset{};
+                if ((control >> 24) == 128) {
+                    // Actor callback 8920 reads signed halfwords at +4, +6
+                    // and +8 relative to the callback's control word.
+                    const auto x = track.keyWords.at(i+2);
+                    const auto z = track.payload.offset + (i+3)*4;
+                    Need(z+2 <= motion.bytes.size(),"truncated room effect coordinates");
+                    offset = {static_cast<std::int16_t>(x),static_cast<std::int16_t>(x>>16),
+                              static_cast<std::int16_t>(unsigned(motion.bytes[z]) | (unsigned(motion.bytes[z+1])<<8))};
+                }
+                keys.push_back({track.keyWords.at(i),object.targetNodeIndex,control,offset});
             }
         }
     }

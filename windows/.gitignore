@@ -5,3 +5,5 @@
 /research/
 /savedata/
 /source-iso.json
+/src/audio_catalog.h
+/src/recovered/ksc_dispatch_addresses.h

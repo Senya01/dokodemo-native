@@ -1,5 +1,6 @@
 #pragma once
 #include "room_sound.h"
+#include "room_meeting_channel.h"
 #include "room_activity_phase.h"
 #include "room_conversation_flow.h"
 #include <array>
@@ -86,12 +87,14 @@ class PostProfile {
     bool Load(const std::filesystem::path &game_directory, unsigned actor,
               const std::array<std::uint32_t, 7> &calendar, std::string &error);
     bool Load(const std::filesystem::path &game_directory, const AcceptedProfile &profile,
-              const std::array<std::uint32_t, 7> &calendar, std::string &error);
+              const std::array<std::uint32_t, 7> &calendar, std::string &error,
+              const RetailUtilityContents* previous = nullptr);
     bool Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std::uint32_t buttons = 0,
               const recovered::PackageView *common_font = nullptr, recovered::RngNativeOwner *rng = nullptr,
               const std::array<std::uint32_t, 7> *calendar = nullptr, const TitleRenderer *softkey = nullptr);
     bool Load(const std::filesystem::path& game_directory, const RetailUtilityContents& saved,
               const std::array<std::uint32_t,7>& calendar, std::string& error);
+    void BindMeetingOpener(OpenRoomMeeting open);
     bool return_to_title_requested() const;
     bool music_requested() const;
     const std::string &last_error() const;

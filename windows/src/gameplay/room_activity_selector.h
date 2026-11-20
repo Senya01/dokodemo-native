@@ -28,7 +28,7 @@ struct RoomActivitySelection {
 
 class RoomActivitySelector {
   public:
-    bool Load(const std::filesystem::path& post_profile_directory, std::string& error);
+    bool Load(const std::filesystem::path& post_profile_directory, std::string& error, unsigned actor=0);
     RoomActivitySelection Select(const RoomActivityInputs& input, recovered::RngNativeOwner& rng) const;
 
   private:

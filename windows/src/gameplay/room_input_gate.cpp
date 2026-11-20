@@ -16,7 +16,7 @@ RoomInputEvent RoomInputGate::Step(std::uint32_t buttons, const RoomInputFrame& 
                 phase_ = Phase::menu;
                 return RoomInputEvent::menu;
             }
-            if (pressed & circle) {
+            if ((pressed & circle) && frame.actor_present) {
                 // 23C6C clears both pending flags before posting event (0,0).
                 request9_ = request8_ = false;
                 phase_ = Phase::await_request;
@@ -75,7 +75,10 @@ RoomInputEvent RoomInputGate::Step(std::uint32_t buttons, const RoomInputFrame& 
                 phase_ = Phase::save;
                 return RoomInputEvent::save_request;
             }
-            else if (*closed_menu_result == -1) phase_ = Phase::cancel_menu;
+            else if (*closed_menu_result == 16 && !frame.actor_present) {
+                phase_ = Phase::cancel_menu;
+                return RoomInputEvent::departed_action;
+            } else if (*closed_menu_result == -1) phase_ = Phase::cancel_menu;
             else phase_ = Phase::other_menu;
         }
         break;

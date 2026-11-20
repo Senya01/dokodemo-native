@@ -10,7 +10,7 @@ namespace dokodemo::gameplay {
 // The two source mode-3 selectors have separate lists, exclusion histories and write cursors.
 class RoomFallbackList {
 public:
-    bool Load(const std::filesystem::path& post_profile,std::string& error);
+    bool Load(const std::filesystem::path& post_profile,std::string& error,unsigned actor=0);
     unsigned CandidateCount() const { return static_cast<unsigned>(ordinary_.eligible.size()); }
     unsigned Consume(unsigned rank) { return ordinary_.Consume(rank); }
     unsigned PartnerCandidateCount() const { return static_cast<unsigned>(partner_.eligible.size()); }

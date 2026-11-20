@@ -8,4 +8,6 @@ src/gameplay/title_bgm.cpp
 src/gameplay/title_effects.cpp
 src/platform/audio_ffmpeg_win32.cpp
 src/platform/startup_modules_win32.cpp
+src/platform/room_meeting_win32.cpp
+src/platform/room_meeting_crypto_win32.cpp
 src/rng_backend_win32.cpp

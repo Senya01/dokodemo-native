@@ -15,10 +15,12 @@ struct RetailUtilityContents {
     RetailSaveProfile profile;
     KscSaveValue actor;
     std::size_t graph_size;
+    std::vector<std::uint8_t> word_history;
 };
 
 std::vector<std::uint8_t> BuildRetailUtilityRequest(const RetailSaveProfile& profile,
-                                                    const KscSaveValue& actor);
+                                                    const KscSaveValue& actor,
+                                                    const std::vector<std::uint8_t>& word_history = {});
 RetailUtilityContents DecodeRetailUtilityRequest(const std::vector<std::uint8_t>& request,
                                                 const RetailSaveProfile& current_profile);
 

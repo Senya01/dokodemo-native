@@ -9,12 +9,17 @@
 #include <string_view>
 #include <vector>
 
+namespace dokodemo::recovered { class RngNativeOwner; }
 namespace dokodemo::gameplay {
 
 class RoomVocabulary {
 public:
     bool Load(const std::filesystem::path& post_profile, const AcceptedProfile& profile, std::string& error);
     KscSaveValue DictionarySaveTable() const; // 8D22A, G3DD2
+    KscSaveValue OwnFriendCard() const;
+    KscSaveValue FriendCard(unsigned row) const;
+    std::optional<unsigned> FriendCardSlot(const KscSaveValue& row) const;
+    unsigned ReceiveFriendCard(const KscSaveValue& row);
     // G59A7 is the next number allocated by 12E7 to column 10 of word rows.
     KscSaveValue RelationGroupCounter() const;
     void RestoreRelationGroupCounter(const KscSaveValue& ref);
@@ -22,10 +27,13 @@ public:
     KscSaveValue QuestionSaveTable() const; // 8D34A, G58DF
     RoomVocabulary WithSaveTables(const KscSaveValue& dictionary,const KscSaveValue& questions) const;
     void RestoreSaveTables(const KscSaveValue& dictionary,const KscSaveValue& questions);
-    void StartActorScript(std::uint32_t draw); // 179E, after first bank and before 8DDB5
+    void InheritDictionary(const KscSaveValue& dictionary,const KscSaveValue& relation_group);
+    void StartActorScript(std::uint32_t draw,recovered::RngNativeOwner* rng=nullptr); // 179E, after first bank and before 8DDB5
     const std::string& player_saying() const { return player_saying_; } // row600[26]
     void BeginConversation(); // 0FD1
     unsigned Candidates(unsigned primary_ct, unsigned secondary_ct, bool mark);
+    unsigned CountMatches(unsigned ct) const;
+    bool MatchesPredicate(unsigned row,unsigned ct) const;
     bool HasPredicate(unsigned ct) const { return conditions_.count(ct)!=0; }
     std::vector<int> PredicateGroup(unsigned ct,unsigned group) const;
     int FirstOutingMatch(unsigned ct) const; // 0F30, builtin96 without marking or a random draw
@@ -77,6 +85,9 @@ private:
         std::string written, reading, alternate;
     };
     struct Term { unsigned field, op; std::uint32_t arg; };
+    KscSaveValue DictionarySaveRow(unsigned id) const;
+    void RestoreDictionaryRow(unsigned id,const KscSaveValue& saved);
+    std::uint32_t PredicateWord(unsigned row,unsigned field) const;
     void Mark(unsigned ct, unsigned mask, bool honor_repeat);
     void Collect(unsigned mask);
     std::vector<Row> rows_;
@@ -87,7 +98,9 @@ private:
     std::map<unsigned, std::vector<std::string>> exclusions_;
     std::array<std::array<std::uint32_t,7>,question_slots> questions_{};
     std::array<std::array<std::string,7>,question_slots> question_text_{};
-    std::array<std::string,5> initial_sayings_;
+    std::vector<std::string> initial_sayings_;
+    std::array<unsigned,2> saying_filters_{0x282d,0x2837};
+    std::optional<unsigned> nonzero_saying_filter_;
     std::string player_saying_;
     std::vector<int> matches_;
     bool pending_ = false, mark_ = false, started_ = false;

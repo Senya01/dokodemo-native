@@ -45,7 +45,7 @@ void Write(const fs::path& p,const Bytes& b) {
 std::array<Bytes,6> Media(const fs::path& game) {
     const Bytes b=Read(game/"assets/game/savedata/slot-media.bin",512*1024);
     Require(core::sha256_hex(b.data(),b.size())=="85d10015fef910c75bb521b6859682988db37f32e736d16dc57e5bccd24293fd",
-            "Incorrect savedata media for Toro");
+            "Incorrect retail savedata media");
     size_t at=4;
     std::array<Bytes,6> parts;
     for(auto& part:parts) {
@@ -151,9 +151,17 @@ fs::path UnusedSibling(const fs::path& slot,const char* suffix) {
 }
 void Retire(const fs::path& slot,const fs::path& backup) {
     CheckNames(backup);
-    ReadSet(backup);
+    // Keep an unreadable backup for recovery instead of blocking a healthy live slot.
+    bool authenticated=false;
+    try {
+        ReadSet(backup);
+        authenticated=true;
+    } catch(const std::invalid_argument&) {
+    } catch(const std::runtime_error&) {
+    }
     const auto retired=UnusedSibling(slot,".retired");
     fs::rename(backup,retired);
+    if(!authenticated) return;
     // Even if subsequent deletion is interrupted, the live and recovery names remain usable.
     try { RemoveSet(retired); } catch(const fs::filesystem_error&) {}
 }
@@ -185,7 +193,8 @@ Bytes ReadRetailSlot(const fs::path& slot) {
 void WriteRetailSlot(const fs::path& slot,const fs::path& game,const Bytes& request) {
     ValidatePath(slot);
     const auto decoded=DecodeRetailUtilityRequest(request,RetailSaveProfile{});
-    Require(decoded.profile.ReadProfile().actor==0,"Savedata media for this actor unavailable");
+    Require(decoded.profile.ReadProfile().actor<5,"Unknown savedata profile actor");
+    // GAME46 uses the common DATA.BPM icon pair and disc media for every actor.
     auto files=Media(game);
     const auto protected_data=ProtectRetailData(request);
     auto sfo=BuildSfo(files[0],files[1],protected_data.mac);

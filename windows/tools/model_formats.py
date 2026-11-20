@@ -242,7 +242,7 @@ def parse_dak(data):
             if typ==0x10: section['extra_header_hex']=nr.take(4,'DAK type10 prefix').hex()
             comp=COMPONENTS.get(typ)
             if typ in (1,2):
-                comp={1:3,2:4,15:10 if typ==1 else 7}.get(sub)
+                comp={1:3,2:4,11:10 if typ==1 else 7,15:10 if typ==1 else 7}.get(sub)
                 if typ==1: section['prefix4']=finite(nr.unpack('<4f','DAK type1 prefix'),'DAK prefix')
             section['components']=comp
             if comp is None:

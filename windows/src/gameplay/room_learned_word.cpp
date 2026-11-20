@@ -37,6 +37,30 @@ unsigned IndexKana(unsigned trail) {
     }
 }
 
+struct ReadingRange {
+    unsigned first=0, last=0;
+    bool all_kana=true;
+};
+
+ReadingRange ReadKana(std::string_view reading) {
+    ReadingRange range;
+    for (std::size_t at=0;at<reading.size();at+=2) {
+        const auto lead=static_cast<std::uint8_t>(reading[at]);
+        const auto trail=at+1<reading.size()?static_cast<std::uint8_t>(reading[at+1]):0u;
+        if (lead==0x81 && trail==0x5b) continue;
+        if (lead!=0x82 || trail<0x9f || trail>0xf1) {
+            range.all_kana=false;
+            break;
+        }
+        const auto kana=IndexKana(trail);
+        if (kana) {
+            if (!range.first) range.first=kana;
+            range.last=kana;
+        }
+    }
+    return range;
+}
+
 std::vector<std::uint8_t> Normalize(std::string_view text) {
     std::vector<std::uint8_t> bytes(text.begin(), text.end());
     bytes.push_back(0);
@@ -45,27 +69,18 @@ std::vector<std::uint8_t> Normalize(std::string_view text) {
 
 } // namespace
 
+std::optional<std::array<unsigned,2>> ShiritoriKana(std::string_view reading) {
+    const auto range=ReadKana(reading);
+    if (!range.all_kana || !range.first || reading.size()>30 || range.last==0xf1) return {};
+    return std::array<unsigned,2>{range.first,range.last};
+}
+
 LearnedWordFields RefreshWordReading(unsigned flags, std::string_view written,
                                      std::optional<std::string_view> reading) {
     LearnedWordFields fields{flags, ScriptCharacterCount(written), std::nullopt};
     if (!reading) return fields;
 
-    unsigned first = 0, last = 0;
-    bool all_kana = true;
-    for (std::size_t at = 0; at < reading->size(); at += 2) {
-        const auto lead = static_cast<std::uint8_t>((*reading)[at]);
-        const auto trail = at + 1 < reading->size() ? static_cast<std::uint8_t>((*reading)[at + 1]) : 0u;
-        if (lead == 0x81 && trail == 0x5b) continue;
-        if (lead != 0x82 || trail < 0x9f || trail > 0xf1) {
-            all_kana = false;
-            break;
-        }
-        const unsigned kana = IndexKana(trail);
-        if (kana) {
-            if (!first) first = kana;
-            last = kana;
-        }
-    }
+    const auto [first,last,all_kana]=ReadKana(*reading);
 
     // 71 stops at the first mapped character even if 70 rejects a later one.
     // 0D takes its first two bytes little-endian, including the static NIL text.

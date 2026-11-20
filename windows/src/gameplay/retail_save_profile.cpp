@@ -24,6 +24,18 @@ std::uint32_t ReadWord(const std::uint8_t* src) noexcept {
     return value;
 }
 
+void ResetDiaryBank(std::uint8_t* bank) noexcept {
+    std::fill_n(bank,bank_size,std::uint8_t{0});
+    for (std::size_t j=0;j<28;++j) {
+        auto* row=bank+row_size*j;
+        WriteWord(row+4,UINT32_MAX);
+        WriteWord(row+0xd0,UINT32_MAX);
+        WriteWord(row+0xd4,UINT32_MAX);
+        WriteWord(row+0xd8,UINT32_MAX);
+    }
+    WriteWord(bank+0x1830,UINT32_MAX);
+}
+
 void WriteCalendar(std::uint8_t* dest, const RetailSaveProfile::Calendar& clock) noexcept {
     for (std::size_t i = 0; i < clock.size(); ++i)
         WriteWord(dest + 4 * i, clock[i]);
@@ -44,17 +56,8 @@ RetailSaveProfile::RetailSaveProfile() noexcept {
     WriteWord(base + 0x10, 2);
     WriteWord(base + 0x14, 3);
     WriteWord(base + 0x18, 3);
-    for (std::size_t i = 0; i < 11; ++i) {
-        auto* bank = base + diary_base + bank_size * i;
-        for (std::size_t j = 0; j < 28; ++j) {
-            auto* row = bank + row_size * j;
-            WriteWord(row + 4, UINT32_MAX);
-            WriteWord(row + 0xd0, UINT32_MAX);
-            WriteWord(row + 0xd4, UINT32_MAX);
-            WriteWord(row + 0xd8, UINT32_MAX);
-        }
-        WriteWord(bank + 0x1830, UINT32_MAX);
-    }
+    for (std::size_t i=0;i<11;++i)
+        ResetDiaryBank(base+diary_base+bank_size*i);
 }
 
 void RetailSaveProfile::Adopt(const AcceptedProfile& profile) noexcept {
@@ -68,6 +71,12 @@ void RetailSaveProfile::Adopt(const AcceptedProfile& profile) noexcept {
     WriteWord(base + 0x50, profile.blood);
     std::memcpy(base + 0x54, profile.phone.bytes.data(), 16);
     WriteCalendar(base + adopted_time, profile.adopted_at);
+}
+
+void RetailSaveProfile::AdoptReplacing(const AcceptedProfile& profile) noexcept {
+    Adopt(profile);
+    ResetDiaryBank(bytes_.data()+diary_base); // 32014 -> 39BCC -> 39B20(0)
+    RestrictRoomMenus();
 }
 
 void RetailSaveProfile::SetOptions(const std::array<int, 3>& values) noexcept {
@@ -85,6 +94,18 @@ void RetailSaveProfile::EnterFirstDayRoom(unsigned actor) noexcept {
 void RetailSaveProfile::SetFullMenuMode() noexcept {
     // NEKO 8DDF5 -> GAME72(1) -> BOOT 25098.
     WriteWord(bytes_.data() + 8, 1);
+}
+
+void RetailSaveProfile::RestrictRoomMenus() noexcept {
+    WriteWord(bytes_.data()+8,0); // 89669 -> GAME72(0) -> 25098.
+}
+
+unsigned RetailSaveProfile::MainDiaryCount() const noexcept {
+    // GAME30 -> 3A314: count occupied illustrations in the 28 main-bank rows.
+    unsigned count=0;
+    for (unsigned row=0;row<28;++row)
+        count+=ReadWord(bytes_.data()+diary_base+row_size*row+4)!=UINT32_MAX;
+    return count;
 }
 
 bool RetailSaveProfile::SetFirstDayDiary(std::string_view text, const std::array<unsigned, 3>& date,

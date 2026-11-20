@@ -40,6 +40,8 @@ public:
     const std::string& written() const { return written_; }
     const std::string& reading() const { return reading_; }
     const std::string& composition() const { return composition_; }
+    std::vector<std::uint8_t> SaveHistory() const { return conversion_.SaveHistory(); }
+    bool RestoreHistory(const std::vector<std::uint8_t>& bytes) { return conversion_.RestoreHistory(bytes); }
 
 private:
     void Close(bool timeout);

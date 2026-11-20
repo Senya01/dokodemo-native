@@ -20,6 +20,7 @@ public:
     bool SetVolumeSetting(unsigned setting);
     bool FadeOut();
     bool DuckForCharacter(bool active);
+    bool SetSuspended(bool suspended) { return player_.SetSuspended(suspended, error_); }
     void Stop() noexcept;
     const std::string& Error() const noexcept { return error_; }
     const audio::PcmClip* PreparedClip(int bank_index = 0) const noexcept;

@@ -98,12 +98,19 @@ void TitleEffects::LoadRoomNotes() {
             throw std::runtime_error("Invalid absent room effect list");
         for (std::uint32_t i = 0; i < count_absent; ++i) {
             const std::array<unsigned,3> key{word(), word(), word()};
-            if (key[0] >= 5 || key[1] > 255 || key[2] > 255 || !notes.emplace(key,std::nullopt).second)
+            if (key[0] > 5 || key[1] > 255 || key[2] > 255 || !notes.emplace(key,std::nullopt).second)
                 throw std::runtime_error("Invalid absent room effect key");
         }
     }
     if (in.tellg() != data_end) throw std::runtime_error("Extra data after room effect bank");
     room_notes_ = std::move(notes);
+}
+
+bool TitleEffects::SetSuspended(bool suspended) {
+    bool ok=character_.SetSuspended(suspended, error_);
+    for (const auto& voice : menu_)
+        if (!voice->SetSuspended(suspended, error_)) ok=false;
+    return ok;
 }
 
 bool TitleEffects::Play(const RoomSound& request) try {

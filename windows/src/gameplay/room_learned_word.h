@@ -1,11 +1,13 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string_view>
 
 namespace dokodemo::gameplay {
 
 unsigned ScriptCharacterCount(std::string_view text);
+std::optional<std::array<unsigned,2>> ShiritoriKana(std::string_view reading);
 
 struct LearnedWordFields {
     unsigned flags;

@@ -35,6 +35,7 @@ public:
     bool ReadMember(const std::string& name, std::vector<std::uint8_t>& bytes);
     bool PrepareTitle();
     bool AdvanceTitle(std::uint32_t buttons = 0, bool character_voice_playing = false);
+    void BindMeetingOpener(OpenRoomMeeting open) { open_meeting_=std::move(open); }
     int RequestedMusic() const { return room_request_ ? view_bank_ : title_.bgm_bank(); }
     int PreloadMusic() const { return room_preload_ ? view_bank_ : -1; }
     unsigned RequestedEffects() const { return title_.se_mask() | editor_sounds_; }
@@ -100,15 +101,17 @@ private:
     TitleRenderer title_renderer_;
     PokepiModels actors_;
     NicknameEditor nickname_;
-    enum class Editor { none, nickname, player, date, phone, confirmation };
+    enum class Editor { none, nickname, player, date, phone, confirmation, overwrite };
     Editor editor_ = Editor::none;
     unsigned editor_sounds_ = 0;
     ProfileText chosen_nickname_, player_name_, phone_;
     std::optional<unsigned> nickname_actor_;
     ProfileDateEditor date_editor_;
     ProfileConfirmation confirmation_;
+    std::vector<std::string> replacement_prompt_;
     std::optional<AcceptedProfile> profile_;
     PostProfile next_scene_;
+    OpenRoomMeeting open_meeting_;
     bool next_scene_ready_ = false;
     int room_bank_ = -1;
     int view_bank_ = -1;

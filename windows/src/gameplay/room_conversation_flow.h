@@ -26,7 +26,7 @@ struct RoomConversationSnapshot {
     int chosen_option = -1;
     bool running = false, completed = false, word_entry_interactive = false;
     unsigned indirect_topic = 0;
-    bool message_revealed = false;
+    bool message_revealed = false, invitation_ready = false;
     std::string message;
     std::vector<int> word_rows;
     std::vector<RoomMessageWord> word_operands;
@@ -46,6 +46,7 @@ struct RoomConversationFrame {
 class RoomConversationFlow {
 public:
     bool Begin(unsigned argument = 0);
+    bool BeginRoboContact(unsigned argument=0);
     void Advance(const RoomConversationFrame& frame, const std::function<bool()>& query_region,
                  const std::function<bool()>& approach_done);
     bool wide_camera() const { return wide_camera_; }
@@ -60,6 +61,7 @@ public:
     void Play(unsigned pc);
     void Finish();
     void Boundary(unsigned pc);
+    void ReleaseBoundary();
     const RoomConversationSnapshot& snapshot() const { return snapshot_; }
 private:
     enum class State { idle, begin, attention, lamp, face, posture, posture_case, interrupt_wait,
@@ -73,6 +75,7 @@ private:
     bool wanted_lamp_ = false, started_ = false, close_camera_ = false;
     bool wide_camera_ = false, start_approach_ = false;
     bool interrupt_requested_ = false;
+    bool robo_ = false;
     void AskActor(unsigned command, unsigned site, State on_ready = State::resume_actor);
 };
 }

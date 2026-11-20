@@ -56,6 +56,21 @@ bool RoomTalkState::BeginFriendsExchange(unsigned argument,const RoomInventory& 
     return true;
 }
 
+void RoomTalkState::FinishPeerMeeting(bool completed) {
+    if (phase_!=Phase::meeting || !meeting_request_ || !exchange_inventory_ || pc_!=0x8d0b8 ||
+        blocks_.empty() || blocks_.back().close!=0x8d19e)
+        throw std::logic_error("No active meeting script");
+    meeting_request_.reset();
+    phase_=Phase::running;
+    if (completed) {
+        // The native connection owns the exchange. Rejoin the common
+        // protected-block close and normal room/contact cleanup.
+        pc_=0x8d1f0;
+    } else {
+        Call(0x8d025,{},false); // Retain the original cancellation unwind and farewell.
+    }
+}
+
 std::optional<bool> RoomTalkState::TakeFriendsBanner() {
     return std::exchange(friends_banner_,{});
 }

@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <fstream>
 #include <algorithm>
+#include <array>
+#include <cstdint>
 
 namespace dokodemo::gameplay {
 namespace {
@@ -93,6 +95,69 @@ bool ReadSuffix(std::istream& input, const std::string& query, RoomNjSuffix& suf
     }
     return true;
 }
+bool Hiragana(std::string_view text) {
+    if(text.empty() || text.size()%2) return false;
+    for(std::size_t at=0;at<text.size();) {
+        const auto glyph=Unit(text,at);
+        if(glyph<0x829f || glyph>0x82f1) return false;
+    }
+    return true;
+}
+
+std::string Katakana(std::string_view reading) {
+    std::string written;
+    written.reserve(reading.size());
+    for(std::size_t at=0;at<reading.size();) {
+        const auto glyph=Unit(reading,at);
+        const auto mapped=glyph+(glyph<0x82de?0xa1:0xa2);
+        written.push_back(static_cast<char>(mapped>>8));
+        written.push_back(static_cast<char>(mapped&255));
+    }
+    return written;
+}
+
+std::uint32_t Dword(std::istream& input) {
+    const int low=Word(input),high=Word(input);
+    if(low<0 || high<0) return UINT32_MAX;
+    return static_cast<std::uint32_t>(low)|(static_cast<std::uint32_t>(high)<<16);
+}
+}
+
+bool RoomWordConversion::Lexicon::Allows(unsigned next,unsigned previous) const {
+    if(!next || next>left_count || !previous || previous>right_count) return false;
+    const auto stride=(left_count+7)/8;
+    const auto index=(previous-1)*stride+(next-1)/8;
+    return (connections[index] & (0x80u>>((next-1)%8)))!=0;
+}
+
+bool RoomWordConversion::LoadLexicon(const std::filesystem::path& path,Lexicon& lexicon) {
+    std::error_code fs_error;
+    if(!std::filesystem::exists(path,fs_error)) return !fs_error;
+    std::ifstream in(path,std::ios::binary);
+    char tag[4]{};
+    in.read(tag,4);
+    const int left=Word(in),right=Word(in),initial=Word(in),terminal=Word(in),
+              raw_left=Word(in),raw_right=Word(in);
+    const auto stems=Dword(in),predictions=Dword(in);
+    if(std::string_view(tag,4)!="NJL1" || left<1 || left>511 || right<1 || right>511 ||
+       initial<1 || initial>right || terminal<1 || terminal>left ||
+       raw_left<1 || raw_left>left || raw_right<1 || raw_right>right ||
+       !stems || stems>300000 || predictions>16384) return false;
+    lexicon.left_count=unsigned(left); lexicon.right_count=unsigned(right);
+    lexicon.initial_class=unsigned(initial); lexicon.terminal_class=unsigned(terminal);
+    lexicon.raw_left=unsigned(raw_left); lexicon.raw_right=unsigned(raw_right);
+    lexicon.connections.resize(((left+7)/8)*right);
+    if(!in.read(reinterpret_cast<char*>(lexicon.connections.data()),lexicon.connections.size())) return false;
+    for(std::uint32_t i=0;i<stems;++i) {
+        const int grade=Word(in);
+        Candidate form;
+        if(grade<0 || grade>63 || !ReadCandidate(in,form) || form.reading.size()>16 ||
+           !form.left_pos || form.left_pos>lexicon.left_count ||
+           !form.right_pos || form.right_pos>lexicon.right_count) return false;
+        auto& alternatives=lexicon.stems[form.reading];
+        alternatives.push_back({std::move(form),unsigned(grade)});
+    }
+    return LoadCandidates(in,predictions,lexicon.predictions) && in.peek()==EOF && !in.bad();
 }
 
 bool RoomWordConversion::Load(const std::filesystem::path& dir,std::string& error) {
@@ -136,6 +201,12 @@ bool RoomWordConversion::Load(const std::filesystem::path& dir,std::string& erro
         }
     }
     if(file.peek()!=EOF) { error="Trailing room kana dictionary data"; return false; }
+    Lexicon lexicon;
+    if(!LoadLexicon(dir/"room-word-lexicon.bin",lexicon)) {
+        error="Invalid room kana lexicon";
+        return false;
+    }
+    lexicon_=std::move(lexicon);
     cold_keys_=std::move(keys);
     dictionary_=std::move(dictionary);
     history_=RoomWordHistory{};
@@ -149,9 +220,99 @@ std::optional<std::vector<RoomWordConversion::Candidate>> RoomWordConversion::Lo
         return history_.Compose(s,it->second.predictions,it->second.forms,it->second.suffix);
     std::size_t at=0;
     const auto first=Unit(s,at);
+    if(auto reading=LookupKana(s)) return reading;
     if(at!=s.size()) return std::nullopt;
     if(!cold_keys_.count(first)) return std::nullopt;
     return std::vector<Candidate>{{std::string(s),std::string(s),185,31}};
+}
+
+std::optional<std::vector<RoomWordConversion::Candidate>> RoomWordConversion::LookupKana(
+        std::string_view query) const {
+    constexpr unsigned max_units=8;
+    if(lexicon_.stems.empty() || query.size()>2*max_units || !Hiragana(query)) return std::nullopt;
+
+    struct Path {
+        std::string written;
+        unsigned first_class=0, parts=0, grade=0, clause_breaks=0;
+    };
+    const auto better=[](const Path& a,const Path& b) {
+        if(a.clause_breaks!=b.clause_breaks) return a.clause_breaks<b.clause_breaks;
+        if(a.parts!=b.parts) return a.parts<b.parts;
+        return a.grade>b.grade;
+    };
+    // Keep a bounded set for each position and outgoing class. Subsequent
+    // connections depend on that class, so one busy class cannot crowd out
+    // every path that could legally finish the reading.
+    const auto keep_best=[&](std::vector<Path>& paths,Path candidate,std::size_t limit) {
+        const auto same=std::find_if(paths.begin(),paths.end(),[&](const Path& path) {
+            return path.written==candidate.written && path.first_class==candidate.first_class;
+        });
+        if(same!=paths.end()) {
+            if(!better(candidate,*same)) return;
+            paths.erase(same);
+        }
+        const auto where=std::upper_bound(paths.begin(),paths.end(),candidate,better);
+        if(std::size_t(where-paths.begin())>=limit) return;
+        paths.insert(where,std::move(candidate));
+        if(paths.size()>limit) paths.pop_back();
+    };
+    const std::size_t count=query.size()/2;
+    std::array<std::map<unsigned,std::vector<Path>>,max_units+1> ending_at;
+    ending_at[0][lexicon_.initial_class].emplace_back();
+    std::vector<Candidate> forms;
+    for(std::size_t start=0;start<count;++start) {
+        for(std::size_t end=start+1;end<=count;++end) {
+            const auto group=lexicon_.stems.find(query.substr(start*2,(end-start)*2));
+            if(group==lexicon_.stems.end()) continue;
+            for(const auto& stem:group->second) {
+                const auto& form=stem.form;
+                if(end==count && !lexicon_.Allows(lexicon_.terminal_class,form.right_pos)) continue;
+                for(const auto& [previous,paths]:ending_at[start]) {
+                    const bool direct=lexicon_.Allows(form.left_pos,previous);
+                    if(!direct && (!lexicon_.Allows(lexicon_.terminal_class,previous) ||
+                                   !lexicon_.Allows(form.left_pos,lexicon_.initial_class))) continue;
+                    for(const auto& path:paths) {
+                        const auto length=path.written.size()+form.written.size();
+                        // The learned bank has one 27-byte payload per entry
+                        // in this implementation. Don't offer an inert choice.
+                        if(length+query.size()>27) continue;
+                        const unsigned first=start ? path.first_class : form.left_pos;
+                        keep_best(ending_at[end][form.right_pos],
+                                  {path.written+form.written,first,path.parts+1,path.grade+stem.grade,
+                                   path.clause_breaks+unsigned(!direct)},16);
+                    }
+                }
+            }
+        }
+    }
+    struct RankedForm {
+        Path path;
+        unsigned last;
+    };
+    std::vector<RankedForm> final;
+    for(auto& [last,paths]:ending_at[count])
+        for(auto& path:paths) final.push_back({std::move(path),last});
+    std::stable_sort(final.begin(),final.end(),[&](const RankedForm& a,const RankedForm& b) {
+        return better(a.path,b.path);
+    });
+    for(auto& entry:final) {
+        if(forms.size()==62) break;
+        if(std::none_of(forms.begin(),forms.end(),[&](const Candidate& form) {
+            return form.written==entry.path.written;
+        })) forms.push_back({std::string(query),std::move(entry.path.written),entry.path.first_class,entry.last});
+    }
+    if(query.size()*2<=27) {
+        forms.push_back({std::string(query),std::string(query),lexicon_.raw_left,lexicon_.raw_right});
+        forms.push_back({std::string(query),Katakana(query),lexicon_.raw_left,lexicon_.raw_right});
+    }
+
+    std::vector<Candidate> predictions;
+    for(const auto& row:lexicon_.predictions) {
+        if(row.reading.compare(0,query.size(),query)==0) predictions.push_back(row);
+    }
+    auto choices=history_.Compose(query,predictions,forms);
+    if(choices.size()>64) choices.resize(64);
+    return choices;
 }
 
 bool RoomWordConversion::FinishWord(std::string_view written,std::string& reading) {

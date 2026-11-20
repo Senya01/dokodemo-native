@@ -242,6 +242,14 @@ bool Win32Player::Resume(std::string& error) {
     return true;
 }
 
+bool Win32Player::SetSuspended(bool suspended, std::string& error) {
+    if (suspended == IsPaused() || (suspended && !IsPlaying())) return true;
+    if (suspended ? Pause(error) : Resume(error)) return true;
+    // A lost WinMM handle cannot be carried forward to another lifecycle.
+    Stop();
+    return false;
+}
+
 bool Win32Player::SetVolume(float gain, std::string& error) {
     error.clear();
     if (!impl_->clip) { error = "No active PCM output"; return false; }

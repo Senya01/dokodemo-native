@@ -10,7 +10,7 @@ class RoomInventory;
 class RoomSceneRows;
 class RoomTalkState;
 
-// Toro actor globals referenced by 8D1FD, before the savedata utility envelope.
+// Common layout of the five actor serializers. Field comments use NEKO names.
 struct RoomSaveOwners {
     KscSaveValue dictionary;                    // root[1], G3DD2
     KscSaveValue inventory;                     // root[2], G4FAD

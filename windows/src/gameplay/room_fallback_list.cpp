@@ -8,14 +8,21 @@
 
 namespace dokodemo::gameplay {
 
-bool RoomFallbackList::Load(const std::filesystem::path& dir,std::string& error) try {
-    std::ifstream in(dir/"toro-fallback-list.bin",std::ios::binary);
+bool RoomFallbackList::Load(const std::filesystem::path& dir,std::string& error,unsigned actor) try {
+    struct Layout { const char* filename; unsigned ordinary, partner; };
+    constexpr Layout layouts[]{
+        {"toro-fallback-list.bin",1057,48}, {"robo-fallback-list.bin",512,40},
+        {"usagi-fallback-list.bin",490,33}, {"inu-fallback-list.bin",512,31}, {"kaeru-fallback-list.bin",547,30},
+    };
+    if (actor>=std::size(layouts)) throw std::invalid_argument("Unknown procedure selector actor");
+    const auto& layout=layouts[actor];
+    std::ifstream in(dir/layout.filename,std::ios::binary);
     auto word=[&]() {
         std::array<unsigned char,4> b{};
         if (!in.read(reinterpret_cast<char*>(b.data()),4)) throw std::runtime_error("Short procedure selector data");
         return std::uint32_t(b[0])|(std::uint32_t(b[1])<<8)|(std::uint32_t(b[2])<<16)|(std::uint32_t(b[3])<<24);
     };
-    if (word()!=0x324c4652) throw std::runtime_error("Invalid Toro procedure selector package");
+    if (word()!=0x324c4652) throw std::runtime_error("Invalid procedure selector package");
     auto read=[&](Selector& selector, unsigned list_size, unsigned ring_size) {
         if (word()!=(0x90000000u|list_size)) throw std::runtime_error("Invalid procedure list");
         for (unsigned i=0;i<list_size;++i) {
@@ -32,8 +39,8 @@ bool RoomFallbackList::Load(const std::filesystem::path& dir,std::string& error)
         selector.Refresh();
     };
     RoomFallbackList next;
-    read(next.ordinary_,1057,100);
-    read(next.partner_,48,20);
+    read(next.ordinary_,layout.ordinary,100);
+    read(next.partner_,layout.partner,20);
     if (in.peek()!=std::char_traits<char>::eof()) throw std::runtime_error("Trailing selector data");
     *this=std::move(next);
     error.clear();

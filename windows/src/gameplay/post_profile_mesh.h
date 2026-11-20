@@ -45,6 +45,18 @@ struct RoomActorRegion {
     std::array<float,2> target;
 };
 
+struct RoomMotionEffectKey {
+    unsigned tick;
+    int node;
+    std::uint32_t control;
+    std::array<int,3> offset;
+};
+
+struct RoomMotionEffectSpawn {
+    unsigned resource;
+    std::array<float,3> position;
+};
+
 class RoomMesh {
   public:
     bool Load(const std::filesystem::path &path, std::string &error, bool build_actor_regions = false);
@@ -56,6 +68,7 @@ class RoomMesh {
     RoomLighting Lighting(unsigned clip, uint32_t time) const { return Lighting({{clip, time}}); }
     RoomLighting Lighting(const std::vector<std::pair<unsigned, uint32_t>>& active_clips) const;
     std::vector<std::pair<unsigned,uint32_t>> SoundKeys(unsigned clip) const;
+    std::vector<RoomMotionEffectKey> EffectKeys(unsigned clip) const;
     uint32_t Duration(unsigned clip) const;
     bool Draw(const std::vector<std::pair<unsigned, uint32_t>> &active_clips,
               const std::array<float, 16> &root, const std::array<float, 16> &view_projection,

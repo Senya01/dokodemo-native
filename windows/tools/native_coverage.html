@@ -1,0 +1,96 @@
+<section id="native-coverage">
+<style>
+#native-coverage{font-family:Inter,Segoe UI,Arial,sans-serif;display:grid;gap:1rem;color:var(--foreground,#f0f5f8);color-scheme:light dark}
+#native-coverage *{box-sizing:border-box}
+#native-coverage .rail{display:grid;gap:.45rem;padding-bottom:.7rem;border-bottom:1px solid var(--border,#526070)}
+#native-coverage .total{font-size:1.32rem;font-variant-numeric:tabular-nums}
+#native-coverage .legend{display:flex;flex-wrap:wrap;gap:.4rem 1rem;font-size:.83rem}
+#native-coverage .legend span{display:inline-flex;gap:.35rem;align-items:center}
+#native-coverage .swatch{width:.78rem;height:.78rem;display:inline-block}
+#native-coverage .map{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,265px),1fr));gap:.95rem .65rem;align-items:start}
+#native-coverage .group{min-width:0}
+#native-coverage .group h3{display:flex;align-items:baseline;justify-content:space-between;gap:.35rem;margin:0 0 .35rem;font-size:.91rem;font-weight:500}
+#native-coverage .count{font-variant-numeric:tabular-nums;opacity:.75;white-space:nowrap}
+#native-coverage .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px}
+#native-coverage .tile{appearance:none;min-width:0;height:32px;border:0;color:var(--foreground,#f0f5f8);border-radius:2px;font:inherit;font-size:.72rem;cursor:pointer;display:grid;place-items:center;position:relative}
+#native-coverage [data-status=basic]{background:color-mix(in srgb,var(--green,#43ba83) 32%,var(--background,#101820))}
+#native-coverage [data-status=exact]{background:color-mix(in srgb,var(--blue,#76b6ff) 44%,var(--background,#101820))}
+#native-coverage [data-status=missing]{background:var(--muted,#465260)}
+#native-coverage .tile:focus-visible,#native-coverage .tile[aria-pressed=true]{outline:2px solid var(--foreground,#f0f5f8);outline-offset:-2px;z-index:1}
+#native-coverage .detail{min-height:8.5rem;border-top:1px solid var(--border,#526070);padding-top:.7rem;display:grid;gap:.35rem;align-content:start}
+#native-coverage .detail h3,#native-coverage .detail p{margin:0;overflow-wrap:anywhere}
+#native-coverage .detail h3{font-size:1rem}
+#native-coverage .detail p{font-size:.85rem;line-height:1.45}
+#native-coverage .evidence{font-family:Consolas,monospace;opacity:.75}
+@media(max-width:320px){#native-coverage .tiles{grid-template-columns:repeat(5,minmax(0,1fr))}}
+</style>
+<header class="rail">
+  <strong class="total"></strong>
+  <div class="legend" aria-label="Статусы"></div>
+</header>
+<div class="map" aria-label="Группы функций"></div>
+<div class="detail" aria-live="polite">
+  <h3></h3>
+  <p class="state"></p>
+  <p class="description"></p>
+  <p class="evidence"></p>
+</div>
+<script type="application/json" class="coverage-data">__NATIVE_COVERAGE_DATA__</script>
+<script>
+(() => {
+  const root = document.getElementById("native-coverage");
+  const groups = JSON.parse(root.querySelector(".coverage-data").textContent).groups;
+  const labels = {missing:"Нет нативной реализации", basic:"Базовая реализация", exact:"Побайтово точная реализация"};
+  const markers = {missing:"·",basic:"✓",exact:"≡"};
+  const all = groups.flatMap(group => group.items);
+  const amount = status => all.filter(item => item.status === status).length;
+  const covered = amount("basic") + amount("exact");
+  root.querySelector(".total").textContent = covered + " из " + all.length + " с базовой реализацией или выше";
+  for (const [status, label] of Object.entries(labels)) {
+    const piece = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.dataset.status = status;
+    swatch.setAttribute("aria-hidden", "true");
+    piece.append(swatch, label + " · " + amount(status));
+    root.querySelector(".legend").append(piece);
+  }
+  let current;
+  function select(tile, item) {
+    current?.setAttribute("aria-pressed", "false");
+    current = tile;
+    tile.setAttribute("aria-pressed", "true");
+    root.querySelector(".detail h3").textContent = item.title;
+    root.querySelector(".state").textContent = labels[item.status];
+    root.querySelector(".description").textContent = item.detail;
+    root.querySelector(".evidence").textContent = item.evidence;
+  }
+  for (const group of groups) {
+    const panel = document.createElement("section");
+    panel.className = "group";
+    const title = document.createElement("h3");
+    const count = document.createElement("span");
+    count.className = "count";
+    count.textContent = group.items.filter(item => item.status !== "missing").length + "/" + group.items.length;
+    title.append(group.name, count);
+    const tiles = document.createElement("div");
+    tiles.className = "tiles";
+    for (const item of group.items) {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "tile";
+      tile.dataset.status = item.status;
+      tile.title = item.title + " — " + labels[item.status];
+      tile.setAttribute("aria-label", tile.title);
+      tile.setAttribute("aria-pressed", "false");
+      tile.textContent = markers[item.status];
+      tile.addEventListener("click", () => select(tile, item));
+      tiles.append(tile);
+      if (item.id === "story-toro-final") select(tile, item);
+    }
+    panel.append(title, tiles);
+    root.querySelector(".map").append(panel);
+  }
+})();
+</script>
+</section>

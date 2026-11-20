@@ -35,10 +35,21 @@ def mesh_blob(archive, model_path, motion_paths, texture_directory):
     return bytes(data)
 
 
+def room_motion_effect_media(root):
+    # BOOT 4EF30 uses the entries other than -1 at DATA+691C.
+    effects = BparArchive(root.payload(root.by_name("EFFECTMODEL.BPM")))
+    files = {}
+    for resource in (1, 2, 3, 4, 9):
+        name = f"EF{resource}"
+        effect = Region(mesh_blob(effects, f"{name}.DVS", [f"{name}.DAK"], "GIM"))
+        files[Path(f"assets/game/post-profile/motion-ef{resource}.bin")] = effect, effect.sha256()
+    return files
+
+
 def post_profile_media(root):
     room = BparArchive(root.payload(root.by_name("BG_ROOM.BPM")))
     clips = ["TUZURA_BIG_OPEN", "TUZURA_SMALL_OPEN", "FUSUMA_ON", "FUSUMA_OFF"] + [f"LIGHT{i:02}" for i in range(1, 8)] + ["LIGHT_ON", "TV_ON", "TV_OFF"]
-    files = {}
+    files = room_motion_effect_media(root)
     # The five shipped character scripts use the same date-ranged scene0
     # registration table. Singleton resource AA (wall), AB (carpet) lead
     # its typed arrays. Record 196 with null endpoints terminates the list.

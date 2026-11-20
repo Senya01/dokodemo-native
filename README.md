@@ -2,16 +2,11 @@
 
 An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Windows is the application target. Ubuntu x86_64 headless component testing is described below; a Linux game application/window backend is not implemented. A matching PSP rebuild remains unverified.
 
-The root application includes title/new-game/profile entry, room and actor rendering, repeated conversations, choices and limited Latin/kana word input. It supports inventory marking, decoration, putaway and confirmed discard, main-menu inventory, empty friends and word notebooks, self-details, the current diary record, and selected Options edits within a session. The standalone Windows game below includes first-day persistence.
+## Standalone Windows game
 
-## Windows development progress · 2026-11-19
+The current Windows source lives in [windows/](windows/README.md). It includes the five Poképi, room conversations, language lessons, outings, notebooks, calendar changes, protected save and resume, end-of-stay events, and Windows peer meetings. The [coverage report](windows/docs/PROGRESS.md) distinguishes component and integration results from continuous playthrough coverage.
 
-The Windows development build has reached first-day play with Toro, including word lessons and editing in the notebook, repeated conversations, inventory and room settings, and a trip to the roof and back. These milestones were exercised through the regular Windows game window.
-
-- **Save and resume.** A regular Windows session taught Toro a word and saved from the System menu. A fresh process loaded the six save files, entered the room automatically, and showed the word and its reading in the notebook. The original game running in PPSSPP also loaded that Windows-created save.
-- **Changing days.** A component test advanced a copy of a first-day save to day two, preserved the learned word and the earlier diary entry, then saved and loaded day two again. The regular Windows executable has been checked with a same-day reload. The windowed check across a natural day change is pending.
-
-The [standalone Windows game source and build instructions](windows/README.md) are available in `windows/`. [SOURCE_SNAPSHOT.json](SOURCE_SNAPSHOT.json) identifies the earlier source checkpoint used by the root build.
+The root CMake project builds an earlier recovery application. [SOURCE_SNAPSHOT.json](SOURCE_SNAPSHOT.json) records the two checkpoints separately.
 
 ## Published source checkpoint
 

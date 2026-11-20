@@ -1,4 +1,4 @@
-﻿#include "startup_runtime_win32.h"
+#include "startup_runtime_win32.h"
 #include "core_hash.h"
 #include "gameplay/boot_to_display.h"
 #include "gameplay/display_win32.h"
@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string_view>
 #include <tuple>
 
@@ -79,7 +80,11 @@ bool VerifyAudio(StartupCoordinator& session, const fs::path& file) {
         digest == "ac72953c2b7a3232f9d44dd322763d25a60644d288c8c4ee0965ca98b548f805";
 }
 
-int Verify(StartupCoordinator& session, const fs::path& root, const fs::path& capture, bool audio) {
+bool VerifyPowerCycle(StartupCoordinator& session, const fs::path& audio_directory,
+                      const std::shared_ptr<BootToDisplay>& boot);
+
+int Verify(StartupCoordinator& session, const fs::path& root, const fs::path& capture,
+           bool audio, bool power_cycle) {
     const auto deadline = GetTickCount64() + 20000;
     while (GetTickCount64() < deadline) {
         auto state = session.Observe(UINT64_MAX);
@@ -91,6 +96,8 @@ int Verify(StartupCoordinator& session, const fs::path& root, const fs::path& ca
                 return StartupFailed;
             while (boot->TitleFrame() < 2) if (!boot->AdvanceTitle()) return StartupFailed;
             if (!VerifyFrame(boot->Screen(), capture)) return StartupFailed;
+            if (power_cycle)
+                return VerifyPowerCycle(session, root / L"assets/audio", boot) ? Success : StartupFailed;
             return !audio || VerifyAudio(session, root / L"assets/audio/BGM_TITLE.at3") ? Success : StartupFailed;
         }
         if (Failed(state)) {
@@ -110,7 +117,48 @@ struct WindowState {
     platform::WindowsClockCache clock;
     uint32_t keys = 0, pressed = 0;
     std::shared_ptr<BootToDisplay> boot;
-    std::chrono::steady_clock::time_point started;
+    using Clock = std::chrono::steady_clock;
+    using FrameTicks = std::chrono::duration<std::int64_t, std::ratio<1001,30000>>;
+    Clock::time_point started;
+    bool suspended = false;
+    gameplay::ControllerButtonLatch pad_latch;
+
+    bool HandlePower(WPARAM event, Clock::time_point now) {
+        switch (event) {
+        case PBT_APMSUSPEND:
+            if (suspended) return true;
+            suspended=true;
+            keys=pressed=0;
+            pad_latch.Reset();
+            break;
+        case PBT_APMRESUMEAUTOMATIC:
+        case PBT_APMRESUMESUSPEND:
+        case PBT_APMRESUMECRITICAL:
+            if (!suspended) return true;
+            // Restart the pacing clock from the next unexecuted frame.
+            if (boot) started=now-std::chrono::ceil<Clock::duration>(FrameTicks(boot->TitleFrame()-std::int64_t{1}));
+            suspended=false;
+            break;
+        default:
+            return false;
+        }
+        if (!music.SetSuspended(suspended))
+            std::fprintf(stderr, "BGM power transition: %s\n", music.Error().c_str());
+        if (!effects.SetSuspended(suspended))
+            std::fprintf(stderr, "Effect power transition: %s\n", effects.Error().c_str());
+        return true;
+    }
+
+    std::optional<std::int64_t> TargetFrame(Clock::time_point now) const {
+        if (suspended || !boot) return {};
+        return 1 + std::chrono::duration_cast<FrameTicks>(now-started).count();
+    }
+
+    std::uint32_t FrameButtons(std::optional<std::uint32_t> pad_buttons) {
+        const auto buttons=keys | pressed | pad_latch.Read(pad_buttons);
+        pressed=0;
+        return buttons;
+    }
     int result = Success;
     DWORD output_type = GetFileType(GetStdHandle(STD_OUTPUT_HANDLE));
     unsigned activity_serial = 0;
@@ -121,6 +169,43 @@ struct WindowState {
     gameplay::RoomInventorySnapshot last_inventory{};
     gameplay::RoomNotebookSnapshot last_notebook{};
 };
+
+bool VerifyPowerCycle(StartupCoordinator& session, const fs::path& audio_directory,
+                      const std::shared_ptr<BootToDisplay>& boot) {
+    using Clock = WindowState::Clock;
+    using Tick = WindowState::FrameTicks;
+    WindowState state{session, {session, audio_directory}, gameplay::TitleEffects(audio_directory)};
+    // Exercise the notification order even if the startup worker has not handed off.
+    const auto start=Clock::time_point{};
+    if (!state.HandlePower(PBT_APMSUSPEND,start) || state.TargetFrame(start) ||
+        !state.HandlePower(PBT_APMRESUMEAUTOMATIC,start) || state.TargetFrame(start)) return false;
+
+    state.boot=boot;
+    state.started=start;
+    const auto frame=boot->TitleFrame();
+    if (frame!=2 || !state.music.Prepare(0) || !state.music.Start(0) || !state.effects.Play(4)) return false;
+    std::vector<std::uint32_t> before, during;
+    if (!boot->Screen().CopyPixels(before)) return false;
+    state.keys=state.pressed=0x2000;
+    const auto stopped=start+std::chrono::duration_cast<Clock::duration>(Tick(1));
+    const auto resumed=stopped+std::chrono::hours(1);
+    if (!state.HandlePower(PBT_APMSUSPEND,stopped) ||
+        !state.HandlePower(PBT_APMSUSPEND,stopped) || state.TargetFrame(resumed) ||
+        state.keys || state.pressed || boot->TitleFrame()!=frame ||
+        !boot->Screen().CopyPixels(during) || during!=before) return false;
+
+    if (!state.HandlePower(PBT_APMRESUMEAUTOMATIC,resumed) || state.TargetFrame(resumed)!=frame ||
+        state.FrameButtons(std::nullopt) || state.FrameButtons(0x2000) || state.FrameButtons(0) || state.FrameButtons(0x2000)!=0x2000) return false;
+    const auto next=resumed+std::chrono::ceil<Clock::duration>(Tick(1));
+    if (!state.HandlePower(PBT_APMRESUMESUSPEND,next) || state.TargetFrame(next)!=frame+1 ||
+        !boot->AdvanceTitle() || boot->TitleFrame()!=frame+1) return false;
+    // A resume without a matching suspend must not rebase the live clock.
+    if (!state.HandlePower(PBT_APMRESUMECRITICAL,next) || state.TargetFrame(next)!=frame+1 ||
+        state.HandlePower(PBT_APMPOWERSTATUSCHANGE,next)) return false;
+    std::printf("power_cycle=pass frame_before=%u frame_paused=%u frame_after=%u skipped_updates=0 null_audio=%d\n",
+                frame, frame, boot->TitleFrame(), int(audio::Win32Player::UsesNullOutput()));
+    return audio::Win32Player::UsesNullOutput();
+}
 
 // An ordinary window can inherit a redirected output stream. Report each
 // decision, actual actor start and script pause at the update that owns it.
@@ -338,17 +423,26 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
     }
     auto state = reinterpret_cast<WindowState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (state && message == WM_POWERBROADCAST &&
+        state->HandlePower(wparam, WindowState::Clock::now())) return TRUE;
+    if (state && state->suspended &&
+        (message == WM_TIMER || message == WM_KEYDOWN || message == WM_KEYUP || message == WM_CHAR)) return 0;
     if (state && (message == WM_KEYDOWN || message == WM_KEYUP)) {
         const auto bit = KeyButton(wparam);
         if (bit) {
             if (message == WM_KEYDOWN) {
+                // A repeating key from before sleep or focus loss cannot start a new press.
+                if ((lparam & (1L << 30)) && !(state->keys & bit)) return 0;
                 state->pressed |= bit & ~state->keys;
                 state->keys |= bit;
             } else state->keys &= ~bit;
             return 0;
         }
     }
-    if (state && message == WM_KILLFOCUS) state->keys = state->pressed = 0;
+    if (state && message == WM_KILLFOCUS) {
+        state->keys=state->pressed=0;
+        state->pad_latch.Reset();
+    }
     if (state && state->boot && message == WM_CHAR) {
         if (wparam == VK_BACK) state->boot->BackspaceNickname();
         else if (wparam >= 0x20 && wparam != VK_SPACE && wparam <= 0xffff) {
@@ -381,17 +475,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         }
         // Cold title submits at two PSP vblanks per frame. Use elapsed time
         // so Windows timer coalescing does not slow the authored animation.
-        using TitleTicks = std::chrono::duration<int64_t, std::ratio<1001, 30000>>;
-        const auto elapsed = std::chrono::steady_clock::now() - state->started;
-        const auto frame = 1 + std::chrono::duration_cast<TitleTicks>(elapsed).count();
-        if (state->boot->TitleFrame() == frame) return 0;
-        while (state->boot->TitleFrame() < frame) {
-            uint32_t buttons = state->keys | state->pressed;
+        const auto frame = state->TargetFrame(WindowState::Clock::now());
+        if (!frame || state->boot->TitleFrame() >= *frame) return 0;
+        while (state->boot->TitleFrame() < *frame) {
+            std::optional<std::uint32_t> pad_buttons;
             if (GetFocus() == window) {
                 const auto sample = state->pad.ReadOne();
-                if (sample && sample->sample) buttons |= sample->sample->buttons;
+                if (sample && sample->sample) pad_buttons=sample->sample->buttons;
             }
-            state->pressed = 0;
+            const auto buttons=state->FrameButtons(pad_buttons);
             if (!state->clock.RefreshFromWindows()) {
                 state->result = StartupFailed;
                 DestroyWindow(window);
@@ -489,7 +581,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     if (!argv) return BadArguments;
     const bool audio = argc == 2 && std::wstring_view(argv[1]) == L"--verify-audio";
     const bool capture = argc == 3 && std::wstring_view(argv[1]) == L"--capture-first-frame";
-    const bool verify = audio || capture || (argc == 2 && std::wstring_view(argv[1]) == L"--verify-startup");
+    const bool power_cycle = argc == 2 && std::wstring_view(argv[1]) == L"--verify-power-cycle";
+    const bool verify = power_cycle || audio || capture || (argc == 2 && std::wstring_view(argv[1]) == L"--verify-startup");
     const fs::path output = capture ? argv[2] : L"";
     LocalFree(argv);
     if (argc != 1 && !verify) return BadArguments;
@@ -516,7 +609,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         StartupRuntimeStatus status;
         auto session = StartupCoordinator::Create(options, status);
         if (session && status && session->Start()) {
-            auto result = verify ? Verify(*session, root, output, audio) : RunWindow(instance, show, *session);
+            auto result = verify ? Verify(*session, root, output, audio, power_cycle) : RunWindow(instance, show, *session);
             if (!session->Close()) return CleanupFailed;
             const auto after = session->Observe(UINT64_MAX);
             if (!after.caller_joined || !after.worker_joined || !after.resources_closed ||

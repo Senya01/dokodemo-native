@@ -3,5 +3,21 @@
   "development_commits_preserved": 207,
   "approach": "source-only projection; original data and private parents excluded",
   "full_game": false,
-  "source_fixture_groups_require_private_inputs": true
+  "source_fixture_groups_require_private_inputs": true,
+  "windows": {
+    "directory": "windows",
+    "progress": "windows/docs/PROGRESS.md",
+    "coverage_inventory": "windows/docs/native-coverage.json",
+    "coverage_counts": {
+      "missing": 0,
+      "basic": 67,
+      "exact": 1
+    },
+    "ordinary_ksc_roster": {
+      "entries": 3118,
+      "direct_returns": 3094,
+      "returns_after_retry": 24
+    },
+    "full_playthrough_verified": false
+  }
 }

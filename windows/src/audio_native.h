@@ -45,6 +45,7 @@ public:
               std::optional<SampleLoop> loop, std::string& error);
     bool Pause(std::string& error);
     bool Resume(std::string& error);
+    bool SetSuspended(bool suspended, std::string& error);
     bool SetVolume(float gain, std::string& error); // 0..1, both channels.
     bool IsPlaying() const noexcept;
     bool IsPaused() const noexcept;

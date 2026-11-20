@@ -15,7 +15,7 @@ class ColdRoomActor {
     bool entrance_finished() const { return !entry_sequence_; }
     bool Advance(std::optional<uint32_t> calendar_minute = {});
     bool Request(unsigned command);
-    bool AdoptScene(unsigned selector); // BD28 applies placement to the existing actor.
+    bool AdoptScene(unsigned selector,const std::array<float,3>* destination=nullptr);
     bool RequestActivity(unsigned command);
     bool RequestRoomControl(unsigned command);
     bool RequestConversationControl(unsigned command);
@@ -38,6 +38,7 @@ class ColdRoomActor {
     std::optional<unsigned> game28_write() const { return game28_write_; }
     const std::string &error() const { return error_; }
     const std::vector<RoomSound> &sounds() const { return sounds_; }
+    const std::vector<RoomMotionEffectSpawn>& effect_spawns() const { return effect_spawns_; }
     unsigned source_field50() const { return field50_; }  // GAME23
     unsigned source_field58() const { return field58_; }  // GAME24
     std::optional<bool> lamp_write() const { return lamp_write_; }
@@ -65,7 +66,9 @@ class ColdRoomActor {
     unsigned blend_ticks_ = 0, blend_elapsed_ = 0, species_ = 0, invite_motion_ = 0, anchor_ = 0;
     bool clip_started_ = false, first_sample_ = false;
     std::vector<std::vector<std::pair<unsigned, uint32_t>>> sound_keys_;
+    std::vector<std::vector<RoomMotionEffectKey>> effect_keys_;
     std::vector<RoomSound> sounds_;
+    std::vector<RoomMotionEffectSpawn> effect_spawns_;
     std::map<unsigned, std::vector<uint32_t>> commands_;
     std::map<unsigned, unsigned> clips_;
     std::set<unsigned> activity_ids_;

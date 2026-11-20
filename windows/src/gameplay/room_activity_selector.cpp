@@ -16,18 +16,31 @@ unsigned Bit(int n) {
 }
 }
 
-bool RoomActivitySelector::Load(const std::filesystem::path& directory, std::string& error) {
-    std::ifstream file(directory / "toro-room-activities.bin", std::ios::binary | std::ios::ate);
-    constexpr std::size_t bytes = 21330;
+bool RoomActivitySelector::Load(const std::filesystem::path& directory, std::string& error,
+                                unsigned actor) {
+    struct Media { const char* name; unsigned count; const char* sha256; };
+    constexpr Media media[]{
+        {"toro-room-activities.bin", 1523, "392ac172a3dd9cc030b2190e015880cba52d0ba4cc8c38e0a5f8449cca695a8e"},
+        {"robo-room-activities.bin", 1412, "7c7770b5213c3c47c53d5cf81773b4bce33e05dcd19b7ed4202c828f6c8b7ebc"},
+        {"usagi-room-activities.bin", 1472, "af4a89a9cfc3575a0e8114050018180a8a1a0494e257918b7eec54fcce6a810e"},
+        {"inu-room-activities.bin", 1481, "757ee067c4db1dff2bc109139e849573da9ca07062ecfaa10adde7118d9b44e8"},
+        {"kaeru-room-activities.bin", 1430, "592100a4ab2d33f8f2ca4f6860343488c3976488f885b665ebc482b2169bd830"},
+    };
+    if (actor >= std::size(media)) {
+        error = "Missing room activity table for actor";
+        return false;
+    }
+    const auto& source = media[actor];
+    const std::size_t bytes = 8 + 14 * source.count;
+    std::ifstream file(directory / source.name, std::ios::binary | std::ios::ate);
     if (!file || file.tellg() != static_cast<std::streamoff>(bytes)) {
-        error = "Missing NEKO room activity list";
+        error = "Missing room activity list";
         return false;
     }
     std::vector<unsigned char> data(bytes);
     if (!file.seekg(0).read(reinterpret_cast<char*>(data.data()), bytes) ||
-        core::sha256_hex(data.data(), data.size()) !=
-            "392ac172a3dd9cc030b2190e015880cba52d0ba4cc8c38e0a5f8449cca695a8e") {
-        error = "Incorrect NEKO room activity list";
+        core::sha256_hex(data.data(), data.size()) != source.sha256) {
+        error = "Incorrect room activity list";
         return false;
     }
     std::vector<std::array<std::uint16_t, 7>> rows(ReadU16(data.data() + 4));

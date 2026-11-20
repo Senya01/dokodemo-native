@@ -1,4 +1,5 @@
 #include "post_profile.h"
+#include "room_motion_effects.h"
 #include "cold_room_actor.h"
 #include "post_profile_mesh.h"
 #include "profile_adoption.h"
@@ -15,6 +16,8 @@
 #include "room_word_entry.h"
 #include "room_menu.h"
 #include "room_friends_banner.h"
+#include "room_record_exchange.h"
+#include "room_shiritori.h"
 #include "roof_scene.h"
 #include "roof_signs.h"
 #include "room_music.h"
@@ -67,13 +70,8 @@ unsigned RoomPeriod(unsigned row, unsigned hour, unsigned minute) {
     return 4;
 }
 
-// The original writes immediately. The Windows port cannot yet export all 27
-// current actor roots used by GAME(46), so this is explicitly a host notice.
-void DrawSaveUnavailable(const recovered::PackageView& font, std::vector<std::uint8_t>& vram,
-                         std::size_t offset) {
-    constexpr std::string_view lines[]{
-        "Windows port: Save unavailable", "Cannot write the protected slot.", "Enter / Esc: return to room"
-    };
+void DrawRoomNotice(const recovered::PackageView& font, std::vector<std::uint8_t>& vram,
+                    std::size_t offset, const std::array<std::string_view,3>& lines) {
     int half_width = 0;
     for (auto line : lines)
         half_width = std::max(half_width, int(std::ceil(MeasureUiText(line,font) / 2.f)));
@@ -221,6 +219,10 @@ struct PostProfile::Data {
     RoomMesh background;
     std::vector<RoomMesh> decorations;
     ColdRoomActor actor;
+    std::optional<ColdRoomActor> secondary_actor;
+    bool secondary_visible = false;
+    bool scheduled_camera_held = false;
+    RoomMotionEffects motion_effects;
     unsigned season = 0;
     std::optional<unsigned> television_clip;
     std::uint32_t television_time = 0;
@@ -229,7 +231,13 @@ struct PostProfile::Data {
     bool music = false;
     RoofScene roof;
     RoofSigns signs;
+    OutingScene destination;
     unsigned scene = 0;
+    unsigned SceneResource() const { return scene==12 ? roof.resource() : scene ? destination.resource() : 0; }
+    const RoomMesh& SceneBackground() const {
+        if (scene==12) return roof.Background();
+        return scene ? destination.Background() : background;
+    }
     std::optional<unsigned> pending_scene;
     std::optional<int> scene_music;
     bool fade_music = false;
@@ -244,17 +252,17 @@ struct PostProfile::Data {
     void DepartureEvent(const char* name, EventValues values) {
         departure_events.push_back({conversation.snapshot().serial,name,values});
     }
-    unsigned CurrentMinute() const {
-        const auto record = recovered::CalendarRecord689B8(
-            {static_cast<int>(clock[6]), static_cast<int>(clock[5]), static_cast<int>(clock[4]),
-             static_cast<int>(clock[3]), static_cast<int>(clock[2])});
+    static unsigned CalendarMinute(const RetailSaveProfile::Calendar& calendar) {
+        const auto record=recovered::CalendarRecord689B8(
+            {int(calendar[6]),int(calendar[5]),int(calendar[4]),int(calendar[3]),int(calendar[2])});
         return recovered::CalendarScalar7C660(record);
     }
+    unsigned CurrentMinute() const { return CalendarMinute(clock); }
     void RecordMenuDestination(const char* event, bool record_deadline = false) {
         if (!scene) return;
         const auto place = talk.contact_location();
         DepartureEvent(event, {{"scene",int(scene)},{"index",int(place.descriptor_id)},
-                               {"kind",int(place.kind)},{"resource",int(roof.resource())}});
+                               {"kind",int(place.kind)},{"resource",int(SceneResource())}});
         if (const auto deadline = talk.outing_return_deadline(); record_deadline && deadline) {
             departure_events.back().values.emplace_back("minute",int(CurrentMinute()));
             departure_events.back().values.emplace_back("deadline",int(*deadline));
@@ -262,7 +270,16 @@ struct PostProfile::Data {
         departure_events.back().text = talk.current_outing_names();
     }
     void HandleTravel(unsigned period, recovered::RngNativeOwner& rng);
+    void AdvanceRoomActivity(uint32_t minute, unsigned period, recovered::RngNativeOwner& rng);
+    void DrawMotionEffects(const std::array<float,16>& view, std::vector<std::uint8_t>& vram,
+                           std::size_t offset);
     void AdvanceTravelCover(std::vector<std::uint8_t>& vram, std::size_t offset);
+    void AdvanceFarewell();
+    void LoadScheduledCompanion();
+    void StartRoomEvent();
+    bool StageDiary(const std::vector<RoomTalkState::ScheduledDiary>& requests, recovered::RngNativeOwner& rng,
+                    const char* event);
+    void EnterDepartedRoom(int previous_day, recovered::RngNativeOwner& rng);
     enum class View { room, inventory, notebook, friends, diary, options };
     View current_view = View::room, next_view = View::room;
     bool switching = false, view_changed = false;
@@ -283,6 +300,21 @@ struct PostProfile::Data {
     RoomAnswerRenderer answer_gui;
     RoomMenu menu;
     RoomFriendsBanner friends_banner;
+    OpenRoomMeeting open_meeting;
+    std::optional<RoomRecordExchange> record_exchange;
+    std::optional<RoomShiritori> shiritori;
+    ShiritoriState shiritori_result=ShiritoriState::waiting;
+    std::optional<RoomInventory> prepared_gift;
+    std::optional<MeetingPlace> active_meeting;
+    std::vector<unsigned> gift_choices;
+    unsigned gift_choice=0;
+    std::uint32_t meeting_buttons=0;
+    unsigned meeting_result_ticks=0;
+    bool meeting_received=false;
+    MeetingMode meeting_mode=MeetingMode::cards;
+    void UpdateMeeting(MeetingPlace request,std::uint32_t buttons,std::uint32_t minute);
+    void UpdateShiritori(MeetingPlace request);
+    void FinishMeeting(bool cancelled);
     RoomOptions options;
     RoomOptionsRenderer options_gui;
     int last_menu_result = -1;
@@ -290,7 +322,16 @@ struct PostProfile::Data {
     RoomWordEntry word_entry;
     bool word_open = false;
     bool introduction_done = false;
+    bool actor_script_started = false;
+    std::uint32_t robo_cleanup_minute = 0;
+    int robo_next_hour_topic = 0;
+    RoomPendingTopics robo_pending_topics;
+    enum class RoboTopicStage { first_word, calendar, day_class, alternative, fallback, exhausted };
+    RoboTopicStage robo_topic_stage = RoboTopicStage::calendar;
+    bool robo_hour_topic = false;
     bool loaded_save = false, awaiting_entrance = false, return_to_title = false;
+    bool actor_departed = false;
+    unsigned scheduled_room_event = 0;
     std::filesystem::path game_directory;
     RoomActivitySelector activities;
     RoomActivityPhase activity;
@@ -318,10 +359,27 @@ struct PostProfile::Data {
     }
 
     void BindHomeModels() {
-        if (!profile || profile->actor != 0) return;
+        if (!profile) return;
         if (!scene_models.Bind(media, calendar_items, scene_rows, inventory, error))
             throw std::runtime_error(error);
         RecordTable("home-model-rows", scene_rows.SaveTable(), {});
+    }
+
+    void UpdateHomeDecorations(uint32_t minute, recovered::RngNativeOwner& rng) {
+        const int signed_minute = SignedTimeOperand(minute);
+        const auto date = recovered::CalendarBcdDate68FE0(signed_minute);
+        if (activity.day_number() >= 0) {
+            const int selector = (signed_minute / 1440 + 5) % 7;
+            const auto seasonal = calendar_items.Update(date, date, profile->packed_birthday);
+            RecordTable("scene-rows-before", scene_rows.SaveTable(),
+                            {{"day",activity.day_number()},{"selector",selector},{"date",int(date)},
+                             {"calendar_items",int(seasonal)}});
+            const auto draws = scene_rows.Update(selector, date, rng);
+            RecordTable("scene-rows-updated", scene_rows.SaveTable(),
+                            {{"roll0",draws[0]},{"roll1",draws[1]},{"roll2",draws[2]},
+                             {"roll3",draws[3]},{"roll4",draws[4]}});
+        }
+        BindHomeModels();
     }
 
     void StageSaveHeader() {
@@ -330,6 +388,27 @@ struct PostProfile::Data {
                 diary.entry_text(), diary.entry_date(), diary.entry_revealed()))
             throw std::logic_error("Cannot stage the current first-day diary row");
         save_profile.StampForSave(clock);
+    }
+
+    std::size_t WriteCurrentSlot() {
+        StageSaveHeader();
+        topics.messages().PrepareUsedDescriptorsForSave(); // 8D360 -> A0F3
+        topics.PrepareTopicHistoryForSave(); // 8D36B -> 1D62
+        const auto owners = RoomSaveOwners::Export(talk, scene_rows, activity, inventory, topics);
+        RecordTable("system-save-inventory", owners.inventory, {{"root",2}});
+        RecordTable("system-save-scene-rows", owners.scene_rows, {{"root",3}});
+        RecordTable("system-save-home-timer", owners.home_counter, {{"root",16}});
+        RecordTable("system-save-message-timer", owners.message_counter, {{"root",18}});
+        RecordTable("system-save-used-diaries", owners.used_diaries, {{"root",21}});
+        RecordTable("system-save-messages", owners.diary_staging, {{"root",26}});
+        const auto request = BuildRetailUtilityRequest(save_profile, owners.ToActorGraph(), word_entry.SaveHistory());
+        DepartureEvent("system-save-utility", {{"bytes",int(request.size())}});
+        // The full request contains the player profile. Capture its bytes only in the private save test.
+        const char* capture = std::getenv("DOKODEMO_TEST_SAVE_SNAPSHOT");
+        if (capture && std::string_view(capture) == "1")
+            departure_events.back().text.emplace_back(request.begin(), request.end());
+        WriteRetailSlot(game_directory/"savedata"/"UCJS10002000",game_directory,request);
+        return request.size();
     }
 
     void SwitchTo(View target) {
@@ -360,7 +439,7 @@ struct PostProfile::Data {
                     options.Open(buttons);
                     ReceiveSystemSounds(options.TakeEffects());
                 } else if (current_view == View::friends) {
-                    friends.Open(buttons);
+                    friends.Open(buttons,&talk.vocabulary());
                     ReceiveSystemSounds(friends.TakeEffects());
                 } else if (current_view == View::diary) {
                     if (previous == View::diary) {
@@ -476,6 +555,10 @@ struct PostProfile::Data {
 
     void UpdateWordEntry(std::uint32_t buttons, const recovered::PackageView* font);
     void UpdateConversation(unsigned minute, unsigned period, recovered::RngNativeOwner& rng);
+    void UpdateNamedConversation(unsigned minute, unsigned period, recovered::RngNativeOwner& rng);
+    unsigned BeginRoboTopic(unsigned minute, recovered::RngNativeOwner& rng);
+    unsigned StartRoboTopicSelection(unsigned minute, recovered::RngNativeOwner& rng);
+    unsigned ChooseRoboTopic(unsigned minute, recovered::RngNativeOwner& rng);
     void OpenTopic(const RoomEventSelection& selection);
     bool DrawScene(std::vector<std::uint8_t> &vram, std::size_t offset, std::uint32_t buttons,
                    const recovered::PackageView *font, recovered::RngNativeOwner *rng, const TitleRenderer *softkey);
@@ -517,20 +600,21 @@ bool PostProfile::Load(const std::filesystem::path &game_directory, unsigned act
 }
 
 bool PostProfile::Load(const std::filesystem::path &game_directory, const AcceptedProfile &profile,
-                       const std::array<std::uint32_t, 7> &calendar, std::string &error) {
+                       const std::array<std::uint32_t, 7> &calendar, std::string &error,
+                       const RetailUtilityContents* previous) {
     if (!Load(game_directory, profile.actor, calendar, error))
         return false;
     auto &room = *data_;
-    if ((profile.actor == 0 && (!room.activities.Load(room.media, error) ||
-                                !room.topics.Load(room.media, profile.packed_birthday, error) ||
-                                !room.menu.Load(room.media, error) ||
-                                !room.friends_banner.Load(game_directory / "assets/game/room-talk", error) ||
-                                !room.options_gui.Load(room.media, error) ||
-                                !room.notebook_gui.Load(game_directory, error) ||
-                                !room.friends.Load(game_directory / "assets/game/notebook", error) ||
-                                !room.diary.Load(game_directory / "assets/game/notebook", error) ||
-                                !room.word_entry.Load(game_directory / "assets/game/title", error) ||
-                                !room.answer_gui.Load(game_directory / "assets/game", error))) ||
+    if (!room.activities.Load(room.media,error,profile.actor) ||
+        !room.menu.Load(room.media,error) ||
+        !room.friends_banner.Load(game_directory / "assets/game/room-talk",error) ||
+        !room.options_gui.Load(room.media,error) ||
+        !room.notebook_gui.Load(game_directory,error) ||
+        !room.friends.Load(game_directory / "assets/game/notebook",error) ||
+        !room.word_entry.Load(game_directory / "assets/game/title",error) ||
+        !room.answer_gui.Load(game_directory / "assets/game",error) ||
+        !room.topics.Load(room.media,profile.packed_birthday,error,RoomTopicTable::Actor(profile.actor)) ||
+        !room.diary.Load(game_directory / "assets/game/notebook",error,profile.actor) ||
         !room.talk.Load(room.media, profile, error) ||
         !room.talk_gui.Load(game_directory / "assets/game", error) ||
         !room.inventory.Load(game_directory / "assets/game", error) ||
@@ -538,18 +622,24 @@ bool PostProfile::Load(const std::filesystem::path &game_directory, const Accept
         data_.reset();
         return false;
     }
-    if (profile.actor == 0) {
-        try {
-            room.scene_rows.Load(room.media);
-            if (!room.calendar_items.Load(room.media, error)) throw std::runtime_error(error);
-        } catch (const std::exception& ex) {
-            error = ex.what();
-            data_.reset();
-            return false;
+    try {
+        room.scene_rows.Load(room.media);
+        if (!room.calendar_items.Load(room.media, error)) throw std::runtime_error(error);
+        if (previous) {
+            const auto owners=RoomSaveOwners::FromActorGraph(previous->actor);
+            room.talk.vocabulary().InheritDictionary(owners.dictionary,owners.relation_group);
+            room.save_profile=previous->profile;
+            room.save_profile.AdoptReplacing(profile);
+            room.options.RestoreValues(room.save_profile.Options());
+        } else {
+            room.save_profile.Adopt(profile);
         }
+    } catch (const std::exception& ex) {
+        error = ex.what();
+        data_.reset();
+        return false;
     }
     room.talk.BindHomeInvitationReturn([owner=&room] { owner->topics.HomeInvitationReturned(); });
-    room.save_profile.Adopt(profile);
     room.save_profile.EnterFirstDayRoom(profile.actor);
     room.profile = room.save_profile.ReadProfile();
     return true;
@@ -558,7 +648,6 @@ bool PostProfile::Load(const std::filesystem::path &game_directory, const Accept
 bool PostProfile::Load(const std::filesystem::path& game_directory,const RetailUtilityContents& saved,
                        const std::array<std::uint32_t,7>& calendar,std::string& error) try {
     const auto profile=saved.profile.ReadProfile();
-    if (profile.actor!=0) throw std::invalid_argument("Only saved Toro rooms are currently supported");
     // Build a separate set of live owners. A rejected graph must not replace the active room.
     PostProfile resumed;
     if (!resumed.Load(game_directory,profile,calendar,error)) return false;
@@ -568,6 +657,9 @@ bool PostProfile::Load(const std::filesystem::path& game_directory,const RetailU
     room.save_profile=saved.profile;
     room.save_profile.EnterFirstDayRoom(profile.actor);
     room.options.RestoreValues(room.save_profile.Options());
+    // An older slot has no extension. A malformed optional history leaves
+    // the newly loaded keyboard cold without rejecting the room graph.
+    room.word_entry.RestoreHistory(saved.word_history);
     if (const auto page=room.save_profile.FirstDayDiary())
         room.diary.RestoreFirstDay(page->text,page->date,page->revealed);
     room.loaded_save=true;
@@ -576,6 +668,104 @@ bool PostProfile::Load(const std::filesystem::path& game_directory,const RetailU
 } catch (const std::exception& ex) {
     error=ex.what();
     return false;
+}
+
+void PostProfile::BindMeetingOpener(OpenRoomMeeting open) {
+    if (!data_ || !open) return;
+    data_->open_meeting=std::move(open);
+    data_->talk.EnablePeerMeetings();
+}
+
+void PostProfile::Data::UpdateMeeting(MeetingPlace request,std::uint32_t buttons,std::uint32_t minute) {
+    if (!active_meeting) {
+        active_meeting=request;
+        meeting_mode=request.mode;
+        shiritori_result=ShiritoriState::waiting;
+        meeting_buttons=buttons;
+        meeting_result_ticks=0;
+        if (request.mode==MeetingMode::gifts) {
+            gift_choices=inventory.ExchangeableGifts();
+            gift_choice=0;
+            if (gift_choices.empty()) { FinishMeeting(false); return; }
+            DepartureEvent("meeting-gift-choice",{{"count",int(gift_choices.size())}});
+        }
+    }
+    const auto edges=buttons&~std::exchange(meeting_buttons,buttons);
+    if (edges&0x4000) { FinishMeeting(true); return; }
+
+    if (request.mode==MeetingMode::shiritori) { UpdateShiritori(request); return; }
+
+    if (!record_exchange) {
+        if (request.mode==MeetingMode::gifts) {
+            const unsigned n=unsigned(gift_choices.size());
+            if (edges&0x50) gift_choice=(gift_choice+((edges&0x40)?1:n-1))%n;
+            if (!(edges&0x2000)) return;
+            const auto slot=gift_choices.at(gift_choice);
+            const auto date=recovered::CalendarBcdDate68FE0(SignedTimeOperand(minute));
+            record_exchange.emplace(open_meeting(request),inventory.OfferGift(slot),
+                [this,slot,date](const KscSaveValue& gift) {
+                    prepared_gift=inventory.WithGiftSwap(slot,gift,date);
+                    return true;
+                },
+                [this,slot](const KscSaveValue&) {
+                    inventory=std::move(*prepared_gift);
+                    return slot;
+                });
+        } else {
+            record_exchange.emplace(open_meeting(request),talk.vocabulary().OwnFriendCard(),
+                [this](const KscSaveValue& card) { return talk.vocabulary().FriendCardSlot(card).has_value(); },
+                [this](const KscSaveValue& card) { return talk.vocabulary().ReceiveFriendCard(card); });
+        }
+        DepartureEvent("meeting-open",{{"mode",int(request.mode)},{"venue",int(request.venue)}});
+    }
+    const auto state=record_exchange->Poll();
+    if (state==RecordExchangeState::complete || state==RecordExchangeState::failed)
+        FinishMeeting(false);
+}
+
+void PostProfile::Data::UpdateShiritori(MeetingPlace request) {
+    if (!shiritori) {
+        shiritori.emplace(open_meeting(request),talk.vocabulary());
+        DepartureEvent("meeting-open",{{"mode",int(request.mode)},{"venue",int(request.venue)}});
+    }
+    const auto previous=shiritori->turns();
+    shiritori_result=shiritori->Poll();
+    if (shiritori->turns()!=previous) {
+        const auto& word=shiritori->last_word();
+        DepartureEvent("meeting-shiritori-word",{{"turn",int(shiritori->turns())},{"local",int(shiritori->last_word_local())}});
+        departure_events.back().text={word.text,word.reading};
+    }
+    if (shiritori_result!=ShiritoriState::waiting && shiritori_result!=ShiritoriState::playing)
+        FinishMeeting(false);
+}
+
+void PostProfile::Data::FinishMeeting(bool cancelled) {
+    const auto row=record_exchange ? record_exchange->received_row() : std::nullopt;
+    const bool played=!cancelled && (shiritori_result==ShiritoriState::won || shiritori_result==ShiritoriState::lost ||
+                                     shiritori_result==ShiritoriState::draw);
+    meeting_received=row.has_value() || played;
+    meeting_result_ticks=cancelled ? 0 : 90;
+    if (row) {
+        if (meeting_mode==MeetingMode::gifts) {
+            const auto* item=inventory.slot_item(int(*row));
+            DepartureEvent("meeting-gift-received",{{"slot",int(*row)},{"id",item->id}});
+        } else {
+            DepartureEvent("meeting-card-received",{{"row",int(*row)},{"peer_done",1}});
+        }
+    } else if (played) {
+        auto& words=talk.vocabulary();
+        for (const auto used : shiritori->used_rows()) words.WriteNumber(used,11,words.FieldInt(used,11)|8);
+        const int result=shiritori_result==ShiritoriState::won ? 1 : shiritori_result==ShiritoriState::lost ? -1 : 0;
+        DepartureEvent("meeting-shiritori-finished",{{"result",result},{"turns",int(shiritori->turns())}});
+    } else {
+        DepartureEvent("meeting-closed",{{"cancelled",int(cancelled)}});
+    }
+    shiritori.reset();
+    record_exchange.reset();
+    active_meeting.reset();
+    prepared_gift.reset();
+    gift_choices.clear();
+    talk.FinishPeerMeeting(meeting_received);
 }
 
 bool PostProfile::return_to_title_requested() const {
@@ -609,7 +799,9 @@ bool PostProfile::Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std:
     }
     if (!ok)
         return false;
-    if (room.profile && room.profile->actor == 0) {
+    if (room.profile) {
+        const bool named_actor = room.profile->actor>=1;
+        constexpr unsigned save_site[]{0x8d382,0x6b247,0x67128,0x6b2ff,0x6b110};
         const bool active = room.current_view == Data::View::room && !room.switching;
         const bool open = room.radius == std::hypot(240.5f, 136.5f);
         // Manager posts at the end of this update. The queued event is
@@ -632,11 +824,14 @@ bool PostProfile::Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std:
             if (menu_result) room.last_menu_result = *menu_result;
         }
         room.pending_input = room.input_gate.Step(buttons, {active, open,
-                              !active || room.awaiting_entrance || room.talk.busy_for_room_input() || room.word_open, true}, menu_result);
+                              !active || room.awaiting_entrance || room.talk.busy_for_room_input() ||
+                                  room.word_open || (named_actor && !room.talk.finished() && !room.talk.scheduled_room_event_active()),
+                              true, !room.actor_departed}, menu_result);
         if (room.pending_input == RoomInputEvent::menu) {
             // This owner opens the full MMENU (13B28, mode from 2508C).
-            room.save_profile.SetFullMenuMode();
-            room.menu.Open(buttons, room.scene != 0);
+            if (!room.actor_departed) room.save_profile.SetFullMenuMode();
+            room.menu.Open(buttons,room.scene!=0,false,true,room.actor_departed);
+            if (room.actor_departed) room.DepartureEvent("departed-menu",{});
             room.last_menu_result = -1;
         } else if (room.pending_input == RoomInputEvent::inventory) {
             room.SwitchTo(Data::View::inventory);
@@ -647,32 +842,17 @@ bool PostProfile::Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std:
             room.DepartureEvent(return_to_title ? "system-title-request" : "system-save-request",
                                 {{"result",room.last_menu_result},{"event",return_to_title ? 7 : 8}});
             try {
-                room.StageSaveHeader();
-                room.topics.messages().PrepareUsedDescriptorsForSave(); // 8D360 -> A0F3
-                room.topics.PrepareTopicHistoryForSave(); // 8D36B -> 1D62
-                const auto owners = RoomSaveOwners::Export(room.talk, room.scene_rows, room.activity,
-                                                          room.inventory, room.topics);
-                room.RecordTable("system-save-inventory", owners.inventory, {{"root",2}});
-                room.RecordTable("system-save-scene-rows", owners.scene_rows, {{"root",3}});
-                room.RecordTable("system-save-home-timer", owners.home_counter, {{"root",16}});
-                room.RecordTable("system-save-message-timer", owners.message_counter, {{"root",18}});
-                room.RecordTable("system-save-used-diaries", owners.used_diaries, {{"root",21}});
-                room.RecordTable("system-save-messages", owners.diary_staging, {{"root",26}});
-                const auto request = BuildRetailUtilityRequest(room.save_profile, owners.ToActorGraph());
-                room.DepartureEvent("system-save-utility", {{"bytes",int(request.size())}});
-                // The full request contains the player profile. Capture its bytes only in the private save test.
-                const char* capture = std::getenv("DOKODEMO_TEST_SAVE_SNAPSHOT");
-                if (capture && std::string_view(capture) == "1")
-                    room.departure_events.back().text.emplace_back(request.begin(), request.end());
-                WriteRetailSlot(room.game_directory/"savedata"/"UCJS10002000",room.game_directory,request);
-                room.DepartureEvent("system-save-written", {{"result",room.last_menu_result},{"bytes",int(request.size())}});
+                const auto size = room.WriteCurrentSlot();
+                room.DepartureEvent("system-save-written", {{"result",room.last_menu_result},{"bytes",int(size)}});
                 room.input_gate.SaveCompleted();
                 room.return_to_title=return_to_title;
             } catch (const std::exception& ex) {
                 room.DepartureEvent(return_to_title ? "system-title-save-unavailable" : "system-save-unavailable",
-                                    {{"result",room.last_menu_result},{"game",46},{"script_site",0x8D382}});
+                                    {{"result",room.last_menu_result},{"game",46},{"script_site",int(save_site[room.profile->actor])}});
                 room.departure_events.back().text.emplace_back(ex.what());
             }
+        } else if (room.pending_input == RoomInputEvent::departed_action) {
+            room.DepartureEvent("departed-action-frontier",{{"result",16},{"site",0x23898}});
         } else if (room.pending_input == RoomInputEvent::dismiss_save_notice) {
             room.DepartureEvent("system-save-dismissed", {});
         } else if (room.pending_input == RoomInputEvent::options) {
@@ -683,6 +863,16 @@ bool PostProfile::Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std:
             case 4: room.SwitchTo(Data::View::notebook); break;
             case 6: room.SwitchTo(Data::View::diary); break;
             }
+        } else if (named_actor && (room.pending_input == RoomInputEvent::outing ||
+                            room.pending_input == RoomInputEvent::return_home ||
+                            room.pending_input == RoomInputEvent::friends_action ||
+                            (room.profile->actor>=2 && (room.pending_input == RoomInputEvent::teaching ||
+                                                        room.pending_input == RoomInputEvent::ordinary)))) {
+            // The native menu owns its input until the closed-menu event
+            // returns. Unported actor callbacks must release that owner.
+            room.input_gate.FinishAction();
+            room.DepartureEvent(room.profile->actor==1?"robo-room-action-unavailable":"actor-room-action-unavailable",
+                                {{"event",int(room.pending_input)},{"result",room.last_menu_result}});
         }
         if (was_open || room.pending_input == RoomInputEvent::menu) {
             for (const auto cue : room.menu.effects()) room.effects.push_back({5, 0, cue, 128, false});
@@ -693,7 +883,8 @@ bool PostProfile::Draw(std::vector<std::uint8_t> &vram, std::size_t offset, std:
     else room.AdvanceTravelCover(vram, offset);
     if (room.input_gate.shows_save_notice()) {
         if (!common_font) throw std::runtime_error("Missing room font for save notice");
-        DrawSaveUnavailable(*common_font,vram,offset);
+        DrawRoomNotice(*common_font,vram,offset,
+                       {"Windows port: Save unavailable","Cannot write the protected slot.","Enter / Esc: return to room"});
     }
     if (room.friends_destination_pending && room.input_gate.room_controls_ready() && !room.menu.active() &&
         !room.talk.busy_for_room_input() && room.current_view == Data::View::room) {
@@ -725,6 +916,33 @@ void PostProfile::Data::AdvanceTravelCover(std::vector<std::uint8_t>& vram, std:
             music = true;
         }
     }
+}
+
+void PostProfile::Data::AdvanceFarewell() {
+    using Action = RoomTalkState::FarewellAction;
+    const auto action=talk.pending_farewell_action();
+    if (!action) return;
+    const auto sites=talk.farewell_sites();
+    switch (*action) {
+    case Action::wait_for_cover:
+        // GAME75's room-manager request waits for the closing transition.
+        if (switching || travel_cover!=TravelCover::closed) return;
+        DepartureEvent("farewell-cover-closed", {{"game",75},{"site",int(sites.game75)},{"mode",int(talk.farewell_mode())}});
+        break;
+    case Action::write_slot:
+        try {
+            const auto size=WriteCurrentSlot();
+            DepartureEvent("farewell-save-written", {{"game",46},{"site",int(sites.game46)},{"bytes",int(size)}});
+        } catch (const std::exception& ex) {
+            throw std::runtime_error(std::string("Cannot save the farewell: ")+ex.what());
+        }
+        break;
+    case Action::wait_for_slot:
+        // The native utility returns only after the protected slot is committed.
+        DepartureEvent("farewell-save-acknowledged", {{"site",int(sites.game75+11)}});
+        break;
+    }
+    talk.FinishFarewellAction(*action);
 }
 
 void PostProfile::Data::HandleTravel(unsigned period, recovered::RngNativeOwner& rng) {
@@ -761,7 +979,8 @@ void PostProfile::Data::HandleTravel(unsigned period, recovered::RngNativeOwner&
     const auto request = talk.outing_scene_request();
     if (!request) return;
     if (!pending_scene) {
-        if (!((*request == 12 && scene == 0) || (*request == 0 && scene == 12)))
+        const bool departure=scene==0 && (*request==12 || OutingScene::Supports(*request));
+        if (!departure && (scene==0 || *request!=0))
             throw std::runtime_error("Unsupported outing scene request " + std::to_string(*request));
         pending_scene = request;
         fade_music = true;
@@ -774,18 +993,25 @@ void PostProfile::Data::HandleTravel(unsigned period, recovered::RngNativeOwner&
 
     // Scene unload clears the old bank. 19B6C chooses the new bank before 5F58 loads the model.
     const int bank = SelectTravelRoomBank(period,rng.NextC3234());
-    if (*request == 12) {
+    if (*request != 0) {
         scene_models.Clear();
-        if (!roof.Load(media,period,rng,error) || !signs.Load(media,roof.resource(),talk.outing_labels(),error))
+        if (*request==12) {
+            if (!roof.Load(media,period,rng,error) || !signs.Load(media,roof.resource(),talk.outing_labels(),error))
+                throw std::runtime_error(error);
+        } else if (!destination.Load(media,*request,period,error)) {
             throw std::runtime_error(error);
+        }
     } else {
+        destination={};
         // Restore the room's own scene controls. Its mesh stays resident during the outing.
         television_clip.reset();
         door_clip.reset();
         paired_time = lamp_time = door_time = 0;
     }
-    if (!actor.AdoptScene(*request)) throw std::runtime_error("Outing actor placement failed");
+    const auto* placement=OutingScene::Supports(*request) ? &destination.Placement() : nullptr;
+    if (!actor.AdoptScene(*request,placement)) throw std::runtime_error("Outing actor placement failed");
     light_time = clock[3]*216000 + clock[2]*3600 + clock[1]*60;
+    motion_effects.Clear();
     scene = *request;
     scene_music = bank;
     report_view = true;
@@ -793,20 +1019,198 @@ void PostProfile::Data::HandleTravel(unsigned period, recovered::RngNativeOwner&
     if (!talk.FinishOutingScene(scene)) throw std::logic_error("No waiting outing caller for adopted scene");
     pending_scene.reset();
     caller_parked = false;
-    if (scene == 12) DepartureEvent("consumed", {{"scene",12},{"resource",int(roof.resource())},{"period",int(period)},{"bank",bank}});
+    if (scene) DepartureEvent("consumed", {{"scene",int(scene)},{"resource",int(SceneResource())},{"period",int(period)},{"bank",bank}});
     else DepartureEvent("consumed", {{"scene",0},{"period",int(period)},{"bank",bank}});
+}
+
+void PostProfile::Data::AdvanceRoomActivity(uint32_t minute, unsigned period, recovered::RngNativeOwner& rng) {
+    const RoomActivityFrame frame{period, actor.light_on(), talk.mood(), talk.mood_age(),
+                                  actor.source_field50(), actor.source_field5c(), actor.source_flag25a(),
+                                  actor.started_activity(), actor.command_ready(),scene, talk.outing_return_deadline()};
+    activity.Advance(minute, frame, rng);
+    if (const auto command = activity.lamp_command(); command && !actor.RequestRoomControl(*command))
+        activity.RefuseLampCommand();
+    if (const auto mood = activity.mood_write()) {
+        talk.SetMood(*mood);
+        actor.SetMood(*mood);
+    }
+    if (activity.state() == RoomActivityPhase::State::select) {
+        // Scene 0 is the room registered at 8E161. GAME23/24/28/36
+        // and mood are sampled again by 13482 on every turn.
+        const RoomActivityInputs input{activity.first_after_cleanup(), int(scene), int(actor.source_field58()),
+                                       int(actor.source_field50()), int(period), talk.mood(),
+                                       activity_flag};
+        const auto selection = activities.Select(input, rng);
+        const bool accepted = !selection.command || actor.RequestActivity(*selection.command);
+        activity.FinishSelection(input, selection, accepted, rng);
+    }
+}
+
+void PostProfile::Data::LoadScheduledCompanion() {
+    secondary_actor.emplace();
+    secondary_visible=false;
+    if (!secondary_actor->Load(game_directory,5,RoomPeriod(season,clock[3],clock[2]),error))
+        throw std::runtime_error("Cannot load secondary room actor: "+error);
+}
+
+void PostProfile::Data::StartRoomEvent() {
+    const auto midnight=activity.DaySaveWords()[1].word & 0x0fffffffu;
+    const RoomTalkState::ScheduledProgress progress{topics.total_contacts(),save_profile.MainDiaryCount(),
+        CalendarMinute(profile->adopted_at)};
+    if (!talk.BeginScheduledRoomEvent(scheduled_room_event,midnight,progress))
+        throw std::runtime_error("Missing scheduled room event media: "+std::to_string(scheduled_room_event));
+    input_gate.RequestAction();
+    DepartureEvent("scheduled-room-event", {{"event",int(scheduled_room_event)},{"day",activity.day_number()}});
+}
+
+bool PostProfile::Data::StageDiary(const std::vector<RoomTalkState::ScheduledDiary>& requests,
+                                 recovered::RngNativeOwner& rng, const char* event) {
+    auto& messages=topics.messages();
+    std::vector<const RoomTalkState::ScheduledDiary*> available;
+    for (const auto& request : requests)
+        if (!messages.DescriptorUsed(request.descriptor)) available.push_back(&request);
+    if (available.empty()) return false;
+
+    const auto& request=*available[rng.NextC3234()%available.size()];
+    auto text=request.text;
+    for (std::size_t at=0; (at=text.find("$_",at))!=std::string::npos;) {
+        if (text.compare(at,5,"$_YOU")==0) {
+            const auto name=profile->player.text();
+            text.replace(at,5,name);
+            at+=name.size();
+        } else if (text.compare(at,4,"$_ME")==0) {
+            const auto name=profile->nickname.text();
+            text.replace(at,4,name);
+            at+=name.size();
+        } else {
+            at+=2;
+        }
+    }
+    const bool recorded=messages.RecordDiary(request.descriptor,text,request.priority);
+    if (recorded) RecordTable(event,messages.SaveTable(),{{"root",26}});
+    return recorded;
+}
+
+void PostProfile::Data::EnterDepartedRoom(int previous_day, recovered::RngNativeOwner& rng) {
+    if (activity.last_day()!=0) {
+        // Each actor's cold entry offers diary 9 before disabling the expired stay.
+        StageDiary({talk.expired_stay_diary()},rng,"expired-stay-diary");
+        auto stay=activity.ProgressionSaveWords();
+        stay[0].word=0x20000000;
+        activity.RestoreProgressionSaveWords(stay);
+        constexpr std::array reset_sites{0x8e158,0x6c019,0x67efc,0x6c0d1,0x6bee4};
+        DepartureEvent("expired-stay-closed",{{"site",reset_sites.at(profile->actor)}});
+    }
+    save_profile.RestrictRoomMenus();
+    actor_departed=true;
+    talk.EnterWithoutIntroduction();
+    introduction_done=true;
+    report_view=true;
+    DepartureEvent("departed-room",{{"previous_day",previous_day}});
+    if (profile->actor<2)
+        departure_events.back().values.emplace_back("site",profile->actor==1?0x6bc94:0x8ddd3);
 }
 
 bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t offset, std::uint32_t buttons,
                                   const recovered::PackageView *font, recovered::RngNativeOwner *rng, const TitleRenderer *softkey) {
     talk.SetMessageSpeed(options.values()[0]);
     const auto minute = CurrentMinute();
-    if (profile && profile->actor == 0 && activity.state() == RoomActivityPhase::State::unloaded) {
+    const bool robo=profile && profile->actor==1;
+    const bool alternate=profile && profile->actor>=2;
+    if(alternate && !actor_script_started) {
+        if (!rng) return false;
+        if (!loaded_save) {
+            talk.vocabulary().StartActorScript(rng->NextC3234(),rng);
+            topics.StartActorScript(minute);
+        }
+        const auto previous_day=activity.day_number();
+        if (activity.RegisterDay(minute))
+            topics.ResetMessageDay(minute);
+        const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word&0x0fffffffu);
+        if (loaded_save && activity.day_number()<1)
+            EnterDepartedRoom(previous_day,*rng);
+        if ((activity.day_number()<1 && !actor_departed) || event>6)
+            throw std::runtime_error("This saved actor's scheduled scene is not available");
+        UpdateHomeDecorations(minute,*rng);
+        if (!actor_departed) activity.Enter(minute,*rng);
+        if (loaded_save && !actor_departed) {
+            if (event==2 || event==4) LoadScheduledCompanion();
+            scheduled_room_event=event>=2?event:0;
+            actor.EnterWithoutInvitation();
+            talk.EnterWithoutIntroduction();
+            topics.ResumeDay(minute);
+            awaiting_entrance=true;
+            DepartureEvent("room-load-restored",{{"day",activity.day_number()},
+                                                 {"previous_day",previous_day},{"graph_fields",27}});
+        }
+        actor_script_started=true;
+    } else if (alternate && !actor_departed && introduction_done && !switching && !menu.active() &&
+               !awaiting_entrance && !scheduled_room_event &&
+               activity.RegisterDay(minute)) {
+        if (!rng) return false;
+        topics.ResetMessageDay(minute);
+        const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word&0x0fffffffu);
+        if (activity.day_number()<1 || event>6)
+            throw std::runtime_error("This actor's scheduled scene is not available");
+        UpdateHomeDecorations(minute,*rng);
+        if (event>=2) {
+            if (!activity.BeginOrdinary()) throw std::logic_error("Cannot suspend a room activity for the scheduled scene");
+            if (event==2 || event==4) LoadScheduledCompanion();
+            scheduled_room_event=event;
+            StartRoomEvent();
+        }
+    }
+    if(robo && !actor_script_started) {
+        if(!rng) return false;
+        if (!loaded_save) {
+            talk.vocabulary().StartActorScript(rng->NextC3234(),rng);
+            topics.StartActorScript(minute);
+        }
+        const int previous_day=activity.day_number();
+        if (activity.RegisterDay(minute)) { // 6BFFB -> 1B35
+            topics.ResetMessageDay(minute);
+            RecordTable("diary-staging-clear",topics.messages().SaveTable(),{{"root",26}});
+        }
+        const unsigned event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
+        if (loaded_save && activity.day_number()<1)
+            EnterDepartedRoom(previous_day,*rng);
+        if (event>6) throw std::runtime_error("Unsupported Robo stay event at 6BC4D");
+        UpdateHomeDecorations(minute,*rng); // 6C039 / 6C046 / 6C05B
+        if (!actor_departed) activity.Enter(minute,*rng); // 6BCC1..6BCD1
+        if (loaded_save && !actor_departed && event!=1) {
+            if (event==2 || event==4) LoadScheduledCompanion();
+            scheduled_room_event=event;
+            actor.EnterWithoutInvitation();
+            talk.EnterWithoutIntroduction();
+            topics.ResumeDay(minute);
+            robo_cleanup_minute=minute;
+            awaiting_entrance=true;
+        }
+        if (loaded_save) DepartureEvent("room-load-restored",{{"day",activity.day_number()},
+                                         {"previous_day",previous_day},{"graph_fields",27}});
+        actor_script_started=true;
+    } else if (robo && !actor_departed && introduction_done && !switching && !menu.active() && !awaiting_entrance &&
+               !scheduled_room_event && talk.finished() && activity.state()!=RoomActivityPhase::State::ordinary &&
+               activity.RegisterDay(minute)) { // 6BD3D registers a new day in the running room.
+        topics.ResetMessageDay(minute);
+        RecordTable("diary-staging-clear",topics.messages().SaveTable(),{{"root",26}});
+        const auto event=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
+        if (activity.day_number()<1 || event>6)
+            throw std::runtime_error("Unsupported Robo stay event at 6BC4D");
+        if (event>=2) {
+            if (!activity.BeginOrdinary()) throw std::logic_error("Cannot suspend Robo's activity for a scheduled event");
+            if (event==2 || event==4) LoadScheduledCompanion();
+            scheduled_room_event=event;
+            StartRoomEvent();
+        }
+    }
+    std::optional<unsigned> scheduled_camera;
+    if (profile && profile->actor == 0 && !actor_departed && activity.state() == RoomActivityPhase::State::unloaded) {
         if (!rng) return false;
         // 183E0 selects the room bank before this VM starts. 17A6 picks
         // the adopted player row's initial saying before 8DDF5 sets timers.
         if (!loaded_save) {
-            talk.vocabulary().StartActorScript(rng->NextC3234());
+            talk.vocabulary().StartActorScript(rng->NextC3234(),rng);
             topics.StartActorScript(minute);
         }
         const int previous_day = activity.day_number();
@@ -815,43 +1219,37 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
             RecordTable("diary-staging-clear", topics.messages().SaveTable(), {{"root",26}});
         }
         if (loaded_save) {
-            if (activity.day_number() < 1)
-                throw std::runtime_error("Saved stay reached the departure path at 8E146");
+            if (activity.day_number() < 1) EnterDepartedRoom(previous_day,*rng);
             DepartureEvent("room-load-restored", {{"day",activity.day_number()},
                            {"previous_day",previous_day},{"graph_fields",27}});
         }
-        // Calendar builtins consume the signed 28-bit payload of the VM time value.
-        const int signed_minute = SignedTimeOperand(minute);
-        const unsigned date = recovered::CalendarBcdDate68FE0(signed_minute);
-        if (activity.day_number() >= 0) {
-            const int selector = (signed_minute / 1440 + 5) % 7;
-            const auto seasonal = calendar_items.Update(date, date, profile->packed_birthday);
-            RecordTable("scene-rows-before", scene_rows.SaveTable(),
-                            {{"day",activity.day_number()},{"selector",selector},{"date",int(date)},
-                             {"calendar_items",int(seasonal)}});
-            const auto draws = scene_rows.Update(selector, date, *rng);
-            RecordTable("scene-rows-updated", scene_rows.SaveTable(),
-                            {{"roll0",draws[0]},{"roll1",draws[1]},{"roll2",draws[2]},
-                             {"roll3",draws[3]},{"roll4",draws[4]}});
-        }
-        BindHomeModels(); // 8DDFC schedules 3A91/393C before the room deadlines.
-        activity.Enter(minute, *rng);
-        const auto scheduled=activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
-        if (loaded_save && scheduled==0) {
+        UpdateHomeDecorations(minute,*rng); // 8DDFC schedules 3A91/393C before the room deadlines.
+        if (!actor_departed) activity.Enter(minute,*rng);
+        const auto scheduled=actor_departed?0:activity.ScheduledEvent(talk.ProgressFlagWords()[0].word & 0x0fffffffu);
+        if (loaded_save && !actor_departed && (scheduled<=6 && scheduled!=1)) {
+            if (scheduled==2 || scheduled==4) LoadScheduledCompanion();
             actor.EnterWithoutInvitation();
             talk.EnterWithoutIntroduction();
             topics.ResumeDay(minute);
             awaiting_entrance=true;
+            scheduled_room_event=scheduled;
         }
         if (scheduled==1) input_gate.RequestAction(); // 8DDA3: dispatch first-day introduction.
-        else if (scheduled) throw std::runtime_error("Unsupported room event at 8DD8C: "+std::to_string(scheduled));
+        else if (scheduled && !scheduled_room_event)
+            throw std::runtime_error("Unsupported room event at 8DD8C: "+std::to_string(scheduled));
     }
-    if (!actor.Advance(minute))
+    if (!actor_departed && !actor.Advance(minute))
         throw std::runtime_error(actor.error().empty() ? "Room actor update failed" : actor.error());
+    if (secondary_visible && !secondary_actor->Advance(minute))
+        throw std::runtime_error(secondary_actor->error().empty() ?
+                                 "Secondary room actor update failed" : secondary_actor->error());
     if (awaiting_entrance && actor.entrance_finished()) {
-        activity.EnterUnscheduledLoop();
         awaiting_entrance=false;
-        introduction_done=true;
+        if (scheduled_room_event) StartRoomEvent();
+        else {
+            activity.EnterUnscheduledLoop();
+            introduction_done=true;
+        }
     }
     if (const auto light = actor.lamp_write()) {
         if (*light) {
@@ -865,14 +1263,18 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
     }
     if (const auto value = actor.game28_write())
         activity_flag = *value != 0;
-    if (!switching && radius == std::hypot(240.5f, 136.5f))
+    if (!switching && radius == std::hypot(240.5f, 136.5f)) {
         effects.insert(effects.end(), actor.sounds().begin(), actor.sounds().end());
-    if (profile && !switching) {
+        if (secondary_visible)
+            effects.insert(effects.end(), secondary_actor->sounds().begin(), secondary_actor->sounds().end());
+    }
+    if (profile && !actor_departed && !switching) {
         if (last_travel_command && actor.command_ready()) {
             DepartureEvent("ready", {{"command",int(*last_travel_command)}});
             last_travel_command.reset();
         }
         talk.SetCalendarMinute(minute);
+        talk.SetRoomDay(activity.day_number());
         talk.SetOutingEnvironment(activity_flag, actor.light_on(), RoomPeriod(season, clock[3], clock[2]),
                                   camera.mode == RoomCameraState::Mode::approaching || camera.mode == RoomCameraState::Mode::close);
         talk.SetOutingActorFlags(actor.source_field5c(), actor.source_flag25a());
@@ -880,7 +1282,12 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         const bool answer_was_ready = talk.answer_interactive();
         const unsigned previous_answer = talk.answer_cursor();
         talk.Step(buttons, actor.talk_ready(), actor.command_ready(), font, actor.invitation_expired(),
-                  pending_input == RoomInputEvent::during_action, rng);
+                  profile->actor>=1 && !talk.scheduled_room_event_active()
+                      ? std::nullopt : std::optional<bool>(pending_input == RoomInputEvent::during_action), rng,
+                  secondary_actor && secondary_actor->command_ready());
+        if (const auto meeting=talk.meeting_request()) UpdateMeeting(*meeting,buttons,minute);
+        if (talk.scheduled_room_event_active() && talk.answer_interactive() && !answer_was_ready)
+            DepartureEvent("scheduled-room-choice", {{"count",int(talk.answer_options().size())}});
         if (conversation.snapshot().argument == 2 && talk.answer_interactive() &&
             (!answer_was_ready || previous_answer != talk.answer_cursor())) {
             DepartureEvent("friends-ask", {{"cursor",int(talk.answer_cursor())},
@@ -888,6 +1295,45 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
             departure_events.back().text = talk.answer_options();
         }
         friends_banner.Step();
+        for (const auto selection : talk.TakeScheduledActorSelections()) {
+            if (!secondary_actor) throw std::logic_error("Scheduled actor selection has no secondary actor");
+            secondary_visible=true; // GAME37 writes the secondary model's visibility byte on either selection.
+            DepartureEvent("scheduled-actor-selection", {{"record",int(selection)}});
+        }
+        if (const auto deadline=talk.TakeScheduledActivityDeadline()) activity.SetAmbientDeadline(*deadline);
+        scheduled_camera=talk.TakeScheduledCamera();
+        if (scheduled_camera) scheduled_camera_held=*scheduled_camera==3; // 23580 -> 8490 holds the current view.
+        if (const auto requests=talk.scheduled_diaries(); !requests.empty()) {
+            if (!rng) throw std::runtime_error("Missing scheduled diary selector RNG");
+            const auto event=scheduled_room_event==6?"return-diary-staged":"farewell-diary-staged";
+            talk.FinishScheduledDiary(StageDiary(requests,*rng,event));
+        }
+        if (scheduled_room_event==3 || scheduled_room_event==5) {
+            const auto writes=talk.TakeScheduledStayWrites();
+            if (writes[0] || writes[1]) {
+                auto stay=activity.ProgressionSaveWords();
+                for (unsigned i=0;i<stay.size();++i)
+                    if (writes[i]) stay[i].word=0x20000000u|*writes[i];
+                activity.RestoreProgressionSaveWords(stay);
+                DepartureEvent("scheduled-stay-written",{{"last_day",int(stay[0].word&0x0fffffffu)},
+                                                          {"return_day",int(stay[1].word&0x0fffffffu)}});
+            }
+            if (talk.TakeScheduledMenuRestriction()) save_profile.RestrictRoomMenus();
+            if (const auto open=talk.TakeOutingWipe())
+                travel_cover=*open ? TravelCover::opening : TravelCover::closing;
+            AdvanceFarewell();
+            if (talk.TakeFarewellComplete()) {
+                DepartureEvent("scheduled-farewell-complete", {{"event",int(scheduled_room_event)},
+                               {"day",activity.day_number()},{"site",int(talk.farewell_sites().reset)}});
+                scheduled_room_event=0;
+                return_to_title=true;
+                return true;
+            }
+        }
+        if (const auto show = talk.TakeScheduledNavigation()) {
+            friends_banner.SetNavigation(*show);
+            DepartureEvent("scheduled-navigation", {{"show",int(*show)}});
+        }
         if (const auto show = talk.TakeFriendsBanner()) {
             friends_banner.Set(*show);
             DepartureEvent("friends-banner", {{"show",int(*show)}});
@@ -895,22 +1341,38 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         actor.SetMood(talk.mood());
         if (!talk.error().empty())
             throw std::runtime_error(talk.error());
+        if (talk.scheduled_room_event_active() && talk.ordinary_frontier())
+            throw std::runtime_error("Unsupported scheduled room procedure "+std::to_string(*talk.ordinary_frontier()));
         if (talk.TakeFirstDayDiaryRequest()) {
             if (!rng) throw std::logic_error("Missing first-day diary selector RNG");
-            if (diary.RecordFirstDay(topics.messages(), *rng, profile->player.text(), clock[6], clock[5], clock[4])) {
+            const auto diary_name=profile->actor==1 || profile->actor==3 ? profile->nickname.text() : profile->player.text();
+            if (diary.RecordFirstDay(topics.messages(), *rng, diary_name, clock[6], clock[5], clock[4])) {
                 RecordTable("diary-staging-written", topics.messages().SaveTable(), {{"root",26}});
                 DepartureEvent("diary-created", {{"year",int(clock[6])},{"month",int(clock[5])},
                                                  {"day",int(clock[4])},{"hour",int(clock[3])}});
                 departure_events.back().text = {std::string(profile->player.text())};
             }
         }
-        for(const auto topic : talk.TakeTopicEnqueues()) topics.Enqueue(topic);
+        for(const auto topic : talk.TakeTopicEnqueues()) {
+            if (profile->actor==1) robo_pending_topics.Enqueue(topic);
+            else topics.Enqueue(topic);
+        }
         if (talk.consumed())
             effects.push_back({5, 0, 4, 128, true}); // 1D05C
         for (const auto sound : talk.TakeEffects())
             effects.push_back({5, 0, sound, 128, false});
+        if (const auto sound = talk.TakeScheduledSound())
+            effects.push_back(*sound);
         if (talk.TakeOutingInterrupt() && !actor.InterruptCommand())
             throw std::runtime_error("Outing actor interrupt failed");
+        for (unsigned record=0; record<2; ++record) {
+            if (const auto command=talk.TakeScheduledActorCommand(record)) {
+                auto& command_actor=record ? secondary_actor.value() : actor;
+                if (!command_actor.Request(*command))
+                    throw std::runtime_error("Unimplemented scheduled actor request "+std::to_string(*command));
+                DepartureEvent("scheduled-actor-command", {{"command",int(*command)},{"record",int(record)}});
+            }
+        }
         if (const auto command = talk.actor_command()) {
             if (!actor.Request(*command)) throw std::runtime_error("Unimplemented room actor request " + std::to_string(*command));
             if (talk.outing_descriptor() && conversation.snapshot().running &&
@@ -921,7 +1383,7 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         }
         if (const auto modulus = talk.random_requested()) {
             if (!rng || !*modulus)
-                return false;
+                throw std::runtime_error("Room script requested RNG without a positive bound");
             talk.SupplyRandom(rng->NextC3234() % *modulus);
         }
         if (talk.word_entry_requested()) UpdateWordEntry(buttons, font);
@@ -941,19 +1403,116 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
             SwitchTo(View::inventory);
         }
     }
-    bool return_wide = false;
-    if (profile && profile->actor == 0 && !switching) {
+    bool return_wide = profile && profile->actor>=1 && talk.wide_camera_requested();
+    if (alternate && !actor_departed && !switching) {
+        if (!rng) return false;
+        if (const auto counted=talk.TakeScheduledReturn()) {
+            if (*counted) topics.CountContact();
+            input_gate.FinishAction();
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+            introduction_done=true;
+            return_wide=true;
+            DepartureEvent("scheduled-room-return", {{"event",int(scheduled_room_event)},{"day",activity.day_number()}});
+            scheduled_room_event=0;
+        } else if (scheduled_room_event) {
+            // The source scene continues to own the room until its wrapper returns.
+        } else if (return_wide) {
+            introduction_done=(talk.ProgressFlagWords()[0].word&1)!=0;
+            if (introduction_done) {
+                topics.FinishIntroduction(minute);
+                input_gate.FinishAction();
+            }
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+        } else if (talk.ordinary_source_return()) {
+            topics.CountContact();
+            talk.vocabulary().BeginConversation();
+            conversation.Finish();
+            input_gate.FinishAction();
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+            return_wide=true;
+            DepartureEvent("named-contact-return",{{"contacts",int(topics.total_contacts())}});
+        } else if (introduction_done) {
+            const auto period=RoomPeriod(season,clock[3],clock[2]);
+            if (pending_input==RoomInputEvent::ordinary) {
+                if (activity.BeginOrdinary() && conversation.Begin()) {
+                    input_gate.RequestAction();
+                    UpdateNamedConversation(minute,period,*rng);
+                } else {
+                    activity.ReleaseUnavailableContact();
+                    input_gate.ReleaseUnavailableContact();
+                }
+            } else if (activity.state()==RoomActivityPhase::State::ordinary) {
+                UpdateNamedConversation(minute,period,*rng);
+            } else AdvanceRoomActivity(minute,period,*rng);
+        }
+    }
+    if (robo && !actor_departed && !switching) {
+        if (!rng) return false;
+        const auto period=RoomPeriod(season,clock[3],clock[2]);
+        if (const auto counted=talk.TakeScheduledReturn()) {
+            if (*counted) topics.CountContact();
+            robo_cleanup_minute=minute;
+            input_gate.FinishAction();
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+            introduction_done=true;
+            return_wide=true;
+            DepartureEvent("scheduled-room-return", {{"event",int(scheduled_room_event)},{"day",activity.day_number()}});
+            scheduled_room_event=0;
+        } else if (scheduled_room_event) {
+            // The pending source callback owns the scene until its enclosing return.
+        } else if (return_wide) {
+            introduction_done=(talk.ProgressFlagWords()[0].word&1)!=0;
+            topics.FinishIntroduction(minute);
+            talk.vocabulary().BeginConversation();
+            robo_cleanup_minute=minute;
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+        } else if (talk.ordinary_source_return()) {
+            if (conversation.snapshot().argument==0 || talk.counted_contact()) topics.CountContact();
+            if (robo_hour_topic) robo_next_hour_topic=SignedTimeOperand(minute+180); // 67C63
+            robo_cleanup_minute=minute; // 6B801 stamps CT CADF after the contact finishes.
+            talk.vocabulary().BeginConversation(); // 6B7F5 -> 0FD1
+            conversation.Finish();
+            input_gate.FinishAction();
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+            return_wide=true;
+            DepartureEvent("robo-contact-return", {{"site",0x6b7f3},{"contacts",int(topics.total_contacts())}});
+        } else if (pending_input==RoomInputEvent::ordinary || pending_input==RoomInputEvent::teaching) {
+            const auto argument=pending_input==RoomInputEvent::teaching ? 1u : 0u;
+            if (activity.BeginOrdinary() && conversation.BeginRoboContact(argument)) {
+                input_gate.RequestAction();
+                UpdateNamedConversation(minute,period,*rng);
+            } else {
+                activity.ReleaseUnavailableContact();
+                input_gate.ReleaseUnavailableContact();
+            }
+        } else if (activity.state()==RoomActivityPhase::State::ordinary) {
+            UpdateNamedConversation(minute,period,*rng);
+        } else {
+            AdvanceRoomActivity(minute,period,*rng);
+        }
+    }
+    if (profile && profile->actor == 0 && !actor_departed && !switching) {
         if (!rng) return false;
         const auto period = RoomPeriod(season, clock[3], clock[2]);
         HandleTravel(period, *rng);
-        if (talk.wide_camera_requested() || talk.ordinary_source_return()) {
+        if (const auto scheduled_return=talk.TakeScheduledReturn()) {
+            const auto boundary=topics.FinishScheduledEvent(minute,*scheduled_return);
+            if (boundary)
+                throw std::runtime_error("Unsupported scheduled cleanup procedure "+std::to_string(boundary));
+            input_gate.FinishAction();
+            activity.ReturnToRoom(minute,talk.mood(),*rng);
+            introduction_done=true;
+            return_wide=true;
+            DepartureEvent("scheduled-room-return", {{"event",int(scheduled_room_event)},{"day",activity.day_number()}});
+            scheduled_room_event=0;
+        } else if (talk.wide_camera_requested() || talk.ordinary_source_return()) {
             introduction_done = true;
             unsigned boundary = 0;
             if (talk.ordinary_source_return()) {
                 const unsigned argument = conversation.snapshot().argument;
                 if (argument == 3 && !scene && !talk.TakeOutingRoomRequest())
                     throw std::logic_error("Outing returned without a current-room request");
-                if ((argument == 3 && scene == 12) || argument == 4) {
+                if ((argument == 3 && scene != 0) || argument == 4) {
                     if (pending_scene || (argument == 4 && scene != 0))
                         throw std::logic_error("Outing caller returned before its scene was adopted");
                     report_control = true;
@@ -1004,33 +1563,15 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         } else if (activity.state() == RoomActivityPhase::State::ordinary) {
             UpdateConversation(minute, period, *rng);
         } else {
-            const RoomActivityFrame frame{period, actor.light_on(), talk.mood(), talk.mood_age(),
-                                          actor.source_field50(), actor.source_field5c(), actor.source_flag25a(),
-                                          actor.started_activity(), actor.command_ready(),scene, talk.outing_return_deadline()};
-            activity.Advance(minute, frame, *rng);
+            AdvanceRoomActivity(minute,period,*rng);
             if (activity.state() == RoomActivityPhase::State::return_home && conversation.Begin(4) && activity.BeginOrdinary()) {
                 input_gate.RequestAction();
                 UpdateConversation(minute,period,*rng);
             }
-            if (const auto command = activity.lamp_command(); command && !actor.RequestRoomControl(*command))
-                activity.RefuseLampCommand();
-            if (const auto mood = activity.mood_write()) {
-                talk.SetMood(*mood);
-                actor.SetMood(*mood);
-            }
-            if (activity.state() == RoomActivityPhase::State::select) {
-                // Scene 0 is the room registered at 8E161. GAME23/24/28/36
-                // and mood are sampled again by 13482 on every turn.
-                const RoomActivityInputs input{activity.first_after_cleanup(), int(scene), int(actor.source_field58()),
-                                               int(actor.source_field50()), int(period), talk.mood(),
-                                               activity_flag};
-                const auto selection = activities.Select(input, *rng);
-                const bool accepted = !selection.command || actor.RequestActivity(*selection.command);
-                activity.FinishSelection(input, selection, accepted, *rng);
-            }
         }
     }
-    const auto pair = actor.scene_pair_requested();
+    const auto secondary_pair=secondary_visible ? secondary_actor->scene_pair_requested() : -1;
+    const auto pair = secondary_pair >= 0 ? secondary_pair : actor.scene_pair_requested();
     if (pair == 2 || pair == 3) {
         door_clip = unsigned(pair);
         door_time = 0;
@@ -1039,8 +1580,9 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         television_clip = 12u + unsigned(pair);
         television_time = 0;
     }
-    camera.Move(actor.position(), actor.zoom_requested() || conversation.close_camera(),
-                return_wide || departure_wide || conversation.wide_camera());
+    if (!scheduled_camera_held)
+        camera.Move(actor.position(), actor.zoom_requested() || conversation.close_camera() || scheduled_camera==1u,
+                    return_wide || departure_wide || conversation.wide_camera() || scheduled_camera==0u);
     departure_wide = false;
     const auto view = RoomCamera(camera.x, camera.z, camera.fov);
     const unsigned seasonal_clip = actor.light_on() ? 11 : 4 + season;
@@ -1057,6 +1599,9 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
     if (scene == 12) {
         if (!roof.Draw(view,season,light_time,vram,offset,lighting,measuring ? &drawn : nullptr) ||
             !signs.Draw(roof.Background(),roof.main_clips(),view,vram,offset)) return false;
+    } else if (scene) {
+        if (!destination.Draw(view,season,light_time,vram,offset,lighting,measuring ? &drawn : nullptr))
+            return false;
     } else {
         lighting = background.Lighting(clips);
         if (scene_models.bound()) {
@@ -1076,9 +1621,12 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         DepartureEvent("view", {{"scene",int(scene)},{"drawn",1},{"wipe",0}});
         report_view = false;
     }
-    if (!actor.Draw(view, vram, offset, &lighting))
-        return false;
-    if (!friends_banner.Draw(vram, offset)) return false;
+    if (!actor_departed && !actor.Draw(view,vram,offset,&lighting))
+        throw std::runtime_error("Room actor draw failed");
+    if (secondary_visible && !secondary_actor->Draw(view,vram,offset,&lighting))
+        throw std::runtime_error("Secondary room actor draw failed");
+    DrawMotionEffects(view,vram,offset);
+    if (!friends_banner.Draw(vram, offset)) throw std::runtime_error("Room navigation banner draw failed");
     if (profile && talk.prompt_visible()) {
         prompt_frame = std::min(8u, prompt_frame + 1);
         if (!talk_gui.DrawPrompt(vram, offset, prompt_frame))
@@ -1087,13 +1635,14 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
         prompt_frame = 0;
     if (profile && talk.visible()) {
         if (!font)
-            return false;
+            throw std::runtime_error("Missing room conversation font");
         const auto xy = actor.position();
         RoomSpeechPlacement placement;
         std::array<float, 3> body;
-        if (!actor.SpeechAnchor(body) ||
-            !RoomTalkRenderer::Project(view, camera.fov, body, {xy[0], xy[1], 0}, placement, talk.rows()))
-            return false;
+        if (!actor.SpeechAnchor(body))
+            throw std::runtime_error("Missing room conversation actor anchor");
+        if (!RoomTalkRenderer::Project(view, camera.fov, body, {xy[0], xy[1], 0}, placement, talk.rows()))
+            throw std::runtime_error("Room conversation anchor projection failed");
         std::vector<RoomTextLine> text;
         for (const auto &line : talk.lines())
             text.push_back({line, float(text.size() * 18) - talk.scroll(), 0});
@@ -1103,13 +1652,41 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
                                                  vram, offset, {85, 47, 13}, 1.f,
                                                  {left, top, left + width, top + height});
                                   }, talk.cols(), talk.rows()))
-            return false;
+            throw std::runtime_error("Room conversation balloon draw failed");
     }
     if (talk.answer_visible() &&
         (!font || !answer_gui.Draw(talk.answer_options(), talk.answer_cursor(), talk.answer_frame(),
-                                   talk.answer_closing(), *font, vram, offset, talk.answer_ticks()))) return false;
+                                   talk.answer_closing(), *font, vram, offset, talk.answer_ticks())))
+        throw std::runtime_error("Room conversation answers draw failed");
     if (word_open && (!softkey || !word_entry.Draw(*softkey, vram, offset, font)))
         throw std::runtime_error("Missing room word-entry SOFTKEY renderer");
+    const bool gifts=meeting_mode==MeetingMode::gifts;
+    if (font && shiritori) {
+        const auto text=shiritori->turns() ? std::string_view(shiritori->last_word().text) : std::string_view{};
+        DrawRoomNotice(*font,vram,offset,{shiritori->state()==ShiritoriState::waiting ?
+                       "Waiting for another player" : "Shiritori",text,"Esc: return to room"});
+    } else if (font && record_exchange) {
+        const bool waiting=record_exchange->state()==RecordExchangeState::waiting;
+        DrawRoomNotice(*font,vram,offset,{waiting ? "Waiting for another player" :
+                       gifts ? "Exchanging gifts" : "Exchanging cards",
+                       "Choose the same meeting place on the local network.","Esc: return to room"});
+    } else if (font && active_meeting && gifts && !gift_choices.empty()) {
+        const auto* item=inventory.slot_item(int(gift_choices.at(gift_choice)));
+        DrawRoomNotice(*font,vram,offset,{"Choose a gift to offer",item->name,
+                       "Up / Down: choose   Enter: offer   Esc: cancel"});
+    } else if (font && meeting_result_ticks) {
+        --meeting_result_ticks;
+        if (meeting_received && meeting_mode==MeetingMode::shiritori) {
+            const auto result=shiritori_result==ShiritoriState::won ? "Your Pokepi won" :
+                              shiritori_result==ShiritoriState::lost ? "Your Pokepi lost" : "Draw";
+            DrawRoomNotice(*font,vram,offset,{"Shiritori",result,""});
+        } else {
+            DrawRoomNotice(*font,vram,offset,{meeting_received ? (gifts ? "Gift received" : "Friend card received") :
+                           "The meeting ended",meeting_received ?
+                           (gifts ? "Open your inventory to see the gift." : "Open the friend notebook to see the card.") :
+                           "Nothing was exchanged.",""});
+        }
+    }
     paired_time = std::min(paired_time + 160, std::max(background.Duration(0), background.Duration(1)));
     if (door_clip) door_time = std::min(door_time + 160, background.Duration(*door_clip));
     if (television_clip) {
@@ -1123,6 +1700,23 @@ bool PostProfile::Data::DrawScene(std::vector<std::uint8_t> &vram, std::size_t o
     // 89ACC with delta 160 and seasonal speed 30 advances one DAK time unit.
     light_time = (light_time + 1) % (24u * 216000);
     return true;
+}
+
+void PostProfile::Data::DrawMotionEffects(const std::array<float,16>& view,
+                                          std::vector<std::uint8_t>& vram, std::size_t offset) {
+    const auto add = [&](const ColdRoomActor& source) {
+        for (const auto& spawn : source.effect_spawns()) {
+            if (motion_effects.Spawn(media,spawn))
+                DepartureEvent("room-motion-effect",{{"resource",int(spawn.resource)},{"command",int(source.command())}});
+        }
+    };
+    add(actor);
+    if (secondary_visible) add(*secondary_actor);
+    const auto finished=motion_effects.Draw(view,vram,offset);
+    for (unsigned resource=1;resource<finished.size();++resource) {
+        if (finished[resource])
+            DepartureEvent("room-motion-effect-finished",{{"resource",int(resource)},{"count",int(finished[resource])}});
+    }
 }
 
 void PostProfile::Data::UpdateWordEntry(std::uint32_t buttons, const recovered::PackageView* font) {
@@ -1159,7 +1753,7 @@ void PostProfile::Data::UpdateWordEntry(std::uint32_t buttons, const recovered::
 }
 
 void PostProfile::Data::OpenTopic(const RoomEventSelection& selection) {
-    if (scene==12 && conversation.snapshot().argument==0) {
+    if (scene && conversation.snapshot().argument==0) {
         const auto place=talk.contact_location();
         DepartureEvent("contact-topic", {{"place",int(place.descriptor_id)},{"kind",int(place.kind)},
             {"location_check",int(topics.last_location_check())},{"topic",int(selection.topic_pc.value_or(0))},
@@ -1177,6 +1771,159 @@ void PostProfile::Data::OpenTopic(const RoomEventSelection& selection) {
         if (!talk.BeginOrdinaryFarewell()) conversation.Boundary(0x899f9);
     } else {
         conversation.Boundary(selection.boundary_pc ? selection.boundary_pc : 0x89f81);
+    }
+}
+
+unsigned PostProfile::Data::BeginRoboTopic(unsigned minute, recovered::RngNativeOwner& rng) {
+    if (activity.day_number()<1 || topics.total_contacts()>9) return 0x67d3a;
+    talk.SetMood(0);
+    actor.SetMood(0);
+    // 678D2 has a separate greeting when CT CADF is five minutes old.
+    if (SignedTimeOperand(minute)-SignedTimeOperand(robo_cleanup_minute)>=5)
+        return talk.BeginRoboContactGreeting() ? 0 : 0x5bdc3;
+    return StartRoboTopicSelection(minute,rng);
+}
+
+unsigned PostProfile::Data::StartRoboTopicSelection(unsigned minute, recovered::RngNativeOwner& rng) {
+    talk.vocabulary().BeginConversation(); // 67904 -> 0FD1
+    robo_hour_topic=false;
+    if (conversation.snapshot().argument==1) {
+        constexpr unsigned direct_lesson=0x8e05;
+        conversation.Play(direct_lesson);
+        DepartureEvent("robo-contact-topic", {{"topic",int(direct_lesson)},{"row",-1},{"site",0x6bdfd}});
+        return talk.BeginTeaching() ? 0 : direct_lesson;
+    }
+    robo_topic_stage=RoboTopicStage::first_word;
+    if (const auto queued=robo_pending_topics.Pop(rng)) { // 67D3C -> 2574
+        conversation.Play(*queued);
+        DepartureEvent("robo-contact-topic", {{"topic",int(*queued)},{"row",-1},{"site",0x2574}});
+        return talk.BeginOrdinaryTopic(*queued,true) ? 0 : *queued;
+    }
+    return ChooseRoboTopic(minute,rng);
+}
+
+unsigned PostProfile::Data::ChooseRoboTopic(unsigned minute, recovered::RngNativeOwner& rng) {
+    const int now=SignedTimeOperand(minute);
+    const auto date=recovered::CalendarBcdDate68FE0(now);
+    RoomEventSelection selection;
+    unsigned site=0x665de;
+    for (;;) {
+        switch (robo_topic_stage) {
+        case RoboTopicStage::first_word: {
+            robo_topic_stage=RoboTopicStage::calendar;
+            auto& vocabulary=talk.vocabulary();
+            // The cold local room has no incoming partner topic (679A1).
+            if (rng.NextC3234()%100<=40) {
+                for (unsigned filter : {0x2becu,0x2bfbu}) {
+                    const auto count=vocabulary.Candidates(filter,0,false);
+                    vocabulary.FinishLookup(count ? rng.NextC3234()%count : 0); // B829
+                    if (count) return 0x11568;
+                }
+            }
+            break;
+        }
+        case RoboTopicStage::calendar:
+            robo_topic_stage=RoboTopicStage::day_class;
+            selection=topics.SelectCatalogTopic(date&0xffffu,false,rng); // 67BAA
+            break;
+        case RoboTopicStage::day_class:
+            robo_topic_stage=RoboTopicStage::alternative;
+            if (rng.NextC3234()%100<(activity.day_number()==1 ? 50u : 10u))
+                selection=topics.SelectCatalogTopic(activity.day_number(),false,rng); // 67DF7 / 67E16
+            break;
+        case RoboTopicStage::alternative: {
+            robo_topic_stage=RoboTopicStage::fallback;
+            const auto roll=rng.NextC3234()%100; // 67E24 tests this one result in order.
+            if (roll<10) {
+                const auto month=10*((date>>12)&15)+((date>>8)&15);
+                if (month<1 || month>12) return 0x67bce;
+                selection=topics.SelectCatalogTopic(1u<<(15+month),true,rng);
+            } else if (roll<20) {
+                if (robo_next_hour_topic<now) {
+                    const auto time=recovered::CalendarBcdTime6912C(now);
+                    const auto hour=10*((time>>12)&15)+((time>>8)&15);
+                    selection=topics.SelectCatalogTopic(100+hour/3,false,rng);
+                    robo_hour_topic=selection.topic_pc.has_value();
+                }
+            } else if (roll<23) {
+                auto& vocabulary=talk.vocabulary();
+                const auto count=vocabulary.Candidates(0x29e5,0,true); // 4E20
+                vocabulary.FinishLookup(count ? rng.NextC3234()%count : 0);
+                if (count) return 0x4cf9;
+            } else if (roll<58 && talk.rumors().candidates()) {
+                return 0x5c190; // 679E3 passes a real pair to this procedure.
+            }
+            break;
+        }
+        case RoboTopicStage::fallback:
+            robo_topic_stage=RoboTopicStage::exhausted;
+            robo_hour_topic=false;
+            selection.topic_pc=0x5bdb8;
+            site=0x67e98;
+            break;
+        case RoboTopicStage::exhausted:
+            return 0x67e9c;
+        }
+        if (selection.topic_pc) break;
+    }
+
+    const auto topic=*selection.topic_pc;
+    conversation.Play(topic);
+    DepartureEvent("robo-contact-topic", {{"topic",int(topic)},
+       {"row",selection.selected_row ? int(*selection.selected_row) : -1},{"site",int(site)}});
+    return talk.BeginOrdinaryTopic(topic) ? 0 : topic;
+}
+
+void PostProfile::Data::UpdateNamedConversation(unsigned minute, unsigned period, recovered::RngNativeOwner& rng) {
+    const bool robo=profile->actor==1;
+    auto stop=[&](unsigned pc) {
+        conversation.Boundary(pc);
+        conversation.ReleaseBoundary();
+        talk.ReleaseOrdinaryFrontier();
+        activity.ReleaseUnavailableContact();
+        input_gate.ReleaseUnavailableContact();
+        departure_wide=true;
+        DepartureEvent(robo?"robo-contact-boundary":"named-contact-boundary", {{"site",int(pc)}});
+    };
+    if (const auto pc=talk.ordinary_frontier()) return stop(*pc);
+    if (talk.ordinary_active()) return;
+    if (talk.TakeRoboContactGreetingReturn()) {
+        if (const auto boundary=StartRoboTopicSelection(minute,rng)) stop(boundary);
+        return;
+    }
+    if (talk.ordinary_rejected()) {
+        if (!robo) return stop(talk.named_contact_entry());
+        robo_hour_topic=false;
+        if (const auto boundary=ChooseRoboTopic(minute,rng)) stop(boundary);
+        return;
+    }
+    if (talk.room_attention_return()) conversation.FinishAttention();
+    else if (conversation.wants_attention()) return;
+
+    const RoomConversationFrame frame{actor.light_on(),actor.source_flag25a(),actor.source_field50(),
+        actor.source_field5c(),period,talk.mood(),actor.started_activity(),actor.command_ready(),0};
+    conversation.Advance(frame,[&] {
+        conversation_region=background.QueryActorRegion(actor.position());
+        return conversation_region.inside;
+    },[&] { return actor.ConversationApproachDone(); });
+    if (const auto boundary=conversation.snapshot().boundary_pc) return stop(boundary);
+    if (conversation.wants_attention()) {
+        if (!talk.BeginRoomAttentionMessage()) stop(talk.attention_entry());
+    } else if (conversation.interrupt_requested()) {
+        if (!actor.InterruptCommand()) stop(0x6b475);
+    } else if (const auto command=conversation.actor_request()) {
+        if (!actor.RequestConversationControl(*command)) stop(conversation.actor_request_site());
+    } else if (conversation.start_approach()) {
+        if (!actor.BeginConversationApproach(background,conversation_region)) stop(0x6b680);
+    } else if (conversation.wants_topic()) {
+        if (robo) {
+            if (const auto boundary=BeginRoboTopic(minute,rng)) stop(boundary);
+        } else {
+            const auto topic=talk.named_contact_entry();
+            conversation.Play(topic);
+            if (!talk.BeginNamedContact()) stop(topic);
+            else DepartureEvent("named-contact-topic",{{"topic",int(topic)}});
+        }
     }
 }
 
@@ -1198,9 +1945,9 @@ void PostProfile::Data::UpdateConversation(unsigned minute, unsigned period, rec
     const RoomConversationFrame frame{actor.light_on(), actor.source_flag25a(), actor.source_field50(),
                                       actor.source_field5c(), period, talk.mood(), actor.started_activity(),
                                       actor.command_ready(), talk.contact_location().kind};
-    const bool roof_contact=scene==12 && conversation.snapshot().argument==0;
+    const bool roof_contact=scene!=0 && conversation.snapshot().argument==0;
     conversation.Advance(frame, [&] {
-        conversation_region = (scene == 12 ? roof.Background() : background).QueryActorRegion(actor.position());
+        conversation_region = SceneBackground().QueryActorRegion(actor.position());
         if (roof_contact) DepartureEvent("contact-region", {{"inside",int(conversation_region.inside)}});
         return conversation_region.inside;
     }, [&] {
@@ -1217,7 +1964,7 @@ void PostProfile::Data::UpdateConversation(unsigned minute, unsigned period, rec
         if (!actor.RequestConversationControl(*command)) conversation.Boundary(conversation.actor_request_site());
         else if (roof_contact) DepartureEvent("contact-command", {{"command",int(*command)},{"site",int(conversation.actor_request_site())}});
     } else if (conversation.start_approach()) {
-        if (!actor.BeginConversationApproach(scene == 12 ? roof.Background() : background, conversation_region))
+        if (!actor.BeginConversationApproach(SceneBackground(),conversation_region))
             conversation.Boundary(0x8d7bf);
         else if (roof_contact) DepartureEvent("contact-approach", {{"scene",int(scene)}});
     } else if (conversation.wants_topic()) {
@@ -1345,6 +2092,13 @@ RoomNotebookSnapshot PostProfile::notebook_snapshot() const {
         result.detail = data_->friends.detail();
         result.list_ready = data_->friends.ready() && !result.detail;
         result.tab = int(data_->friends.tab()) + 1;
+        result.count = data_->friends.count();
+        result.selection = int(data_->friends.selection());
+        result.row = data_->friends.selected_row();
+        if (result.row>=0) {
+            result.written = data_->talk.vocabulary().FieldText(unsigned(result.row),1);
+            result.reading = data_->talk.vocabulary().FieldText(unsigned(result.row),2);
+        }
         return result;
     }
     if (data_->current_view != Data::View::notebook) return result;
@@ -1379,8 +2133,10 @@ RoomNotebookSnapshot PostProfile::notebook_snapshot() const {
 RoomConversationSnapshot PostProfile::conversation_snapshot() const {
     if (!data_) return {};
     auto status = data_->conversation.snapshot();
-    if (status.serial) {
-        const auto& talk = data_->talk;
+    const auto& talk = data_->talk;
+    status.invitation_ready=talk.prompt_visible();
+    const bool named_greeting=data_->profile && data_->profile->actor>=1;
+    if (status.serial || named_greeting) {
         status.word_entry_interactive = data_->word_open && data_->word_entry.phase() == RoomWordEntry::Phase::editing;
         if (talk.visible()) {
             status.message_pc = talk.message_pc();
@@ -1392,7 +2148,7 @@ RoomConversationSnapshot PostProfile::conversation_snapshot() const {
             if (status.message_revealed) status.displayed_lines = talk.lines();
         }
         if (talk.answer_interactive()) status.option_count = static_cast<unsigned>(talk.answer_options().size());
-        if (status.topic_pc) status.chosen_option = talk.last_answer();
+        if (status.topic_pc || named_greeting) status.chosen_option = talk.last_answer();
     }
     return status;
 }

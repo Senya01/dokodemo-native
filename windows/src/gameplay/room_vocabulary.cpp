@@ -1,6 +1,8 @@
 #include "room_vocabulary.h"
 #include "room_learned_word.h"
+#include "recovered/game_primitives.h"
 #include "recovered/service39_native.h"
+#include "recovered/rng_native.h"
 #include <algorithm>
 #include <ctime>
 #include <fstream>
@@ -98,10 +100,15 @@ bool Predicate(std::uint32_t field, unsigned op, std::uint32_t arg) {
 bool RoomVocabulary::Load(const std::filesystem::path& dir, const AcceptedProfile& profile,
                           std::string& error) {
     try {
-        Require(profile.actor == 0, "First-conversation dictionary requires Toro");
-        std::ifstream in(dir/"neko-vocabulary.bin", std::ios::binary);
-        Require(in && Read(in, 4) == 0x33435652 && Read(in, 2) == 162, "Missing Toro vocabulary");
+        constexpr std::array dictionaries{"neko-vocabulary.bin", "robo-vocabulary.bin", "usagi-vocabulary.bin",
+                                           "inu-vocabulary.bin", "kaeru-vocabulary.bin"};
+        Require(profile.actor < dictionaries.size(), "Missing first-conversation dictionary for actor");
+        const bool alternate=profile.actor>=2;
+        std::ifstream in(dir/dictionaries[profile.actor], std::ios::binary);
+        Require(in && Read(in, 4) == (alternate ? 0x34435652u : 0x33435652u) &&
+                Read(in, 2) == 162, "Missing actor vocabulary");
         RoomVocabulary next;
+        if(profile.actor==1) next.saying_filters_={0x28e1,0x28eb};
         next.rows_.resize(700);
         for (unsigned i=1; i<=162; ++i) {
             Row& row=next.rows_[i];
@@ -122,7 +129,8 @@ bool RoomVocabulary::Load(const std::filesystem::path& dir, const AcceptedProfil
                 auto& group=groups.emplace_back();
                 for (unsigned k=0; k<terms; ++k) {
                     const unsigned field=Read(in,1), op=Read(in,1), arg=Read(in,4);
-                    Require(field < 19 && op <= 8 && arg>>28 == 2, "Invalid dictionary term");
+                    Require(field < (profile.actor==0?19u:30u) && op <= 8 && (arg>>28 == 2 || (arg==0 && op<=1)),
+                            "Invalid dictionary term");
                     group.push_back({field,op,arg});
                 }
             }
@@ -135,8 +143,18 @@ bool RoomVocabulary::Load(const std::filesystem::path& dir, const AcceptedProfil
             for (unsigned k=0; k<count; ++k) list.push_back(ReadString(in));
         }
         for (auto& row : next.questions_) row[0]=Read(in,4);
+        unsigned sayings=5;
+        if(alternate) {
+            sayings=Read(in,2);
+            next.nonzero_saying_filter_=Read(in,2);
+            next.saying_filters_={Read(in,2),Read(in,2)};
+            Require(sayings && sayings<=16 && next.conditions_.count(*next.nonzero_saying_filter_) &&
+                    next.conditions_.count(next.saying_filters_[0]) && next.conditions_.count(next.saying_filters_[1]),
+                    "Invalid alternate saying selector");
+        }
+        next.initial_sayings_.resize(sayings);
         for (auto& saying : next.initial_sayings_) saying=ReadString(in);
-        Require(in.peek() == std::char_traits<char>::eof(), "Trailing Toro vocabulary data");
+        Require(in.peek() == std::char_traits<char>::eof(), "Trailing actor vocabulary data");
 
         // 1936 assigns nickname/player to the live composite rows. 17D5 previously
         // ran on the cold field9 masks, before 19E2 supplies the player's gender.
@@ -160,26 +178,84 @@ bool RoomVocabulary::Load(const std::filesystem::path& dir, const AcceptedProfil
     } catch (const std::exception& e) { error=e.what(); return false; }
 }
 
+KscSaveValue RoomVocabulary::DictionarySaveRow(unsigned id) const {
+    auto row=Table(id<600?19:30);
+    auto& fields=row.children.front().children;
+    for (unsigned field=0;field<19;++field) {
+        const auto word=rows_.at(id).fields[field];
+        if ((word>>28)==5 || (word>>28)==6) fields.push_back(TextValue(FieldText(id,field)));
+        else fields.push_back({word,{},{}});
+    }
+    if (id>=600) {
+        const auto& tail=friend_tails_.at(id-600);
+        fields.insert(fields.end(),tail.begin(),tail.end());
+        if (id==600) fields[26]=TextValue(player_saying_);
+    }
+    return row;
+}
+
 KscSaveValue RoomVocabulary::DictionarySaveTable() const {
     Require(started_ && !pending_ && rows_.size()==700 && friend_tails_.size()==100,"Dictionary not ready for save");
     auto result=Table(rows_.size());
-    for (unsigned i=0;i<rows_.size();++i) {
-        auto row=Table(i<600?19:30);
-        auto& fields=row.children.front().children;
-        for(unsigned k=0;k<19;++k) {
-            const auto word=rows_[i].fields[k];
-            if((word>>28)==5 || (word>>28)==6) {
-                fields.push_back(TextValue(FieldText(i,k)));
-            } else fields.push_back({word,{},{}});
-        }
-        if(i>=600) {
-            const auto& tail=friend_tails_[i-600];
-            fields.insert(fields.end(),tail.begin(),tail.end());
-            if(i==600) fields[26]=TextValue(player_saying_);
-        }
-        result.children.front().children.push_back(std::move(row));
-    }
+    for (unsigned id=0;id<rows_.size();++id)
+        result.children.front().children.push_back(DictionarySaveRow(id));
     return result;
+}
+
+KscSaveValue RoomVocabulary::OwnFriendCard() const {
+    return FriendCard(600);
+}
+
+KscSaveValue RoomVocabulary::FriendCard(unsigned row) const {
+    Require(started_ && rows_.size()==700 && row>=600 && row<700,"Friend card unavailable");
+    return DictionarySaveRow(row).children.front();
+}
+
+std::optional<unsigned> RoomVocabulary::FriendCardSlot(const KscSaveValue& row) const {
+    Require(started_ && rows_.size()==700 && row.word==0x9000001eu &&
+            row.children.size()==30 && row.text.empty(),"Invalid friend card shape");
+    const auto& fields=row.children;
+    for (unsigned i=0;i<fields.size();++i) {
+        const auto& field=fields[i];
+        const auto tag=field.word>>28;
+        Require(field.children.empty(),"Invalid child in a friend card");
+        if (tag==5 || tag==6) {
+            Require(i==1 || i==2 || i==13 || i==21 || i==25 || i==26,"Unexpected text in a friend card");
+            Require(field.text.size()<=128,"Oversized friend card text");
+            for (std::size_t cursor=0;cursor<field.text.size();) {
+                recovered::Glyph glyph;
+                Require(recovered::read_glyph(reinterpret_cast<const std::uint8_t*>(field.text.data()+cursor),
+                        field.text.size()-cursor,glyph) && glyph.index>=32 && glyph.index<8224,
+                        "Invalid glyph in a friend card");
+                cursor+=glyph.consumed;
+            }
+        } else {
+            Require(tag<=3 && field.text.empty(),"Invalid scalar in a friend card");
+        }
+    }
+    Require((Number(fields[0].word)&2) && !fields[1].text.empty() &&
+            !fields[2].text.empty() && !fields[21].text.empty(),"Incomplete peer identity");
+    std::optional<unsigned> empty;
+    for (unsigned id=601;id<rows_.size();++id) {
+        if (!HasField(id,1)) {
+            if (!empty) empty=id;
+            continue;
+        }
+        const auto& tail=friend_tails_.at(id-600);
+        if (FieldText(id,1)==fields[1].text && tail[2].text==fields[21].text &&
+            tail[4].word==fields[23].word && tail[6].text==fields[25].text) return id;
+    }
+    return empty;
+}
+
+unsigned RoomVocabulary::ReceiveFriendCard(const KscSaveValue& row) {
+    const auto target=FriendCardSlot(row);
+    Require(target.has_value(),"Friend notebook has no available slot");
+    KscSaveValue saved{0xb0000000u,{},{row}};
+    auto& flags=saved.children.front().children[0].word;
+    flags=Integer(Number(flags)&~2);
+    RestoreDictionaryRow(*target,saved);
+    return *target;
 }
 
 KscSaveValue RoomVocabulary::QuestionSaveTable() const {
@@ -196,29 +272,54 @@ KscSaveValue RoomVocabulary::QuestionSaveTable() const {
     return result;
 }
 
+void RoomVocabulary::RestoreDictionaryRow(unsigned id,const KscSaveValue& saved) {
+    const auto& fields=TableFields(saved,id<600?19:30);
+    Row row;
+    for(unsigned k=0;k<19;++k) {
+        const auto& v=fields[k];
+        const auto tag=v.word>>28;
+        if(tag==5 || tag==6) {
+            Require(k==1 || k==2 || k==13,"Invalid saved vocabulary text column");
+            (k==1 ? row.written : k==2 ? row.reading : row.alternate)=v.text;
+            row.fields[k]=0x50000000u;
+        } else {
+            Require(tag<=3,"Unsupported dictionary scalar");
+            row.fields[k]=v.word;
+        }
+    }
+    if(id>=600) {
+        std::array<KscSaveValue,11> tail;
+        std::copy(fields.begin()+19,fields.end(),tail.begin());
+        if(id==600) {
+            Require(fields[26].word>>28==5 || fields[26].word>>28==6,"Missing player saying");
+            player_saying_=fields[26].text;
+        }
+        friend_tails_.at(id-600)=std::move(tail);
+    }
+    rows_.at(id)=std::move(row);
+}
+
+void RoomVocabulary::InheritDictionary(const KscSaveValue& dictionary,const KscSaveValue& relation_group) {
+    Require(!started_ && !pending_ && rows_.size()==700,"Expected a freshly adopted vocabulary");
+    auto next=*this;
+    const auto& saved=TableFields(dictionary,700);
+    for(unsigned id=1;id<saved.size();++id) {
+        // 1936..1A27 installs the current Pokepi and the player's own card.
+        if(id==600) continue;
+        next.RestoreDictionaryRow(id,saved[id]);
+        // NEKO 8D3A3 / CTE2A5 retains bit 0 of field 11.
+        auto& flags=next.rows_[id].fields[11];
+        flags=Integer(Number(flags)&1);
+    }
+    next.RestoreRelationGroupCounter(relation_group);
+    *this=std::move(next);
+}
+
 RoomVocabulary RoomVocabulary::WithSaveTables(const KscSaveValue& dictionary,const KscSaveValue& questions) const {
     Require(!pending_ && rows_.size()==700,"Vocabulary must be loaded before restoring");
     auto next=*this;
     const auto& saved=TableFields(dictionary,700);
-    for(unsigned i=0;i<saved.size();++i) {
-        const auto& fields=TableFields(saved[i],i<600?19:30);
-        auto& row=next.rows_[i];
-        row={};
-        for(unsigned k=0;k<19;++k) {
-            const auto& v=fields[k];
-            const auto tag=v.word>>28;
-            if(tag==5 || tag==6) next.WriteText(i,k,v.text);
-            else {
-                Require(tag<=3,"Unsupported dictionary scalar");
-                row.fields[k]=v.word;
-            }
-        }
-        if(i>=600) std::copy(fields.begin()+19,fields.end(),next.friend_tails_[i-600].begin());
-        if(i==600) {
-            Require(fields[26].word>>28==5 || fields[26].word>>28==6,"Missing player saying");
-            next.player_saying_=fields[26].text;
-        }
-    }
+    for(unsigned id=0;id<saved.size();++id) next.RestoreDictionaryRow(id,saved[id]);
     const auto& table=TableFields(questions,question_slots);
     for(unsigned i=0;i<question_slots;++i) {
         const auto& fields=TableFields(table[i],7);
@@ -239,13 +340,20 @@ void RoomVocabulary::RestoreSaveTables(const KscSaveValue& dictionary,const KscS
     *this=WithSaveTables(dictionary,questions);
 }
 
-void RoomVocabulary::StartActorScript(std::uint32_t draw) {
-    Require(!started_ && !rows_.empty(), "Unexpected Toro cold script start");
+void RoomVocabulary::StartActorScript(std::uint32_t draw,recovered::RngNativeOwner* rng) {
+    Require(!started_ && !initial_sayings_.empty(), "Unexpected actor cold script start");
     const std::string& fallback=initial_sayings_[draw % initial_sayings_.size()]; // F6 mode 0
+    auto primary=saying_filters_[0];
+    if(nonzero_saying_filter_) {
+        Require(rng!=nullptr,"Missing actor saying selector RNG");
+        if(rng->NextC3234()%2) primary=*nonzero_saying_filter_;
+    }
     // 179E then searches for a learned saying. Even with no result, EA0
     // can leave secondary marks. 1211 bypasses 122F on an empty result.
-    Require(Candidates(0x282d,0x2837,true)==0, "Unexpected learned cold saying");
-    player_saying_=Word(FinishLookup(0),fallback,0,false);
+    const unsigned matches=Candidates(primary,saying_filters_[1],true);
+    Require(!matches || rng,"Missing cold saying RNG");
+    const int row=FinishLookup(matches ? rng->NextC3234()%matches : 0);
+    player_saying_=Word(row,fallback,0,false);
     started_=true;
 }
 
@@ -254,19 +362,25 @@ void RoomVocabulary::BeginConversation() {
     for (Row& row : rows_) row.fields[11]=Integer(Number(row.fields[11]) & ~2);
 }
 
+std::uint32_t RoomVocabulary::PredicateWord(unsigned row,unsigned field) const {
+    if(field<rows_.at(row).fields.size()) return rows_[row].fields[field];
+    return row>=600 ? friend_tails_.at(row-600).at(field-19).word : 0;
+}
+
 void RoomVocabulary::Mark(unsigned ct, unsigned mask, bool honor_repeat) {
     const auto found=conditions_.find(ct);
     if(found==conditions_.end()) throw std::runtime_error("Unknown Toro dictionary filter "+std::to_string(ct));
     for (const auto& group : found->second) {
-        for (Row& row : rows_) {
+        for (unsigned row=0;row<rows_.size();++row) {
             bool match=true;
             for (unsigned i=0; i<group.size(); ++i) {
                 // ED4 temporarily sets the second comparison's opcode to 16.
                 if (!honor_repeat && i == 1) continue;
                 const auto& [field,op,arg]=group[i];
-                if (!Predicate(row.fields[field],op,arg)) { match=false; break; }
+                if (!Predicate(PredicateWord(row,field),op,arg)) { match=false; break; }
             }
-            if (match) row.fields[17]=Integer(Number(row.fields[17]) | int(mask));
+            auto& marks=rows_[row].fields[17];
+            if (match) marks=Integer(Number(marks) | int(mask));
         }
     }
 }
@@ -297,6 +411,20 @@ unsigned RoomVocabulary::Candidates(unsigned primary_ct, unsigned secondary_ct, 
     return unsigned(matches_.size());
 }
 
+bool RoomVocabulary::MatchesPredicate(unsigned row,unsigned ct) const {
+    const auto& group=conditions_.at(ct).at(0);
+    return std::all_of(group.begin(),group.end(),[&](const Term& term) {
+        return Predicate(PredicateWord(row,term.field),term.op,term.arg);
+    });
+}
+
+unsigned RoomVocabulary::CountMatches(unsigned ct) const {
+    unsigned count=0;
+    for(unsigned row=0;row<rows_.size();++row)
+        count+=MatchesPredicate(row,ct);
+    return count;
+}
+
 int RoomVocabulary::FirstOutingMatch(unsigned ct) const {
     for(const auto& group : conditions_.at(ct)) {
         // 0F45 temporarily makes the group's second term inactive for builtin96.
@@ -304,7 +432,7 @@ int RoomVocabulary::FirstOutingMatch(unsigned ct) const {
             bool match=true;
             for(unsigned i=0;i<group.size();++i) {
                 const auto& term=group[i];
-                if(i!=1 && !Predicate(rows_[row].fields[term.field],term.op,term.arg)) {
+                if(i!=1 && !Predicate(PredicateWord(row,term.field),term.op,term.arg)) {
                     match=false; break;
                 }
             }

@@ -15,9 +15,10 @@ struct RoomInputFrame {
     bool fade_open = false;    // GameTransition state 2
     bool vm_busy = false;      // context state 6..9 or a live extension's word 64
     bool menu_enabled = false; // manager byte 68 written by GAME78
+    bool actor_present = true;
 };
 
-enum class RoomInputEvent { none, ordinary, during_action, menu, teaching, outing, inventory, notebook, options, return_home, friends_action, save_request, dismiss_save_notice };
+enum class RoomInputEvent { none, ordinary, during_action, menu, teaching, outing, inventory, notebook, options, return_home, friends_action, departed_action, save_request, dismiss_save_notice };
 
 class RoomInputGate {
 public:
@@ -25,6 +26,10 @@ public:
     // completed cold action calls GAME3. These set manager bytes 8 and 9.
     void RequestAction() { request8_ = true; }
     void FinishAction() { request9_ = true; }
+    void ReleaseUnavailableContact() {
+        request8_ = request9_ = false;
+        phase_ = Phase::room;
+    }
     bool room_controls_ready() const { return phase_ == Phase::room; }
     bool owns_inventory() const { return phase_ == Phase::inventory; }
     void FinishInventory() { if (owns_inventory()) phase_ = Phase::room; }

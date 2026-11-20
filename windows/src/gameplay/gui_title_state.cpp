@@ -46,6 +46,7 @@ void GuiTitleState::InstallPanel() {
     guide_frame_ = 0;
     if (panel_ == 0) { // 30E70 clears the previous character and profile on return.
         selected_ = 0;
+        replacing_slot_ = false;
         nickname_present_ = player_present_ = phone_present_ = false;
         gender_value_ = year_ = month_ = day_ = zodiac_ = blood_ = -1;
         list_phase_ = ListPhase::idle;
@@ -164,6 +165,15 @@ void GuiTitleState::ReturnToSelectMenu() {
     next_ = 0;
     pending_bank_ = 0;
     InstallPanel();
+}
+
+void GuiTitleState::FinishOverwrite(bool yes) {
+    if (!overwrite_requested_) return;
+    overwrite_requested_ = false;
+    if (yes) {
+        replacing_slot_ = true;
+        BeginSwitch(2,1); // 316D8: confirmed variant three starts selection.
+    }
 }
 
 void GuiTitleState::SubmitFreeBytes(std::uintmax_t available) {
@@ -458,6 +468,7 @@ void GuiTitleState::Advance(std::uint32_t buttons, bool selection_voice_playing)
             const bool menu_input_enabled = media_phase_ == MediaPhase::ready;
             AdvanceColdMedia();
             UpdateEntranceVisibility(); // 30ED4 runs after 31274.
+            if (overwrite_requested_) return;
             if (menu_input_enabled && menu_variant_ != 1) {
                 if ((down && menu_variant_ == 2) || (up && menu_variant_ == 3) ||
                     down == 1 || up == 1) {

@@ -22,6 +22,9 @@ public:
     int AwardGift(unsigned actor,unsigned choice,std::string_view nickname,int year,int month,int day);
     int AwardGiftOnDate(unsigned actor,unsigned choice,std::string_view nickname,std::uint32_t bcd_date);
     KscSaveValue SaveRow(unsigned slot) const;
+    std::vector<unsigned> ExchangeableGifts() const;
+    KscSaveValue OfferGift(unsigned slot) const;
+    RoomInventory WithGiftSwap(unsigned slot,const KscSaveValue& gift,std::uint32_t date) const;
     KscSaveValue SaveTable() const;
     void RestoreSaveTable(const KscSaveValue& table);
     std::uint32_t PlacementWord(int slot,unsigned field) const;

@@ -8,7 +8,7 @@ def number(data, offset, size):
     return int.from_bytes(data[offset:offset+size], "big")
 
 
-def learned_prefix(data, key):
+def learned_prefix(data, key, single_block_only=False):
     index, area, count, capacity, stride = struct.unpack_from(">5I",data,0x1c)
     # 9C440 translates sorted lookup entries to ring slots. 9C4A4
     # compares the wrapped slot rank to return matches in recency order.
@@ -22,6 +22,8 @@ def learned_prefix(data, key):
         nr, nw = a&127, b&127
         reading = data[p+5:p+5+nr]
         if reading.startswith(key):
+            if single_block_only and 5+nr+nw>stride:
+                continue
             require(5+nr+nw<=stride,"Selected NJLEARN word spans multiple blocks")
             written = data[p+5+nr:p+5+nr+nw] or reading
             eligible.append((slot+(capacity if slot<cursor else 0),a>>7,b>>7,reading,written))
@@ -73,13 +75,16 @@ def root_stems(data,key,with_grade=False):
     offset=info&0x3fffff
     if offset==0x3fffff:
         return []
+    return read_stems(data, key, stems+offset, with_grade)
+
+
+def read_stems(data, key, p, with_grade):
     length_bits,left_bits,right_bits=struct.unpack_from(">3H",data,0x38)
     head_size=1+(length_bits+left_bits+right_bits+7)//8
     pos,left_count,right_count=struct.unpack_from(">IHH",data,0x1c)
     require(number(data,0x24,2) in (1,2),"NJDC part-of-speech width")
     pos_width=number(data,0x24,2)
     records=[]
-    p=stems+offset
     while p<len(data)-4:
         first_byte=data[p]
         bits=number(data,p+1,head_size-1)
@@ -105,6 +110,33 @@ def root_stems(data,key,with_grade=False):
             return records
         p+=head_size+size
     raise ValueError("Unterminated NJDC stem group")
+
+
+def all_stems(data, max_units):
+    """Walk sibling lists and relative child links without lookup seeds."""
+    alphabet, count, width = struct.unpack_from(">IHH", data, 0x28)
+    nodes, stems = struct.unpack_from(">II", data, 0x30)
+    require(width == 2 and alphabet+count*width <= nodes < stems, "Invalid NJDC trie")
+    labels = [data[i:i+width] for i in range(alphabet, alphabet+count*width, width)]
+
+    def descend(start, prefix, remaining):
+        for n in range(start, stems, 6):
+            label = data[n]
+            require(0 < label <= len(labels), "Invalid NJDC node label")
+            key = prefix + labels[label-1]
+            info = number(data, n+3, 3)
+            offset = info & 0x3fffff
+            if offset != 0x3fffff:
+                yield from read_stems(data, key, stems+offset, True)
+            child = (number(data, n+1, 2) << 1) | (info >> 23)
+            if remaining > 1 and child != 0x1ffff:
+                require(child > 0 and n+child*6 < stems, "Invalid NJDC child reference")
+                yield from descend(n+child*6, key, remaining-1)
+            if info & 0x400000:
+                return
+        raise ValueError("Unterminated NJDC sibling list")
+
+    yield from descend(nodes, b"", max_units)
 
 
 def connected(con,left,right):

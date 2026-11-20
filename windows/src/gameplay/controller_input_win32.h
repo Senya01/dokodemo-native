@@ -4,6 +4,8 @@
 
 namespace dokodemo::gameplay {
 
+ControllerSample MapXInputGamepad(std::uint16_t buttons,std::int16_t left_x,std::int16_t left_y);
+
 // Samples one explicitly selected XInput user (0..3). Scheduling remains
 // with the caller. A disconnected device supplies no observation.
 class XInputController final : public ControllerSource {

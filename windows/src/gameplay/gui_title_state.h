@@ -26,6 +26,8 @@ public:
     void ReturnToSelectMenu();
     unsigned menu_variant() const { return menu_variant_; }
     bool overwrite_requested() const { return overwrite_requested_; }
+    bool replacing_slot() const { return replacing_slot_; }
+    void FinishOverwrite(bool yes);
     void SubmitFreeBytes(std::uintmax_t available);
     void FinishNickname(bool confirmed_nonempty);
     void FinishPlayerName(bool confirmed_nonempty);
@@ -99,7 +101,7 @@ private:
     Phase phase_ = Phase::active;
     Wipe wipe_ = Wipe::closed;
     unsigned menu_variant_ = 1;
-    bool overwrite_requested_ = false;
+    bool overwrite_requested_ = false, replacing_slot_ = false;
     unsigned panel_ = 5, next_ = 5, frame_ = 0, selected_ = 0;
     float radius_ = -50;
     int pending_bank_ = -1, queued_bank_ = -1, submitted_bank_ = -1;

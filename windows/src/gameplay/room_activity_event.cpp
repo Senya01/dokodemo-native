@@ -24,16 +24,25 @@ RoomEventSelection Routine(unsigned pc) {
 }
 }
 
-bool RoomActivityEvent::Load(const std::filesystem::path& directory, std::uint32_t packed_birthday,
-                             std::string& error) {
+bool RoomTopicTable::Load(const std::filesystem::path& directory, Actor actor,
+                          std::uint32_t packed_birthday, std::string& error) {
     *this = {};
-    std::ifstream in(directory / "toro-room-events.bin", std::ios::binary | std::ios::ate);
-    std::vector<unsigned char> bytes(1162);
+    struct Source { const char* name; unsigned bytes; const char* sha; };
+    constexpr Source sources[]{
+        {"toro-room-events.bin",1162,"a88494f899e99609c6df34e98ffd346fcada50b5fdf79ec2003899650437eaa8"},
+        {"robo-room-events.bin",820,"46efc23442618d7858106d55ccf253132fa9ea0135f3cfa558cf317b20fffb94"},
+        {"usagi-room-events.bin",1014,"34003b3c31833483e151cbc220c8a076cd8122659599676e30313c77b50c14a4"},
+        {"inu-room-events.bin",1113,"487d078e368ce2cb854451c5f7f078837e88ca036f429da35955b58b80da1991"},
+        {"kaeru-room-events.bin",910,"69be4b6eb75abfe58e6f5a5b53c439478a5b5efe4f38f8bdf0d6b7438162eefb"},
+    };
+    if (unsigned(actor)>=std::size(sources)) { error="Unknown conversation catalog actor"; return false; }
+    const auto& source=sources[unsigned(actor)];
+    std::ifstream in(directory / source.name, std::ios::binary | std::ios::ate);
+    std::vector<unsigned char> bytes(source.bytes);
     if (!in || in.tellg() != static_cast<std::streamoff>(bytes.size()) ||
         !in.seekg(0).read(reinterpret_cast<char*>(bytes.data()), bytes.size()) ||
-        core::sha256_hex(bytes.data(), bytes.size()) !=
-            "a88494f899e99609c6df34e98ffd346fcada50b5fdf79ec2003899650437eaa8") {
-        error = "Missing or incorrect NEKO ordinary topic list";
+        core::sha256_hex(bytes.data(), bytes.size()) != source.sha) {
+        error = std::string("Missing or incorrect ordinary topic list: ") + source.name;
         return false;
     }
     std::size_t offset = 4;
@@ -52,9 +61,17 @@ bool RoomActivityEvent::Load(const std::filesystem::path& directory, std::uint32
             row.entries.push_back(read(4));
         rows_.push_back(std::move(row));
     }
-    // 18F9 imports GAME20's profile; 1A32 -> 18E6 -> 88A95 assigns
-    // G96C9[0][0] the low sixteen bits of the adopted birthday.
+    // The game imports GAME20's profile and writes the low sixteen
+    // bits of the adopted birthday into the first callback row.
     rows_.front().category = packed_birthday & 0xffff;
+    return true;
+}
+
+bool RoomActivityEvent::Load(const std::filesystem::path& directory, std::uint32_t packed_birthday,
+                             std::string& error,RoomTopicTable::Actor actor) {
+    *this = {};
+    if (!topic_table_.Load(directory, actor, packed_birthday, error))
+        return false;
     stage_ = Stage::introduction;
     return true;
 }
@@ -208,10 +225,10 @@ void RoomActivityEvent::FinishIntroduction(std::uint32_t minute) {
     }
 }
 
-RoomEventSelection RoomActivityEvent::Choose(unsigned key, bool mask, recovered::RngNativeOwner& rng) {
+RoomEventSelection RoomTopicTable::Select(unsigned key, bool mask, recovered::RngNativeOwner& rng) {
     RoomEventSelection result;
-    // 88A23 creates a frame array with eight slots. Builtin 60 fills them
-    // in source order. A direct code reference consumes the row at 88A8E.
+    // NEKO 88A23 and ROBO 665DE both use an eight-slot frame. Builtin 60
+    // fills it in source order and the caller clears only direct code rows.
     for (unsigned i = 0; i < rows_.size(); ++i) {
         const auto& row = rows_[i];
         if (!row.present || (mask ? (row.category & key) != key : row.category != key)) continue;
@@ -226,9 +243,19 @@ RoomEventSelection RoomActivityEvent::Choose(unsigned key, bool mask, recovered:
         row.present = false;
         result.topic_pc = row.entries.front();
     } else {
-        // 89994..8999C resolves an indirect choice with F6, selector zero.
+        // NEKO 89994 and ROBO 678B1 resolve indirect choices with F6 mode 0.
         result.topic_pc = row.entries[rng.NextC3234() % row.entries.size()];
     }
+    return result;
+}
+
+RoomEventSelection RoomActivityEvent::SelectCatalogTopic(unsigned key, bool mask, recovered::RngNativeOwner& rng) {
+    return topic_table_.Select(key, mask, rng);
+}
+
+RoomEventSelection RoomActivityEvent::Choose(unsigned key, bool mask, recovered::RngNativeOwner& rng) {
+    auto result = SelectCatalogTopic(key, mask, rng);
+    if (!result.topic_pc) return result;
     pending_topic_ = result.topic_pc;
     return result;
 }
@@ -265,6 +292,16 @@ unsigned RoomActivityEvent::FinishConversation(std::uint32_t minute, bool count_
     pending_topic_.reset();
     awaiting_cleanup_ = false;
     hourly_topic_ = false;
+    return CompleteContact(minute,count_contact);
+}
+
+unsigned RoomActivityEvent::FinishScheduledEvent(std::uint32_t minute, bool count_contact) {
+    if (stage_ != Stage::idle || pending_topic_ || awaiting_cleanup_)
+        throw std::logic_error("Scheduled event cannot retire a different conversation");
+    return CompleteContact(minute,count_contact);
+}
+
+unsigned RoomActivityEvent::CompleteContact(std::uint32_t minute, bool count_contact) {
     if (count_contact) {
         CountContact();
         if (counted_contacts_>=message_threshold && !message_timer_start_) {

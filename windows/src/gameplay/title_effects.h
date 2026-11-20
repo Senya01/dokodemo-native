@@ -13,6 +13,7 @@ public:
     explicit TitleEffects(std::filesystem::path audio_directory);
     bool Play(int sequence);
     void SetVolumeSetting(unsigned setting);
+    bool SetSuspended(bool suspended);
     // Returns true for a handled request, including a DAK callback whose
     // verified original sequence lookup produces no sound.
     bool Play(const RoomSound& request);

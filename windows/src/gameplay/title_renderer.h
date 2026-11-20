@@ -33,7 +33,8 @@ public:
                       unsigned count, float scroll_rows, std::vector<std::uint8_t>& vram,
                       std::size_t offset, const DrawSelectItem& draw_item) const;
     bool RenderConfirmation(float progress, unsigned cursor, std::vector<std::uint8_t>& vram,
-                            std::size_t offset, const std::function<void(int,int,float)>& draw_question) const;
+                            std::size_t offset, const std::function<void(int,int,float)>& draw_question,
+                            unsigned columns = 11, unsigned rows = 2) const;
     bool RenderGenderList(unsigned frame, bool closing, unsigned cursor,
                           std::vector<std::uint8_t>& vram, std::size_t offset,
                           const std::function<void(unsigned,int,int)>& draw_row) const;

@@ -32,6 +32,8 @@ def motion_sounds(mesh):
 def room_effects(iso, files):
     entries = []
     absent = []
+    secondary = files.get(Path("assets/game/post-profile/actor-5.bin"))
+    secondary_sounds = motion_sounds(secondary[0]) if secondary else set()
     # Slot order is the BOOT loader's NEKO, ROBO, USAGI, INU, KAERU, SYS.
     banks = (
         ("SE_CHA_N", "7e54b7aa6ef75ef1907f793f7e672b0231ca651c665b2f1210c9f0d1735d1b82"),
@@ -44,6 +46,9 @@ def room_effects(iso, files):
     for bank, (name, digest) in enumerate(banks):
         if bank == 5:
             selected = {(0, index) for index in range(15)}  # SE_SYS dry notes for live Options gain.
+            selected.add((1, 8))  # 89942 -> 1ED8 -> GAME73 during the scheduled room event.
+            # 88F8 sends actor 5's motion requests to SE_SYS as well.
+            selected.update(secondary_sounds)
         else:
             mesh, _ = files[Path(f"assets/game/post-profile/actor-{bank}.bin")]
             selected = motion_sounds(mesh)
@@ -53,13 +58,19 @@ def room_effects(iso, files):
         info = inspect_sgd(data)
         for group, index in sorted(selected):
             matches = [s for s in info["sequences"] if (s["group"], s["index"]) == (group, index)]
-            if not matches and bank < 5:
+            if not matches and (bank < 5 or (group, index) in secondary_sounds):
                 # This key exists in the motion. BOOT 558E4 resolves it to
                 # null in this specific bank; 587F4 skips sequence startup.
                 absent.append(struct.pack("<3I", bank, group, index))
                 continue
             seq, = matches
-            pcm, rate, level = one_note(data, info, seq, 3520 if bank == 5 else 3200)
+            if bank != 5:
+                controller_level = 3200
+            elif group == 2 and index in (0, 1):
+                controller_level = 3840  # SE_SYS notes selected by KURO's DAKs.
+            else:
+                controller_level = 3520
+            pcm, rate, level = one_note(data, info, seq, controller_level)
             if sys.byteorder == "big":
                 pcm.byteswap()
             entries.append(struct.pack("<6I", bank, group, index, rate, level, len(pcm)) + pcm.tobytes())

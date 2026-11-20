@@ -8,7 +8,7 @@ namespace dokodemo::gameplay {
 class RoomMessages;
 class RoomNotebookDiary {
 public:
-    bool Load(const std::filesystem::path& directory,std::string& error);
+    bool Load(const std::filesystem::path& directory,std::string& error,unsigned actor=0);
     bool RecordFirstDay(RoomMessages& staging,recovered::RngNativeOwner& rng,std::string_view player,unsigned year,unsigned month,unsigned day);
     void RestoreFirstDay(std::string text, const std::array<unsigned,3>& date, bool revealed);
     void Open(std::uint32_t buttons,unsigned year,unsigned month,unsigned day,unsigned hour);
@@ -32,6 +32,7 @@ private:
     Phase phase_=Phase::closed;
     Cb2aScene scene_;
     std::string template_,entry_,date_;
+    std::string_view marker_;
     unsigned descriptor_id_=0, descriptor_kind_=0;
     std::vector<std::uint8_t> photo_;
     std::vector<unsigned> effects_;

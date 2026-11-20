@@ -8,26 +8,29 @@ constexpr Cb2aMedia media{"MMENU.CB2A",31512,"5a8c8df5cfc2011850fa8c9403ef2cb8a0
 // BOOT 13B28, full room menu (D8410).
 constexpr int outcomes[7][4]={{0,-1,-1,-1},{2,-1,-1,-1},{1,-1,-1,-1},{3,4,6,7},
                                {8,9,10,11},{5,-1,-1,-1},{13,14,15,-1}};
+// 13C00 reads the four-row table at D8480 while the actor is away.
+constexpr int restricted_outcomes[4][4]={{16,-1,-1,-1},{3,4,6,7},{5,-1,-1,-1},{13,14,15,-1}};
 }
 bool RoomMenu::Load(const std::filesystem::path& dir,std::string& error) {
     return scene_.Load(dir,media,error);
 }
-void RoomMenu::Open(std::uint32_t buttons,bool away,bool other_profiles,bool media_mounted) {
+void RoomMenu::Open(std::uint32_t buttons,bool away,bool other_profiles,bool media_mounted,bool restricted) {
     if(active()) return;
     away_=away; others_=other_profiles; mounted_=media_mounted; row_=column_=sub_=0; result_=-1;
-    frame_=clip_=boundary_=0; idle_=1800; holds_={}; previous_=buttons;
+    restricted_=restricted;
+    frame_=boundary_=0; clip_=restricted_?19:0; idle_=1800; holds_={}; previous_=buttons;
     highlights_.fill(1); highlights_[0]=9;
     phase_=Phase::opening; effects_={13};
 }
 void RoomMenu::Close(int result) {
-    result_=result; clip_=1; frame_=0; phase_=Phase::closing; effects_.push_back(14);
+    result_=result; clip_=restricted_?20:1; frame_=0; phase_=Phase::closing; effects_.push_back(14);
 }
 std::optional<int> RoomMenu::Step(std::uint32_t buttons) {
     effects_.clear();
     const unsigned edge=buttons & ~previous_;
     previous_=buttons;
     if(!active()) return {};
-    const unsigned length=clip_<=1?10:21;
+    const unsigned length=phase_==Phase::closing || !sub_ ? 10:21;
     if(frame_<length) ++frame_;
     if(phase_==Phase::opening) {
         if(frame_==length) phase_=Phase::input;
@@ -54,7 +57,7 @@ std::optional<int> RoomMenu::Step(std::uint32_t buttons) {
         int& sel=sub_?column_:row_;
         // 12E4C/12F20: the ordinary local friends menu has no GAME49 session.
         const int submenu_last=(sub_==2 || (sub_==1 && others_)) ? 3 : 2;
-        const int last=sub_?submenu_last:6;
+        const int last=sub_?submenu_last:(restricted_?3:6);
         int next=sel+direction;
         if(next<0 || next>last) {
             if(!first) return {};
@@ -63,26 +66,28 @@ std::optional<int> RoomMenu::Step(std::uint32_t buttons) {
         // 1309C/130E8 skip the save row when 4E67C reports no media.
         if(sub_==3 && !mounted_ && next==1) next+=direction;
         // 128A8 skips おでかけ (row 1) when away and 部屋に帰る (row 2) at home.
-        if(!sub_ && next==(away_?1:2)) next+=direction;
+        if(!sub_ && !restricted_ && next==(away_?1:2)) next+=direction;
         if(!sub_) { highlights_[sel]=1; highlights_[next]=2; }
         sel=next; effects_.push_back(6); return {};
     }
     // 12D94, 12F48 and 1311C test Circle inside the three submenus.
     const unsigned select_buttons = sub_ ? 0x2000 : (0x2000 | 0x20);
     if(edge & select_buttons) {
-        if(!sub_ && (row_==3 || row_==4 || row_==6)) {
-            sub_=row_==3?1:row_==4?2:3; column_=0;
-            clip_=sub_==1?(others_?3:2):sub_==2?4:5;
+        const int notebook=restricted_?1:3, system=restricted_?3:6;
+        if(!sub_ && (row_==notebook || row_==system || (!restricted_ && row_==4))) {
+            sub_=row_==notebook?1:row_==system?3:2; column_=0;
+            if(restricted_) clip_=sub_==1?21:22;
+            else clip_=sub_==1?(others_?3:2):sub_==2?4:5;
             frame_=0; effects_.push_back(4);
         } else if((edge&0x2000) && (sub_ || !(edge&0x20))) {
-            effects_.push_back(4); Close(outcomes[row_][column_]);
+            effects_.push_back(4); Close(restricted_?restricted_outcomes[row_][column_]:outcomes[row_][column_]);
         }
     } else if(edge & (0x4000|0x80)) {
         effects_.push_back(5);
         if(sub_) {
             // 12DBC/12F70 resume the active parent with its current row selected.
             frame_ = 10;
-            sub_=0; column_=0; clip_=0;
+            sub_=0; column_=0; clip_=restricted_?19:0;
         }
         else Close(-1);
     }
@@ -95,6 +100,15 @@ bool RoomMenu::Draw(std::vector<std::uint8_t>& ram,std::size_t offset) const {
     std::vector<Cb2aClip> tracks;
     // 12ADC rebinds the root to clip 4. Nodes 22..27 keep their parent
     // sprite references from clip 0; the friends and System popup clips overlay the open parent.
+    if(restricted_) {
+        tracks.push_back({19,10,false});
+        tracks.push_back({clip_,int(frame_),false});
+        tracks.push_back({23,1,false});
+        for(unsigned i=0;i<4;++i) tracks.push_back({24+i,highlights_[i],false});
+        tracks.push_back({28,sub_==1?column_+2:6,false});
+        tracks.push_back({29,sub_==3?column_+2:5,false});
+        return scene_.Draw(14,tracks,ram,offset);
+    }
     if(sub_==2 || clip_==5) tracks.push_back({0,10,false});
     tracks.push_back({clip_,int(frame_),false});
     tracks.push_back({6,away_?2:1,false});

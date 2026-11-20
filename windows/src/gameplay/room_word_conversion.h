@@ -17,6 +17,8 @@ public:
     bool Load(const std::filesystem::path& directory,std::string& error);
     std::optional<std::vector<Candidate>> Lookup(std::string_view composition) const;
     bool FinishWord(std::string_view written,std::string& reading);
+    std::vector<std::uint8_t> SaveHistory() const { return history_.Save(); }
+    bool RestoreHistory(const std::vector<std::uint8_t>& bytes) { return history_.Restore(bytes); }
     std::optional<bool> CommitCandidate(const Candidate& candidate,std::string& written,
                                         std::string& reading,std::string& composition,unsigned max_units);
     // BOOT 20D3C maps the editor's native CP932 reading.
@@ -34,6 +36,21 @@ private:
         RoomNjSuffix suffix;
     };
     std::map<std::string,Group,std::less<>> dictionary_;
+    struct Stem {
+        Candidate form;
+        unsigned grade;
+    };
+    struct Lexicon {
+        std::map<std::string,std::vector<Stem>,std::less<>> stems;
+        std::vector<Candidate> predictions;
+        std::vector<unsigned char> connections;
+        unsigned left_count=0, right_count=0;
+        unsigned initial_class=0, terminal_class=0, raw_left=0, raw_right=0;
+        bool Allows(unsigned next, unsigned previous) const;
+    };
+    static bool LoadLexicon(const std::filesystem::path& path, Lexicon& lexicon);
+    std::optional<std::vector<Candidate>> LookupKana(std::string_view query) const;
+    Lexicon lexicon_;
 };
 
 } // namespace dokodemo::gameplay

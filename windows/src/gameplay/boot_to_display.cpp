@@ -314,11 +314,6 @@ bool BootToDisplay::AdvanceTitle(std::uint32_t buttons, bool character_voice_pla
     case GuiTitleMediaRequest::none:
         break;
     }
-    if (title_.overwrite_requested()) {
-        frontier_ = 0x314e4;
-        slot_error_ = "Starting a replacement Pokepi with inherited words is not supported";
-        return false;
-    }
     if (title_.media_blocked()) return false;
     if (!UpdateProfile(buttons)) return false;
     if (clear_queued_ || title_.title_complete() || title_.panel() != 5 || title_frame_ >= 319) {
@@ -336,14 +331,18 @@ bool BootToDisplay::AdvanceTitle(std::uint32_t buttons, bool character_voice_pla
         if (!next_scene_ready_) {
             if (!profile_ && !saved_room_) return false;
             std::string error;
-            const bool loaded = saved_room_
-                ? next_scene_.Load(assets_.parent_path(), *saved_room_, calendar_, error)
-                : next_scene_.Load(assets_.parent_path(), *profile_, calendar_, error);
+            // Only the Continue command cold-loads the old room. A confirmed
+            // adoption begins a fresh room with selected inherited data.
+            const bool loaded = profile_
+                ? next_scene_.Load(assets_.parent_path(), *profile_, calendar_, error,
+                                   title_.replacing_slot() && saved_room_ ? &*saved_room_ : nullptr)
+                : next_scene_.Load(assets_.parent_path(), *saved_room_, calendar_, error);
             if (!loaded) {
                 std::fprintf(stderr, "After profile: %s\n", error.c_str());
                 return false;
             }
             saved_room_.reset();
+            next_scene_.BindMeetingOpener(open_meeting_);
             next_scene_ready_ = true;
             room_bank_ = SelectFirstRoomBank(calendar_[3], calendar_[2], rng_.NextC3234());
             view_bank_ = room_bank_;
@@ -385,7 +384,25 @@ bool BootToDisplay::AdvanceTitle(std::uint32_t buttons, bool character_voice_pla
 
 bool BootToDisplay::UpdateProfile(std::uint32_t buttons) {
     editor_sounds_ = 0;
-    if (title_.nickname_requested()) {
+    if (title_.overwrite_requested() && editor_ != Editor::overwrite) {
+        if (!saved_room_) return false;
+        if (replacement_prompt_.empty()) {
+            std::ifstream text(assets_ / "game/title/replacement-prompt.txt", std::ios::binary);
+            std::vector<std::string> lines;
+            for (std::string line; std::getline(text,line);) {
+                if (line.empty() || line.size()>36 || lines.size()==7) break;
+                lines.push_back(std::move(line));
+            }
+            if (lines.size()!=7 || !text.eof()) {
+                slot_error_ = "Cannot read the replacement Pokepi confirmation";
+                return false;
+            }
+            replacement_prompt_ = std::move(lines);
+        }
+        confirmation_.Open(buttons);
+        editor_ = Editor::overwrite;
+        editor_sounds_ = confirmation_.se_mask();
+    } else if (title_.nickname_requested()) {
         if (title_.panel() == 3 && nickname_actor_ != title_.selected_actor()) nickname_.Open(title_.selected_actor(), buttons);
         else nickname_.OpenName(chosen_nickname_.text(), buttons);
         editor_ = Editor::nickname;
@@ -414,11 +431,12 @@ bool BootToDisplay::UpdateProfile(std::uint32_t buttons) {
             title_.FinishDate(result->year, result->month, result->day, result->zodiac);
             editor_ = Editor::none;
         }
-    } else if (editor_ == Editor::confirmation) {
+    } else if (editor_ == Editor::confirmation || editor_ == Editor::overwrite) {
         confirmation_.Step(buttons);
         editor_sounds_ = confirmation_.se_mask();
         if (const auto& result = confirmation_.result()) {
-            title_.FinishConfirmation(*result == 1);
+            if (editor_ == Editor::overwrite) title_.FinishOverwrite(*result == 1);
+            else title_.FinishConfirmation(*result == 1);
             editor_ = Editor::none;
         }
     } else if (editor_ != Editor::none) {
@@ -521,11 +539,19 @@ bool BootToDisplay::DrawTitleScene() {
                     else label = std::to_string((mode == 3 ? date_editor_.base_year() : 1) + int(item));
                     DrawProfileField(label,x,y,item == cursor,common_font_,*vram_,draw_offset_,scale,top,bottom);
                 })) return false;
-    } else if (editor_ == Editor::confirmation && confirmation_.visible()) {
+    } else if ((editor_ == Editor::confirmation || editor_ == Editor::overwrite) && confirmation_.visible()) {
+        const bool replacement = editor_ == Editor::overwrite;
         if (!title_renderer_.RenderConfirmation(confirmation_.progress(),confirmation_.cursor(),*vram_,draw_offset_,
                 [&](int x,int y,float scale){
-                    DrawConfirmationText(ProfileConfirmation::question(),x,y,scale,common_font_,*vram_,draw_offset_);
-                })) return false;
+                    if (replacement) {
+                        for (const auto& line : replacement_prompt_) {
+                            DrawConfirmationText(line,x,y,scale,common_font_,*vram_,draw_offset_);
+                            y += int(23*scale);
+                        }
+                    } else {
+                        DrawConfirmationText(ProfileConfirmation::question(),x,y,scale,common_font_,*vram_,draw_offset_);
+                    }
+                }, replacement ? 20u : 11u, replacement ? unsigned(replacement_prompt_.size()+1) : 2u)) return false;
     }
     if (title_.wipe_visible()) ApplyRadialWipe(title_.radius(), *vram_, draw_offset_);
     return true;

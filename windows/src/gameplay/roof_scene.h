@@ -35,4 +35,22 @@ private:
     unsigned resource_ = 0;
 };
 
+class OutingScene {
+public:
+    static constexpr bool Supports(unsigned selector) { return selector>0 && selector<20 && selector!=12; }
+    bool Load(const std::filesystem::path& directory,unsigned selector,unsigned period,std::string& error);
+    bool Draw(const std::array<float,16>& camera,unsigned season,std::uint32_t light_time,
+              std::vector<std::uint8_t>& vram,std::size_t offset,RoomLighting& lighting,
+              bool* changed_pixels=nullptr);
+    const RoomMesh& Background() const { return background_; }
+    const std::array<float,3>& Placement() const { return placement_; }
+    unsigned resource() const { return resource_; }
+private:
+    RoomMesh background_;
+    std::array<float,3> placement_{};
+    unsigned resource_=0, lights_=0;
+    struct Motion { std::uint32_t time, duration; bool loop; };
+    std::vector<Motion> motions_;
+};
+
 } // namespace dokodemo::gameplay

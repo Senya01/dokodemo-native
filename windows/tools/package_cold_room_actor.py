@@ -8,11 +8,19 @@ from model_formats import parse_asc
 from ksc_format import parse_header
 from package_post_profile import mesh_blob
 from package_room_activity_selector import project_activity_rows
-from package_room_activity_topic import project_topic_bodies
+from package_room_activity_topic import project_topic_bodies, scheduled_room_row
+from package_room_common_topic import collect_named_contacts
 from ksc_format import parse_code
+from package_room_talk import (NAMED_INTROS, NAMED_PENULTIMATE, actor_event_row, named_actor_entries,
+                               named_room_blocks, robo_event_row, robo_room_blocks)
 
 
-def cold_room_actor_media(root, boot):
+# Within the scene body, GAME37 has selected KURO for these motion-helper calls.
+# The intervening 39 uses builtin 22 directly.
+KURO_REQUESTS = (0x13, 0xa8, 0xdb)
+
+
+def cold_room_actor_media(root, boot, *, effect_test=False):
     def member(archive, name):
         part = archive.payload(archive.by_name(name))
         return part.read(0, part.size)
@@ -27,22 +35,25 @@ def cold_room_actor_media(root, boot):
     shared = BparArchive(root.payload(root.by_name("DATA.BPM")))
     coordinates = member(shared, "SEQ/SEQUENCE_COORD.BIN")
     files = {}
-    routes = zip((0x8938B, 0x672A2, 0x631CB, 0x673DB, 0x671D4),
+    routes = list(zip((0x8938B, 0x672A2, 0x631CB, 0x673DB, 0x671D4),
                  (0x8DE46, 0x6BD07, 0x67BEA, 0x6BDBF, 0x6BBD2),
                  (0x8D798, 0x6B659, 0x6753C, 0x6B711, 0x6B524),
                  (0x8D91B, 0x6B7DC, 0x676BF, 0x6B894, 0x6B6A7),
                  (0x8940D, 0x67324, 0x6324D, 0x6745D, 0x67256),
-                 (0x1A62, 0x1A63, 0x1A78, 0x1A78, 0x1A78))
-    for actor, (entrance, walk, turn, zoom, invite, repeat) in enumerate(routes):
+                 (0x1A62, 0x1A63, 0x1A78, 0x1A78, 0x1A78)))
+    for actor in range(6):
         species = game_name(0xd7c, actor)
         body = game_name(0xd58, actor)
         group = BparArchive(root.payload(root.by_name(species + ".BPM")))
-        scripts = BparArchive(root.payload(root.by_name("KS" + species + ".BPM")))
-        script_file = member(scripts, species + ".KSC")
-        script = script_file[28:]
         def at(pc, expected):
             return script.startswith(bytes.fromhex(expected), pc)
-        require(at(entrance, "30 01 91 00 00 81 b0 00 51") and
+        invite_motion = 0
+        if actor < 5:
+            entrance, walk, turn, zoom, invite, repeat = routes[actor]
+            scripts = BparArchive(root.payload(root.by_name("KS" + species + ".BPM")))
+            script_file = member(scripts, species + ".KSC")
+            script = script_file[28:]
+            require(at(entrance, "30 01 91 00 00 81 b0 00 51") and
                 at(walk, "81 9d 00 20 01") and at(turn, "81 b2 00 20 01") and
                 script[walk+5:walk+11] == script[turn+5:turn+11] and
                 at(zoom, "80 01 20 01") and at(zoom+7, "80 0f 44") and
@@ -52,24 +63,109 @@ def cold_room_actor_media(root, boot):
         # Each cold first conversation uses entry 1 of its species' event
         # table. Element 0 of that row is the requested invitation ASC, and
         # element 1 is the species-specific callback invoked by the script.
-        lookup = (0x89896, 0x677AD, 0x636D6, 0x678E6, 0x676DF)[actor]
-        require(at(lookup, "51 91 01 00 95"), "Unknown invitation table resolver")
-        table, = struct.unpack_from("<H", script, lookup + 5)
-        header = parse_header(script_file)
-        def global_word(index):
-            require(index < header.global_count, "Room greeting global index")
-            return struct.unpack_from("<I", script_file, header.global_start + 4*index)[0]
-        row_ref = global_word(table+2)
-        require(global_word(table) == 0x90000008 and row_ref >> 16 == 0xb004,
-                "Unknown invitation row address")
-        row = row_ref & 0xffff
-        require(global_word(row) == 0x90000002 and global_word(row+1) >> 28 == 2
-                and global_word(row+2) >> 28 == 7, "Invalid invitation pair")
-        invite_motion = global_word(row+1) & 0x0fffffff
+            lookup = (0x89896, 0x677AD, 0x636D6, 0x678E6, 0x676DF)[actor]
+            require(at(lookup, "51 91 01 00 95"), "Unknown invitation table resolver")
+            table, = struct.unpack_from("<H", script, lookup + 5)
+            header = parse_header(script_file)
+            def global_word(index):
+                require(index < header.global_count, "Room greeting global index")
+                return struct.unpack_from("<I", script_file, header.global_start + 4*index)[0]
+            row_ref = global_word(table+2)
+            require(global_word(table) == 0x90000008 and row_ref >> 16 == 0xb004,
+                    "Unknown invitation row address")
+            row = row_ref & 0xffff
+            require(global_word(row) == 0x90000002 and global_word(row+1) >> 28 == 2
+                    and global_word(row+2) >> 28 == 7, "Invalid invitation pair")
+            invite_motion = global_word(row+1) & 0x0fffffff
         asc = parse_asc(member(group, species + "/" + species + ".ASC"))
         requests = {1, 5, 9, 153, 154, 157, 176, 178, invite_motion}
         activity_ids = set()
+        if actor == 1:
+            instructions = parse_code(script_file)
+            blocks = robo_room_blocks(script_file,instructions)
+            contacts, _, _=collect_named_contacts(script_file,species,instructions)
+            blocks.update(named_room_blocks(script_file,instructions,contacts))
+            for event in (2,3):
+                requests.add(robo_event_row(script_file, header, event)[0])
+            for pc in (0x6b510, 0x6b551, 0x6b55d, 0x6b594, 0x6b5cb,
+                       0x6b602, 0x6b60e, 0x6b65c, 0x6b675, 0x67372,
+                       0x67532, 0x67544, 0x675cc, 0x675de, 0x6b777, 0x6b783):
+                require(script[pc-3] == 0x81 and at(pc, "20 01 d7 3e 01"),
+                        "Unknown ROBO contact ASC call")
+                requests.add(struct.unpack_from("<H", script, pc-2)[0])
+            require(at(0x67417, "20 01 d7 3e 01"), "Unknown ROBO scheduled motion dispatch")
+            for setter in (0x673a6, 0x673bc, 0x673e0):
+                require(script[setter] == 0x81 and at(setter+3,"51"), "Invalid ROBO scheduled reply ASC")
+                requests.add(struct.unpack_from("<H",script,setter+1)[0])
+            for op in instructions:
+                pc = op["code_offset"]
+                if op["opcode"] == 0x80 and at(pc+2,"84 8b 22 02") and any(
+                        start <= pc < start+len(data) for start,data in blocks.items()):
+                    requests.add(script[pc+1])
+        if species in NAMED_INTROS:
+            instructions = parse_code(script_file)
+            contacts, _, _=collect_named_contacts(script_file,species,instructions)
+            blocks = named_room_blocks(script_file, instructions, set(named_actor_entries(species)) | contacts)
+            _, motion, scene, _ = NAMED_PENULTIMATE[species]
+            motion_call = f"2001{motion.to_bytes(3, 'little').hex()}"
+            for op in instructions:
+                pc = op["code_offset"]
+                if op["opcode"] == 0x80 and at(pc+2,"84 8b 22 02") and any(
+                        start <= pc < start+len(raw) for start, raw in blocks.items()):
+                    requests.add(script[pc+1])
+                if (op["opcode"] == 0x81 and at(pc+3,motion_call) and pc-scene not in KURO_REQUESTS) and any(
+                        start <= pc < start+len(raw) for start, raw in blocks.items()):
+                    requests.add(struct.unpack_from("<H", script, pc+1)[0])
+            requests.update((30,74,144,146,147,150,151,152,186))
+            for event in range(2,7):
+                requests.add(actor_event_row(script_file, header, NAMED_INTROS[species][0], event)[0])
+            # Local 1 carries the selected reply to the restored primary actor.
+            for offset in (0x5b, 0x71, 0x95):
+                pc=scene+offset
+                require(script[pc]==0x81 and at(pc+3,"51"),"Unknown named actor reply motion")
+                requests.add(struct.unpack_from("<H",script,pc+1)[0])
+
+        if 1 <= actor <= 4:
+            rows = project_activity_rows(script_file, species)
+            activity_ids.update(row[1] for row in struct.iter_unpack("<7H", rows[8:]) if row[0] == 0)
+            requests.update(activity_ids)
+            # Mood variants and the seated second controller share the room locomotion owner.
+            requests.update((2, 3, 4, 6, 7, 8, 10, 11, 12, 13))
+
+        if actor == 5:
+            # 1A108 constructs KURO. Only the 89434 commands between the
+            # paired GAME37 calls are exported for this scene record.
+            require(species == body == "KURO", "Unknown secondary room model")
+            requests = set(range(1, 13))
+            for pc in (0x89447, 0x894dc, 0x8950f):
+                require(toro_script[pc] == 0x81, "Unknown secondary room command operand")
+                requests.add(struct.unpack_from("<H", toro_script, pc+1)[0])
+            require(toro_script[0x8946e:0x89474] == bytes.fromhex("80 27 84 8b 22 02"),
+                    "Unknown secondary room reaction")
+            requests.add(toro_script[0x8946f])
+            # 6734B selects the same secondary actor before these four ROBO requests.
+            robo_archive = BparArchive(root.payload(root.by_name("KSROBO.BPM")))
+            robo_member = robo_archive.payload(robo_archive.by_name("ROBO.KSC"))
+            robo = robo_member.read(28,robo_member.size-28)
+            for pc in (0x6735e,0x673f3,0x67426):
+                require(robo[pc]==0x81 and robo[pc+3:pc+8]==bytes.fromhex("2001d73e01"),
+                        "Unknown ROBO secondary actor motion")
+                requests.add(struct.unpack_from("<H",robo,pc+1)[0])
+            for name, (_, motion, scene, _) in NAMED_PENULTIMATE.items():
+                archive = BparArchive(root.payload(root.by_name("KS" + name + ".BPM")))
+                segment = archive.payload(archive.by_name(name + ".KSC"))
+                companion_script = segment.read(28,segment.size-28)
+                signature = b"\x20\x01" + motion.to_bytes(3, "little")
+                for offset in KURO_REQUESTS:
+                    pc = scene+offset
+                    require(companion_script[pc]==0x81 and companion_script.startswith(signature,pc+3),
+                            "Unknown secondary motion for " + name)
+                    requests.add(struct.unpack_from("<H",companion_script,pc+1)[0])
         if actor == 0:  # Reached NEKO first conversation and gift reply.
+            toro_script = script
+            for pc in (0x89458, 0x8948f, 0x894a5, 0x894c9, 0x89618, 0x8962a):
+                require(script[pc] == 0x81, "Unknown primary room command operand")
+                requests.add(struct.unpack_from("<H", script, pc+1)[0])
             requests.update((20, 29, 35, 36, 38, 39, 42, 43, 48, 60, 74, 87, 156, 186))
             # With caller argument 1, posture 3 uses this action and waits.
             require(at(0x8d68d, "81 93 00 20 01 6f 34 01"), "Unknown posture-three action")
@@ -102,6 +198,9 @@ def cold_room_actor_media(root, boot):
             # For example 94E8's affirmative branch requests ASC 99 at 94FF.
             instructions = parse_code(script_file)
             topic_blocks, _ = project_topic_bodies(script_file, instructions)
+            for event in (2, 3, 6, 4, 5):
+                scheduled_motion, _ = scheduled_room_row(script_file, header, event)
+                requests.add(scheduled_motion & 0x0fffffff)
             topic_start = None
             for op in instructions:
                 pc = op["code_offset"]
@@ -117,9 +216,9 @@ def cold_room_actor_media(root, boot):
             # the live script keeps using the complete ordered selector table.
             rows = project_activity_rows(script_file)
             for scene, request, field58, posture, period, mood, flag in struct.iter_unpack("<7H", rows[8:]):
-                if scene == 12:
-                    # All roof rows remain eligible for the live selector to
-                    # evaluate. Its source moves use SEQUENCE_COORD 212..219.
+                if 0 < scene < 20:
+                    # The live destination selector owns the full row and
+                    # filters these authored ASC requests at each decision.
                     activity_ids.add(request)
                 elif (scene == 0 and field58 in (0, 1, 3, 11) and posture & 0xe and
                         period & 0x3f and mood & 0xb and flag & 3):
@@ -129,25 +228,39 @@ def cold_room_actor_media(root, boot):
             # A690(+54), including quiet-hours mood changes during the return.
             requests.update((2, 3, 4, 6, 7, 8, 10, 11, 12))
             requests.add(13)  # B9B8: second channel of actor mode 3 uses BA60(13).
-        commands = {i: asc["blocks"][i-1]["words"] for i in sorted(requests)}
-        # 8010 operands refer to AFT motion names. Skip operands and stop at
-        # root return; zero padding is outside the ASQ command stream.
+        if effect_test:
+            # The source ASC table exposes single-animation entries for effect
+            # motions. Keep these for direct actor requests as well as sequences.
+            effect_commands = ((1062,1063,1193,1263), (1062,1063,1193,1202,1205,1263),
+                               (1062,1063,1263), (1062,1063,1263),
+                               (1062,1063,1203,1205,1263), (1264,1266,1267))
+            requests.update(effect_commands[actor])
+        commands = {}
         motions = set()
         points = {9, 15, 16}
-        widths = {0x8000: 1, 0x8010: 3, 0x8020: 2, 0x8021: 1,
+        widths = {0x8000: 1, 0x8001: 2, 0x8010: 3, 0x8020: 2, 0x8021: 1,
                   0x8030: 3, 0x8031: 1, 0x8040: 2, 0x8041: 1, 0x8042: 1, 0x8043: 1}
-        for words in commands.values():
+        remaining = set(requests)
+        while remaining:
+            command = remaining.pop()
+            require(0 < command <= len(asc["blocks"]), f"Invalid ASC target {species} {command}")
+            words = commands[command] = asc["blocks"][command-1]["words"]
             index = 0
             while index < len(words):
                 op = words[index]
-                require(op in widths and index + widths[op] <= len(words), "Unsupported cold-room ASC")
+                require(op in widths and index + widths[op] <= len(words),
+                        f"Unsupported {species} ASC {command} opcode {op:#x}")
                 if op == 0x8000:
                     break
+                if op == 0x8001 and words[index+1] not in commands:
+                    remaining.add(words[index+1])
                 if op == 0x8030 and words[index+1] in (3, 4, 11):
                     points.add(words[index+2])
                 if op == 0x8010:
                     motions.add(words[index+1])
                 index += widths[op]
+        require(all(8*point+8 <= len(coordinates) for point in points),
+                f"Invalid {species} ASC movement point")
         ordered = sorted(motions)
         dak = [species + "/" + asc["names"][i]["name"].upper() + ".DAK" for i in ordered]
         model = mesh_blob(group, species + "/" + body + ".DVS", dak, species + "/GIM")
@@ -156,7 +269,7 @@ def cold_room_actor_media(root, boot):
             control.extend(struct.pack("<" + "I" * len(values), *values))
         anchor, = struct.unpack("<I", boot.read(code + 0xd7df8 + 4 * actor, 4))
         words([invite_motion, anchor, len(ordered), *ordered, len(commands)])
-        for index, ops in commands.items():
+        for index, ops in sorted(commands.items()):
             words([index,len(ops),*ops])
         words([len(activity_ids), *sorted(activity_ids)])
         words([len(points)])
@@ -174,8 +287,14 @@ def cold_room_actor_media(root, boot):
             nodes.append(node)
         require(nodes and len(nodes) < 128, "Invalid actor channel node list")
         words([len(nodes), *nodes])
-        control.extend(boot.read(data+0x4180,12))
-        control.extend(boot.read(code+0xd7ee0,4))
+        if actor == 5:
+            # 1A16C/1A174 supply x and degrees to BD78. Two other axes are zero.
+            x, degrees = struct.unpack("<2f", boot.read(code+0xd8eec,8))
+            pi, half_turn = struct.unpack("<2f", boot.read(code+0xd7ee4,8))
+            control.extend(struct.pack("<4f", x, 0., 0., degrees*pi/half_turn))
+        else:
+            control.extend(boot.read(data+0x4180,12))
+            control.extend(boot.read(code+0xd7ee0,4))
         if actor == 0:
             control.extend(boot.read(data+0x4180+16*12,12))  # D2D0, roof selector 12
         for stride in range(0,32,4):

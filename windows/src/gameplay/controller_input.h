@@ -25,6 +25,16 @@ public:
     virtual std::optional<ControllerRead> ReadOne() = 0;
 };
 
+// The Windows game's per-frame sample latch. A missing device sample is
+// distinct from a neutral sample after focus loss, sleep, or disconnect.
+class ControllerButtonLatch {
+public:
+    void Reset() { needs_release_=true; }
+    std::uint32_t Read(std::optional<std::uint32_t> buttons);
+private:
+    bool needs_release_=false;
+};
+
 struct ControllerFields {
     std::array<std::uint8_t, 4> axes; // input object +5..+8
     std::uint32_t buttons;            // input object +C

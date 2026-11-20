@@ -16,9 +16,11 @@ public:
 
     RetailSaveProfile() noexcept;
     void Adopt(const AcceptedProfile& profile) noexcept;
+    void AdoptReplacing(const AcceptedProfile& profile) noexcept;
     void SetOptions(const std::array<int, 3>& values) noexcept;
     void EnterFirstDayRoom(unsigned actor) noexcept;
     void SetFullMenuMode() noexcept;
+    void RestrictRoomMenus() noexcept;
     bool SetFirstDayDiary(std::string_view text, const std::array<unsigned, 3>& date,
                           bool revealed) noexcept;
     void StampForSave(const Calendar& now) noexcept;
@@ -32,6 +34,7 @@ public:
         bool revealed;
     };
     std::optional<DiaryPage> FirstDayDiary() const;
+    unsigned MainDiaryCount() const noexcept;
     const std::array<std::uint8_t, kSize>& bytes() const noexcept { return bytes_; }
 
 private:

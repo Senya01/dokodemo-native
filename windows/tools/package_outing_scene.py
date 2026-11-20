@@ -1,4 +1,4 @@
-"""Package scene-12 registration, selected 50AC recipe and the model/light bundles."""
+"""Package selected 50AC scene registrations and their model/light bundles."""
 from pathlib import Path
 import struct
 
@@ -75,4 +75,54 @@ def outing_scene_media(root, boot):
         save(stem + ".bin", mesh_blob(package, reg + "/MODEL01.DVS", main, textures))
         save(stem + "-aux.bin", mesh_blob(package, member(aux_model_fmt, reg, reg), child, textures))
         save(stem + "-controls.bin", b"RUF3" + pose + face + indices)
+    return files
+
+
+def other_outing_media(root, boot, selectors=range(1, 20)):
+    ph, = struct.unpack("<I", boot.read(28, 4))
+    text, data = [struct.unpack("<I", boot.read(ph + i * 32 + 4, 4))[0] for i in range(2)]
+    period_variants = struct.unpack("<6I", boot.read(text + 0xd3018, 24))
+    require(period_variants == (0, 1, 1, 2, 0, 0), "Unexpected BOOT 4848 period table")
+    light_fmt = boot.read(text + 0xd307c, 48).split(b"\0")[0].decode("ascii")
+    heading = boot.read(text + 0xd7ee0, 4)
+    directory = Path("assets/game/post-profile")
+    files = {}
+    controls = bytearray(b"DSC1")
+
+    def save(name, raw):
+        source = Region(raw)
+        files[directory / name] = source, source.sha256()
+
+    for scene in selectors:
+        if scene == 12:
+            continue
+        require(1 <= scene < 20, "Unsupported destination selector")
+        spawn = boot.read(data + 0x4180 + 16 * scene, 12)
+        for variant in range(3):
+            index = scene * 3 + variant
+            resource = 30 + index
+            lights, models = boot.read(data + 0x9d0 + 2 * index, 2)
+            require(lights <= 1 and models <= 4, "Unrecognized destination controller counts")
+            raw = boot.read(data + 0x43c4 + 20 * resource, 20)
+            name = raw.split(b"\0")[0].decode("ascii").upper()
+            require(name.startswith("BG_"), "Invalid destination package name")
+            package = BparArchive(root.payload(root.by_name(name + ".BPM")))
+            motions = []
+            if lights:
+                for number in range(1, 8):
+                    path = (light_fmt % (name, name, number)).upper().split("\\")
+                    require(path[:2] == [name, name], "Unexpected destination light path")
+                    motions.append("/".join(path[1:]))
+            flags = 0
+            for motion in range(models):
+                member = f"{name}/MODEL{motion + 1:02}.DAK"
+                header = package.payload(package.by_name(member)).read(0, 20)
+                require(header[:4] == b"DAK\0", "Invalid destination animation")
+                flags |= (struct.unpack_from("<I", header, 12)[0] & 1) << motion
+                motions.append(member)
+            require(lights or models, "Destination has no background controllers")
+            controls.extend(struct.pack("<4B", resource, 7 * lights, models, flags) + spawn + heading)
+            save(f"destination-{resource}.bin",
+                 mesh_blob(package, f"{name}/MODEL01.DVS", motions, f"{name}/GIM"))
+    save("destination-controls.bin", controls)
     return files

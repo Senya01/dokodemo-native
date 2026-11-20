@@ -471,14 +471,15 @@ bool TitleRenderer::RenderSelect(unsigned mode,unsigned frame,bool closing,unsig
 }
 
 bool TitleRenderer::RenderConfirmation(float progress,unsigned cursor,Bytes& vram,size_t offset,
-                                       const std::function<void(int,int,float)>& draw_question) const {
+                                       const std::function<void(int,int,float)>& draw_question,
+                                       unsigned columns,unsigned rows) const {
     constexpr size_t surface=4*(512*(272-1)+480);
     if (!trc_ || cursor>1 || !(progress>=0 && progress<=1) ||
+        columns<1 || columns>20 || rows<2 || rows>10 ||
         offset>vram.size() || surface>vram.size()-offset) return false;
-    // 482E0/48554 lay out the one-line profile question and the Yes/No row.
-    // The TRC grid uses the 16x23 text metrics from 476DC and 476EC.
-    constexpr unsigned columns=11, rows=2, frame=columns+20*(rows-1);
-    constexpr float width=columns*16, height=rows*23;
+    // 482E0/48554 lay out the text and the Yes/No row on a 16x23 grid.
+    const unsigned frame=columns+20*(rows-1);
+    const float width=float(columns*16), height=float(rows*23);
     std::vector<Pose> poses(trc_->nodes.size());
     trc_->Apply(poses,0,frame,false);
     trc_->Apply(poses,1,cursor+1,false);

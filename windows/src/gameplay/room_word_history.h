@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
@@ -32,6 +33,8 @@ class RoomWordHistory {
 public:
     bool Learn(const RoomNjCandidate& selected);
     bool Register(std::string_view reading, std::string_view written);
+    std::vector<std::uint8_t> Save() const;
+    bool Restore(const std::vector<std::uint8_t>& data);
     std::vector<RoomNjCandidate> Compose(std::string_view query,
                                          const std::vector<RoomNjCandidate>& predictions,
                                          const std::vector<RoomNjCandidate>& exact,

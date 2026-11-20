@@ -8,7 +8,8 @@ class RoomMenu {
 public:
     bool Load(const std::filesystem::path& post_profile, std::string& error);
     // 236C4 sets the context from the manager's current scene (14 != 0).
-    void Open(std::uint32_t buttons, bool away=false, bool other_profiles=false, bool media_mounted=true);
+    void Open(std::uint32_t buttons, bool away=false, bool other_profiles=false, bool media_mounted=true,
+              bool restricted=false);
     std::optional<int> Step(std::uint32_t buttons);
     bool Draw(std::vector<std::uint8_t>& vram, std::size_t offset) const;
     bool active() const { return phase_ != Phase::closed; }
@@ -23,7 +24,7 @@ private:
     enum class Phase { closed, opening, input, closing };
     Phase phase_=Phase::closed;
     Cb2aScene scene_;
-    bool away_=false, others_=false, mounted_=false;
+    bool away_=false, others_=false, mounted_=false, restricted_=false;
     unsigned previous_=0, clip_=0, frame_=0, idle_=0, boundary_=0;
     int row_=0, column_=0, sub_=0, result_=-1;
     std::array<unsigned,2> holds_{};

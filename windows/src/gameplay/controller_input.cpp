@@ -13,6 +13,15 @@ std::uint32_t GameButtons(std::uint32_t raw) {
 
 } // namespace
 
+std::uint32_t ControllerButtonLatch::Read(std::optional<std::uint32_t> buttons) {
+    if (!buttons) {
+        Reset();
+        return 0;
+    }
+    if (*buttons==0) needs_release_=false;
+    return needs_release_ ? 0 : *buttons;
+}
+
 std::optional<std::uint32_t> PollController(
     bool enabled, ControllerSource& source, std::optional<ControllerSample>& retained,
     ControllerFields& fields) {

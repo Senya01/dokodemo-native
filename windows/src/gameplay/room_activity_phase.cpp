@@ -154,6 +154,13 @@ bool RoomActivityPhase::BeginOrdinary() {
     return true;
 }
 
+void RoomActivityPhase::ReleaseUnavailableContact() {
+    if (state_ == State::ordinary) {
+        entry_delay_ = 1;
+        state_ = State::return_wait;
+    }
+}
+
 void RoomActivityPhase::ReturnToRoom(std::uint32_t now, int mood, recovered::RngNativeOwner& rng,
                                      bool reset_contact_timer) {
     if (state_ != State::introduction && state_ != State::ordinary) return;

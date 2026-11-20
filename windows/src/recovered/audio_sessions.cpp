@@ -1,6 +1,8 @@
 #include "audio_sessions.h"
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <utility>
 #include <stdexcept>
 
 namespace dokodemo::audio {
@@ -63,12 +65,63 @@ bool ParseRiff(const std::vector<uint8_t>& bytes, Riff& riff) {
     return uint64_t(riff.delay)+riff.frames <= (riff.size/riff.format.block_size)*samples_per_block;
 }
 }
+NativeMediaCodec::NativeMediaCodec(AtracCodec codec,std::unique_ptr<AtracDecoder> decoder)
+    : codec_(codec),decoder_(std::move(decoder)) {
+    if (!decoder_) throw std::runtime_error("Could not allocate the native codec context");
+}
+
+std::optional<NativeCodecMemory> NativeMediaCodec::CheckNeedMem(const AtracFormat& format) noexcept {
+    if ((format.codec!=AtracCodec::Plus && format.codec!=AtracCodec::Atrac3) ||
+        !format.sample_rate || format.sample_rate>std::numeric_limits<int>::max() ||
+        !format.block_size || format.block_size>std::numeric_limits<std::uint16_t>::max() ||
+        format.extra.size()>64) return {};
+    // ATRAC3+ produces at most 2048 frames per block, and ATRAC3 at most
+    // 1024. Both formats here output interleaved stereo signed PCM.
+    return NativeCodecMemory{format.block_size,format.codec==AtracCodec::Plus ? 4096u : 2048u};
+}
+
+bool NativeMediaCodec::Init(const AtracFormat& format) {
+    const auto memory=CheckNeedMem(format);
+    if (!memory || format.codec!=codec_) return false;
+    std::vector<uint8_t> next(memory->input_bytes);
+    if (!decoder_->Configure(format)) return false;
+    input_.swap(next);
+    rate_=format.sample_rate;
+    pcm_samples_=memory->pcm_samples;
+    failed_=false;
+    return true;
+}
+
+bool NativeMediaCodec::DecodePacket(const uint8_t* data,size_t size,AtracPcmFrame& out) {
+    out={};
+    if (!ready() || !data || size!=input_.size()) return false;
+    std::copy_n(data,size,input_.begin());
+    AtracPcmFrame decoded;
+    // A backend can consume the packet before failing to publish PCM. Retire
+    // the active decode state on that failure so the same block is not retried.
+    failed_=true;
+    if (!decoder_->DecodePacket(input_.data(),input_.size(),decoded) ||
+        decoded.sample_rate!=rate_ || decoded.channels!=2 || decoded.samples.empty() ||
+        decoded.samples.size()%2 || decoded.samples.size()>pcm_samples_)
+        return false;
+    out=std::move(decoded);
+    failed_=false;
+    return true;
+}
+
+void NativeMediaCodec::Release() noexcept {
+    decoder_->Reset();
+    std::vector<uint8_t>().swap(input_);
+    rate_=pcm_samples_=0;
+    failed_=false;
+}
+
 NativeAtracSessions::NativeAtracSessions(AtracDecoderFactory& factory) {
     // 11A0..121C attempts two 1000 and two 1001 records in order. This
     // substitution covers the public ABI of a fully prepared pool.
     for (size_t i = 0; i < slots_.size(); ++i) {
-        slots_[i].decoder = factory.Create(i < 2 ? AtracCodec::Plus : AtracCodec::Atrac3);
-        if (!slots_[i].decoder) throw std::runtime_error("Could not allocate all four native ATRAC slots");
+        const auto codec=i<2 ? AtracCodec::Plus : AtracCodec::Atrac3;
+        slots_[i].workspace=std::make_unique<NativeMediaCodec>(codec,factory.Create(codec));
     }
 }
 int32_t NativeAtracSessions::Acquire(uint32_t codec) noexcept {
@@ -85,43 +138,43 @@ int32_t NativeAtracSessions::Acquire(uint32_t codec) noexcept {
 }
 int32_t NativeAtracSessions::Release(uint32_t id) noexcept {
     if (id >= slots_.size() || !slots_[id].claimed) return int32_t(0x80630005u);
-    slots_[id].decoder->Reset();
+    slots_[id].workspace->Release();
     std::vector<uint8_t>().swap(slots_[id].riff);
     slots_[id].claimed = false;
     return 0;
 }
 bool NativeAtracSessions::DecodePlusPacket(uint32_t id, const uint8_t* data, size_t size, unsigned sample_rate) {
-    return id < slots_.size() && slots_[id].claimed && slots_[id].riff.empty() &&
-           slots_[id].decoder->DecodePlusPacket(data, size, sample_rate);
+    if (id>=slots_.size() || !slots_[id].claimed || !slots_[id].riff.empty() ||
+        !data || !size || size>std::numeric_limits<std::uint16_t>::max())
+        return false;
+    auto& workspace=*slots_[id].workspace;
+    if (workspace.codec()!=AtracCodec::Plus ||
+        (!workspace.configured() && !workspace.Init({AtracCodec::Plus,sample_rate,unsigned(size),{}})))
+        return false;
+    AtracPcmFrame pcm;
+    return workspace.sample_rate()==sample_rate && workspace.DecodePacket(data,size,pcm);
 }
 bool NativeAtracSessions::OpenRiff(uint32_t id, std::vector<uint8_t> bytes) {
     if (id >= slots_.size() || !slots_[id].claimed) return false;
     auto& slot = slots_[id];
     Riff riff;
-    if (!ParseRiff(bytes,riff) || !slot.decoder->Configure(riff.format)) return false;
+    if (!ParseRiff(bytes,riff) || !slot.workspace->Init(riff.format)) return false;
     slot.riff = std::move(bytes);
     slot.next = riff.data; slot.limit = riff.data+riff.size;
     slot.block = riff.format.block_size; slot.skip = riff.delay;
-    slot.remaining = riff.frames; slot.failed = false;
+    slot.remaining = riff.frames;
     return true;
 }
 bool NativeAtracSessions::Decode(uint32_t id, AtracPcmFrame& out) {
     out = {};
     if (id >= slots_.size() || !slots_[id].claimed) return false;
     auto& slot = slots_[id];
-    if (slot.riff.empty() || slot.failed) return false;
+    if (slot.riff.empty() || !slot.workspace->ready()) return false;
     while (slot.remaining) {
         AtracPcmFrame packet;
-        // A decoder may consume the compressed block before PCM allocation
-        // fails. Retrying it on the same decoder would advance history twice.
-        slot.failed = true;
-        if (slot.limit-slot.next < slot.block ||
-            !slot.decoder->DecodePacket(slot.riff.data()+slot.next,slot.block,packet) ||
-            packet.channels != 2 || packet.samples.empty() || packet.samples.size()%2) {
-            return false;
-        }
+        if (slot.limit-slot.next<slot.block ||
+            !slot.workspace->DecodePacket(slot.riff.data()+slot.next,slot.block,packet)) return false;
         slot.next += slot.block;
-        slot.failed = false;
         const auto count = static_cast<unsigned>(packet.samples.size()/2);
         const auto skip = std::min(slot.skip,count);
         slot.skip -= skip;

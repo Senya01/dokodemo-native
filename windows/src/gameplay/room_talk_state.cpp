@@ -48,12 +48,29 @@ unsigned TextWidth(std::string_view line,const recovered::PackageView& font) {
 namespace {
 constexpr std::array<unsigned,3> contact_globals{0x59a8,0x59af,0x59b6};
 constexpr std::array<unsigned,3> contact_sizes{5,6,6};
+struct ActorContactScript {
+    unsigned entry, roster, history, slot, mood_tick, attention, clear_text;
+    unsigned lesson_fields, display_name, keyboard, initialize_word, accept_again, enqueue_topic, flags;
+};
+constexpr ActorContactScript contact_scripts[]{
+    {0x7d43a,0xd090,0x6018,0x2878,0x2872,0x8d3e2,0x8d8fe,0x2446,0x497a,0x4929,0x87a2,0x18a5,0x249f,0x59a2},
+    {0x5bdb8,0xbab1,0x6020,0x292c,0x2926,0x6b2a7,0x6b7bf,0x249f,0x497c,0x492b,0x87ed,0x18a5,0x24a0,0x59aa},
+    {0x6206e,0x989d,0x6021,0x258c,0x2586,0x67188,0x676a2,0x2137,0x49c7,0x4976,0x87ed,0x18ba,0x24b5,0x59ab},
+    {0x654e7,0x92b1,0x6031,0x2472,0x246c,0x6b35f,0x6b877,0x2019,0x48d8,0x4887,0x878c,0x18ba,0x24b5,0x59bb},
+    {0x66058,0x9723,0x601c,0x2508,0x2502,0x6b170,0x6b68a,0x20bb,0x489a,0x4849,0x8715,0x18ba,0x24b5,0x59a6},
+};
+
+}
+
+unsigned RoomTalkState::ContactGlobal(unsigned bank) const {
+    const auto flags=alternate_greeting_?alternate_greeting_->flags:robo_greeting_?0x59aau:0x59a2u;
+    return contact_globals.at(bank)+flags-0x59a2u;
 }
 
 std::array<KscSaveValue,3> RoomTalkState::ContactHistoryTables() const {
     std::array<KscSaveValue,3> tables;
     for (unsigned bank=0; bank<tables.size(); ++bank) {
-        const auto& live=global_arrays_.at(contact_globals[bank]);
+        const auto& live=global_arrays_.at(ContactGlobal(bank));
         Require(live.size()==contact_sizes[bank],"Wrong live contact table size");
         KscSaveValue array{0x90000000u | contact_sizes[bank]};
         for (const auto& cell : live) {
@@ -88,7 +105,7 @@ void RoomTalkState::RestoreContactHistory(const std::array<KscSaveValue,3>& tabl
     std::array<std::vector<Value>,3> staged;
     for (unsigned bank=0; bank<tables.size(); ++bank) {
         const auto& ref=tables[bank];
-        Require(global_arrays_.at(contact_globals[bank]).size()==contact_sizes[bank],
+        Require(global_arrays_.at(ContactGlobal(bank)).size()==contact_sizes[bank],
                 "Contact table owner not initialized");
         Require(ref.word==0xb0000000u && ref.text.empty() && ref.children.size()==1,
                 "Invalid saved contact table reference");
@@ -114,15 +131,36 @@ void RoomTalkState::RestoreContactHistory(const std::array<KscSaveValue,3>& tabl
         }
     }
     for (unsigned bank=0; bank<tables.size(); ++bank)
-        staged[bank].swap(global_arrays_.at(contact_globals[bank]));
+        staged[bank].swap(global_arrays_.at(ContactGlobal(bank)));
     intro_flags_=progress[0].word & 0x0fffffffu;
     outing_enabled_=progress[1].word & 0x0fffffffu;
 }
 
 bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile& p,std::string& error) {
     *this={};
-    if(p.actor!=0) return true;
     try {
+        Require(p.actor<std::size(contact_scripts),"Unknown actor contact layout");
+        actor_number_=p.actor;
+        const auto& adopted=p.adopted_at;
+        if (adopted[6] && adopted[5] && adopted[4])
+            adoption_minute_=recovered::CalendarScalar7C660(recovered::CalendarRecord689B8(
+                {int(adopted[6]),int(adopted[5]),int(adopted[4]),int(adopted[3]),int(adopted[2])}));
+        if(p.actor>=2) {
+            static constexpr GreetingScript scripts[]{
+                {"usagi-introduction.bin",0x63396,0x6211e,0x59ab,0x3360,0x63372,0x4fb6,0x1c71,0x2587,0xa455,0x633df,0x3dd3,
+                 {0x96a0,0x636c3,0x63839,0x257b,0x2130,0x3b91,0x59ae,
+                  {0x63544,0x6342a,0x63585,0x634cb,0x6340b},0x67779,0x67128,0x67270,0x9fb3,0x59d5}},
+                {"inu-introduction.bin",0x675a6,0x65588,0x59bb,0x3354,0x67582,0x4fc6,0x1c71,0x246d,0xb150,0x675ef,0x3dd3,
+                 {0x972d,0x678d3,0x67a49,0x2461,0x2012,0x3af2,0x59be,
+                  {0x67754,0x6763a,0x67795,0x676db,0x6761b},0x6b94e,0x6b2ff,0x6b445,0xacae,0x59e5}},
+                {"kaeru-introduction.bin",0x6739f,0x660ff,0x59a6,0x322a,0x6737b,0x4fb1,0x1c71,0x2503,0xae21,0x673e8,0x3dd6,
+                 {0x94f1,0x676cc,0x67842,0x24f7,0x20b4,0x3d09,0x59a9,
+                  {0x6754d,0x67433,0x6758e,0x674d4,0x67414},0x6b761,0x6b110,0x6b258,0xa97f,0x59d0}},
+            };
+            Require(p.actor-2<std::size(scripts),"Unsupported introduction actor");
+            alternate_greeting_=&scripts[p.actor-2];
+        }
+        if(p.actor>=1) return LoadNamedGreeting(dir,p,error);
         std::ifstream file(dir/"toro-introduction.bin",std::ios::binary|std::ios::ate);
         Require(file && file.tellg()==std::streamoff(1743),"Missing NEKO introduction");
         std::vector<unsigned char> image(1743);
@@ -202,8 +240,28 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
                         list.push_back(offset);
                     }
                 } else if(section==4) {
-                    const bool labels=at==0x6092 || at==0x9a26;
-                    const unsigned cells=at==0x9a26?3:at==0x6092?4:at==0x59a8?5:6;
+                    if(at==0x98a2) {
+                        Require((size==12 || size==20 || size==28 || size==36 || size==44) && Word(bytes+pos,4)==(0x90000000u|(size/4-1)),
+                                "Invalid scheduled room event projection");
+                        auto& events=global_arrays_[at];
+                        constexpr std::array<unsigned,5> projected_events{2,3,6,4,5};
+                        const auto count=(size-4)/8;
+                        events.resize(*std::max_element(projected_events.begin(),projected_events.begin()+count)+1);
+                        for(unsigned index=0;index<count;++index) {
+                            const auto i=projected_events[index];
+                            const auto start=pos+4+index*8;
+                            const auto motion=Word(bytes+start,4), callback=Word(bytes+start+4,4);
+                            Require(motion>>28==2 && (motion&0x0fffffff)>=20 && callback>>28==7 &&
+                                    code_.count(callback&0x0fffffff),"Invalid scheduled room event row");
+                            auto row=std::make_shared<std::vector<Value>>();
+                            row->push_back({Kind::integer,int(motion&0x0fffffff)});
+                            row->push_back({Kind::code,int(callback&0x0fffffff)});
+                            events[i]={Kind::array,0,{},0,std::move(row)};
+                        }
+                        previous_end=at+1; pos+=size; continue;
+                    }
+                    const bool labels=at==0x6092 || at==0x6097 || at==0x9a26;
+                    const unsigned cells=at==0x9a26?3:at==0x6092?4:at==0x59a8?5:at==0x6097?7:6;
                     Require((labels || at==0x59a8 || at==0x59af || at==0x59b6) &&
                             size==4*(cells+1) && Word(bytes+pos,4)==(0x90000000u|cells),
                             "Invalid room script global array");
@@ -255,7 +313,167 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
     } catch(const std::exception& e) { error=e.what(); return false; }
 }
 
+bool RoomTalkState::LoadNamedGreeting(const std::filesystem::path& dir,const AcceptedProfile& profile,
+                                      std::string& error) {
+    std::ifstream file(dir/(alternate_greeting_?alternate_greeting_->filename:"robo-introduction.bin"),
+                       std::ios::binary|std::ios::ate);
+    const auto size=file.tellg();
+    Require(file && size>=16 && size<=(1<<20),"Missing named actor room script");
+    std::vector<unsigned char> data(static_cast<std::size_t>(size));
+    Require(bool(file.seekg(0).read(reinterpret_cast<char*>(data.data()),data.size())),
+            "Truncated ROBO introduction");
+    const auto format=Word(data.data(),4);
+    Require(alternate_greeting_ ? format==0x34494152u || format==0x35494152u :
+            format>=0x31495252 && format<=0x36495252 && (format&0xffffff)==0x495252,
+            "Invalid actor introduction");
+    std::size_t at=4;
+    auto take=[&](std::size_t length) {
+        Require(length<=data.size()-at,"Truncated ROBO introduction");
+        const auto* begin=data.data()+at;
+        at+=length;
+        return begin;
+    };
+    auto number=[&](unsigned length) { return Word(take(length),length); };
+    const auto blocks=number(2), strings=number(2), phrases=number(2), suffix=number(2);
+    const std::array<unsigned,2> breaks{number(2),number(2)};
+    suffix_.assign(reinterpret_cast<const char*>(take(suffix)),suffix);
+    for(unsigned i=0;i<2;++i) {
+        const std::string_view text(reinterpret_cast<const char*>(take(breaks[i])),breaks[i]);
+        for(std::size_t k=0;k<text.size();) {
+            const auto glyph=GlyphAt(text,k);
+            break_classes_[i].push_back(glyph.index);
+            k+=glyph.consumed;
+        }
+    }
+    unsigned previous_end=0;
+    for(unsigned i=0;i<blocks;++i) {
+        const auto pc=number(4), length=number(4);
+        const auto* body=take(length);
+        const bool trait_loop=pc==0xb5fdu && length>=4 && Word(body+length-4,4)==0x00b65710;
+        Require(pc>=previous_end && pc<=0xffffff && length<=0x1000000-pc && length>=3 && body[0]==0x30 &&
+                (body[length-1]==0x31 || trait_loop || (pc==0x6b88b && body[length-1]==0x1b) ||
+                 (alternate_greeting_ && pc+11==alternate_greeting_->schedule.farewell && body[length-1]==0x1b)),
+                "Invalid ROBO procedure");
+        code_[pc].assign(body,body+length);
+        previous_end=pc+length;
+    }
+    for(unsigned i=0;i<strings;++i) {
+        const auto offset=number(4), length=number(4);
+        const auto* bytes=take(length);
+        Require(pool_.emplace(offset,std::string(reinterpret_cast<const char*>(bytes),length)).second,
+                "Duplicate ROBO script string");
+    }
+    for(unsigned i=0;i<phrases;++i) {
+        const auto id=number(2), count=number(2);
+        Require(count && count<=16 && !phrase_lists_.count(id),"Invalid ROBO phrase list");
+        for(unsigned j=0;j<count;++j) {
+            const auto offset=number(4);
+            Require(pool_.count(offset)!=0,"Missing ROBO phrase text");
+            phrase_lists_[id].push_back(offset);
+        }
+    }
+    if(alternate_greeting_) {
+        const auto count=number(2);
+        Require(count>0 && count<=4,"Invalid alternate speech suffix count");
+        for(unsigned i=0;i<count;++i) {
+            const auto index=number(2), offset=number(4);
+            Require(index==0x18+i && pool_.count(offset),"Missing alternate actor speech suffix");
+            speech_suffixes_.emplace(index,offset);
+        }
+        const auto& source=alternate_greeting_->schedule;
+        auto& rows=global_arrays_[source.table];
+        rows.resize(8);
+        constexpr std::array motions{79u,48u,79u,48u,85u};
+        for(unsigned i=0;i<motions.size();++i) {
+            const auto motion=number(4), callback=number(4);
+            Require(motion==motions[i] && callback==source.callbacks[i] && code_.count(callback),
+                    "Invalid named actor scheduled event row");
+            auto row=std::make_shared<std::vector<Value>>();
+            row->push_back({Kind::integer,int(motion)});
+            row->push_back({Kind::code,int(callback)});
+            rows[2+i]={Kind::array,0,{},0,std::move(row)};
+        }
+        Require(code_.count(source.wrapper),"Missing named actor scheduled wrapper");
+        for(auto& offset:named_scheduled_diary_offsets_) {
+            offset=number(4);
+            Require(pool_.count(offset),"Missing named actor scheduled diary text");
+        }
+        if(format==0x34494152u) {
+            const auto season_count=number(2);
+            Require(season_count==(profile.actor==2?4u:0u),"Invalid named actor season table");
+            for(unsigned i=0;i<season_count;++i)
+                global_arrays_[0x609b].push_back({Kind::string,0,pool_.at(number(4))});
+        }
+        auto& location=global_arrays_[source.location_cell];
+        location.resize(6);
+        location[0]={Kind::integer,0}; // Actor bootstrap sets the cold room selector.
+        outing_script_cells_[alternate_greeting_->skip_farewell-2]={Kind::integer,0};
+    } else if(format!=0x31495252) {
+        auto& rows=global_arrays_[0x940b];
+        rows.resize(8);
+        const unsigned count=format>=0x35495252?5:(format>>24)-'1';
+        constexpr std::array events{2u,3u,6u,4u,5u};
+        constexpr std::array motions{79u,48u,85u,79u,48u};
+        constexpr std::array callbacks{0x6761bu,0x67501u,0x674e2u,0x6765cu,0x675a2u};
+        for(unsigned i=0;i<count;++i) {
+            const unsigned motion=number(4), callback=number(4);
+            Require(motion==motions[i] && callback==callbacks[i] &&
+                    code_.count(callback) && code_.count(0x6779a),"Invalid ROBO scheduled event row");
+            auto row=std::make_shared<std::vector<Value>>();
+            row->push_back({Kind::integer,int(motion)});
+            row->push_back({Kind::code,int(callback)});
+            rows[events[i]]={Kind::array,0,{},0,std::move(row)};
+        }
+        auto& reactions=procedure_lists_[0x2a98];
+        for(unsigned i=0;i<3;++i) {
+            const auto pc=number(4);
+            Require(code_.count(pc)!=0,"Missing ROBO event reaction");
+            reactions.push_back(pc);
+        }
+    }
+    if(format==0x35494152u || format==0x36495252u) {
+        nil_inline_text_.assign(reinterpret_cast<const char*>(take(4)),4);
+        Require(ScriptCharacterCount(nil_inline_text_)==2,"Invalid inline text fallback");
+        constexpr std::array<std::array<unsigned,2>,4> ids{{
+            {0x609a,0x609f},{0x609b,0x60a0},{0x60ab,0},{0x6096,0}
+        }};
+        const auto expected=ids.at(profile.actor-1);
+        const auto table_count=number(2);
+        Require(table_count==(expected[1]?2u:1u),"Invalid actor calendar table count");
+        for(unsigned i=0;i<table_count;++i) {
+            const auto index=number(2), length=number(2);
+            Require(index==expected[i] && length==(i==0?4u:7u),"Invalid actor calendar labels");
+            auto [table, inserted]=global_arrays_.try_emplace(index);
+            Require(inserted,"Duplicate actor calendar table");
+            for(unsigned j=0;j<length;++j)
+                table->second.push_back({Kind::string,0,pool_.at(number(4))});
+        }
+    }
+    Require(at==data.size() && code_.count(alternate_greeting_?alternate_greeting_->entry:0x6746d) &&
+            code_.count(alternate_greeting_?alternate_greeting_->farewell:0x5be76),"Incomplete actor introduction");
+    if(!vocabulary_.Load(dir,profile,error) || !fallback_list_.Load(dir,error,profile.actor)) return false;
+    nickname_=profile.nickname.text();
+    player_=profile.player.text();
+    phase_=Phase::prompt;
+    robo_greeting_=!alternate_greeting_;
+    for (unsigned bank=0;bank<contact_globals.size();++bank)
+        global_arrays_[ContactGlobal(bank)].resize(contact_sizes[bank]);
+    if(alternate_greeting_) return true;
+    if(!traits_.Load(dir,error)) return false;
+    for (const unsigned id : {0x2a0au,0x2a3bu,0x2a42u,0x2a49u,0x2a50u,0x2a57u,0x2a5eu,0x2a65u,0x2a6cu,0x2a73u}) {
+        if (!vocabulary_.HasPredicate(id)) continue;
+        const auto cells=vocabulary_.PredicateGroup(id,0);
+        predicates_[id].assign(cells.begin(),cells.end());
+    }
+    // 6C022..6C028 writes the home kind to the initially empty descriptor.
+    global_arrays_[0x2498].resize(6);
+    global_arrays_[0x2498][0]={Kind::integer,0};
+    return true;
+}
+
 bool RoomTalkState::supports_ordinary_topic(unsigned selected_pc) const {
+    if(robo_greeting_)
+        return (selected_pc==0x5bdb8 || selected_pc==0x5c7dc || selected_pc==0x5cc52) && code_.count(selected_pc);
     return (selected_pc==0x4e27 || selected_pc==0x89acc || selected_pc==0x7d43a ||
             selected_pc==0x810a0 || selected_pc==0x8121c || selected_pc==0x82bfa || selected_pc==0x8304e ||
             (selected_pc>=0x846ab && selected_pc<=0x85439)) && code_.count(selected_pc);
@@ -270,12 +488,175 @@ bool RoomTalkState::BeginOrdinaryTopic(unsigned selected_pc,bool queued) {
         selected_fallback_={Kind::code,int(selected_pc)};
         indirect_topic_=selected_pc;
     }
-    phase_=Phase::running; pc_=selected_pc;
+    StartTopic(selected_pc);
+    if(robo_greeting_) {
+        columns_=9;
+        rows_=4;
+    }
+    return true;
+}
+
+bool RoomTalkState::BeginRoboContactGreeting() {
+    if(!robo_greeting_ || phase_!=Phase::done || ordinary_ || !code_.count(0x5bdc3)) return false;
+    StartTopic(0x5bdc3);
+    robo_contact_greeting_=true;
+    columns_=9;
+    rows_=4;
+    return true;
+}
+
+bool RoomTalkState::TakeRoboContactGreetingReturn() {
+    return std::exchange(robo_contact_greeting_return_,false);
+}
+
+bool RoomTalkState::BeginScheduledRoomEvent(unsigned event, std::uint32_t midnight, ScheduledProgress progress) {
+    const unsigned entry=alternate_greeting_?alternate_greeting_->schedule.wrapper:robo_greeting_?0x6779au:0x89883u;
+    const auto rows=global_arrays_.find(alternate_greeting_?alternate_greeting_->schedule.table:robo_greeting_?0x940bu:0x98a2u);
+    if(event<2 || event>6 || phase_!=Phase::done || ordinary_ || !code_.count(entry) ||
+       rows==global_arrays_.end() || rows->second.size()<=event || rows->second[event].kind!=Kind::array) return false;
+    scheduled_room_event_=event;
+    scheduled_midnight_=midnight;
+    scheduled_progress_=progress;
+    StartTopic(entry);
+    return true;
+}
+
+std::optional<bool> RoomTalkState::TakeScheduledNavigation() {
+    return std::exchange(scheduled_navigation_,std::nullopt);
+}
+
+std::optional<RoomSound> RoomTalkState::TakeScheduledSound() {
+    return std::exchange(scheduled_sound_,std::nullopt);
+}
+
+std::vector<unsigned> RoomTalkState::TakeScheduledActorSelections() {
+    return std::exchange(scheduled_selections_,{});
+}
+
+std::optional<unsigned> RoomTalkState::TakeScheduledActorCommand(unsigned record) {
+    return std::exchange(scheduled_actor_commands_.at(record),std::nullopt);
+}
+
+std::optional<unsigned> RoomTalkState::TakeScheduledCamera() {
+    return std::exchange(scheduled_camera_request_,std::nullopt);
+}
+
+std::optional<std::uint32_t> RoomTalkState::TakeScheduledActivityDeadline() {
+    return std::exchange(scheduled_activity_deadline_,std::nullopt);
+}
+
+std::array<std::optional<unsigned>,2> RoomTalkState::TakeScheduledStayWrites() {
+    return std::exchange(scheduled_stay_writes_,{});
+}
+
+std::vector<RoomTalkState::ScheduledDiary> RoomTalkState::scheduled_diaries() const {
+    if(phase_!=Phase::scheduled_diary) return {};
+    if(alternate_greeting_) {
+        const auto& offsets=named_scheduled_diary_offsets_;
+        if(scheduled_room_event_==6) return {{7,0x900000,pool_.at(offsets[0])}};
+        if(scheduled_room_event_==5) return {{10,0x800000,pool_.at(offsets[2])},
+                                             {11,0x800000,pool_.at(offsets[3])}};
+        return {{8,0x700000,pool_.at(offsets[1])}};
+    }
+    if(scheduled_room_event_==6) return {{7,0x900000,pool_.at(robo_greeting_?0x305:0x379)}};
+    if(scheduled_room_event_==5)
+        return {{10,0x800000,pool_.at(robo_greeting_?0x465:0x4ce)},
+                {11,0x800000,pool_.at(robo_greeting_?0x4f1:0x545)}};
+    return {{8,0x700000,pool_.at(robo_greeting_?0x381:0x3ff)}};
+}
+
+RoomTalkState::FarewellSites RoomTalkState::farewell_sites() const {
+    if(alternate_greeting_) {
+        const auto& source=alternate_greeting_->schedule;
+        return {source.farewell,source.utility_save,source.farewell+0x16};
+    }
+    return robo_greeting_ ? FarewellSites{0x6b896,0x6b247,0x6b8ac} :
+                            FarewellSites{0x8d9d5,0x8d382,0x8d9eb};
+}
+
+RoomTalkState::ScheduledDiary RoomTalkState::expired_stay_diary() const {
+    const auto offset=alternate_greeting_ ? named_scheduled_diary_offsets_[4] : robo_greeting_ ? 0x405 : 0x477;
+    return {9,0xa00000,pool_.at(offset)};
+}
+
+void RoomTalkState::FinishScheduledDiary(bool recorded) {
+    Require(phase_==Phase::scheduled_diary,"Unexpected farewell diary return");
+    result_={Kind::truth,recorded};
+    phase_=Phase::running;
+}
+
+bool RoomTalkState::TakeScheduledMenuRestriction() {
+    return std::exchange(scheduled_menu_restriction_,false);
+}
+
+std::optional<RoomTalkState::FarewellAction> RoomTalkState::pending_farewell_action() const {
+    if(phase_!=Phase::scheduled_farewell) return {};
+    switch(farewell_stage_) {
+    case FarewellStage::cover_wait: return FarewellAction::wait_for_cover;
+    case FarewellStage::writing: return FarewellAction::write_slot;
+    case FarewellStage::slot_wait: return FarewellAction::wait_for_slot;
+    default: throw std::logic_error("Missing pending farewell action");
+    }
+}
+
+void RoomTalkState::FinishFarewellAction(FarewellAction action) {
+    Require(pending_farewell_action()==action,"Unexpected farewell host completion");
+    switch(action) {
+    case FarewellAction::wait_for_cover: farewell_stage_=FarewellStage::covered; break;
+    case FarewellAction::write_slot: farewell_stage_=FarewellStage::written; break;
+    case FarewellAction::wait_for_slot: farewell_stage_=FarewellStage::acknowledged; break;
+    }
+    phase_=Phase::running;
+}
+
+bool RoomTalkState::TakeFarewellComplete() {
+    if(farewell_stage_!=FarewellStage::complete) return false;
+    farewell_stage_=FarewellStage::inactive;
+    return true;
+}
+
+unsigned RoomTalkState::named_contact_entry() const {
+    return contact_scripts[actor_number_].entry;
+}
+
+unsigned RoomTalkState::attention_entry() const {
+    return contact_scripts[actor_number_].attention;
+}
+
+bool RoomTalkState::BeginNamedContact() {
+    const auto pc=named_contact_entry();
+    if (!alternate_greeting_ || phase_!=Phase::done || ordinary_ || !code_.count(pc))
+        return false;
+    vocabulary_.BeginConversation();
+    StartTopic(pc);
+    columns_=9; rows_=4;
+    return true;
+}
+
+std::optional<bool> RoomTalkState::TakeScheduledReturn() {
+    if(!std::exchange(scheduled_return_,false)) return {};
+    return std::exchange(scheduled_count_contact_,std::nullopt);
+}
+
+void RoomTalkState::StartTopic(unsigned pc) {
+    phase_=Phase::running; pc_=pc;
     ordinary_=true; ordinary_return_=ordinary_rejected_=false;
     frontier_.reset();
     farewell_=skip_farewell_=actor_wait_=message_wait_=false;
     last_answer_=-1; delay_=0; result_={}; locals_.clear(); stack_.clear(); callers_.clear();
-    return true;
+}
+
+void RoomTalkState::ReleaseOrdinaryFrontier() {
+    if (!ordinary_ || phase_ != Phase::frontier) return;
+    ordinary_ = false;
+    direct_teaching_=false;
+    if(reserved_word_>=0) vocabulary_.ReleaseWord(std::exchange(reserved_word_,-1));
+    frontier_.reset();
+    selected_fallback_={};
+    indirect_topic_=0;
+    robo_contact_greeting_=false;
+    locals_.clear(); stack_.clear(); callers_.clear(); blocks_.clear();
+    phase_ = Phase::done;
 }
 
 void RoomTalkState::LoadOutings(const std::filesystem::path& dir) {
@@ -285,7 +666,8 @@ void RoomTalkState::LoadOutings(const std::filesystem::path& dir) {
         Require(size<=4 && bool(file.read(reinterpret_cast<char*>(bytes),size)),"Incomplete outing package");
         return Word(bytes,size);
     };
-    Require(read(4)==0x34544f52,"Missing Toro outing data");
+    const auto version=read(4);
+    Require(version==0x35544f52 || version==0x34544f52,"Missing Toro outing data");
     outing_enabled_=read(4);
     for(auto& mask : outing_period_masks_) mask=read(1);
     auto& order=global_arrays_[0x5f92];
@@ -319,7 +701,8 @@ void RoomTalkState::LoadOutings(const std::filesystem::path& dir) {
         Require(!kind || fields->at(4).kind==Kind::string,"Missing outing label");
         destinations.push_back({Kind::array,0,{},0,std::move(fields)});
     }
-    roof_detail_=read(2);
+    if (version==0x34544f52) outing_details_[11]=read(2);
+    else for (auto& details:outing_details_) details=read(2);
     const unsigned table_count=read(2);
     for(unsigned i=0;i<table_count;++i) {
         const unsigned ct=read(2),count=read(2);
@@ -343,7 +726,9 @@ void RoomTalkState::LoadOutings(const std::filesystem::path& dir) {
         }
         if(phrases.size()==count) phrase_lists_[ct]=std::move(phrases);
     }
-    Require(outing_tables_.count(roof_detail_)!=0,"Missing rooftop detail list");
+    for (const auto details:outing_details_)
+        if (details) Require(outing_tables_.count(details)!=0,"Missing destination detail list");
+    Require(outing_details_[11]!=0,"Missing roof detail registration");
     global_arrays_[0].resize(8); // The eight mutable destination strings read by the scene.
     outing_script_cells_[0x2871]={Kind::integer,0};
     Require(file.peek()==std::char_traits<char>::eof(),"Trailing outing data");
@@ -475,13 +860,12 @@ bool RoomTalkState::TakeOutingRoomRequest() {
 }
 
 bool RoomTalkState::BeginTeaching() {
-    if(phase_!=Phase::done || ordinary_) return false;
-    phase_=Phase::running; pc_=0x8dba;
-    direct_teaching_=ordinary_=true;
-    counted_contact_=ordinary_return_=ordinary_rejected_=false;
-    frontier_.reset(); last_answer_=-1; delay_=0;
-    farewell_=skip_farewell_=actor_wait_=message_wait_=false;
-    result_={}; locals_.clear(); stack_.clear(); callers_.clear();
+    const auto entry=robo_greeting_?0x8e05u:0x8dbau;
+    if(phase_!=Phase::done || ordinary_ || !code_.count(entry)) return false;
+    StartTopic(entry);
+    direct_teaching_=true;
+    counted_contact_=false;
+    if(robo_greeting_) { columns_=9; rows_=4; }
     return true;
 }
 
@@ -494,10 +878,11 @@ bool RoomTalkState::BeginOrdinaryFarewell() {
 }
 
 bool RoomTalkState::BeginRoomAttentionMessage() {
-    if(phase_!=Phase::done || ordinary_) return false;
+    const auto entry=attention_entry();
+    if(phase_!=Phase::done || ordinary_ || !code_.count(entry)) return false;
     // 8D8EE chooses DIALOG(0,5,2,100,100) and calls the 8D3E2 text.
     columns_=5; rows_=2; attention_=true; attention_return_=false;
-    phase_=Phase::running; pc_=0x8d3e2; locals_.clear(); stack_.clear(); callers_.clear();
+    phase_=Phase::running; pc_=entry; locals_.clear(); stack_.clear(); callers_.clear();
     result_={}; delay_=0; return true;
 }
 
@@ -544,8 +929,8 @@ RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
     if(v.kind==Kind::element) return v.cells->at(v.data);
     if(v.kind==Kind::global_element) return global_arrays_.at(v.data).at(v.depth);
     if(v.kind==Kind::teach_field) return teaching_.at(v.data);
-    if(v.kind==Kind::global_ref && (v.data==21 || v.data==22))
-        return {Kind::string,0,v.data==21?nickname_:player_};
+    if(v.kind==Kind::global_ref && (v.data==21 || v.data==22 || v.data==23))
+        return {Kind::string,0,v.data==21?nickname_:v.data==22?player_:suffix_};
     throw std::runtime_error("Unknown cold KSC reference");
 }
 
@@ -553,6 +938,19 @@ RoomTalkState::Value RoomTalkState::DictionaryField(int row,int field) const {
     if(row==600 && field==26) {
         const auto& saying=vocabulary_.player_saying();
         return {Kind::string,0,saying,0,{}, {{row,26,0,saying.size()}}};
+    }
+    if (field>=19) {
+        Require(row>=600 && unsigned(row)<vocabulary_.row_count() && field<30,
+                "Invalid player dictionary field");
+        const auto card=vocabulary_.FriendCard(unsigned(row));
+        const auto& cell=card.children.at(field);
+        const auto tag=cell.word>>28;
+        if (tag==2 || tag==3)
+            return {tag==2?Kind::integer:Kind::calendar_time,ScriptInteger(cell.word)};
+        if (tag==5 || tag==6)
+            return {Kind::string,0,cell.text,0,{},{{row,unsigned(field),0,cell.text.size()}}};
+        Require(!cell.word,"Unsupported player dictionary field type");
+        return {};
     }
     if(!vocabulary_.HasField(row,field)) return {};
     if(field==1 || field==2 || field==13) {
@@ -589,23 +987,92 @@ void RoomTalkState::Assign(const Value& ref,Value value) {
             vocabulary_.WriteNumber(ref.data,unsigned(ref.depth),value.kind==Kind::nil?std::nullopt:std::optional<int>(value.data));
         }
     }
+    else if(scheduled_room_event_ && ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==(alternate_greeting_?alternate_greeting_->schedule.motion_cell:robo_greeting_?0x3ec9u:0x3df7u) &&
+            value.kind==Kind::integer)
+        outing_script_cells_[ref.data]=std::move(value);
     else if(excursion_ && ref.kind==Kind::constant_ref &&
             (ref.data==0x2871 || ref.data==0x2874 || ref.data==0x2875 || ref.data==0x3de7 || ref.data==0x3df7))
         outing_script_cells_[ref.data]=std::move(value);
     else if(excursion_ && ref.kind==Kind::global_ref && ref.data==0x6105)
         outing_script_cells_[ref.data]=std::move(value);
-    else if(exchange_inventory_ && ref.kind==Kind::global_ref && (ref.data==0x98c3 || ref.data==0x9a32))
+    else if(exchange_inventory_ && ref.kind==Kind::global_ref &&
+            (ref.data==0x98c3 || ref.data==0x9a32 ||
+             (ref.data==0x9a33 && pc_==0x8d1c4 && value.kind==Kind::truth && value.data==1)))
         friends_cells_[ref.data]=std::move(value);
     else if(friends_introduction_ && ref.kind==Kind::constant_ref &&
             (ref.data==0x2869 || ref.data==0x2877 || ref.data==0x2d54 || ref.data==0x2d55))
         friends_cells_[ref.data]=std::move(value);
-    else if(friends_introduction_ && ref.kind==Kind::constant_ref && ref.data==0x2873 && value.kind==Kind::nil)
+    else if((friends_introduction_ || scheduled_room_event_) &&
+            ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==(alternate_greeting_?alternate_greeting_->skip_farewell:robo_greeting_?0x2927u:0x2873u)
+            && value.kind==Kind::nil)
         skip_farewell_=false;
-    else if(ref.kind==Kind::constant_ref && ref.data==0x2878) selected_fallback_=std::move(value);
+    else if(scheduled_room_event_ && ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==(alternate_greeting_?alternate_greeting_->schedule.event_cell-1:robo_greeting_?0x291au:0x2866u) &&
+            (value.kind==Kind::calendar_time || value.kind==Kind::integer))
+        scheduled_deadline_=std::move(value);
+    else if(scheduled_room_event_ && ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==(alternate_greeting_?alternate_greeting_->skip_farewell+1:robo_greeting_?0x2928u:0x2874u) &&
+            value.kind==Kind::integer &&
+            (value.data==0 || value.data==1 || (ScheduledFarewell() && value.data==3)))
+        scheduled_camera_=unsigned(value.data);
+    else if(alternate_greeting_ && scheduled_room_event_==5 && ref.kind==Kind::global_ref &&
+            ref.data==0x16 && pc_==0x64c5d && value.kind==Kind::string && value.text==player_)
+        player_=std::move(value.text); // INU 64C54–64C5C restores the player name from the profile.
+    else if(alternate_greeting_ && ScheduledFarewell() && ref.kind==Kind::global_ref &&
+            value.kind==Kind::integer) {
+        const auto& live=alternate_greeting_->schedule;
+        const unsigned offset=pc_-live.callbacks[scheduled_room_event_-2];
+        if(unsigned(ref.data)==live.midnight_global-1 &&
+           ((scheduled_room_event_==3 && ((offset==0x66 && value.data==0) ||
+                                          (offset==0x90 && value.data>14))) ||
+            (scheduled_room_event_==5 && offset==0x6f && value.data==0))) {
+            scheduled_stay_writes_[0]=unsigned(value.data);
+        } else if(unsigned(ref.data)==live.midnight_global+1 &&
+                  offset==(scheduled_room_event_==3?0x7cu:0x64u) && value.data>=3 && value.data<=10) {
+            scheduled_stay_writes_[1]=unsigned(value.data);
+        } else throw std::runtime_error("Unsupported named actor farewell assignment");
+    }
+    else if(scheduled_room_event_==3 && ref.kind==Kind::global_ref && value.kind==Kind::integer &&
+            ((ref.data==(robo_greeting_?0x59ac:0x59a4) &&
+              ((pc_==(robo_greeting_?0x67567u:0x89650u) && value.data==0) ||
+               (pc_==(robo_greeting_?0x67591u:0x8967au) && value.data>14))) ||
+             (ref.data==(robo_greeting_?0x59ae:0x59a6) && pc_==(robo_greeting_?0x6757du:0x89666u) &&
+              value.data>=3 && value.data<=10)))
+        scheduled_stay_writes_[ref.data==(robo_greeting_?0x59ae:0x59a6)]=unsigned(value.data);
+    else if(scheduled_room_event_==5 && ref.kind==Kind::global_ref && value.kind==Kind::integer &&
+            ((ref.data==(robo_greeting_?0x59ac:0x59a4) && pc_==(robo_greeting_?0x67611u:0x896fau) && !value.data) ||
+             (ref.data==(robo_greeting_?0x59ae:0x59a6) && pc_==(robo_greeting_?0x67606u:0x896efu) &&
+              value.data>=3 && value.data<=10)))
+        scheduled_stay_writes_[ref.data==(robo_greeting_?0x59ae:0x59a6)]=unsigned(value.data);
+    else if(robo_greeting_ && ordinary_ && ref.kind==Kind::global_ref && ref.data==0x17 &&
+            (pc_==0x56bd3 || pc_==0x56a4c || pc_==0x56a08)) {
+        Require(value.kind==Kind::string,"Invalid conversation speech suffix");
+        suffix_=std::move(value.text);
+    }
+    else if(((scheduled_room_event_==4 && pc_==0x7c9e9) ||
+             (scheduled_room_event_==5 && pc_==0x7cbe9)) && ref.kind==Kind::global_ref && ref.data==0x17) {
+        Require(value.kind==Kind::string && value.text==pool_.at(0),"Unexpected scheduled speech suffix");
+        suffix_=std::move(value.text);
+    }
+    else if(ref.kind==Kind::constant_ref && unsigned(ref.data)==contact_scripts[actor_number_].slot)
+        selected_fallback_=std::move(value);
     else if(ref.kind==Kind::constant_ref && ref.data==0 && value.kind==Kind::truth)
         event20_cleanup_=value.data!=0; // 4E/46 around the address-form ASK in 49DE.
-    else if(ref.kind==Kind::constant_ref && ref.data==0x2872) mood_set_tick_=value.data;
-    else if(ref.kind==Kind::constant_ref && ref.data==0x2873 && value.data==2) skip_farewell_=true;
+    else if(scheduled_room_event_ && alternate_greeting_ && ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==alternate_greeting_->skip_farewell-1 &&
+            pc_==0x2176 && value.kind==Kind::integer)
+        mood_set_tick_=value.data;
+    else if(scheduled_room_event_ && alternate_greeting_ && ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==alternate_greeting_->skip_farewell-2 &&
+            pc_==0x20a7 && value.kind==Kind::integer)
+        outing_script_cells_[ref.data]=std::move(value);
+    else if(ref.kind==Kind::constant_ref && unsigned(ref.data)==contact_scripts[actor_number_].mood_tick &&
+            value.kind==Kind::integer) mood_set_tick_=value.data;
+    else if(ref.kind==Kind::constant_ref &&
+            unsigned(ref.data)==(alternate_greeting_ ? alternate_greeting_->skip_farewell : robo_greeting_?0x2927u:0x2873u)
+            && value.kind==Kind::integer && value.data==2) skip_farewell_=true;
     else throw std::runtime_error("Unsupported KSC assignment");
 }
 
@@ -621,6 +1088,10 @@ RoomTalkState::Value RoomTalkState::ReadText() {
                 text.text+=std::to_string(ScriptInteger(unsigned(value.data)));
                 continue;
             }
+            if(value.kind==Kind::nil && !nil_inline_text_.empty()) {
+                text.text+=nil_inline_text_;
+                continue;
+            }
             Require(value.kind==Kind::string,"Unsupported KSC message operand");
             for(auto operand : value.word_operands) {
                 operand.offset+=text.text.size();
@@ -630,7 +1101,13 @@ RoomTalkState::Value RoomTalkState::ReadText() {
             }
             text.text+=value.text;
         } else if(c==0x17) {
-            Require(Read(2)==23,"Unknown KSC speech suffix"); text.text+=suffix_;
+            const auto index=Read(2);
+            if(index==0x17) text.text+=suffix_;
+            else {
+                const auto it=speech_suffixes_.find(index);
+                Require(it!=speech_suffixes_.end(),"Unknown KSC speech suffix");
+                text.text+=pool_.at(it->second);
+            }
         } else text.text+=static_cast<char>(c);
     }
     return text;
@@ -659,6 +1136,46 @@ void RoomTalkState::ReturnFromGreeting() {
 
 void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) {
     const auto argc=args.size();
+    const auto* source=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
+    if(scheduled_room_event_ && ((robo_greeting_ && target==0x1a89 && pc_==0x676b5) ||
+                                 (source && target==0x1a9e && pc_==source->callbacks[0]+0x9a))) {
+        Require(argc==2 && args[0].kind==Kind::calendar_time &&
+                args[1].kind==Kind::integer && args[1].data==0,"Invalid ROBO ambient deadline");
+        scheduled_activity_deadline_=unsigned(args[0].data)&0x0fffffffu;
+        return;
+    }
+    if(scheduled_room_event_ && ((target==0x1aac && pc_==0x8995d) ||
+                                  (robo_greeting_ && target==0x1aad && pc_==0x67874) ||
+                                  (alternate_greeting_ && target==0x1ac2 && pc_==alternate_greeting_->schedule.wrapper+0xda))) {
+        Require(!argc,"Invalid scheduled contact timer clear");
+        // CT2868 belongs to the ambient contact timer, re-armed at 89A69 below.
+        return;
+    }
+    if(scheduled_room_event_ && ((target==0x899f9 && pc_==0x89966) ||
+                                  (robo_greeting_ && target==0x67910 && pc_==0x6787d) ||
+                                  (alternate_greeting_ && target==alternate_greeting_->schedule.contact_cleanup &&
+                                   pc_==alternate_greeting_->schedule.wrapper+0xe3))) {
+        Require(argc==2 && args[0].kind==Kind::integer && !args[0].data &&
+                args[1].kind==Kind::truth && !scheduled_secondary_,
+                "Invalid scheduled contact cleanup");
+        vocabulary_.BeginConversation();
+        scheduled_count_contact_=args[1].data!=0;
+        if(skip_farewell_) {
+            scheduled_actor_commands_[0]=74; // CT2927/CT2873 == 2.
+            return;
+        }
+        // 67934 (ROBO) and 89A1D (NEKO) call the actor's own farewell.
+        target=alternate_greeting_?alternate_greeting_->farewell:robo_greeting_?0x5be76u:0x7d548u;
+        args.clear();
+    }
+    if(exchange_inventory_ && peer_meetings_enabled_ && !argc &&
+       ((target==0x8bff6 && pc_==0x8d1e4) || (target==0x8bf9b && pc_==0x8d1e8))) {
+        // The host socket and the waiting overlay were closed before this
+        // cancellation continuation. The native owner has no pending callback.
+        const auto& pending=friends_cells_.at(0x9a33);
+        Require(pending.kind==Kind::truth && pending.data==0,"Meeting close still has a callback");
+        return;
+    }
     if(exchange_inventory_ && target==0x899f9 && pc_==0x8d1f8) {
         Require(argc==2 && args[0].kind==Kind::integer && args[0].data==0 &&
                 args[1].kind==Kind::truth && args[1].data,"Invalid meeting farewell");
@@ -688,35 +1205,124 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         phase_=Phase::done; indirect_topic_=0;
         return;
     }
-    if(target==0xf30 && excursion_) {
-        Require(argc==1 && args[0].kind==Kind::constant_ref,"Invalid outing word lookup");
+    if(target==0xf30 && (excursion_ || (ordinary_ && actor_number_==4 && pc_==0x1c2e1))) {
+        Require(argc==1 && args[0].kind==Kind::constant_ref,"Invalid KSC ordered word lookup");
         result_={Kind::integer,vocabulary_.FirstOutingMatch(args[0].data)};
-        if(result_.data>=0) eligibility_words_[unsigned(locals_.at(7).data)]=unsigned(result_.data);
+        if(excursion_ && result_.data>=0) eligibility_words_[unsigned(locals_.at(7).data)]=unsigned(result_.data);
         return;
     }
-    if(target==0x249f) {
+    const auto& contact=contact_scripts[actor_number_];
+    if(target==contact.enqueue_topic) {
         Require(argc==0 && (selected_fallback_.kind==Kind::code || selected_fallback_.kind==Kind::nil),
                 "Invalid pending topic in CT2878");
         topic_enqueues_.push_back(selected_fallback_.kind==Kind::code
             ?std::optional<unsigned>(selected_fallback_.data):std::nullopt);
         return;
     }
-    if(target==0x333b) { // Passed giver name; inventory owns builtin11(5) and row generation.
+    if(target==0x333b || (robo_greeting_ && target==0x3325) ||
+       (alternate_greeting_ && target==alternate_greeting_->gift)) {
+        // The inventory owner takes the actual giver and the gift RNG draw.
         Require(argc==1 && args[0].kind==Kind::string && args[0].text==nickname_,"Invalid KSC giver");
         phase_=Phase::gift; return;
     }
     if(target==0x393c && excursion_ && outing_returning_ && pc_==0x3a98) {
         phase_=Phase::outing_inventory; return;
     }
-    if(target==0x1c5b && !excursion_) { // Register and wait for the currently open modal to close.
+    const auto farewell=farewell_sites();
+    if(ScheduledFarewell() && target==(source?alternate_greeting_->modal_wait:robo_greeting_?0x1c5c:0x1c5b) &&
+       (pc_==farewell.game75+7 || pc_==farewell.game75+15)) {
+        const bool first=pc_==farewell.game75+7;
+        Require(!argc && farewell_stage_==(first?FarewellStage::requested:FarewellStage::written),
+                "Invalid farewell callback order");
+        farewell_stage_=first?FarewellStage::cover_wait:FarewellStage::slot_wait;
+        phase_=Phase::scheduled_farewell;
+        return;
+    }
+    if(ScheduledFarewell() && target==(source?source->utility_save-(0x67128-0x67101):robo_greeting_?0x6b220:0x8d35b) &&
+       pc_==farewell.game75+11) {
+        Require(!argc && farewell_stage_==FarewellStage::covered,"Invalid farewell save request");
+        farewell_stage_=FarewellStage::writing;
+        phase_=Phase::scheduled_farewell;
+        return;
+    }
+    if(ScheduledFarewell() && target==(source?source->reset:robo_greeting_?0x6b38d:0x8d4cc) &&
+       pc_==farewell.reset) {
+        Require(argc==2 && args[0].kind==Kind::integer && !args[0].data &&
+                args[1].kind==Kind::nil && farewell_stage_==FarewellStage::acknowledged,
+                "Invalid farewell context reset");
+        farewell_stage_=FarewellStage::reset;
+        return;
+    }
+    if((target==0x1c5b || (robo_greeting_ && target==0x1c5c) ||
+        (alternate_greeting_ && target==alternate_greeting_->modal_wait)) && !excursion_) {
+        // The inventory modal owns this wait until its close completes.
         Require(gift_slot_>=0,"No active inventory slot");
         phase_=Phase::inventory; return;
     }
-    if(target==0xa519) {
+    if(scheduled_room_event_==3 && target==(source?source->diary_count:robo_greeting_?0xab55:0xa078) &&
+       pc_==(source?0x1f38u:robo_greeting_?0x1f23u:0x1f22u)) {
+        Require(!argc,"Invalid last-day diary count request");
+        result_={Kind::integer,int(scheduled_progress_.diary_count)};
+        return;
+    }
+    if(scheduled_room_event_==3 && target==(source?0x1ebcu:robo_greeting_?0x1ea7:0x1ea6) &&
+       (pc_==(source?0x1f4eu:robo_greeting_?0x1f39u:0x1f38u) || (source && argc==0))) {
+        Require(!argc && calendar_minute_,"Invalid last-day elapsed time request");
+        // GAME20(3) is the adoption clock. 1EA6 subtracts its midnight,
+        // divides the signed minute difference by 1440, and adds one.
+        const int adoption=ScriptInteger(scheduled_progress_.adoption_minute);
+        const auto elapsed=ScriptInteger(*calendar_minute_-unsigned(adoption-adoption%1440));
+        result_={Kind::integer,elapsed/1440+1};
+        return;
+    }
+    if(scheduled_room_event_==3 && target==0x178d && pc_==(source?0x1f68u:robo_greeting_?0x1f53u:0x1f52u)) {
+        const unsigned predicate=source?source->event_cell+3:robo_greeting_?0x291e:0x286a;
+        Require(argc==1 && args[0].kind==Kind::constant_ref && unsigned(args[0].data)==predicate,
+                "Invalid last-day learned word count request");
+        result_={Kind::integer,int(vocabulary_.CountMatches(predicate))};
+        return;
+    }
+    if(alternate_greeting_ && target==alternate_greeting_->diary && pc_==alternate_greeting_->diary_resume) {
+        Require(argc==1 && args[0].kind==Kind::integer && args[0].data==0x600000,
+                "Invalid first-day actor diary request");
+        first_day_diary_request_=true;
+        return;
+    }
+    if(source && scheduled_room_event_>=2 && target==alternate_greeting_->diary) {
+        const auto entry=source->callbacks.at(scheduled_room_event_-2);
+        const auto offset=pc_-entry;
+        const unsigned priority=scheduled_room_event_==3 && offset==0x6f ? 0x700000 :
+                                scheduled_room_event_==5 && offset==0x57 ? 0x800000 :
+                                scheduled_room_event_==6 && offset==0x16 ? 0x900000 : 0;
+        Require(priority && argc==1 && args[0].kind==Kind::integer && unsigned(args[0].data)==priority,
+                "Invalid named actor diary request");
+        phase_=Phase::scheduled_diary;
+        return;
+    }
+    if(target==0xa519 || (robo_greeting_ && target==0xaff7)) {
+        if(scheduled_room_event_==3 && pc_==(robo_greeting_?0x67570u:0x89659u)) {
+            Require(argc==1 && args[0].kind==Kind::integer && args[0].data==0x700000 &&
+                    pool_.count(robo_greeting_?0x381:0x3ff),"Invalid farewell diary request");
+            phase_=Phase::scheduled_diary;
+            return;
+        }
+        if(scheduled_room_event_==5 && pc_==(robo_greeting_?0x675f9u:0x896e2u)) {
+            Require(argc==1 && args[0].kind==Kind::integer && args[0].data==0x800000 &&
+                    pool_.count(robo_greeting_?0x465:0x4ce) &&
+                    pool_.count(robo_greeting_?0x4f1:0x545),"Invalid final extension diary request");
+            phase_=Phase::scheduled_diary;
+            return;
+        }
+        if(scheduled_room_event_==6 && pc_==(robo_greeting_?0x674f8u:0x895e1u)) {
+            Require(argc==1 && args[0].kind==Kind::integer && args[0].data==0x900000 &&
+                    pool_.count(robo_greeting_?0x305:0x379),"Invalid return diary request");
+            phase_=Phase::scheduled_diary;
+            return;
+        }
         // The introductory KSC call at 8959A requests the first-day entry;
         // both the gift path and the no-slot branch join here.
         Require(argc==1 && args[0].data==0x600000,"Invalid follow-on schedule");
-        if (pc_==0x8959f && args[0].kind==Kind::integer)
+        if ((pc_==0x8959f || (robo_greeting_ && pc_==0x674b6)) && args[0].kind==Kind::integer)
             first_day_diary_request_=true;
         return;
     }
@@ -730,8 +1336,9 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
     }
     // 0FDD compares the selected written form (row field 1) with each
     // string in the caller's exclusion list, returning on the first match.
-    if(target==0x0fdd && argc==2 && args[1].kind==Kind::constant_ref) {
+    if(target==0x0fdd && argc==2 && (args[1].kind==Kind::constant_ref || args[1].kind==Kind::nil)) {
         Require(args[0].kind==Kind::integer,"Invalid word for spelling exclusion");
+        if(args[1].kind==Kind::nil) { result_={Kind::truth,0}; return; }
         const auto& list=phrase_lists_.at(args[1].data);
         const auto spelling=vocabulary_.FieldText(args[0].data,1);
         const bool excluded=std::any_of(list.begin(),list.end(),[&](unsigned offset) {
@@ -745,25 +1352,43 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         return;
     }
     if(target==0x1011) {
-        Require(argc==4 && args[0].kind==Kind::integer && args[1].kind==Kind::string &&
-            (args[2].kind==Kind::nil || args[2].kind==Kind::constant_ref) &&
+        Require(argc==4 && args[0].kind==Kind::integer &&
+            (args[1].kind==Kind::string || args[1].kind==Kind::nil) &&
             args[3].kind==Kind::truth,"Invalid word form lookup");
-        auto form=vocabulary_.ResolveWord(args[0].data,args[1].text,args[2].data,args[3].data!=0);
+        const auto exclusion=args[2].kind==Kind::frame_ref ? Dereference(args[2]) : args[2];
+        Require(exclusion.kind==Kind::nil || exclusion.kind==Kind::constant_ref || exclusion.kind==Kind::array,
+                "Invalid word form exclusion list");
+        int selected=args[0].data;
+        if(selected>=0 && exclusion.kind==Kind::array) {
+            const auto written=vocabulary_.FieldText(selected,1);
+            // 0FDD compares the written form with each live list element.
+            for(const auto& entry:*exclusion.cells) {
+                if(entry.kind==Kind::string && entry.text==written) {
+                    selected=-1;
+                    break;
+                }
+            }
+        }
+        const unsigned fixed_exclusion=exclusion.kind==Kind::constant_ref ? unsigned(exclusion.data) : 0;
+        auto form=vocabulary_.ResolveWord(selected,args[1].text,fixed_exclusion,args[3].data!=0);
+        if(!form.field && args[1].kind==Kind::nil) { result_={}; return; }
         result_={Kind::string,0,std::move(form.text)};
         if(form.field) result_.word_operands.push_back({args[0].data,form.field,0,form.field_bytes});
         else result_.word_operands=std::move(args[1].word_operands);
         return;
     }
-    if(target==0x497a) {
+    if(target==contact.display_name) {
         Require(argc==1 && args[0].kind==Kind::integer,"Invalid displayed word row");
         auto form=vocabulary_.ResolveDisplayName(args[0].data);
         result_={Kind::string,0,std::move(form.text),0,{}, {{args[0].data,form.field,0,form.field_bytes}}};
         return;
     }
-    if(target==0xa9c5 || target==0xa942) {
+    const bool new_trait=target==(robo_greeting_?0xb4a7u:0xa9c5u);
+    const bool repeated_trait=target==(robo_greeting_?0xb424u:0xa942u);
+    if(new_trait || repeated_trait) {
         Require(argc==1 && args[0].kind==Kind::integer,"Missing word for trait selection");
         trait_row_=args[0].data;
-        if(target==0xa9c5) {
+        if(new_trait) {
             unasked_traits_=RoomWordTraits::Unasked(trait_row_,vocabulary_.FieldInt(trait_row_,12),
                                                     vocabulary_.FieldInt(trait_row_,15));
             if(unasked_traits_.empty()) { result_={Kind::integer,-1}; return; }
@@ -771,7 +1396,7 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         } else { random_use_=RandomUse::repeated_trait; random_bound_=22; }
         phase_=Phase::random; return;
     }
-    if(target==0xa8a2) {
+    if(target==(robo_greeting_?0xb384u:0xa8a2u)) {
         Require(argc==3 && args[0].kind==Kind::integer && args[1].kind==Kind::integer && args[2].kind==Kind::truth,
                 "Invalid answer to word trait");
         vocabulary_.RecordTrait(args[0].data,args[1].data,args[2].data!=0);
@@ -812,7 +1437,7 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         Require(args.at(0).data==reserved_word_,"Wrong vocabulary reservation on release");
         vocabulary_.ReleaseWord(reserved_word_); reserved_word_=-1; return;
     }
-    if(target==0x4929) {
+    if(target==contact.keyboard) {
         Require(argc==3 && args[1].kind==Kind::string && args[2].kind==Kind::integer,
                 "Invalid word keyboard arguments");
         if(args[2].data==2 && pc_==0x4cb7)
@@ -834,7 +1459,8 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         Require(argc==1 && args[0].kind==Kind::integer,"Invalid reading refresh row");
         vocabulary_.RefreshReading(args[0].data); return;
     }
-    if(target==0x87a2) {
+    if(target==contact.initialize_word) {
+        Require(argc==2,"Invalid word initializer arguments");
         const auto pair=Dereference(args.at(1));
         Require(pair.kind==Kind::array && pair.cells->size()==2 &&
                 args[0].data==reserved_word_,"Invalid initial dictionary write");
@@ -849,17 +1475,17 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
         learned_reading_=vocabulary_.FieldText(reserved_word_,2);
         reserved_word_=-1; return;
     }
-    if(target==0x18a5) {
+    if(target==contact.accept_again) {
         Require(argc==3 && args[1].data==0 && args[2].data==32,"Wrong existing word update");
         const int row=args[0].data;
         vocabulary_.WriteNumber(row,0,vocabulary_.FieldInt(row,0)|32); return;
     }
-    if(target==0x899f9 && direct_teaching_) {
+    if(target==(robo_greeting_?0x67910u:0x899f9u) && direct_teaching_) {
         Require(argc==2 && args[1].kind==Kind::truth,"Invalid teaching farewell");
         counted_contact_=args[1].data!=0;
         vocabulary_.BeginConversation();
         if(skip_farewell_) { actor_command_=74; return; }
-        target=0x7d548; args.clear();
+        target=robo_greeting_?0x5be76:0x7d548; args.clear();
     }
     if(ordinary_ && !code_.count(target)) {
         frontier_=target; phase_=Phase::frontier; return;
@@ -870,6 +1496,7 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
 }
 
 void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
+    const auto* named=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
     for(unsigned budget=0;budget<16384;++budget) {
         if(ordinary_) {
             const auto after=code_.upper_bound(pc_);
@@ -900,11 +1527,26 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             blocks_.push_back({Read(3),callers_.size(),stack_.size()}); break;
         case 0x1a:
             Require(!blocks_.empty() && (blocks_.back().close==site ||
+                    (scheduled_room_event_ && blocks_.back().close==(alternate_greeting_?0x1a8du:robo_greeting_?0x1a78u:0x1a77u) &&
+                     site==(alternate_greeting_?0x1a95u:robo_greeting_?0x1a80u:0x1a7fu)) ||
                     (exchange_inventory_ && blocks_.back().close==0x8d19e && site==0x8d1f0)) &&
                     blocks_.back().depth==callers_.size() &&
                     blocks_.back().base==stack_.size(),"Unbalanced outing protected block");
             blocks_.pop_back(); break;
         case 0x1b: {
+            if(ScheduledFarewell() && site==farewell_sites().reset) {
+                Require(farewell_stage_==FarewellStage::reset && !callers_.empty() &&
+                        callers_.back().resume==FarewellReturnPc(),"Invalid farewell script unwind");
+                callers_.clear();
+                blocks_.clear();
+                stack_.clear();
+                locals_.clear();
+                ordinary_=false;
+                scheduled_room_event_=0;
+                farewell_stage_=FarewellStage::complete;
+                phase_=Phase::done;
+                return;
+            }
             Require(exchange_inventory_ && site==0x8d027 && !blocks_.empty(),"Unexpected script unwind");
             const auto& handler=blocks_.back();
             Require(handler.close==0x8d19e && callers_.size()==handler.depth+1 &&
@@ -952,6 +1594,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x80: stack_.push_back({Kind::integer,static_cast<std::int8_t>(Read(1))}); break;
         case 0x81: stack_.push_back({Kind::integer,static_cast<std::int16_t>(Read(2))}); break;
         case 0x82: stack_.push_back({Kind::integer,static_cast<int>(Read(3))}); break;
+        case 0x83: stack_.push_back({Kind::integer,ScriptInteger(Read(4))}); break;
         case 0x84: stack_.push_back({}); break;
         case 0x85: stack_.push_back({Kind::integer,0}); break;
         case 0x86: stack_.push_back({Kind::truth,0}); break;
@@ -964,11 +1607,21 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
         case 0x94: case 0x95: {
             const int id=Read(2);
-            if(op==0x94 && id==0x59a2) stack_.push_back({Kind::integer,int(intro_flags_)});
+            const unsigned flags=contact_scripts[actor_number_].flags;
+            if(op==0x94 && unsigned(id)==flags)
+                stack_.push_back({Kind::integer,int(intro_flags_)});
+            else if(op==0x94 && unsigned(id)==flags+1 && room_day_)
+                stack_.push_back({Kind::integer,*room_day_});
+            else if(op==0x94 && scheduled_room_event_ && unsigned(id)==(alternate_greeting_?alternate_greeting_->schedule.midnight_global:robo_greeting_?0x59adu:0x59a5u))
+                stack_.push_back({Kind::calendar_time,ScriptInteger(scheduled_midnight_)});
+            else if(op==0x94 && scheduled_room_event_==3 && named && unsigned(id)==named->contacts_global)
+                stack_.push_back({Kind::integer,ScriptInteger(scheduled_progress_.contacts)});
+            else if(op==0x94 && scheduled_room_event_==3 && id==(robo_greeting_?0x59d4:0x59cc))
+                stack_.push_back({Kind::integer,ScriptInteger(scheduled_progress_.contacts)});
             else if(op==0x94 && id==0x9a35 && exchange_inventory_)
                 stack_.push_back({Kind::integer,int(global_arrays_.at(id).size())});
             else if(op==0x94 && id==0x98c3 && exchange_inventory_) stack_.push_back(friends_cells_.at(id));
-            else if(op==0x94 && id==0x59ae) stack_.push_back({Kind::integer,int(outing_enabled_)});
+            else if(op==0x94 && id==(robo_greeting_?0x59b6:0x59ae)) stack_.push_back({Kind::integer,int(outing_enabled_)});
             else stack_.push_back({Kind::global_ref,id});
             break;
         }
@@ -976,14 +1629,26 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x98: {
             const auto index=Read(2);
             if(index==0) stack_.push_back({Kind::truth,event20_cleanup_}); // event 20 at 8DC38
+            else if(robo_greeting_ && index==0x291d) stack_.push_back({Kind::integer,0}); // Cold local room.
             else if(excursion_ && index==0x2874) stack_.push_back({Kind::integer,int(outing_camera_)});
             else if(excursion_ && index==0x2871) stack_.push_back(outing_script_cells_.at(index));
             else if(friends_introduction_ && (index==0x2d54 || index==0x2869))
                 stack_.push_back(friends_cells_.at(index));
             else if(friends_introduction_ && index==0x2873)
                 stack_.push_back(skip_farewell_?Value{Kind::integer,2}:Value{});
+            else if(scheduled_room_event_ && index==(alternate_greeting_?alternate_greeting_->schedule.event_cell:robo_greeting_?0x291bu:0x2867u))
+                stack_.push_back({Kind::integer,int(scheduled_room_event_)});
+            else if(scheduled_room_event_ && index==(alternate_greeting_?alternate_greeting_->schedule.event_cell-1:robo_greeting_?0x291au:0x2866u) && scheduled_deadline_)
+                stack_.push_back(*scheduled_deadline_);
+            else if(scheduled_room_event_ && index==(alternate_greeting_?alternate_greeting_->skip_farewell+1:robo_greeting_?0x2928u:0x2874u))
+                stack_.push_back({Kind::integer,int(scheduled_camera_)});
+            else if(scheduled_room_event_ && alternate_greeting_ && index==alternate_greeting_->skip_farewell-2)
+                stack_.push_back(outing_script_cells_.at(index));
             else if(index==0x2869) stack_.push_back({Kind::integer,0}); // cold room conversation
-            else { Require(index==0x2878,"Unknown indirect topic slot"); stack_.push_back(selected_fallback_); }
+            else {
+                Require(index==contact_scripts[actor_number_].slot,"Unknown indirect topic slot");
+                stack_.push_back(selected_fallback_);
+            }
             break;
         }
         case 0xf6: {
@@ -993,7 +1658,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 random_bound_=static_cast<unsigned>(phrase_lists_.at(stack_.back().data).size());
                 random_use_=RandomUse::phrase; phase_=Phase::random; return;
             }
-            Require(mode==3 && Read(2)==0x6018 && Pop().data==0xd090,"Wrong fallback topic history");
+            const auto& contact=contact_scripts[actor_number_];
+            Require(mode==3 && Read(2)==contact.history,"Wrong fallback topic history");
+            const auto list=Pop();
+            Require(list.kind==Kind::constant_ref && unsigned(list.data)==contact.roster,
+                    "Wrong fallback topic table");
             random_bound_=fallback_list_.CandidateCount();
             Require(random_bound_>0,"Empty fallback procedure array");
             random_use_=RandomUse::fallback; phase_=Phase::random; return;
@@ -1007,7 +1676,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             else if(ref.kind==Kind::global_ref && global_arrays_.count(ref.data))
                 stack_.push_back({Kind::array,0,{},0,std::make_shared<std::vector<Value>>(global_arrays_.at(ref.data))});
             else if(ref.kind==Kind::array) stack_.push_back({Kind::integer,int(ref.cells->size())});
-            else if(ref.kind==Kind::constant_ref && ref.data==0x2446) stack_.push_back({Kind::integer,12});
+            else if(ref.kind==Kind::constant_ref && unsigned(ref.data)==contact_scripts[actor_number_].lesson_fields)
+                stack_.push_back({Kind::integer,int(teaching_.size())});
             else {
                 auto value=Dereference(ref);
                 if(value.kind==Kind::array) value={Kind::integer,int(value.cells->size())};
@@ -1018,6 +1688,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0xf4: {
             auto index=Pop(),array=Pop();
             if(array.kind==Kind::frame_ref) array=Dereference(array);
+            // The two actor scripts address the same verified trait forms at different slots.
+            const auto trait_table=unsigned(array.data)-(robo_greeting_?0xfcu:0u);
             if(array.kind==Kind::array) stack_.push_back(array.cells->at(index.data));
             else if(friends_introduction_ && array.kind==Kind::constant_ref && array.data==0x2b0c) {
                 const unsigned label=phrase_lists_.at(0x2b0c).at(index.data);
@@ -1028,19 +1700,40 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 stack_.push_back(global_arrays_.at(array.data).at(index.data));
             else if(array.kind==Kind::constant_ref && array.data==0x28f6 && index.kind==Kind::integer)
                 stack_.push_back({Kind::integer,int(outing_period_masks_.at(index.data))});
-            else if(array.kind==Kind::constant_ref && array.data==0x243f && index.kind==Kind::integer)
-                stack_.push_back(global_arrays_.at(0x243f).at(index.data));
-            else if(excursion_ && array.kind==Kind::constant_ref && array.data==0x2df7 && index.data==11)
-                stack_.push_back({Kind::constant_ref,int(roof_detail_)});
+            else if(array.kind==Kind::constant_ref && index.kind==Kind::integer &&
+                    (array.data==0x243f || (scheduled_room_event_ && alternate_greeting_ &&
+                                           unsigned(array.data)==alternate_greeting_->schedule.location_cell)))
+                stack_.push_back(global_arrays_.at(array.data).at(index.data));
+            else if(robo_greeting_ && array.kind==Kind::constant_ref && array.data==0x2498 &&
+                    index.kind==Kind::integer)
+                stack_.push_back(global_arrays_.at(0x2498).at(index.data));
+            else if(excursion_ && array.kind==Kind::constant_ref && array.data==0x2df7 && index.kind==Kind::integer) {
+                const auto details=outing_details_.at(index.data);
+                Require(details!=0,"Missing text for current destination");
+                stack_.push_back({Kind::constant_ref,int(details)});
+            }
             else if(excursion_ && array.kind==Kind::constant_ref && outing_tables_.count(array.data))
                 stack_.push_back(outing_tables_.at(array.data).at(index.data));
+            else if(robo_greeting_ && ordinary_ && array.kind==Kind::global_ref && array.data==9 && index.data==2)
+                stack_.push_back(DictionaryField(600,23));
+            else if(array.kind==Kind::global_ref && array.data==9 && index.data==3 && adoption_minute_)
+                stack_.push_back({Kind::calendar_time,ScriptInteger(*adoption_minute_)});
             else if(array.kind==Kind::global_ref && array.data==9 && (index.data==8 || index.data==9)) {
                 // 204C reads previous-character profile data. New adoption has
                 // no preceding Poképi. The original first handler takes B3.
                 stack_.push_back({});
-            } else if(array.kind==Kind::global_ref && array.data==0x4fad && index.data==gift_slot_)
+            } else if(scheduled_room_event_ && named && array.kind==Kind::global_ref && array.data==9 &&
+                      index.kind==Kind::integer && (index.data==0 || index.data==1)) {
+                stack_.push_back({Kind::string,0,index.data==0?player_:nickname_});
+            } else if(array.kind==Kind::global_ref &&
+                      (array.data==0x4fad || (robo_greeting_ && array.data==0x4fb5) ||
+                       (alternate_greeting_ && unsigned(array.data)==alternate_greeting_->inventory)) &&
+                      index.data==gift_slot_)
                 stack_.push_back({Kind::global_ref,-1});
-            else if(array.kind==Kind::global_ref && array.data==0x3dd2 && index.kind==Kind::integer)
+            else if(array.kind==Kind::global_ref &&
+                    (array.data==0x3dd2 ||
+                     (alternate_greeting_ && unsigned(array.data)==alternate_greeting_->dictionary)) &&
+                    index.kind==Kind::integer)
                 stack_.push_back({Kind::word_row,index.data});
             else if(array.kind==Kind::global_ref && array.data==0x58df && index.kind==Kind::integer) {
                 Require(unsigned(index.data)<RoomVocabulary::question_slots,"Invalid prepared question row");
@@ -1050,7 +1743,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 stack_.push_back(Dereference({Kind::question_field,array.data,{},unsigned(index.data)}));
             else if(array.kind==Kind::word_row && index.kind==Kind::integer)
                 stack_.push_back(DictionaryField(array.data,index.data));
-            else if(array.kind==Kind::constant_ref && array.data==0x2446 && index.kind==Kind::integer)
+            else if(array.kind==Kind::constant_ref && unsigned(array.data)==contact_scripts[actor_number_].lesson_fields &&
+                    index.kind==Kind::integer)
                 stack_.push_back(teaching_.at(index.data));
             else if(array.kind==Kind::constant_ref && index.kind==Kind::integer &&
                     vocabulary_.HasPredicate(array.data)) {
@@ -1059,8 +1753,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                     group.cells->push_back({Kind::integer,number});
                 stack_.push_back(std::move(group));
             }
-            else if(array.kind==Kind::constant_ref && RoomWordTraits::IsTextTable(array.data) && index.kind==Kind::integer)
-                stack_.push_back({Kind::string,0,traits_.Label(array.data,index.data)});
+            else if(array.kind==Kind::constant_ref && RoomWordTraits::IsTextTable(trait_table) && index.kind==Kind::integer)
+                stack_.push_back({Kind::string,0,traits_.Label(trait_table,index.data)});
+            else if(array.kind==Kind::constant_ref && index.kind==Kind::integer &&
+                    phrase_lists_.count(array.data))
+                stack_.push_back({Kind::string,0,pool_.at(phrase_lists_.at(array.data).at(index.data))});
             else if(array.kind==Kind::global_ref && array.data==-1 && index.data==0)
                 stack_.push_back(slot_empty_?Value{}:Value{Kind::integer,0});
             else throw std::runtime_error("Missing cold KSC indexed value");
@@ -1070,9 +1767,10 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             auto index=Pop(),array=Pop();
             Require(index.kind==Kind::integer,"Invalid KSC field");
             if(array.kind==Kind::frame_ref) array=Dereference(array);
-            if(excursion_ && array.kind==Kind::constant_ref && array.data==0x243f)
+            if((excursion_ || scheduled_room_event_) && array.kind==Kind::constant_ref && array.data==0x243f)
                 stack_.push_back({Kind::global_element,0x243f,{},unsigned(index.data)});
-            else if(array.kind==Kind::constant_ref && array.data==0x2446) stack_.push_back({Kind::teach_field,index.data});
+            else if(array.kind==Kind::constant_ref && unsigned(array.data)==contact_scripts[actor_number_].lesson_fields)
+                stack_.push_back({Kind::teach_field,index.data});
             else if(array.kind==Kind::global_ref && global_arrays_.count(array.data)) {
                 Require(index.data>=0 && unsigned(index.data)<global_arrays_.at(array.data).size(),
                         "Room script global index outside array");
@@ -1090,9 +1788,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             else throw std::runtime_error("Unsupported mutable KSC array");
             break;
         }
-        case 0x51: {
+        case 0x50: case 0x51: {
             auto value=Pop(),ref=Pop();
-            Assign(ref,std::move(value)); break;
+            if(op==0x50) stack_.push_back(value); // Assignment expression retains the assigned value.
+            Assign(ref,std::move(value));
+            break;
         }
         case 0x78: {
             auto right=Pop(),left=Pop();
@@ -1113,10 +1813,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(++outing_index_<order.size()) { locals_.at(7)=order[outing_index_]; pc_=loop; }
             break;
         }
-        case 0x5d: {
+        case 0x5b: case 0x5d: {
             const auto rhs=Pop(),ref=Pop(),lhs=Dereference(ref);
-            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid subtract assignment");
-            Assign(ref,{Kind::integer,ScriptInteger(unsigned(lhs.data)-unsigned(rhs.data))}); break;
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid arithmetic assignment");
+            const auto bits=op==0x5b ? unsigned(lhs.data)+unsigned(rhs.data) : unsigned(lhs.data)-unsigned(rhs.data);
+            Assign(ref,{Kind::integer,ScriptInteger(bits)}); break;
         }
         case 0x55: case 0x53: {
             auto ref=Pop(),value=Dereference(ref);
@@ -1142,8 +1843,16 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 if(excursion_ && ref.kind==Kind::global_ref && ref.data==0x59ae && op==0x67) {
                     outing_enabled_|=unsigned(value.data); break;
                 }
-                Require(ref.kind==Kind::global_ref && ref.data==0x59a2 &&
-                        (value.data==1 || value.data==64 || (excursion_ && value.data==0x100)),"Invalid intro completion flag");
+                Require(ref.kind==Kind::global_ref &&
+                        (ref.data==0x59a2 || (robo_greeting_ && ref.data==0x59aa) ||
+                         (alternate_greeting_ && unsigned(ref.data)==alternate_greeting_->flags)) &&
+                        (value.data==1 || value.data==64 || (excursion_ && value.data==0x100) ||
+                         (scheduled_room_event_==2 && site==(named?named->callbacks[0]+0x3d:robo_greeting_?0x67658u:0x89741u) && value.data==2) ||
+                         (scheduled_room_event_==6 && site==(named?named->callbacks[4]+0xb:robo_greeting_?0x674edu:0x895d6u) && value.data==8) ||
+                         (scheduled_room_event_==4 && site==(named?named->callbacks[2]+0x3e:robo_greeting_?0x6769au:0x89783u) && value.data==16) ||
+                         (scheduled_room_event_==3 && site==(named?named->callbacks[1]+0x18:robo_greeting_?0x67519u:0x89602u) && value.data==4) ||
+                         (scheduled_room_event_==5 && site==(named?named->callbacks[3]+0xb:robo_greeting_?0x675adu:0x89696u) && value.data==32)),
+                        "Invalid intro completion flag");
                 intro_flags_|=value.data;
             }
             break;
@@ -1165,10 +1874,19 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             stack_.push_back({Kind::truth,v.data<=0}); break;
         }
         case 0xb8: { auto v=Pop(); stack_.push_back({Kind::truth,v.kind==Kind::integer && v.data==0}); break; }
+        case 0xbb: {
+            auto value=Pop();
+            // BOOT 71EBC–72014 tests the sign of the numeric value or the string/array length.
+            Require(value.kind==Kind::integer || value.kind==Kind::truth || value.kind==Kind::string ||
+                    value.kind==Kind::nil || value.kind==Kind::array,"Unsupported KSC nonnegative operand");
+            stack_.push_back({Kind::truth,value.data>=0});
+            break;
+        }
         case 0xc2: case 0xc3: case 0xc4: case 0xc5: {
             auto rhs=Pop(),lhs=Pop();
             Require((lhs.kind==Kind::integer && rhs.kind==Kind::integer) ||
-                    (site==0xa5e9 && lhs.kind==Kind::calendar_time && rhs.kind==Kind::calendar_time),
+                    ((site==0xa5e9 || (scheduled_room_event_ && site==(alternate_greeting_?0x1a73u:robo_greeting_?0x1a5eu:0x1a5du))) &&
+                     lhs.kind==Kind::calendar_time && rhs.kind==Kind::calendar_time),
                     "Invalid numeric comparison");
             const bool match=op==0xc2?lhs.data<rhs.data:op==0xc3?lhs.data<=rhs.data:op==0xc4?lhs.data>rhs.data:lhs.data>=rhs.data;
             stack_.push_back({Kind::truth,match}); break;
@@ -1215,6 +1933,17 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(excursion_ && site==0x1259e && lhs.kind==Kind::calendar_time && rhs.kind==Kind::integer) {
                 stack_.push_back({Kind::calendar_time,ScriptInteger(unsigned(lhs.data)+unsigned(rhs.data))}); break;
             }
+            if(scheduled_room_event_ && site==(alternate_greeting_?0x1a6au:robo_greeting_?0x1a55u:0x1a54u) && op==0xe0 &&
+               lhs.kind==Kind::integer && rhs.kind==Kind::calendar_time) {
+                stack_.push_back({Kind::calendar_time,ScriptInteger(unsigned(lhs.data)+unsigned(rhs.data))}); break;
+            }
+            if(scheduled_room_event_ && (named ? site==named->callbacks[0]+0x11 || site==named->callbacks[0]+0x93 ||
+                                                    site==named->callbacks[2]+0x12 :
+                                         robo_greeting_ ? site==0x6762c || site==0x6766e || site==0x676ae :
+                                                        site==0x89715 || site==0x89757) && op==0xe0 &&
+               lhs.kind==Kind::calendar_time && rhs.kind==Kind::integer) {
+                stack_.push_back({Kind::calendar_time,ScriptInteger(unsigned(lhs.data)+unsigned(rhs.data))}); break;
+            }
             Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Expected two KSC integers");
             const unsigned left=unsigned(lhs.data),right=unsigned(rhs.data);
             const unsigned bits=op==0xd0 ? left*right : op==0xe0 ? left+right : left-right;
@@ -1222,7 +1951,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0x8a: stack_.push_back({Kind::code,int(Read(3))}); break;
         case 0x10: pc_=Read(3); break;
-        case 0x11: { auto target=Read(3); if(!Pop().data) pc_=target; break; }
+        case 0x11: {
+            const auto target=Read(3);
+            const auto value=Pop();
+            const bool set=value.kind==Kind::string ? !value.text.empty() : value.data!=0;
+            if(!set) pc_=target;
+            break;
+        }
         case 0x13: {
             const auto key=Pop();
             for(unsigned tag=Read(4);tag;tag=Read(4)) {
@@ -1257,6 +1992,22 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x70: result_=Pop(); break;
         case 0x31: {
             if(callers_.empty()) {
+                if(robo_contact_greeting_) {
+                    Require(site==0x5be18 && result_.kind==Kind::truth && result_.data,
+                            "Unexpected Robo contact greeting return");
+                    robo_contact_greeting_=ordinary_=false;
+                    robo_contact_greeting_return_=true;
+                    phase_=Phase::done;
+                    return;
+                }
+                if(scheduled_room_event_) {
+                    const unsigned flag=scheduled_room_event_==6?8:scheduled_room_event_==4?16:2;
+                    Require(site==(alternate_greeting_?alternate_greeting_->schedule.wrapper+0xe3:robo_greeting_?0x6787du:0x89966u) && (intro_flags_&flag) && scheduled_count_contact_ &&
+                            blocks_.empty(),"Incomplete scheduled room return");
+                    scheduled_room_event_=0;
+                    ordinary_=false; indirect_topic_=0; scheduled_return_=true;
+                    phase_=Phase::done; return;
+                }
                 if(queued_root_) {
                     // 25A8..25B1 clears CT2878 after the selected function returns.
                     selected_fallback_={}; indirect_topic_=0; queued_root_=false;
@@ -1274,13 +2025,15 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                     phase_=Phase::done; return;
                 }
                 if(direct_teaching_) {
-                    Require(pc_==0x8df1 || pc_==0x8e60 || pc_==0x8f22,"Unexpected teaching root return");
+                    Require(robo_greeting_ ? (site==0x8e3b || site==0x8eaa || site==0x8f6c)
+                                          : (site==0x8df0 || site==0x8e5f || site==0x8f21),
+                            "Unexpected teaching root return");
                     direct_teaching_=ordinary_=false; ordinary_return_=true; phase_=Phase::done; return;
                 }
                 if(attention_) {
                     // The immediate next message at 8D8FE is the single clear control 04.
-                    Require(pc_==0x8d3f1,"Wrong attention-message return");
-                    message_pc_=0x8d8fe; message_.clear(); lines_.clear();
+                    Require(code_.at(attention_entry()).size()==pc_-attention_entry(),"Wrong attention-message return");
+                    message_pc_=contact_scripts[actor_number_].clear_text; message_.clear(); lines_.clear();
                     message_wait_=closing_=new_line_=false; appearance_=scroll_=0;
                     columns_=9; rows_=4; attention_=false; attention_return_=true;
                     phase_=Phase::done; return;
@@ -1293,11 +2046,22 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 if(farewell_) { ReturnFromGreeting(); return; }
                 // 89590 sets ctx28[2873]=2 if the new gift had no slot.
                 // In that case 89A08..89A19 bypass the farewell entirely.
-                if(skip_farewell_) { actor_command_=74; ReturnFromGreeting(); return; }
+                if(skip_farewell_) {
+                    actor_command_=74;
+                    if (ordinary_) {
+                        // 89A08..89A19 skips only the farewell. The root still
+                        // returns to its ordinary room cleanup.
+                        ordinary_=false; ordinary_return_=true; phase_=Phase::done;
+                    } else ReturnFromGreeting();
+                    return;
+                }
                 // 8942E indirect return, 899F9 -> 89A1D normal farewell.
                 // GAME21/22 carries this encounter's changed actor field.
                 vocabulary_.BeginConversation(); // 899FB enters 0FD1 before 89A1D
-                farewell_=true; pc_=0x7d548; locals_.clear(); break;
+                farewell_=true;
+                pc_=alternate_greeting_?alternate_greeting_->farewell:robo_greeting_?0x5be76u:0x7d548u;
+                locals_.clear();
+                break;
             }
             auto parent=std::move(callers_.back()); callers_.pop_back();
             pc_=parent.resume; locals_=std::move(parent.locals); indirect_topic_=parent.indirect_topic; break;
@@ -1340,6 +2104,35 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 const auto time=Pop();
                 Require(time.kind==Kind::calendar_time,"Expected a KSC time for the clock");
                 result_={Kind::integer,ScriptInteger(recovered::CalendarBcdTime6912C(time.data))};
+            } else if(id==12 && argc==1) {
+                const auto time=Pop();
+                Require(time.kind==Kind::calendar_time,"Expected a KSC time for the weekday");
+                result_={Kind::integer,(time.data/1440+5)%7}; // BOOT 692BC–69340.
+            } else if(id==0x52 && argc==3) {
+                const auto length=Pop(),start=Pop();
+                auto value=Pop();
+                Require(value.kind==Kind::string && start.kind==Kind::integer &&
+                        (length.kind==Kind::integer || length.kind==Kind::nil),"Invalid KSC substring operands");
+                // 7C048 counts source characters before copying bytes.
+                std::vector<std::size_t> offsets;
+                for (std::size_t byte=0;byte<value.text.size();) {
+                    offsets.push_back(byte);
+                    byte+=GlyphAt(value.text,byte).consumed;
+                }
+                const auto count=int(offsets.size());
+                offsets.push_back(value.text.size());
+                const auto first=std::clamp(start.data<0?count+start.data:start.data,0,count);
+                const auto last=length.kind==Kind::nil || length.data<0
+                    ? count : std::min(count,first+length.data);
+                const auto begin=offsets.at(first), end=offsets.at(last);
+                value.text=value.text.substr(begin,end-begin);
+                std::vector<RoomMessageWord> kept;
+                for (auto operand:value.word_operands) {
+                    if (operand.offset<begin || operand.offset>end || operand.length>end-operand.offset) continue;
+                    operand.offset-=begin; kept.push_back(operand);
+                }
+                value.word_operands=std::move(kept);
+                result_=std::move(value);
             } else if(id==0x51 && argc==3 && excursion_) {
                 auto substitution=Pop(),token=Pop(),text=Pop();
                 Require(substitution.kind==Kind::string && token.kind==Kind::string && !token.text.empty() &&
@@ -1421,20 +2214,24 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             } else if(id==0x63 && argc==2) {
                 const auto filter=Pop(),row=Pop();
                 Require(filter.kind==Kind::constant_ref && row.kind==Kind::word_row,"Invalid word predicate");
-                const auto& p=predicates_.at(filter.data);
-                bool matched=true;
-                for(unsigned i=0;matched && i<p.size();i+=3) {
-                    const auto value=DictionaryField(row.data,p[i]&0xffff);
-                    const unsigned op=p[i+1]&0xffff;
-                    const int rhs=p[i+2]&0x0fffffff;
-                    if(op==0) matched=value.kind==Kind::integer && value.data==rhs;
-                    else if(op==6) matched=(value.data&rhs)==rhs;
-                    else if(op==7) matched=(value.data&rhs)==0;
-                    else if(op==8) matched=(value.data&rhs)!=0;
-                    else throw std::runtime_error("Unknown teaching predicate operator");
+                if(robo_greeting_ || alternate_greeting_)
+                    result_={Kind::truth,vocabulary_.MatchesPredicate(row.data,filter.data)};
+                else {
+                    const auto& p=predicates_.at(filter.data);
+                    bool matched=true;
+                    for(unsigned i=0;matched && i<p.size();i+=3) {
+                        const auto value=DictionaryField(row.data,p[i]&0xffff);
+                        const unsigned condition=p[i+1]&0xffff;
+                        const int rhs=p[i+2]&0x0fffffff;
+                        if(condition==0) matched=value.kind==Kind::integer && value.data==rhs;
+                        else if(condition==6) matched=(value.data&rhs)==rhs;
+                        else if(condition==7) matched=(value.data&rhs)==0;
+                        else if(condition==8) matched=(value.data&rhs)!=0;
+                        else throw std::runtime_error("Unknown teaching predicate operator");
+                    }
+                    result_={Kind::truth,matched};
                 }
-                result_={Kind::truth,matched};
-            } else if(id==0x21 && argc>0 && ordinary_) {
+            } else if(id==0x21 && argc>0 && (ordinary_ || robo_greeting_ || alternate_greeting_)) {
                 answer_options_.resize(argc);
                 for(unsigned i=argc;i>0;--i) {
                     auto value=Pop();
@@ -1445,19 +2242,71 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 phase_=Phase::answer_pending; return;
             } else if(id==0x22 && argc==2) {
                 Require(Pop().kind==Kind::nil,"Missing default KSC actor");
-                actor_command_=static_cast<unsigned>(Pop().data);
+                const auto command=static_cast<unsigned>(Pop().data);
+                if(scheduled_room_event_) scheduled_actor_commands_[scheduled_secondary_]=command;
+                else actor_command_=command;
             } else if(id==0x23 && argc==0) {
+                actor_wait_secondary_=scheduled_secondary_;
                 actor_wait_=true; return;
-            } else if(id==0xf0 && argc==2 && site==0x89532) {
+            } else if(id==0xf0 && argc==2 &&
+                      site==(alternate_greeting_?alternate_greeting_->gift_open:robo_greeting_?0x67449u:0x89532u)) {
                 auto slot=Pop(),service=Pop();
                 Require(slot.data==gift_slot_ && service.data==41,"Invalid inventory request");
             } else if(id==0xf0 && argc==2) {
                 const auto v=Pop(),service=Pop();
                 if(service.data==21) { mood_=v.data; result_={Kind::truth,0}; }
+                else if(scheduled_room_event_ && service.data==37 && v.kind==Kind::integer) {
+                    scheduled_secondary_=v.data!=0;
+                    scheduled_selections_.push_back(unsigned(scheduled_secondary_));
+                }
+                else if(scheduled_room_event_ && service.data==44 && v.kind==Kind::integer &&
+                        (v.data==0 || v.data==1 || (ScheduledFarewell() && v.data==3)))
+                    scheduled_camera_request_=unsigned(v.data);
+                else if(scheduled_room_event_ && service.data==43 && v.kind==Kind::integer && (v.data==0 || v.data==1))
+                    scheduled_navigation_=v.data!=0;
+                else if(service.data==72 && ((scheduled_room_event_==3 && site==(named?named->callbacks[1]+0x7f:robo_greeting_?0x67580u:0x89669u)) ||
+                        (scheduled_room_event_==5 && site==(named?named->callbacks[3]+0x67:robo_greeting_?0x67609u:0x896f2u))) &&
+                        v.kind==Kind::integer && v.data==0)
+                    scheduled_menu_restriction_=true;
+                else if(ScheduledFarewell() && service.data==75 && site==farewell_sites().game75) {
+                    Require(v.kind==Kind::integer && (scheduled_room_event_==5 ? v.data==2 : v.data==0 || v.data==1) &&
+                            farewell_stage_==FarewellStage::inactive,"Unsupported farewell GAME75 mode");
+                    Require(!callers_.empty() && callers_.back().resume==FarewellReturnPc(),
+                            "GAME75 lacks its last-day caller");
+                    farewell_mode_=unsigned(v.data);
+                    farewell_stage_=FarewellStage::requested;
+                }
+                else if(scheduled_room_event_ && service.data==73 &&
+                        site==(alternate_greeting_?0x1f17u:robo_greeting_?0x1f02u:0x1f01u)) {
+                    const auto request=Dereference(v);
+                    Require(request.kind==Kind::array && request.cells->size()==3 && !scheduled_sound_,
+                            "Invalid scheduled GAME73 request");
+                    const auto& fields=*request.cells;
+                    Require(std::all_of(fields.begin(),fields.end(),[](const Value& field) {
+                        return field.kind==Kind::integer && field.data>=0;
+                    }) && fields[2].data<=128,"Invalid scheduled GAME73 parameters");
+                    scheduled_sound_=RoomSound{5,unsigned(fields[0].data),unsigned(fields[1].data),
+                                               unsigned(fields[2].data),true};
+                }
                 else if(exchange_inventory_ && site==0x8d0b5 && service.data==49 &&
                         v.kind==Kind::integer && v.data>=0 && v.data<=2) {
-                    // The selected site now requires the game's communication owner.
-                    frontier_=site; phase_=Phase::frontier; return;
+                    if (peer_meetings_enabled_) {
+                        const auto venue=locals_.at(2);
+                        Require(venue.kind==Kind::integer && venue.data>=0 && venue.data<4,
+                                "Invalid native meeting place");
+                        meeting_request_=MeetingPlace{MeetingMode(v.data),std::uint8_t(venue.data)};
+                        phase_=Phase::meeting;
+                    } else {
+                        frontier_=site;
+                        phase_=Phase::frontier;
+                    }
+                    return;
+                }
+                else if (exchange_inventory_ && peer_meetings_enabled_ &&
+                         ((service.data==68 && site==0x8d1d1 && v.kind==Kind::nil) ||
+                          (service.data==62 && site==0x8d1dd && v.kind==Kind::integer && v.data==0))) {
+                    Require(!meeting_request_,"Meeting socket was not closed before cancellation");
+                    friends_cells_[0x9a33]={Kind::truth,0}; // Native socket close has completed.
                 }
                 else if(friends_introduction_ && service.data==42 &&
                         (site==0x8df4f || site==0x8df7a)) {
@@ -1465,21 +2314,28 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                             "Invalid SYOUKAI channel-1 request");
                     friends_banner_=bool(v.data);
                 }
-                else if(excursion_ && service.data==28 && v.kind==Kind::nil) result_={Kind::truth,outing_game28_};
-                else if(excursion_ && service.data==40 && v.kind==Kind::nil) result_={Kind::truth,outing_lamp_};
-                else if(excursion_ && service.data==45 && v.kind==Kind::nil) result_={Kind::truth,outing_locked_};
-                else if(excursion_ && service.data==27 && v.kind==Kind::nil) result_={Kind::integer,int(outing_interrupt_)};
-                else if(excursion_ && service.data==26 && v.kind==Kind::nil) outing_interrupt_requested_=true;
+                else if((excursion_ || ScheduledFarewell()) && service.data==28 && v.kind==Kind::nil)
+                    result_={Kind::truth,outing_game28_};
+                else if((excursion_ || ScheduledFarewell()) && service.data==40 && v.kind==Kind::nil)
+                    result_={Kind::truth,outing_lamp_};
+                else if((excursion_ || scheduled_room_event_) && service.data==45 && v.kind==Kind::nil)
+                    result_={Kind::truth,outing_locked_};
+                else if((excursion_ || scheduled_room_event_) && service.data==27 && v.kind==Kind::nil)
+                    result_={Kind::integer,int(outing_interrupt_)};
+                else if((excursion_ || scheduled_room_event_) && service.data==26 && v.kind==Kind::nil)
+                    outing_interrupt_requested_=true;
                 else if(excursion_ && service.data==44 && v.kind==Kind::integer && !v.data) {
                     outing_wide_=true; outing_camera_=0;
-                } else if(excursion_ && (service.data==6 || service.data==7) && v.kind==Kind::nil)
+                } else if((excursion_ || ScheduledFarewell()) &&
+                          (service.data==6 || service.data==7) && v.kind==Kind::nil)
                     outing_wipe_=service.data==6;
                 else if(excursion_ && service.data==12 && site==0x1269f && v.kind==Kind::integer) {
                     Require(outing_snapshot_ && !outing_scene_request_ &&
                             (unsigned(v.data)==outing_snapshot_->kind || (outing_returning_ && !v.data)),
                             "Invalid outing scene request");
                     outing_scene_request_=unsigned(v.data);
-                } else if(service.data==36 && excursion_ && v.kind==Kind::nil)
+                } else if(service.data==36 && (excursion_ || ScheduledFarewell() || robo_contact_greeting_ ||
+                           (robo_greeting_ && ordinary_ && site==0x350f3)) && v.kind==Kind::nil)
                     result_={Kind::integer,int(outing_period_)};
                 else if(service.data==12 && excursion_ && (site==0x13249 || site==0x133a3) &&
                         v.kind==Kind::integer && v.data==0) {
@@ -1487,7 +2343,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 }
                 else if(service.data==22) result_={Kind::integer,mood_};
                 else if(service.data==23) result_={Kind::integer,actor_field50_};
-                else throw std::runtime_error("Unsupported conversation game service");
+                else throw std::runtime_error("Unsupported conversation GAME service "+std::to_string(service.data));
             } else if(id==0x11 && argc==1) {
                 random_bound_=Pop().data;
                 // The two synchronous builtin17 calls inside 2092 draw and swap
@@ -1583,13 +2439,20 @@ void RoomTalkState::AdvanceBalloon(const recovered::PackageView& font) {
             glyph_delay_=timing.page*int(lines_.size());
             return;
         }
+        if (c==9) {
+            // D87D4[5] takes the default glyph delay. 93FF0 skips
+            // non-newline controls below 0x20 in the width calculation.
+            ++text_cursor_; glyph_delay_=timing.glyph; return;
+        }
         if(c==0x16 || c==10) {
             ++text_cursor_;
             if(c==10) new_line_=true;
             glyph_delay_=timing.line; return;
         }
         const unsigned count=c>=0x80?2:1;
-        Require(text_cursor_+count<=message_.size() && c>=32,"Invalid NEKO message unit");
+        if (text_cursor_+count>message_.size() || c<32)
+            throw std::runtime_error("Invalid room message byte "+std::to_string(c)+
+                                     " at offset "+std::to_string(text_cursor_));
         AppendUnit(std::string_view(message_).substr(text_cursor_,count),font);
         text_cursor_+=count; glyph_delay_=timing.glyph; return;
     }
@@ -1629,7 +2492,8 @@ void RoomTalkState::StepAnswer(std::uint32_t buttons,std::uint32_t edges) {
 }
 
 void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,const recovered::PackageView* font,
-                         bool prompt_expired,std::optional<bool> invitation_event,recovered::RngNativeOwner* rng) {
+                         bool prompt_expired,std::optional<bool> invitation_event,recovered::RngNativeOwner* rng,
+                         bool secondary_ready) {
     const auto edges=buttons&~previous_;
     const bool edge=(edges&circle)!=0;
     previous_=buttons; available_=available; consumed_=false; actor_command_.reset();
@@ -1644,7 +2508,16 @@ void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,c
             AdvanceBalloon(*font);
         }
         if(phase_==Phase::prompt && ((available && invitation_event.value_or(edge)) || prompt_expired)) {
-            consumed_=available && invitation_event.value_or(edge); phase_=Phase::running; pc_=0x89556;
+            consumed_=available && invitation_event.value_or(edge);
+            if((robo_greeting_ || alternate_greeting_) && !consumed_) {
+                // 677FA cancels the invitation and requests ASC 30. An
+                // expired prompt does not execute the gift callback.
+                actor_command_=30;
+                ReturnFromGreeting();
+                return;
+            }
+            phase_=Phase::running;
+            pc_=alternate_greeting_?alternate_greeting_->entry:robo_greeting_?0x6746du:0x89556u;
         }
         if(phase_==Phase::answer_pending) {
             // MSG (1E0C8) and ASK (1E618) use the same actor's balloon slot.
@@ -1656,7 +2529,21 @@ void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,c
         }
         if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
         if(phase_!=Phase::running || message_wait_) return;
-        if(actor_wait_) { if(!actor_ready) return; actor_wait_=false; }
+        if(scheduled_room_event_ && invitation_event.value_or(false) && scheduled_deadline_ &&
+           scheduled_deadline_->kind==Kind::calendar_time && !blocks_.empty()) {
+            const auto block=blocks_.back();
+            Require(block.close==(alternate_greeting_?0x1a8du:robo_greeting_?0x1a78u:0x1a77u) && block.depth==callers_.size() &&
+                    block.base<=stack_.size(),
+                    "Scheduled invitation no longer owns its protected wait");
+            // 8DA99 plays the confirm cue, then 8DA9E unwinds to the 1A44 handler.
+            scheduled_sound_=RoomSound{5,0,4,128,true};
+            blocks_.pop_back(); stack_.resize(block.base); pc_=block.close;
+            actor_wait_=false; delay_=0;
+        }
+        if(actor_wait_) {
+            if(!(actor_wait_secondary_?secondary_ready:actor_ready)) return;
+            actor_wait_=false;
+        }
         if(delay_>0 && --delay_>0) return;
         Execute(rng);
     } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }

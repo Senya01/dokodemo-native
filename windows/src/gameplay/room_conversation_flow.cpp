@@ -10,7 +10,14 @@ bool RoomConversationFlow::Begin(unsigned argument) {
     snapshot_.serial = serial;
     snapshot_.argument = argument;
     snapshot_.running = true;
+    robo_ = false;
     state_ = State::begin;
+    return true;
+}
+
+bool RoomConversationFlow::BeginRoboContact(unsigned argument) {
+    if (argument>1 || !Begin(argument)) return false;
+    robo_ = true;
     return true;
 }
 
@@ -34,7 +41,7 @@ void RoomConversationFlow::Advance(const RoomConversationFrame& f, const std::fu
         case State::begin:
             // Case 2 first calls 8D524. The ordinary awake branch then
             // checks GAME19, GAME27 and GAME45 at the start of 8D8CB.
-            if (f.mood == 4 || f.mood == 5) return Boundary(0x8d542);
+            if (f.mood == 4 || f.mood == 5) return Boundary(robo_ ? 0x6b3e5 : 0x8d542);
             if (snapshot_.argument == 4) { // 8DF16 skips 8D8CB after the mood check.
                 state_ = State::choose;
                 return;
@@ -85,12 +92,16 @@ void RoomConversationFlow::Advance(const RoomConversationFrame& f, const std::fu
                     return;
                 }
                 if (saved_posture_ == 7)
-                    return AskActor(f.mood == 5 ? 150 : 146, f.mood == 5 ? 0x8d741 : 0x8d74d,
+                    return AskActor(f.mood == 5 ? 150 : 146,
+                                    robo_ ? (f.mood == 5 ? 0x6b602 : 0x6b60e)
+                                          : (f.mood == 5 ? 0x8d741 : 0x8d74d),
                                     State::posture_compare);
+                if (robo_ && !any_posture && saved_posture_ == 1)
+                    return AskActor(144,0x6b510,State::posture_compare);
                 if (!any_posture && saved_posture_ >= 3) {
-                    if (saved_posture_ == 3) return AskActor(147, 0x8d690, State::posture_compare);
-                    if (saved_posture_ == 4) return AskActor(151, 0x8d6d3, State::posture_compare);
-                    return AskActor(152, 0x8d70a, State::posture_compare);
+                    if (saved_posture_ == 3) return AskActor(147, robo_ ? 0x6b551 : 0x8d690, State::posture_compare);
+                    if (saved_posture_ == 4) return AskActor(151, robo_ ? 0x6b594 : 0x8d6d3, State::posture_compare);
+                    return AskActor(152, robo_ ? 0x6b5cb : 0x8d70a, State::posture_compare);
                 }
                 state_ = State::posture_done;
                 break;
@@ -116,12 +127,14 @@ void RoomConversationFlow::Advance(const RoomConversationFrame& f, const std::fu
         case State::posture_done:
             if (after_posture_ == State::lamp) {
                 if (f.lamp != wanted_lamp_)
-                    return AskActor(wanted_lamp_ ? 153 : 154, wanted_lamp_ ? 0x8d851 : 0x8d85d);
+                    return AskActor(wanted_lamp_ ? 153 : 154,
+                                    robo_ ? (wanted_lamp_ ? 0x6b712 : 0x6b71e)
+                                          : (wanted_lamp_ ? 0x8d851 : 0x8d85d));
                 state_ = State::face;
                 break;
             }
-            if (after_posture_ == State::outside) return AskActor(186, 0x8d7b4);
-            return AskActor(178, 0x8d79b);
+            if (after_posture_ == State::outside) return AskActor(186, robo_ ? 0x6b675 : 0x8d7b4);
+            return AskActor(178, robo_ ? 0x6b65c : 0x8d79b);
         case State::wait_actor:
             if (f.started == current_command_) started_ = true;
             if (started_ && f.ready) state_ = on_ready_;
@@ -172,6 +185,10 @@ void RoomConversationFlow::Boundary(unsigned pc) {
     snapshot_.running = false;
     snapshot_.boundary_pc = pc;
     state_ = State::boundary;
+}
+
+void RoomConversationFlow::ReleaseBoundary() {
+    if (state_ == State::boundary) state_ = State::finished;
 }
 
 }

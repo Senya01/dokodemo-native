@@ -61,6 +61,61 @@ if(BUILD_TESTING)
         configure_cpp(${test}-tests)
         target_link_libraries(${test}-tests PRIVATE dokodemo-core)
         add_test(NAME ${test} COMMAND ${test}-tests)
-        set_tests_properties(${test} PROPERTIES ENVIRONMENT "DOKODEMO_TEST_AUDIO=null")
     endforeach()
+
+    add_executable(controller-input-tests tools/presentation_input_tests.cpp)
+    configure_cpp(controller-input-tests)
+    target_link_libraries(controller-input-tests PRIVATE dokodemo-win32)
+    add_test(NAME controller-input COMMAND controller-input-tests)
+
+    add_executable(audio-null-queue-tests tools/audio_native_test.cpp)
+    configure_cpp(audio-null-queue-tests)
+    target_link_libraries(audio-null-queue-tests PRIVATE dokodemo-win32)
+    add_test(NAME game-null-pcm COMMAND audio-null-queue-tests --null-queue)
+
+    add_executable(room-meeting-channel-tests tools/room_meeting_channel_tests.cpp)
+    configure_cpp(room-meeting-channel-tests)
+    target_link_libraries(room-meeting-channel-tests PRIVATE dokodemo-win32)
+
+    set(DOKODEMO_GAME_TEST_MEDIA_DIR "" CACHE PATH "Optional game package containing locally prepared media")
+    if(DOKODEMO_GAME_TEST_MEDIA_DIR)
+        find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+        if(NOT EXISTS "${DOKODEMO_GAME_TEST_MEDIA_DIR}/assets/game/post-profile/toro-introduction.bin" OR
+           NOT EXISTS "${DOKODEMO_GAME_TEST_MEDIA_DIR}/assets/iso/PSP_GAME/USRDIR/data/DATA.BP")
+            message(FATAL_ERROR "Prepare game media with tools/package_game_media.py before enabling local-media tests.")
+        endif()
+
+        add_executable(post-profile-tests tools/post_profile_tests.cpp)
+        configure_cpp(post-profile-tests)
+        target_link_libraries(post-profile-tests PRIVATE dokodemo-win32)
+        add_test(NAME game-post-profile COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+        add_test(NAME game-robo-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --robo-introduction 1)
+        foreach(actor IN ITEMS usagi inu kaeru)
+            add_test(NAME game-${actor}-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --${actor}-introduction)
+        endforeach()
+
+        add_executable(cold-room-actor-tests tools/cold_room_actor_tests.cpp)
+        configure_cpp(cold-room-actor-tests)
+        target_link_libraries(cold-room-actor-tests PRIVATE dokodemo-core)
+        add_test(NAME game-room-actor COMMAND cold-room-actor-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+
+        add_executable(room-vocabulary-tests tools/room_vocabulary_tests.cpp)
+        configure_cpp(room-vocabulary-tests)
+        target_link_libraries(room-vocabulary-tests PRIVATE dokodemo-core)
+        add_test(NAME game-room-vocabulary COMMAND room-vocabulary-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+
+        add_executable(room-talk-state-tests tools/room_talk_state_tests.cpp tools/room_topic_flag_tests.cpp
+            tools/room_friends_tests.cpp tools/room_friends_exchange_tests.cpp)
+        configure_cpp(room-talk-state-tests)
+        target_link_libraries(room-talk-state-tests PRIVATE dokodemo-core)
+        add_test(NAME game-room-talk-state COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_text.py"
+            "${DOKODEMO_GAME_TEST_MEDIA_DIR}" "$<TARGET_FILE:room-talk-state-tests>")
+        add_test(NAME game-room-talk-roster COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_text.py"
+            "${DOKODEMO_GAME_TEST_MEDIA_DIR}" "$<TARGET_FILE:room-talk-state-tests>" --fallback-all)
+    endif()
+
+    get_property(windows_tests DIRECTORY PROPERTY TESTS)
+    set_property(TEST ${windows_tests} APPEND PROPERTY ENVIRONMENT "DOKODEMO_TEST_AUDIO=null")
 endif()

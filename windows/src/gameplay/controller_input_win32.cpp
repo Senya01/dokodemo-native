@@ -5,11 +5,7 @@
 
 namespace dokodemo::gameplay {
 
-std::optional<ControllerRead> XInputController::ReadOne() {
-    XINPUT_STATE state{};
-    if (user_index_ >= XUSER_MAX_COUNT ||
-        XInputGetState(user_index_, &state) != ERROR_SUCCESS) return std::nullopt;
-
+ControllerSample MapXInputGamepad(std::uint16_t host_buttons,std::int16_t left_x,std::int16_t left_y) {
     // Match physical button positions. This is a Windows device mapping.
     static constexpr struct { WORD host; std::uint32_t psp; } mapping[] = {
         {XINPUT_GAMEPAD_BACK, 0x0001}, {XINPUT_GAMEPAD_START, 0x0008},
@@ -21,14 +17,22 @@ std::optional<ControllerRead> XInputController::ReadOne() {
     };
     std::uint32_t buttons = 0;
     for (const auto& button : mapping) {
-        if ((state.Gamepad.wButtons & button.host) != 0) buttons |= button.psp;
+        if ((host_buttons & button.host) != 0) buttons |= button.psp;
     }
     // Both axes rest at 128. PSP analog Y increases downward.
-    const auto x = static_cast<std::uint8_t>((32768 + int(state.Gamepad.sThumbLX)) / 256);
-    const int y_up = state.Gamepad.sThumbLY;
+    const auto x = static_cast<std::uint8_t>((32768 + int(left_x)) / 256);
+    const int y_up = left_y;
     const auto y = static_cast<std::uint8_t>(
         y_up == -32768 ? 255 : (32768 - y_up) / 256);
-    return ControllerRead{1, ControllerSample{buttons, x, y}};
+    return {buttons,x,y};
+}
+
+std::optional<ControllerRead> XInputController::ReadOne() {
+    XINPUT_STATE state{};
+    if (user_index_ >= XUSER_MAX_COUNT ||
+        XInputGetState(user_index_, &state) != ERROR_SUCCESS) return std::nullopt;
+    const auto& pad=state.Gamepad;
+    return ControllerRead{1,MapXInputGamepad(pad.wButtons,pad.sThumbLX,pad.sThumbLY)};
 }
 
 } // namespace dokodemo::gameplay

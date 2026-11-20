@@ -128,6 +128,49 @@ KscSaveValue RoomInventory::SaveRow(unsigned slot) const {
     return Reference(std::move(array));
 }
 
+std::vector<unsigned> RoomInventory::ExchangeableGifts() const {
+    std::vector<unsigned> gifts;
+    for (const auto& item : slots_)
+        if (item.id>=0 && !item.fields[7]) gifts.push_back(unsigned(item.slot));
+    std::stable_sort(gifts.begin(),gifts.end(),[&](unsigned a,unsigned b) {
+        return slots_[a].category>slots_[b].category;
+    });
+    return gifts;
+}
+
+KscSaveValue RoomInventory::OfferGift(unsigned slot) const {
+    const auto* item=slot_item(int(slot));
+    if (!item || item->fields[7]) throw std::invalid_argument("Gift is absent or placed in the room");
+    auto gift=std::move(SaveRow(slot).children.front());
+    // Model handles, placement, and exchange-category marks are local.
+    for (unsigned i=4;i<gift.children.size();++i) gift.children[i]={};
+    return gift;
+}
+
+RoomInventory RoomInventory::WithGiftSwap(unsigned slot,const KscSaveValue& gift,std::uint32_t date) const {
+    const auto* item=slot_item(int(slot));
+    if (!item || item->fields[7] || gift.word!=0x9000000au || gift.children.size()!=10 ||
+        !gift.text.empty() || !gift.children[0].word || gift.children[1].text.empty())
+        throw std::invalid_argument("Invalid gift exchange record");
+    const auto& fields=gift.children;
+    for (unsigned i=0;i<fields.size();++i) {
+        const auto& field=fields[i];
+        if (!field.children.empty() || field.text.size()>1024 ||
+            (i>=4 && (field.word || !field.text.empty())))
+            throw std::invalid_argument("Gift includes unsupported data from the sending room");
+    }
+    auto next=*this;
+    auto table=SaveTable();
+    auto received=gift;
+    // 304E gives the new owner a storage row and stamps the acquisition date.
+    received.children[4].word=integer|(date&0x0fffffffu);
+    received.children[5].word=integer;
+    received.children[9].word=integer;
+    table.children.front().children.at(slot)=Reference(std::move(received));
+    next.RestoreSaveTable(table);
+    return next;
+}
+
 KscSaveValue RoomInventory::SaveTable() const {
     KscSaveValue table{0x90000000u|slot_count,{},{}};
     table.children.reserve(slot_count);

@@ -72,6 +72,71 @@ bool RoomWordHistory::Register(std::string_view reading,std::string_view written
     return true;
 }
 
+std::vector<std::uint8_t> RoomWordHistory::Save() const {
+    if(learned_.empty() && registered_.empty()) return {};
+    std::vector<std::uint8_t> bytes;
+    auto word=[&](std::size_t value) {
+        bytes.push_back(static_cast<std::uint8_t>(value));
+        bytes.push_back(static_cast<std::uint8_t>(value>>8));
+    };
+    for(const auto* bank:{&learned_,&registered_}) {
+        word(bank->size());
+        for(const auto& row:*bank) {
+            word(row.left_pos);
+            word(row.right_pos);
+            bytes.push_back(static_cast<std::uint8_t>(row.reading.size()));
+            bytes.push_back(static_cast<std::uint8_t>(row.written.size()));
+            bytes.insert(bytes.end(),row.reading.begin(),row.reading.end());
+            bytes.insert(bytes.end(),row.written.begin(),row.written.end());
+        }
+    }
+    return bytes;
+}
+
+bool RoomWordHistory::Restore(const std::vector<std::uint8_t>& data) {
+    if(data.empty()) {
+        *this={};
+        return true;
+    }
+    const auto text_ok=[](std::string_view text) {
+        for(std::size_t i=0;i<text.size();) {
+            const auto lead=static_cast<unsigned char>(text[i++]);
+            if(lead>=0x20 && lead<0x7f) continue;
+            if(!((lead>=0x81 && lead<=0x9f) || (lead>=0xe0 && lead<=0xfc)) || i==text.size()) return false;
+            const auto trail=static_cast<unsigned char>(text[i++]);
+            if(trail<0x40 || trail>0xfc || trail==0x7f) return false;
+        }
+        return true;
+    };
+    RoomWordHistory restored;
+    std::size_t at=0;
+    auto read_bank=[&](std::vector<RoomNjCandidate>& bank,std::size_t limit) {
+        if(data.size()-at<2) return false;
+        const std::size_t count=data[at]+256u*data[at+1];
+        if(count>limit) return false;
+        at+=2;
+        bank.reserve(count);
+        for(std::size_t i=0;i<count;++i) {
+            if(data.size()-at<6) return false;
+            const unsigned left=data[at]+256u*data[at+1], right=data[at+2]+256u*data[at+3];
+            const std::size_t reading=data[at+4],writing=data[at+5];
+            at+=6;
+            if(!left || left>511 || !right || right>511 || !reading || !writing ||
+               reading+writing>27 || reading+writing>data.size()-at) return false;
+            const auto* text=reinterpret_cast<const char*>(data.data()+at);
+            const std::string_view r(text,reading), w(text+reading,writing);
+            if(!text_ok(r) || !text_ok(w)) return false;
+            bank.push_back({std::string(r),std::string(w),left,right});
+            at+=reading+writing;
+        }
+        return true;
+    };
+    if(!read_bank(restored.learned_,learning_slots) || !read_bank(restored.registered_,registration_slots) ||
+       at!=data.size()) return false;
+    *this=std::move(restored);
+    return true;
+}
+
 std::vector<RoomNjCandidate> RoomWordHistory::Compose(std::string_view query,
         const std::vector<RoomNjCandidate>& predictions,const std::vector<RoomNjCandidate>& exact,
         const RoomNjSuffix& suffix) const {

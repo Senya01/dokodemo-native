@@ -26,7 +26,7 @@ from package_room_vocabulary import room_vocabulary_media
 from package_room_scene_rows import scene_rows_media
 from package_room_calendar_items import room_calendar_item_media
 from package_roof_signs import roof_sign_media
-from package_outing_scene import outing_scene_media
+from package_outing_scene import outing_scene_media, other_outing_media
 from package_room_common_topic import room_fallback_list_media, room_outing_media
 from package_room_trait_topic import room_word_traits_media
 from package_room_menu import room_menu_media
@@ -73,6 +73,18 @@ def game_media(iso: Iso9660, modules: list[dict]) -> dict[Path, tuple[Region, st
     files[Path("assets/game/boot/debug-font.bin")] = (
         boot.subregion(0xE1ED0, 768), "545d1be44fb2c2859e213977ecb5b76612d5632ee61281455dccccd731af08da",
     )
+    # GuiTitle 314E4 appends these three CP932 strings to the replacement prompt.
+    # Addresses are relative to BOOT's first load segment at file offset 0x80.
+    replacement_lines = []
+    for address, length in ((0xDA0E8, 51), (0xDA11C, 120), (0xDA198, 20)):
+        source = boot.read(0x80 + address, length + 1)
+        require(source[-1:] == b"\0" and b"\0" not in source[:-1], "Invalid replacement title text")
+        message = source[:-1].decode("cp932")
+        replacement_lines.extend(message[i:i + 18].encode("cp932") for i in range(0, len(message), 18))
+    prompt = Region(b"\n".join(replacement_lines) + b"\n")
+    files[Path("assets/game/title/replacement-prompt.txt")] = (
+        prompt, "86cdaea27b43d086db27a905b683acbcced0bc99ca7d6ef7123bb1d943bffc7e",
+    )
     archive = iso.read_file(BP_PATH)
     files[Path("assets/iso") / BP_PATH] = archive, "180fc4c79286449e9e5b0d9df81ee3003998d8ac72f87fa9450174d315fac134"
     root = BparArchive(archive, alignment=2048)
@@ -118,6 +130,7 @@ def game_media(iso: Iso9660, modules: list[dict]) -> dict[Path, tuple[Region, st
     files.update(room_fallback_list_media(root))
     files.update(room_outing_media(root))
     files.update(outing_scene_media(root, boot))
+    files.update(other_outing_media(root, boot))
     files.update(roof_sign_media(root, boot))
     files.update(room_word_traits_media(root))
     files.update(room_menu_media(root))

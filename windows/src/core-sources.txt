@@ -49,6 +49,7 @@ src/gameplay/retail_savedata_crypto.cpp
 src/gameplay/room_calendar_items.cpp
 src/gameplay/room_scene_rows.cpp
 src/gameplay/room_scene_models.cpp
+src/gameplay/room_motion_effects.cpp
 src/gameplay/room_save_owners.cpp
 src/gameplay/post_profile.cpp
 src/gameplay/roof_scene.cpp
@@ -56,6 +57,8 @@ src/gameplay/roof_signs.cpp
 src/gameplay/cold_room_actor.cpp
 src/gameplay/room_friends_banner.cpp
 src/gameplay/room_friends.cpp
+src/gameplay/room_record_exchange.cpp
+src/gameplay/room_shiritori.cpp
 src/gameplay/room_talk_state.cpp
 src/gameplay/room_activity_selector.cpp
 src/gameplay/room_activity_phase.cpp

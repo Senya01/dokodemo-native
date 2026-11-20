@@ -34,12 +34,32 @@ struct RoomEventSelection {
     bool queued = false;
 };
 
+// Builtin 60 scans a script-owned callback table. The caller owns which
+// category to test and what to do with the selected callback.
+class RoomTopicTable {
+  public:
+    enum class Actor : unsigned { toro, robo, usagi, inu, kaeru };
+    bool Load(const std::filesystem::path& directory, Actor actor,
+              std::uint32_t packed_birthday, std::string& error);
+    RoomEventSelection Select(unsigned key, bool mask, recovered::RngNativeOwner& rng);
+    void RecordConsumedRows(std::array<std::uint32_t,5>& words) const;
+    void RemoveConsumedRows(const std::array<std::uint32_t,5>& words);
+  private:
+    struct Row { unsigned category; std::vector<unsigned> entries; bool present = true; };
+    std::vector<Row> rows_;
+    unsigned capacity_ = 0;
+};
+
 // Room conversations in a new Toro game. The main flow owns admission and the
 // camera, and the topic owner supplies the actual callback and farewell returns.
 class RoomActivityEvent {
   public:
-    bool Load(const std::filesystem::path& post_profile, std::uint32_t packed_birthday, std::string& error);
+    bool Load(const std::filesystem::path& post_profile, std::uint32_t packed_birthday, std::string& error,
+              RoomTopicTable::Actor actor=RoomTopicTable::Actor::toro);
+    RoomEventSelection SelectCatalogTopic(unsigned key, bool mask, recovered::RngNativeOwner& rng);
+    void CountContact();
     KscSaveValue ContactCountSaveWord() const;
+    unsigned total_contacts() const { return total_contacts_; }
     static void ValidateContactCount(const KscSaveValue& word);
     void RestoreContactCount(const KscSaveValue& word);
     KscSaveValue HomeCounterSaveTable() const;
@@ -64,6 +84,7 @@ class RoomActivityEvent {
     void Enqueue(std::optional<unsigned> current_topic) { pending_callbacks_.Enqueue(current_topic); }
     void HomeInvitationReturned();
     unsigned FinishConversation(std::uint32_t minute, bool count_contact = true);
+    unsigned FinishScheduledEvent(std::uint32_t minute, bool count_contact);
     RoomEventSelection SelectConversation(unsigned month, unsigned day, std::uint32_t minute,
                                                recovered::RngNativeOwner& rng,
                                                const std::function<std::optional<bool>()>& first_contact_special = {},
@@ -82,10 +103,9 @@ class RoomActivityEvent {
     // false return. A topic or a missing dictionary input remains with its owner.
     RoomEventSelection ResumeAfterEmptyWordLookup(recovered::RngNativeOwner& rng);
   private:
-    struct Row { unsigned category; std::vector<unsigned> entries; bool present = true; };
     enum class Stage { unloaded, introduction, idle, greeting, queued, word, calendar, day, fallback, terminal, direct_menu };
     Stage stage_ = Stage::unloaded;
-    std::vector<Row> rows_;
+    RoomTopicTable topic_table_;
     RoomPendingTopics pending_callbacks_;
     std::optional<unsigned> pending_topic_;
     std::uint32_t cleanup_minute_ = 0, minute_ = 0, first_day_ = 0, hour_topic_after_ = 0;
@@ -98,12 +118,12 @@ class RoomActivityEvent {
     std::optional<std::uint32_t> message_timer_start_;
     unsigned counted_contacts_ = 0; // current G59C7 trigger count
     unsigned total_contacts_ = 0;   // G59CC, accumulated across timer resets
-    void CountContact();
+    unsigned CompleteContact(std::uint32_t minute, bool count_contact);
     std::optional<unsigned> home_offer_mode_;
     RoomEventSelection CheckHomeOffers(recovered::RngNativeOwner& rng);
     std::uint32_t CurrentMinute() const;
     bool teaching_ = false, hourly_topic_ = false, awaiting_cleanup_ = false;
-    unsigned month_ = 0, day_ = 0, capacity_ = 0;
+    unsigned month_ = 0, day_ = 0;
     RoomEventSelection Continue(recovered::RngNativeOwner& rng);
     RoomEventSelection AfterQueue(recovered::RngNativeOwner& rng,
                                  const std::function<std::optional<bool>()>& first_contact_special);

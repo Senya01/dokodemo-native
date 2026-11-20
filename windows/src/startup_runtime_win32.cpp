@@ -1,5 +1,6 @@
 #include "startup_runtime_win32.h"
 #include "platform/startup_modules_win32.h"
+#include "platform/room_meeting_win32.h"
 #include "gameplay/boot_to_display.h"
 #include "recovered/startup_modules.h"
 #include "rng_backend_win32.h"
@@ -881,6 +882,7 @@ struct StartupCoordinator::Impl final : recovered::StartupFlowServices {
             event_module_index = StartupNoCurrentModule;
         }
         auto boot = std::make_shared<gameplay::BootToDisplay>();
+        boot->BindMeetingOpener(platform::MakeLanMeetingOpener());
         if (!boot->Initialize()) {
             (void)ModuleStopResult(recovered::StartupModuleStop::HostFailure, "Native display bootstrap failed",
                                    0, boot->FrontierPc());

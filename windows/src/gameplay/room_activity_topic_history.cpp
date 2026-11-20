@@ -4,11 +4,20 @@
 
 namespace dokodemo::gameplay {
 
+void RoomTopicTable::RecordConsumedRows(std::array<std::uint32_t,5>& words) const {
+    for (size_t i=0; i<rows_.size(); ++i) {
+        if (!rows_[i].present) words.at(i/28) |= 0x20000000u | (1u << (i%28));
+    }
+}
+
+void RoomTopicTable::RemoveConsumedRows(const std::array<std::uint32_t,5>& words) {
+    for (size_t i=0; i<rows_.size(); ++i)
+        if (words.at(i/28) & (1u << (i%28))) rows_[i].present=false;
+}
+
 void RoomActivityEvent::PrepareTopicHistoryForSave() {
     // 1D62 only sets bits. Previously saved removals survive subsequent saves.
-    for (size_t i=0; i<rows_.size(); ++i) {
-        if (!rows_[i].present) saved_topic_rows_.at(i/28) |= 0x20000000u | (1u << (i%28));
-    }
+    topic_table_.RecordConsumedRows(saved_topic_rows_);
 }
 
 KscSaveValue RoomActivityEvent::TopicHistorySaveTable() const {
@@ -32,8 +41,7 @@ void RoomActivityEvent::RestoreTopicHistory(const KscSaveValue& table) {
     }
     // 1D8F runs against the newly loaded G96C9. All 118 starting category words
     // are tagged integers, including index 0 before its birthday override.
-    for (size_t i=0;i<rows_.size();++i)
-        if (saved.at(i/28) & (1u << (i%28))) rows_[i].present=false;
+    topic_table_.RemoveConsumedRows(saved);
     saved_topic_rows_=saved;
 }
 }

@@ -47,7 +47,9 @@ public:
     int last_day() const { return last_day_; }
     void Enter(std::uint32_t minute, recovered::RngNativeOwner& rng);
     void EnterUnscheduledLoop();
+    void SetAmbientDeadline(std::uint32_t minute) { next_event_=minute; }
     bool BeginOrdinary();
+    void ReleaseUnavailableContact();
     void ReturnToRoom(std::uint32_t minute, int mood, recovered::RngNativeOwner& rng,
                       bool reset_contact_timer = true);
     void Advance(std::uint32_t minute, const RoomActivityFrame& frame, recovered::RngNativeOwner& rng);

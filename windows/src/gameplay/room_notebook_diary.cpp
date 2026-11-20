@@ -14,19 +14,32 @@ constexpr Cb2aMedia media{"ENIKKI.CB2A",11031,"448dd1de77376ed9707910b9124239b0a
     "diary-textures.bin",141848,"59aea41db661cfe9f7bf752a3cf8eb74070495cb7a8d6cb95d119b03abfad1c3"};
 constexpr std::array<unsigned,3> ink{85,47,13};
 }
-bool RoomNotebookDiary::Load(const std::filesystem::path& dir,std::string& error) {
+bool RoomNotebookDiary::Load(const std::filesystem::path& dir,std::string& error,unsigned actor) {
+    constexpr std::array records{"first-diary.bin", "robo-first-diary.bin", "usagi-first-diary.bin",
+                                 "inu-first-diary.bin", "kaeru-first-diary.bin"};
+    constexpr std::array<std::string_view,5> markers{"$_YOU","$_ME","","$_ME","$_YOU"};
+    if(actor>=records.size()) { error="Invalid diary actor"; return false; }
     if(!scene_.Load(dir,media,error)) return false;
-    std::ifstream in(dir/"first-diary.bin",std::ios::binary|std::ios::ate);
-    std::vector<std::uint8_t> raw(110720);
-    if(!in || in.tellg()!=std::streamoff(raw.size()) ||
-       !in.seekg(0).read(reinterpret_cast<char*>(raw.data()),raw.size()) ||
-       core::sha256_hex(raw.data(),raw.size())!="aedc44e7bbf92b10002379f7a00426c054acedf5affd48196de08d9f437085b3") {
+    std::ifstream in(dir/records[actor],std::ios::binary|std::ios::ate);
+    const auto size=in.tellg();
+    constexpr unsigned photo_size=192*144*4;
+    if(!in || size<=std::streamoff(10+photo_size) || size>std::streamoff(10+photo_size+1024)) {
+        error="Invalid first-day diary size"; return false;
+    }
+    std::vector<std::uint8_t> raw(static_cast<std::size_t>(size));
+    if(!in.seekg(0).read(reinterpret_cast<char*>(raw.data()),raw.size()) ||
+       (actor==0 && core::sha256_hex(raw.data(),raw.size())!="aedc44e7bbf92b10002379f7a00426c054acedf5affd48196de08d9f437085b3")) {
         error="Invalid first-day diary record or photograph"; return false;
     }
     const unsigned length=raw[0]+256u*raw[1];
+    if(raw.size()!=10+length+photo_size) { error="Invalid first-day diary extent"; return false; }
     descriptor_id_=raw[4] | (unsigned(raw[5])<<8);
     descriptor_kind_=raw[6] | (unsigned(raw[7])<<8) | (unsigned(raw[8])<<16) | (unsigned(raw[9])<<24);
     template_.assign(reinterpret_cast<const char*>(raw.data()+10),length);
+    marker_=markers[actor];
+    if(!marker_.empty() && template_.find(marker_)==template_.npos) {
+        error="Missing diary name marker"; return false;
+    }
     photo_.assign(raw.begin()+10+length,raw.end());
     return true;
 }
@@ -35,7 +48,10 @@ bool RoomNotebookDiary::RecordFirstDay(RoomMessages& staging,recovered::RngNativ
     // A366 found the sole first-day match. Builtin17 at A391 still draws for index modulo one.
     rng.NextC3234();
     auto text=template_;
-    text.replace(text.find("$_YOU"),5,player.data(),player.size());
+    if (!marker_.empty()) {
+        for(std::size_t at=0; (at=text.find(marker_,at))!=std::string::npos; at+=player.size())
+            text.replace(at,marker_.size(),player);
+    }
     // A202/A19F updates the script row before GAME71 copies the dated page.
     if(!staging.RecordDiary(descriptor_id_,text,descriptor_kind_)) return false;
     if(has_entry()) return false; // The dated bank already owns its first-day page.

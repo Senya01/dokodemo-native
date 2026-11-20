@@ -123,4 +123,75 @@ bool RoofScene::Draw(const std::array<float,16>& camera, unsigned season, std::u
     }
     return true;
 }
+bool OutingScene::Load(const std::filesystem::path& directory,unsigned selector,unsigned period,std::string& error) try {
+    constexpr unsigned variants[]{0,1,1,2,0,0}; // BOOT 4848, D3018
+    if (!Supports(selector) || period>=std::size(variants))
+        throw std::invalid_argument("Unsupported destination selector or period");
+    const unsigned resource=30+3*selector+variants[period];
+    std::ifstream in(directory/"destination-controls.bin",std::ios::binary);
+    std::array<char,4> magic{};
+    if (!in.read(magic.data(),magic.size()) || std::string_view(magic.data(),4)!="DSC1")
+        throw std::runtime_error("Missing destination registration table");
+    OutingScene next;
+    for (unsigned i=0;i<54;++i) {
+        std::array<std::uint8_t,4> record{};
+        std::array<float,4> placement{};
+        if (!in.read(reinterpret_cast<char*>(record.data()),record.size()) ||
+            !in.read(reinterpret_cast<char*>(placement.data()),sizeof(float)*placement.size()))
+            throw std::runtime_error("Truncated destination registration table");
+        if (record[0]!=resource) continue;
+        const unsigned clip_count=record[1]+record[2];
+        if (next.resource_ || (record[1]!=0 && record[1]!=7) || record[2]>4 ||
+            !clip_count || (record[3]>>record[2]) ||
+            !std::all_of(placement.begin(),placement.end(),[](float n){return std::isfinite(n);}))
+            throw std::runtime_error("Invalid destination registration");
+        next.resource_=resource;
+        next.lights_=record[1];
+        std::copy_n(placement.begin(),next.placement_.size(),next.placement_.begin());
+        if (!next.background_.Load(directory/("destination-"+std::to_string(resource)+".bin"),error,true))
+            return false;
+        for (unsigned clip=0;clip<clip_count;++clip) {
+            const auto duration=next.background_.Duration(clip);
+            if (!duration) throw std::runtime_error("Missing destination animation");
+            if (clip>=next.lights_)
+                next.motions_.push_back({0,duration,(record[3]&(1u<<(clip-next.lights_)))!=0});
+        }
+    }
+    if (!next.resource_ || in.peek()!=std::char_traits<char>::eof())
+        throw std::runtime_error("Unsupported destination registration extent");
+    *this=std::move(next);
+    return true;
+} catch (const std::exception& e) {
+    error=e.what();
+    return false;
+}
+
+bool OutingScene::Draw(const std::array<float,16>& camera,unsigned season,std::uint32_t light_time,
+                       std::vector<std::uint8_t>& vram,std::size_t offset,RoomLighting& lighting,
+                       bool* changed_pixels) {
+    if (!resource_ || season>=7 || vram.size()<2*stride*height+stride*height/2 ||
+        (offset!=0 && offset!=stride*height))
+        return false;
+    std::vector<std::pair<unsigned,std::uint32_t>> clips;
+    for (unsigned i=0;i<motions_.size();++i) clips.emplace_back(lights_+i,motions_[i].time);
+    if (lights_) clips.emplace_back(season,light_time);
+    lighting=background_.Lighting(clips);
+    std::vector<std::uint8_t> before;
+    if (changed_pixels) before.assign(vram.begin()+offset,vram.begin()+offset+height*stride);
+    if (!background_.Draw(clips,identity,camera,vram,offset,&lighting)) return false;
+    if (changed_pixels) {
+        *changed_pixels=false;
+        for (unsigned y=0;y<height && !*changed_pixels;++y)
+            for (unsigned x=0;x<width && !*changed_pixels;++x) {
+                const auto at=y*stride+x*4;
+                *changed_pixels=!std::equal(before.data()+at,before.data()+at+3,vram.data()+offset+at);
+            }
+    }
+    for (auto& clip:motions_) {
+        if (clip.loop && clip.time>=clip.duration) clip.time=0;
+        clip.time=std::min(clip.duration,clip.time+160);
+    }
+    return true;
+}
+
 } // namespace dokodemo::gameplay

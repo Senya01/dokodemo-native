@@ -43,7 +43,7 @@ struct ControlFile {
 } // namespace
 bool ColdRoomActor::Load(const std::filesystem::path &dir, unsigned actor, int period, std::string &error) {
     try {
-        if (actor >= 5)
+        if (actor > 5)
             throw std::runtime_error("Invalid room actor species");
         ColdRoomActor next;
         const auto base = dir / "assets" / "game" / "post-profile";
@@ -57,10 +57,11 @@ bool ColdRoomActor::Load(const std::filesystem::path &dir, unsigned actor, int p
         next.species_ = actor;
         next.invite_motion_ = f.Word();
         next.anchor_ = f.Word();
-        for (unsigned i = 0, n = f.Count(128); i < n; ++i) {
+        for (unsigned i = 0, n = f.Count(256); i < n; ++i) {
             if (!next.mesh_.Duration(i) || !next.clips_.emplace(f.Word(), i).second)
                 throw std::runtime_error("Invalid room actor clip");
             next.sound_keys_.push_back(next.mesh_.SoundKeys(i));
+            next.effect_keys_.push_back(next.mesh_.EffectKeys(i));
         }
         for (unsigned i = 0, n = f.Count(1294); i < n; ++i) {
             auto &words = next.commands_[f.Word()];
@@ -76,7 +77,7 @@ bool ColdRoomActor::Load(const std::filesystem::path &dir, unsigned actor, int p
             if (!next.commands_.count(id) || !next.activity_ids_.insert(id).second)
                 throw std::runtime_error("invalid activity record binding");
         }
-        for (unsigned i = 0, n = f.Count(64); i < n; ++i) {
+        for (unsigned i = 0, n = f.Count(1024); i < n; ++i) {
             const auto index = f.Word();
             const float x = float(int32_t(f.Word())), y = float(int32_t(f.Word()));
             next.points_[index] = {x, y};
@@ -104,7 +105,8 @@ bool ColdRoomActor::Load(const std::filesystem::path &dir, unsigned actor, int p
         next.period_ = period;
         if (!next.StartLogical(9))
             throw std::runtime_error("Missing actor standing motion");
-        next.StartCommand(176);
+        if (actor == 5) next.entry_sequence_ = false;
+        else next.StartCommand(176);
         *this = std::move(next);
         return true;
     } catch (const std::exception &e) {
@@ -189,11 +191,13 @@ bool ColdRoomActor::Request(unsigned command) {
     StartCommand(command);
     return true;
 }
-bool ColdRoomActor::AdoptScene(unsigned selector) {
-    if (selector != 0 && (selector != 12 || !roof_placement_)) return false;
+bool ColdRoomActor::AdoptScene(unsigned selector,const std::array<float,3>* destination) {
+    if (selector==0) destination=&room_placement_;
+    else if (selector==12 && roof_placement_) destination=&*roof_placement_;
+    if (!destination) return false;
     // D2D0 reads three floats from the selector's 16-byte DATA row.
     // BD28 writes position and heading only. The running ASC keeps its cursor.
-    const auto& placement = selector == 0 ? room_placement_ : *roof_placement_;
+    const auto& placement=*destination;
     x_ = placement[0];
     y_ = placement[1];
     z_ = placement[2];
@@ -210,7 +214,7 @@ bool ColdRoomActor::RequestRoomControl(unsigned command) {
 bool ColdRoomActor::RequestConversationControl(unsigned command) {
     // A newly offered VM script issues its own B1D4 request. B1D4 writes
     // +38C even when the former neutral VM was waiting on another ASC.
-    if ((command != 147 && command != 153 && command != 154 && command != 156 && command != 157 && command != 178 && command != 186) ||
+    if (((command < 144 || command > 154) && command != 156 && command != 157 && command != 178 && command != 186) ||
         !commands_.count(command))
         return false;
     pending_activity_ = command;
@@ -313,6 +317,10 @@ bool ColdRoomActor::Parameter(uint32_t key, uint32_t value) {
     case 0:
         field50_ = value;
         return true;
+    case 1:
+        // D9910[1] -> 24544 writes the actor's +54 mood field.
+        mood_ = static_cast<int>(value);
+        return true;
     case 5:
         field58_ = value;
         return true;
@@ -371,6 +379,7 @@ bool ColdRoomActor::Advance(std::optional<uint32_t> calendar_minute) {
             started_activity_ = request;
         }
         sounds_.clear();
+        effect_spawns_.clear();
         invitation_expired_ = false;
         scene_pair_ = -1;
         game28_write_.reset();
@@ -415,6 +424,23 @@ bool ColdRoomActor::Advance(std::optional<uint32_t> calendar_minute) {
                 time_ = 0;
                 first_sample_ = true;
             }
+            for (const auto& key : effect_keys_.at(clip_)) {
+                if ((!first_sample_ && key.tick <= previous) || key.tick > time_) continue;
+                const auto resource=key.control & 255;
+                if ((key.control >> 24) != 128 || key.node < 0)
+                    throw std::runtime_error("Unsupported timed DAK effect control "+std::to_string(key.control));
+                std::array<float,16> node;
+                const RoomJointLayer layer{secondary_nodes_,secondary_clip_,secondary_time_};
+                if (!mesh_.NodeWorld(unsigned(key.node),{{clip_,time_}},node,nullptr,&layer))
+                    throw std::runtime_error("Missing actor node for timed DAK effect");
+                const auto root = World();
+                std::array<float,3> local{}, position{};
+                for (unsigned axis=0;axis<3;++axis)
+                    local[axis]=node[12+axis]+node[axis]*key.offset[0]+node[axis+4]*key.offset[1]+node[axis+8]*key.offset[2];
+                for (unsigned axis=0;axis<3;++axis)
+                    position[axis]=root[12+axis]+root[axis]*local[0]+root[axis+4]*local[1]+root[axis+8]*local[2];
+                effect_spawns_.push_back({resource,position});
+            }
             for (const auto &[at, word] : sound_keys_.at(clip_)) {
                 if ((at > previous || first_sample_) && at <= time_)
                     sounds_.push_back({species_, (word >> 16) & 255, word & 255, (word >> 8) & 255, true});
@@ -430,8 +456,12 @@ bool ColdRoomActor::Advance(std::optional<uint32_t> calendar_minute) {
         wait_clip_ = false;
         if (!command_)
             return true;
-        const auto &words = commands_.at(command_);
-        while (cursor_ < words.size()) {
+        // 24168 -> 24700 replaces the active ASC and rejoins the dispatcher.
+        // A malformed cycle must not prevent the next game update.
+        for (unsigned instructions = 0; instructions < 4096; ++instructions) {
+            const auto &words = commands_.at(command_);
+            if (cursor_ >= words.size())
+                throw std::runtime_error("ASC record ended without return");
             if (interrupt_pending_ && !flag25a_) {
                 // Mask 0x01000000 on control[258..25B] suppresses the
                 // ordinary ASC handlers. Neither 8043 nor 8000 is masked.
@@ -513,6 +543,13 @@ bool ColdRoomActor::Advance(std::optional<uint32_t> calendar_minute) {
                     zoom_delay_ = 15;
                 }
                 return true;
+            case 0x8001: {
+                const auto target = words.at(cursor_++);
+                if (!commands_.count(target))
+                    throw std::runtime_error("Missing ASC transfer target");
+                StartCommand(target);
+                break;
+            }
             case 0x8000:
                 // Cold route 8DE18/8DE46 and 8D798. The lighting helper
                 // asks for light outside scene periods
@@ -542,7 +579,7 @@ bool ColdRoomActor::Advance(std::optional<uint32_t> calendar_minute) {
                 return false;
             }
         }
-        throw std::runtime_error("ASC record ended without return");
+        throw std::runtime_error("ASC did not yield");
     } catch (const std::exception &e) {
         error_ = "ASC " + std::to_string(command_) + " at word " + std::to_string(cursor_) + ": " + e.what();
         return false;

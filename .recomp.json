@@ -14,5 +14,5 @@
     "Windows"
   ],
   "approach": "C++ reconstruction from the original PSP program with source-linked verification and a native Windows backend.",
-  "notes": "Native Windows source port in progress. The standalone Windows game includes room and roof play, limited kana input, notebooks, and verified first-day save and resume. The next-day transition has component coverage. Full game, networking, and a Linux application remain unfinished. Supply game data locally."
+  "notes": "The standalone Windows source covers all five Pokepi, ordinary conversations, travel, saved progress, and local Windows peer meetings. A complete playthrough and PSP parity remain unverified. Supply game data locally."
 }

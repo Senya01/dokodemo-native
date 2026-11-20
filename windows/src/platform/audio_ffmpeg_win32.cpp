@@ -89,12 +89,6 @@ public:
         api_->free_context(&context_);
         block_ = rate_ = 0;
     }
-    bool DecodePlusPacket(const uint8_t* data, size_t size, unsigned sample_rate) override {
-        if (type_ != AtracCodec::Plus || !data || !size || size > INT_MAX || !sample_rate) return false;
-        if (!block_ && !Configure({type_,sample_rate,static_cast<unsigned>(size),{}})) return false;
-        AtracPcmFrame ignored;
-        return rate_ == sample_rate && DecodePacket(data,size,ignored);
-    }
     bool Configure(const AtracFormat& fmt) override {
         if (fmt.codec != type_ || !fmt.sample_rate || !fmt.block_size || fmt.extra.size() > 64) return false;
         auto* next = api_->alloc(codec_);

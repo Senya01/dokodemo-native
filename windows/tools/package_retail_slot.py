@@ -1,4 +1,4 @@
-"""Ship the original pointers' content for the local first-day Toro savedata utility."""
+"""Project the common disc media used by the local savedata utility."""
 from pathlib import Path
 from struct import pack
 from iso_reader import Region, require

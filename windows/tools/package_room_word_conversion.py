@@ -1,9 +1,10 @@
 """Project qualified room keyboard query groups from the shipped NJDC banks."""
 from pathlib import Path
 import struct
+from itertools import chain
 
 from iso_reader import Region, require
-from room_word_na_dictionary import project_queries
+from room_word_na_dictionary import all_stems, encode_groups, learned_prefix, project_queries
 
 
 def project_word_keys(members):
@@ -53,9 +54,30 @@ def dictionary_members(common):
     return members
 
 
+
+def project_lexicon(members):
+    con = members["NJCON"]
+    left, right, matrix, _, end, start, raw_left, raw_right = struct.unpack_from(">HHII4H", con, 0x1c)
+    matrix_size = (left+7)//8*right
+    require(matrix+matrix_size <= len(con)-4, "Invalid NJ grammar matrix")
+    # The room editor admits at most eight kana per composition.
+    stems = list(chain.from_iterable(all_stems(members[name], 8)
+                for name in ("NJBASE", "NJFZK", "NJTAN", "CUSTOM")))
+    predictions = learned_prefix(members["NJLEARN"], b"", single_block_only=True)
+    header = struct.pack("<4s6HII", b"NJL1", left, right, start, end, raw_left, raw_right,
+                         len(stems), len(predictions))
+    rows = bytearray()
+    for l, r, reading, written, grade in stems:
+        require(0 < l <= left and 0 < r <= right, "NJ stem class outside matrix")
+        rows.extend(struct.pack("<H", grade))
+        rows.extend(encode_groups((), ((l, r, reading, written),)))
+    return header + con[matrix:matrix+matrix_size] + rows + encode_groups(predictions, [])
+
 def room_word_conversion_media(common):
     members=dictionary_members(common)
     r=Region(project_word_keys(members))
     catalog=Region(project_queries(members))
-    return {Path("assets/game/post-profile/room-word-keys.bin"):(r,r.sha256()),
+    lexicon=Region(project_lexicon(members))
+    return {Path("assets/game/post-profile/room-word-lexicon.bin"):(lexicon,lexicon.sha256()),
+            Path("assets/game/post-profile/room-word-keys.bin"):(r,r.sha256()),
             Path("assets/game/post-profile/room-word-dictionary.bin"):(catalog,catalog.sha256())}

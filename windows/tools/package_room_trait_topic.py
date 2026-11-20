@@ -37,17 +37,14 @@ def project_trait_topic(data, rows=None):
     return blocks, strings
 
 
-def room_word_traits_media(root):
-    archive = BparArchive(root.payload(root.by_name("KSNEKO.BPM")))
-    region = archive.payload(archive.by_name("NEKO.KSC"))
-    data = region.read(0, region.size)
+def trait_forms(data, tables):
     h = parse_header(data)
     output = bytearray(b"RWT1")
-    for ct in (0x2A9E, 0x2AB5, 0x2ACC):
+    for ct in tables:
         row = struct.unpack_from("<23I", data, h.constant_start + 4*ct)
         require(row[0] == 0x90000016, "Expected 22 KSC traits")
         for index, value in enumerate(row[1:]):
-            if ct == 0x2ACC and not 6 <= index <= 12:
+            if ct == tables[2] and not 6 <= index <= 12:
                 require(value == 0, "Unexpected opposite adjective")
                 output.extend(b"\0\0")
             else:
@@ -58,5 +55,17 @@ def room_word_traits_media(root):
                 require(form and form.decode("cp932"), "Empty trait string")
                 output.extend(struct.pack("<H", len(form)))
                 output.extend(form)
-    blob = Region(bytes(output))
+    return bytes(output)
+
+
+def room_word_traits_media(root):
+    def forms(actor, tables):
+        archive = BparArchive(root.payload(root.by_name(f"KS{actor}.BPM")))
+        region = archive.payload(archive.by_name(f"{actor}.KSC"))
+        return trait_forms(region.read(0, region.size), tables)
+
+    toro = forms("NEKO", (0x2A9E, 0x2AB5, 0x2ACC))
+    robo = forms("ROBO", (0x2B9A, 0x2BB1, 0x2BC8))
+    require(robo == toro, "Trait forms differ between ROBO and NEKO")
+    blob = Region(toro)
     return {Path("assets/game/post-profile/toro-trait-labels.bin"): (blob, blob.sha256())}
