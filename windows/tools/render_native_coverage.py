@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from native_code_inventory import collect_code
 from render_native_status_images import (
-    acceptance_counts, badge_svg, code_badge_svg, code_svg, format_progress_percent,
+    acceptance_counts, badge_svg, code_badge_svg, format_progress_percent, map_badge_svg, map_svg,
 )
 
 
@@ -40,6 +40,11 @@ def build(boot: Path | None = None) -> tuple[str, Counter, dict]:
         raise ValueError("Acceptance snapshot has inconsistent checks and results")
     if not all(set(part["tiles"]) <= identifiers for part in parts):
         raise ValueError("Acceptance snapshot refers to an unknown feature")
+    passed, checks_total = acceptance_counts(verification)
+    data["progress"] = {
+        "implemented": counts["basic"] + counts["exact"], "exact": counts["exact"],
+        "features": sum(counts.values()), "passed": passed, "checks": checks_total,
+    }
     template = (ROOT / "tools/native_coverage.html").read_text(encoding="utf-8")
     if template.count(PLACEHOLDER) != 1:
         raise ValueError("Expected one coverage-data placeholder")
@@ -47,26 +52,28 @@ def build(boot: Path | None = None) -> tuple[str, Counter, dict]:
     return template.replace(PLACEHOLDER, payload), counts, data
 
 
-def update_readme(path: Path, verification: dict, acceptance_badge: str, code_badge: str) -> None:
+def update_readme(path: Path, progress: dict, badge: str, overview: str) -> None:
     start = "<!-- native-progress:start -->"
     end = "<!-- native-progress:end -->"
     original = path.read_text(encoding="utf-8")
     if original.count(start) != 1 or original.count(end) != 1 or original.index(start) > original.index(end):
         raise ValueError(f"Expected one native progress block in {path}")
 
-    passed, total = acceptance_counts(verification)
-    percent = format_progress_percent(passed, total)
-    scope = "windows/docs/PROGRESS.md#acceptance-and-code-map"
     # GitHub's redirect for relative image URLs drops the cache key.
-    badges = "https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs"
-    acceptance_version = sha256(acceptance_badge.encode("utf-8")).hexdigest()[:12]
-    code_version = sha256(code_badge.encode("utf-8")).hexdigest()[:12]
-    progress = (
-        f"\n**Windows port verification: {percent} ({passed} of {total} requirements).**\n\n"
-        f"[![Windows acceptance]({badges}/native-progress.svg?v={acceptance_version})]({scope})\n"
-        f"[![KSC room dispatch IDs]({badges}/native-code-progress.svg?v={code_version})]({scope})\n"
+    images = "https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs"
+    interactive = "windows/docs/native-coverage.html"
+    badge_version = sha256(badge.encode("utf-8")).hexdigest()[:12]
+    map_version = sha256(overview.encode("utf-8")).hexdigest()[:12]
+    implemented, exact, features = (progress[key] for key in ("implemented", "exact", "features"))
+    passed, checks = progress["passed"], progress["checks"]
+    percent = format_progress_percent(passed, checks)
+    generated = (
+        f"\n[![Native map progress]({images}/native-map-progress.svg?v={badge_version})]({interactive})\n\n"
+        f"**Native implementations: {implemented}/{features} basic or better, {exact}/{features} byte-exact.** "
+        f"**Windows acceptance: {percent} ({passed}/{checks}).**\n\n"
+        f"[![Native port tile map]({images}/native-code-map.svg?v={map_version})]({interactive})\n"
     )
-    updated = original[:original.index(start) + len(start)] + progress + original[original.index(end):]
+    updated = original[:original.index(start) + len(start)] + generated + original[original.index(end):]
     if original != updated:
         path.write_text(updated, encoding="utf-8", newline="\n")
 
@@ -78,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--badge", type=Path)
     parser.add_argument("--code-badge", type=Path)
     parser.add_argument("--overview", type=Path)
+    parser.add_argument("--map-badge", type=Path)
     parser.add_argument("--readme", type=Path, help="Update the main README progress block")
     args = parser.parse_args()
     if args.boot and not args.boot.is_file():
@@ -94,14 +102,17 @@ if __name__ == "__main__":
         encoding="utf-8",
         newline="\n",
     )
-    acceptance_badge = badge_svg(data["verification"])
-    code_badge = code_badge_svg(data["code"])
     if args.badge:
-        args.badge.write_text(acceptance_badge, encoding="utf-8", newline="\n")
+        args.badge.write_text(badge_svg(data["verification"]), encoding="utf-8", newline="\n")
     if args.code_badge:
-        args.code_badge.write_text(code_badge, encoding="utf-8", newline="\n")
-    if args.readme:
-        update_readme(args.readme, data["verification"], acceptance_badge, code_badge)
-    if args.overview:
-        args.overview.write_text(code_svg(data["code"]), encoding="utf-8", newline="\n")
+        args.code_badge.write_text(code_badge_svg(data["code"]), encoding="utf-8", newline="\n")
+    if args.overview or args.map_badge or args.readme:
+        overview = map_svg(data)
+        badge = map_badge_svg(data["progress"])
+        if args.overview:
+            args.overview.write_text(overview, encoding="utf-8", newline="\n")
+        if args.map_badge:
+            args.map_badge.write_text(badge, encoding="utf-8", newline="\n")
+        if args.readme:
+            update_readme(args.readme, data["progress"], badge, overview)
     print(dict(sorted(status_counts.items())))

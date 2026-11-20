@@ -52,53 +52,126 @@ def rectangle(x, y, width, height, color):
     return f'<rect x="{x}" y="{y}" width="{width}" height="{height}" fill="{color}"/>'
 
 
-def code_svg(code: dict) -> str:
-    """Create a preview with one square per dispatch ID or compilation unit."""
-    found, missing, file = "#2f9b53", "#63707a", "#477fac"
-    names = {
+def map_badge_svg(progress: dict) -> str:
+    implemented, exact, features = (progress[key] for key in ("implemented", "exact", "features"))
+    passed, checks = progress["passed"], progress["checks"]
+    basic_percent = format_progress_percent(implemented, features)
+    exact_percent = format_progress_percent(exact, features)
+    acceptance_percent = format_progress_percent(passed, checks)
+    label = (f"Native map: basic or better {basic_percent} ({implemented}/{features}), "
+             f"byte-exact {exact_percent} ({exact}/{features}), "
+             f"Windows acceptance {acceptance_percent} ({passed}/{checks})")
+    green = ("#257944", "#fff")
+    amber = ("#e8ba25", "#171717")
+    segments = (
+        ("Native map", 90, "#444b55", "#fff"),
+        (f"Basic+ {basic_percent}", 102, *(green if implemented == features else amber)),
+        (f"Byte-exact {exact_percent}", 112, "#295b84", "#fff"),
+        (f"Windows {acceptance_percent}", 114, *(green if passed == checks else amber)),
+    )
+    width = sum(segment[1] for segment in segments)
+    elements = [f'<title>{escape(label)}</title>',
+                f'<clipPath id="badge"><rect width="{width}" height="25" rx="4"/></clipPath>',
+                '<g clip-path="url(#badge)" font-family="Verdana,sans-serif" text-anchor="middle">']
+    x = 0
+    for caption, size, color, ink in segments:
+        elements.extend((rectangle(x, 0, size, 25, color),
+                         text(x + size / 2, 16.5, caption, 11, ink)))
+        x += size
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="25" '
+            f'viewBox="0 0 {width} 25" role="img" aria-label="{escape(label)}">\n'
+            + "\n".join(elements) + "\n</g>\n</svg>\n")
+
+
+def map_svg(data: dict) -> str:
+    """Draw the implementations, acceptance checks and code inventory in one tile map."""
+    features, verification, code = data["groups"], data["verification"], data["code"]
+    feature_colors = {"basic": "#2f9b53", "exact": "#72b9ff", "missing": "#63707a"}
+    check_colors = {"passed": "#2f9b53", "blocked": "#63707a",
+                    "failed": "#d55e66", "unverified": "#333e48"}
+    code_colors = {"present": "#2f9b53", "absent": "#63707a", "file": "#477fac"}
+    code_names = {
         "Команды KSC": "KSC opcodes",
         "Встроенные функции KSC": "KSC built-ins",
         "Вызовы GAME в комнате": "Room GAME IDs",
     }
-    groups = [g for g in code["groups"] if g["kind"] != "files"]
-    files = [g for g in code["groups"] if g["kind"] == "files"]
-    width, gap, margin = 930, 10, 14
-    legend = ((found, "Branch in room handler"), (missing, "No branch in room handler"), (file, "Windows source file"))
-    svg = [text(margin, 23, "Native code map", 18)]
-    for i, (color, label) in enumerate(legend):
-        x = margin + i * 220
-        svg.extend((rectangle(x, 36, 10, 10, color), text(x + 16, 45, label, 12)))
+    width, gap, margin = 930, 9, 14
+    svg = [text(margin, 25, "Native port map", 19)]
 
-    def panels(panels, columns, top, cell):
+    def section(y, heading, legend):
+        svg.append(text(margin, y, heading, 15))
+        for x, (color, label) in enumerate(legend):
+            left = margin + x * 218
+            svg.extend((rectangle(left, y + 10, 9, 9, color), text(left + 14, y + 18, label, 11)))
+        return y + 27
+
+    def panels(groups, colors, columns, top, cell, layer):
         available = width - 2 * margin
         box = (available - (columns - 1) * gap) // columns
         row_size = (box - 15) // (cell + 2)
-        for row in range(0, len(panels), columns):
-            chunk = panels[row:row + columns]
-            rows = max((len(g["items"]) + row_size - 1) // row_size for g in chunk)
-            height = 36 + rows * (cell + 2)
-            for col, group in enumerate(chunk):
+        for row in range(0, len(groups), columns):
+            chunk = groups[row:row + columns]
+            rows = max((len(items) + row_size - 1) // row_size for _, _, items in chunk)
+            height = 34 + rows * (cell + 2)
+            for col, (name, count, items) in enumerate(chunk):
                 x = margin + col * (box + gap)
-                items = group["items"]
-                count = str(len(items))
-                if group["kind"] == "dispatch":
-                    count = f"{sum(bool(item['lines']) for item in items)}/{count}"
                 svg.extend((rectangle(x, top, box, height, "#1b242c"),
-                            text(x + 8, top + 19, names.get(group["title"], group["title"])),
-                            text(x + box - 8, top + 19, count, 12, "#a9bdce", end=True)))
-                for i, item in enumerate(items):
-                    color = file if group["kind"] == "files" else found if item["lines"] else missing
-                    svg.append(rectangle(x + 8 + (i % row_size) * (cell + 2),
-                                         top + 28 + (i // row_size) * (cell + 2), cell, cell, color))
+                            text(x + 8, top + 17, name, 12),
+                            text(x + box - 8, top + 17, count, 11, "#a9bdce", end=True)))
+                for i, (name, state) in enumerate(items):
+                    square = rectangle(x + 8 + i % row_size * (cell + 2),
+                                       top + 24 + i // row_size * (cell + 2), cell, cell, colors[state])
+                    svg.append(f'<g data-layer="{layer}" data-status="{state}">'
+                               f'<title>{escape(name)}</title>{square}</g>')
             top += height + gap
         return top
 
-    bottom = panels(files, 4, panels(groups, 3, 60, 8), 7)
+    progress = data["progress"]
+    implemented, exact, features_total = (progress[key] for key in ("implemented", "exact", "features"))
+    feature_title = f"Implementations · {implemented}/{features_total} basic or better · {exact}/{features_total} byte-exact"
+    top = section(48, feature_title, (
+        (feature_colors["basic"], "Basic"), (feature_colors["exact"], "Byte-exact"),
+        (feature_colors["missing"], "Missing"),
+    ))
+    feature_panels = []
+    for group in features:
+        items = [(item["title"], item["status"]) for item in group["items"]]
+        count = sum(state != "missing" for _, state in items)
+        feature_panels.append((group["name"], f"{count}/{len(items)}", items))
+    top = panels(feature_panels, feature_colors, 4, top, 13, "implementation")
+
+    top = section(top + 11, f'Windows acceptance · {progress["passed"]}/{progress["checks"]} passed', (
+        (check_colors["passed"], "Passed"), (check_colors["blocked"], "Open requirement"),
+        (check_colors["failed"], "Test failed"), (check_colors["unverified"], "Unverified"),
+    ))
+    states = verification["states"]
+    check_panels = []
+    for module in verification["modules"]:
+        items = [(part["title"], states[part["id"]]) for part in module["parts"]]
+        count = sum(state == "passed" for _, state in items)
+        check_panels.append((module["title"], f"{count}/{len(items)}", items))
+    top = panels(check_panels, check_colors, 3, top, 13, "acceptance")
+
+    top = section(top + 11, "Code inventory", (
+        (code_colors["present"], "Branch or ID check present"),
+        (code_colors["absent"], "Branch absent"), (code_colors["file"], "Windows source file"),
+    ))
+    commands, files = [], []
+    for group in code["groups"]:
+        name = code_names.get(group["title"], group["title"])
+        if group["kind"] == "files":
+            items = [(item["source"], "file") for item in group["items"]]
+            files.append((name, str(len(items)), items))
+        else:
+            items = [(item["label"], "present" if item["lines"] else "absent") for item in group["items"]]
+            count = sum(state == "present" for _, state in items)
+            commands.append((name, f"{count}/{len(items)}", items))
+    top = panels(commands, code_colors, 3, top, 8, "dispatch")
+    bottom = panels(files, code_colors, 4, top, 7, "file")
     height = bottom + margin - gap
-    return ("<svg xmlns='http://www.w3.org/2000/svg' "
-            f"width='{width}' height='{height}' viewBox='0 0 {width} {height}' role='img' "
-            "aria-label='Native code map. Each square represents a dispatch ID or Windows source file.'>\n"
-            "<title>Native code map</title>\n"
+    return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' "
+            f"viewBox='0 0 {width} {height}' role='img' aria-label='Native port map'>\n"
+            "<title>Native port map with implementations, Windows acceptance checks and code inventory</title>\n"
             + rectangle(0, 0, width, height, "#10161d")
             + "\n<g font-family='Segoe UI, Arial, sans-serif'>\n"
             + "\n".join(svg) + "\n</g>\n</svg>\n")

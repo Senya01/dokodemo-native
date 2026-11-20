@@ -1,360 +1,559 @@
-<svg xmlns='http://www.w3.org/2000/svg' width='930' height='298' viewBox='0 0 930 298' role='img' aria-label='Native code map. Each square represents a dispatch ID or Windows source file.'>
-<title>Native code map</title>
-<rect x="0" y="0" width="930" height="298" fill="#10161d"/>
+<svg xmlns='http://www.w3.org/2000/svg' width='930' height='729' viewBox='0 0 930 729' role='img' aria-label='Native port map'>
+<title>Native port map with implementations, Windows acceptance checks and code inventory</title>
+<rect x="0" y="0" width="930" height="729" fill="#10161d"/>
 <g font-family='Segoe UI, Arial, sans-serif'>
-<text x="14" y="23" font-size="18" fill="#edf3f8">Native code map</text>
-<rect x="14" y="36" width="10" height="10" fill="#2f9b53"/>
-<text x="30" y="45" font-size="12" fill="#edf3f8">Branch in room handler</text>
-<rect x="234" y="36" width="10" height="10" fill="#63707a"/>
-<text x="250" y="45" font-size="12" fill="#edf3f8">No branch in room handler</text>
-<rect x="454" y="36" width="10" height="10" fill="#477fac"/>
-<text x="470" y="45" font-size="12" fill="#edf3f8">Windows source file</text>
-<rect x="14" y="60" width="294" height="96" fill="#1b242c"/>
-<text x="22" y="79" font-size="13" fill="#edf3f8">KSC opcodes</text>
-<text x="300" y="79" font-size="12" fill="#a9bdce" text-anchor="end">142/142</text>
-<rect x="22" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="92" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="102" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="112" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="122" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="132" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="142" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="152" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="162" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="172" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="182" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="192" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="202" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="212" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="222" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="232" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="242" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="252" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="262" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="272" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="282" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="22" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="92" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="102" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="112" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="122" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="132" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="142" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="152" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="162" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="172" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="182" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="192" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="202" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="212" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="222" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="232" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="242" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="252" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="262" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="272" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="282" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="22" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="92" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="102" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="112" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="122" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="132" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="142" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="152" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="162" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="172" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="182" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="192" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="202" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="212" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="222" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="232" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="242" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="252" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="262" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="272" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="282" y="108" width="8" height="8" fill="#2f9b53"/>
-<rect x="22" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="92" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="102" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="112" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="122" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="132" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="142" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="152" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="162" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="172" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="182" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="192" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="202" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="212" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="222" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="232" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="242" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="252" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="262" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="272" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="282" y="118" width="8" height="8" fill="#2f9b53"/>
-<rect x="22" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="92" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="102" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="112" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="122" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="132" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="142" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="152" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="162" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="172" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="182" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="192" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="202" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="212" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="222" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="232" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="242" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="252" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="262" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="272" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="282" y="128" width="8" height="8" fill="#2f9b53"/>
-<rect x="22" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="32" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="42" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="52" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="62" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="72" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="82" y="138" width="8" height="8" fill="#2f9b53"/>
-<rect x="318" y="60" width="294" height="96" fill="#1b242c"/>
-<text x="326" y="79" font-size="13" fill="#edf3f8">KSC built-ins</text>
-<text x="604" y="79" font-size="12" fill="#a9bdce" text-anchor="end">42/42</text>
-<rect x="326" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="336" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="346" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="356" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="366" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="376" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="386" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="396" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="406" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="416" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="426" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="436" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="446" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="456" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="466" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="476" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="486" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="496" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="506" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="516" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="526" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="536" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="546" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="556" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="566" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="576" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="586" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="326" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="336" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="346" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="356" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="366" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="376" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="386" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="396" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="406" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="416" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="426" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="436" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="446" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="456" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="466" y="98" width="8" height="8" fill="#2f9b53"/>
-<rect x="622" y="60" width="294" height="96" fill="#1b242c"/>
-<text x="630" y="79" font-size="13" fill="#edf3f8">Room GAME IDs</text>
-<text x="908" y="79" font-size="12" fill="#a9bdce" text-anchor="end">23</text>
-<rect x="630" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="640" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="650" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="660" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="670" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="680" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="690" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="700" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="710" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="720" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="730" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="740" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="750" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="760" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="770" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="780" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="790" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="800" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="810" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="820" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="830" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="840" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="850" y="88" width="8" height="8" fill="#2f9b53"/>
-<rect x="14" y="166" width="218" height="63" fill="#1b242c"/>
-<text x="22" y="185" font-size="13" fill="#edf3f8">dokodemo-core / core</text>
-<text x="224" y="185" font-size="12" fill="#a9bdce" text-anchor="end">1</text>
-<rect x="22" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="242" y="166" width="218" height="63" fill="#1b242c"/>
-<text x="250" y="185" font-size="13" fill="#edf3f8">dokodemo-core / gameplay</text>
-<text x="452" y="185" font-size="12" fill="#a9bdce" text-anchor="end">64</text>
-<rect x="250" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="259" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="268" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="277" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="286" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="295" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="304" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="313" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="322" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="331" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="340" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="349" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="358" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="367" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="376" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="385" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="394" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="403" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="412" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="421" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="430" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="439" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="250" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="259" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="268" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="277" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="286" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="295" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="304" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="313" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="322" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="331" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="340" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="349" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="358" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="367" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="376" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="385" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="394" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="403" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="412" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="421" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="430" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="439" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="250" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="259" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="268" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="277" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="286" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="295" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="304" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="313" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="322" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="331" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="340" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="349" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="358" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="367" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="376" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="385" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="394" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="403" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="412" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="421" y="212" width="7" height="7" fill="#477fac"/>
-<rect x="470" y="166" width="218" height="63" fill="#1b242c"/>
-<text x="478" y="185" font-size="13" fill="#edf3f8">dokodemo-core / recovered</text>
-<text x="680" y="185" font-size="12" fill="#a9bdce" text-anchor="end">23</text>
-<rect x="478" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="487" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="496" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="505" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="514" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="523" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="532" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="541" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="550" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="559" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="568" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="577" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="586" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="595" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="604" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="613" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="622" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="631" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="640" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="649" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="658" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="667" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="478" y="203" width="7" height="7" fill="#477fac"/>
-<rect x="698" y="166" width="218" height="63" fill="#1b242c"/>
-<text x="706" y="185" font-size="13" fill="#edf3f8">dokodemo-core / src</text>
-<text x="908" y="185" font-size="12" fill="#a9bdce" text-anchor="end">4</text>
-<rect x="706" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="715" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="724" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="733" y="194" width="7" height="7" fill="#477fac"/>
-<rect x="14" y="239" width="218" height="45" fill="#1b242c"/>
-<text x="22" y="258" font-size="13" fill="#edf3f8">dokodemo-win32 / gameplay</text>
-<text x="224" y="258" font-size="12" fill="#a9bdce" text-anchor="end">4</text>
-<rect x="22" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="31" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="40" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="49" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="242" y="239" width="218" height="45" fill="#1b242c"/>
-<text x="250" y="258" font-size="13" fill="#edf3f8">dokodemo-win32 / platform</text>
-<text x="452" y="258" font-size="12" fill="#a9bdce" text-anchor="end">4</text>
-<rect x="250" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="259" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="268" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="277" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="470" y="239" width="218" height="45" fill="#1b242c"/>
-<text x="478" y="258" font-size="13" fill="#edf3f8">dokodemo-win32 / src</text>
-<text x="680" y="258" font-size="12" fill="#a9bdce" text-anchor="end">5</text>
-<rect x="478" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="487" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="496" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="505" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="514" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="698" y="239" width="218" height="45" fill="#1b242c"/>
-<text x="706" y="258" font-size="13" fill="#edf3f8">dokodemo-game</text>
-<text x="908" y="258" font-size="12" fill="#a9bdce" text-anchor="end">2</text>
-<rect x="706" y="267" width="7" height="7" fill="#477fac"/>
-<rect x="715" y="267" width="7" height="7" fill="#477fac"/>
+<text x="14" y="25" font-size="19" fill="#edf3f8">Native port map</text>
+<text x="14" y="48" font-size="15" fill="#edf3f8">Implementations · 68/68 basic or better · 1/68 byte-exact</text>
+<rect x="14" y="58" width="9" height="9" fill="#2f9b53"/>
+<text x="28" y="66" font-size="11" fill="#edf3f8">Basic</text>
+<rect x="232" y="58" width="9" height="9" fill="#72b9ff"/>
+<text x="246" y="66" font-size="11" fill="#edf3f8">Byte-exact</text>
+<rect x="450" y="58" width="9" height="9" fill="#63707a"/>
+<text x="464" y="66" font-size="11" fill="#edf3f8">Missing</text>
+<rect x="14" y="75" width="218" height="49" fill="#1b242c"/>
+<text x="22" y="92" font-size="12" fill="#edf3f8">Запуск и платформа</text>
+<text x="224" y="92" font-size="11" fill="#a9bdce" text-anchor="end">7/7</text>
+<g data-layer="implementation" data-status="basic"><title>Нативный запуск Windows</title><rect x="22" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="exact"><title>319 кадров заставок</title><rect x="37" y="99" width="13" height="13" fill="#72b9ff"/></g>
+<g data-layer="implementation" data-status="basic"><title>Главное меню и раскрытие</title><rect x="52" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Чтение локальных ресурсов</title><rect x="67" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Шрифты и японский текст</title><rect x="82" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Игровые обновления и таймеры</title><rect x="97" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Приостановка и восстановление игры</title><rect x="112" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="241" y="75" width="218" height="49" fill="#1b242c"/>
+<text x="249" y="92" font-size="12" fill="#edf3f8">Графика и ввод</text>
+<text x="451" y="92" font-size="11" fill="#a9bdce" text-anchor="end">11/11</text>
+<g data-layer="implementation" data-status="basic"><title>Окно и кадровый буфер</title><rect x="249" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Фон, меню, переходы и слои</title><rect x="264" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Геометрия, материалы и свет комнаты</title><rect x="279" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Скелет и анимация покепи</title><rect x="294" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Эффект EF9 в прощании Торо</title><rect x="309" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Остальные визуальные события DAK</title><rect x="324" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Камера и привязка реплик</title><rect x="339" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Крыша и смена сцены</title><rect x="354" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Остальные игровые сцены</title><rect x="369" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Клавиатура и приоритет отмены</title><rect x="384" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Ввод с контроллера XInput</title><rect x="399" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="468" y="75" width="218" height="49" fill="#1b242c"/>
+<text x="476" y="92" font-size="12" fill="#edf3f8">Звук и PRX</text>
+<text x="678" y="92" font-size="11" fill="#a9bdce" text-anchor="end">12/12</text>
+<g data-layer="implementation" data-status="basic"><title>Фоновая музыка</title><rect x="476" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Эффекты и громкость</title><rect x="491" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Бесшумный тестовый выход</title><rect x="506" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>libatrac3plus и декодер</title><rect x="521" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>audiocodec и контракт Media Engine</title><rect x="536" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>sc_sascore и микширование</title><rect x="551" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>ifhandle</title><rect x="566" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>pspnet</title><rect x="581" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>memab</title><rect x="596" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>pspnet_adhoc_auth</title><rect x="611" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>pspnet_adhoc</title><rect x="626" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>pspnet_adhocctl</title><rect x="641" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="695" y="75" width="218" height="49" fill="#1b242c"/>
+<text x="703" y="92" font-size="12" fill="#edf3f8">Персонажи и сюжет</text>
+<text x="905" y="92" font-size="11" fill="#a9bdce" text-anchor="end">11/11</text>
+<g data-layer="implementation" data-status="basic"><title>Выбор покепи и создание профиля</title><rect x="703" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Торо — прибытие и знакомство</title><rect x="718" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Торо — обычные дни</title><rect x="733" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Торо — предпоследний день</title><rect x="748" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Торо — последний день</title><rect x="763" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Торо — продление пребывания и возвращение</title><rect x="778" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Робо — история</title><rect x="793" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Усаги — история</title><rect x="808" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Ину — история</title><rect x="823" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Каэру — история</title><rect x="838" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>После ухода — титул и повторная игра</title><rect x="853" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="14" y="133" width="218" height="49" fill="#1b242c"/>
+<text x="22" y="150" font-size="12" fill="#edf3f8">Жизнь в комнате</text>
+<text x="224" y="150" font-size="11" fill="#a9bdce" text-anchor="end">12/12</text>
+<g data-layer="implementation" data-status="basic"><title>Автономные занятия</title><rect x="22" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Календарь, освещение и дневные события</title><rect x="37" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Обычный разговор</title><rect x="52" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Поддерживаемые команды KSC</title><rect x="67" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Остальные процедуры и темы KSC</title><rect x="82" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Телевизор и освещение сцены</title><rect x="97" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Инвентарь и размещение</title><rect x="112" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Удаление подарка</title><rect x="127" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Локальная отметка подарка для обмена</title><rect x="142" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Настройки</title><rect x="157" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Выход на крышу и возврат</title><rect x="172" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Действия на крыше</title><rect x="187" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="241" y="133" width="218" height="49" fill="#1b242c"/>
+<text x="249" y="150" font-size="12" fill="#edf3f8">Слова, дневник и сохранения</text>
+<text x="451" y="150" font-size="11" fill="#a9bdce" text-anchor="end">9/9</text>
+<g data-layer="implementation" data-status="basic"><title>Обучение словам</title><rect x="249" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Экранные раскладки и отмена</title><rect x="264" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Конвертация и история NJ</title><rect x="279" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Широкий словарный поиск и сохранение истории NJ</title><rect x="294" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Словарь в блокноте</title><rect x="309" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Дневник</title><rect x="324" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Реальное сохранение и продолжение</title><rect x="339" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Состояние комнаты и словаря</title><rect x="354" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Поздние и альтернативные сохранения</title><rect x="369" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="468" y="133" width="218" height="49" fill="#1b242c"/>
+<text x="476" y="150" font-size="12" fill="#edf3f8">Встречи и мини-игры</text>
+<text x="678" y="150" font-size="11" fill="#a9bdce" text-anchor="end">6/6</text>
+<g data-layer="implementation" data-status="basic"><title>Меню друзей и заготовка вопроса</title><rect x="476" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Доступность しりとり</title><rect x="491" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Встреча двух игроков</title><rect x="506" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Обмен визитками</title><rect x="521" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Обмен подарками</title><rect x="536" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Партия しりとり</title><rect x="551" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<text x="14" y="202" font-size="15" fill="#edf3f8">Windows acceptance · 50/60 passed</text>
+<rect x="14" y="212" width="9" height="9" fill="#2f9b53"/>
+<text x="28" y="220" font-size="11" fill="#edf3f8">Passed</text>
+<rect x="232" y="212" width="9" height="9" fill="#63707a"/>
+<text x="246" y="220" font-size="11" fill="#edf3f8">Open requirement</text>
+<rect x="450" y="212" width="9" height="9" fill="#d55e66"/>
+<text x="464" y="220" font-size="11" fill="#edf3f8">Test failed</text>
+<rect x="668" y="212" width="9" height="9" fill="#333e48"/>
+<text x="682" y="220" font-size="11" fill="#edf3f8">Unverified</text>
+<rect x="14" y="229" width="294" height="49" fill="#1b242c"/>
+<text x="22" y="246" font-size="12" fill="#edf3f8">Платформа и пакет</text>
+<text x="300" y="246" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
+<g data-layer="acceptance" data-status="passed"><title>Запуск и закрытие</title><rect x="22" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Целостность и переносимость пакета</title><rect x="37" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Логика сна и пробуждения</title><rect x="52" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Интеграция с рабочим столом Windows</title><rect x="67" y="253" width="13" height="13" fill="#63707a"/></g>
+<rect x="317" y="229" width="294" height="49" fill="#1b242c"/>
+<text x="325" y="246" font-size="12" fill="#edf3f8">Графика, анимация и интерфейс</text>
+<text x="603" y="246" font-size="11" fill="#a9bdce" text-anchor="end">8/9</text>
+<g data-layer="acceptance" data-status="passed"><title>Видеобуфер и дисплей</title><rect x="325" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Последовательность заставок</title><rect x="340" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Титульный интерфейс</title><rect x="355" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Шрифты и диалоги</title><rect x="370" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Геометрия и освещение</title><rect x="385" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Скелет и движения</title><rect x="400" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Эффекты KSC/DAK</title><rect x="415" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Камера и перекрытия</title><rect x="430" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Материалы, пограничные кадры и сцены</title><rect x="445" y="253" width="13" height="13" fill="#63707a"/></g>
+<rect x="620" y="229" width="294" height="49" fill="#1b242c"/>
+<text x="628" y="246" font-size="12" fill="#edf3f8">Ввод и доступность</text>
+<text x="906" y="246" font-size="11" fill="#a9bdce" text-anchor="end">2/3</text>
+<g data-layer="acceptance" data-status="passed"><title>Раскладка, фронты и фокус</title><rect x="628" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Ввод в меню и редакторах</title><rect x="643" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Физический контроллер</title><rect x="658" y="253" width="13" height="13" fill="#63707a"/></g>
+<rect x="14" y="287" width="294" height="49" fill="#1b242c"/>
+<text x="22" y="304" font-size="12" fill="#edf3f8">Звук</text>
+<text x="300" y="304" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
+<g data-layer="acceptance" data-status="passed"><title>Декодер и нативный рабочий блок</title><rect x="22" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Музыка и события</title><rect x="37" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Очередь и голоса</title><rect x="52" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Микширование и весь каталог событий</title><rect x="67" y="311" width="13" height="13" fill="#63707a"/></g>
+<rect x="317" y="287" width="294" height="49" fill="#1b242c"/>
+<text x="325" y="304" font-size="12" fill="#edf3f8">Игровой цикл и KSC</text>
+<text x="603" y="304" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
+<g data-layer="acceptance" data-status="passed"><title>Действия, часы и отмена ожидания</title><rect x="325" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Обычные темы пяти персонажей</title><rect x="340" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Особые и альтернативные ветки KSC</title><rect x="355" y="311" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Предметы и настройки в комнате</title><rect x="370" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="620" y="287" width="294" height="49" fill="#1b242c"/>
+<text x="628" y="304" font-size="12" fill="#edf3f8">Язык, словарь и дневник</text>
+<text x="906" y="304" font-size="11" fill="#a9bdce" text-anchor="end">4/5</text>
+<g data-layer="acceptance" data-status="passed"><title>Обучение и повторное использование слова</title><rect x="628" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Клавиатуры и правка чтения</title><rect x="643" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Конвертер и запросы с историей</title><rect x="658" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Блокнот и дневник</title><rect x="673" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Все категории и границы словаря</title><rect x="688" y="311" width="13" height="13" fill="#63707a"/></g>
+<rect x="14" y="345" width="294" height="49" fill="#1b242c"/>
+<text x="22" y="362" font-size="12" fill="#edf3f8">Инвентарь, меню и поездки</text>
+<text x="300" y="362" font-size="11" fill="#a9bdce" text-anchor="end">4/5</text>
+<g data-layer="acceptance" data-status="passed"><title>Цикл инвентаря</title><rect x="22" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Домашнее меню</title><rect x="37" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Крыша и возвращение</title><rect x="52" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Ресурсы поездок</title><rect x="67" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Маршруты по персонажам и сезону</title><rect x="82" y="369" width="13" height="13" fill="#63707a"/></g>
+<rect x="317" y="345" width="294" height="49" fill="#1b242c"/>
+<text x="325" y="362" font-size="12" fill="#edf3f8">Дни, персонажи и финалы</text>
+<text x="603" y="362" font-size="11" fill="#a9bdce" text-anchor="end">10/10</text>
+<g data-layer="acceptance" data-status="passed"><title>Выбор и данные профиля</title><rect x="325" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Торо и первый подарок</title><rect x="340" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Робо и календарные сцены</title><rect x="355" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Усаги и календарные сцены</title><rect x="370" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Ину и календарные сцены</title><rect x="385" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Каэру и календарные сцены</title><rect x="400" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Торо и календарное состояние</title><rect x="415" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Торо, GAME37 и GAME75</title><rect x="430" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Письмо по расписанию · событие 7</title><rect x="445" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Уход и начало нового цикла</title><rect x="460" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="620" y="345" width="294" height="49" fill="#1b242c"/>
+<text x="628" y="362" font-size="12" fill="#edf3f8">Сохранение и дисковая целостность</text>
+<text x="906" y="362" font-size="11" fill="#a9bdce" text-anchor="end">3/3</text>
+<g data-layer="acceptance" data-status="passed"><title>Граф и формат слота</title><rect x="628" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Запись из комнаты и восстановление</title><rect x="643" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Атомарность и восстановление после отказа</title><rect x="658" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<rect x="14" y="403" width="294" height="49" fill="#1b242c"/>
+<text x="22" y="420" font-size="12" fill="#edf3f8">Встречи и мини-игры</text>
+<text x="300" y="420" font-size="11" fill="#a9bdce" text-anchor="end">5/6</text>
+<g data-layer="acceptance" data-status="passed"><title>Обнаружение, изоляция и протокол</title><rect x="22" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Предложения и доступность с игроком</title><rect x="37" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Визитка, блокнот и сохранение</title><rect x="52" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Подарок, отказ и атомарность</title><rect x="67" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Партия и выход</title><rect x="82" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Два независимых хоста</title><rect x="97" y="427" width="13" height="13" fill="#63707a"/></g>
+<rect x="317" y="403" width="294" height="49" fill="#1b242c"/>
+<text x="325" y="420" font-size="12" fill="#edf3f8">Связки подсистем</text>
+<text x="603" y="420" font-size="11" fill="#a9bdce" text-anchor="end">5/7</text>
+<g data-layer="acceptance" data-status="passed"><title>Готовность актёра → ввод → кадр → занятие</title><rect x="325" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Запуск → профиль → комната</title><rect x="340" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Разговор → словарь → блокнот → слот</title><rect x="355" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Меню → сцена → возвращение</title><rect x="370" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Слот → смена даты → событие → новый слот</title><rect x="385" y="427" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Встреча → игровой результат → повторная загрузка</title><rect x="400" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Полнота перечня функций и переходов</title><rect x="415" y="427" width="13" height="13" fill="#63707a"/></g>
+<text x="14" y="472" font-size="15" fill="#edf3f8">Code inventory</text>
+<rect x="14" y="482" width="9" height="9" fill="#2f9b53"/>
+<text x="28" y="490" font-size="11" fill="#edf3f8">Branch or ID check present</text>
+<rect x="232" y="482" width="9" height="9" fill="#63707a"/>
+<text x="246" y="490" font-size="11" fill="#edf3f8">Branch absent</text>
+<rect x="450" y="482" width="9" height="9" fill="#477fac"/>
+<text x="464" y="490" font-size="11" fill="#edf3f8">Windows source file</text>
+<rect x="14" y="499" width="294" height="94" fill="#1b242c"/>
+<text x="22" y="516" font-size="12" fill="#edf3f8">KSC opcodes</text>
+<text x="300" y="516" font-size="11" fill="#a9bdce" text-anchor="end">142/142</text>
+<g data-layer="dispatch" data-status="present"><title>0x0B</title><rect x="22" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0C</title><rect x="32" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0D</title><rect x="42" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0E</title><rect x="52" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0F</title><rect x="62" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x10</title><rect x="72" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x11</title><rect x="82" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x12</title><rect x="92" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x13</title><rect x="102" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x14</title><rect x="112" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x15</title><rect x="122" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x18</title><rect x="132" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x19</title><rect x="142" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x1A</title><rect x="152" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x1B</title><rect x="162" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x1C</title><rect x="172" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x20</title><rect x="182" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x21</title><rect x="192" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x22</title><rect x="202" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x23</title><rect x="212" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x24</title><rect x="222" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x25</title><rect x="232" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x28</title><rect x="242" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x29</title><rect x="252" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x2C</title><rect x="262" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x2D</title><rect x="272" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x2E</title><rect x="282" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x2F</title><rect x="22" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x30</title><rect x="32" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x31</title><rect x="42" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x32</title><rect x="52" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x38</title><rect x="62" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x3A</title><rect x="72" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x3B</title><rect x="82" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x40</title><rect x="92" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x41</title><rect x="102" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x43</title><rect x="112" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x44</title><rect x="122" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x48</title><rect x="132" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x49</title><rect x="142" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x4A</title><rect x="152" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x4E</title><rect x="162" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x4F</title><rect x="172" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x50</title><rect x="182" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x51</title><rect x="192" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x52</title><rect x="202" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x53</title><rect x="212" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x54</title><rect x="222" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x55</title><rect x="232" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x56</title><rect x="242" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x57</title><rect x="252" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5A</title><rect x="262" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5B</title><rect x="272" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5C</title><rect x="282" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5D</title><rect x="22" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5E</title><rect x="32" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x5F</title><rect x="42" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x60</title><rect x="52" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x61</title><rect x="62" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x62</title><rect x="72" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x63</title><rect x="82" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x64</title><rect x="92" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x65</title><rect x="102" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x66</title><rect x="112" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x67</title><rect x="122" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x68</title><rect x="132" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x69</title><rect x="142" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x6A</title><rect x="152" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x6B</title><rect x="162" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x6C</title><rect x="172" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x6D</title><rect x="182" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x70</title><rect x="192" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x71</title><rect x="202" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x72</title><rect x="212" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x73</title><rect x="222" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x75</title><rect x="232" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x78</title><rect x="242" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x80</title><rect x="252" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x81</title><rect x="262" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x82</title><rect x="272" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x83</title><rect x="282" y="543" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x84</title><rect x="22" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x85</title><rect x="32" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x86</title><rect x="42" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x87</title><rect x="52" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x88</title><rect x="62" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x89</title><rect x="72" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8A</title><rect x="82" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8B</title><rect x="92" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8C</title><rect x="102" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8D</title><rect x="112" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8E</title><rect x="122" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x8F</title><rect x="132" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x90</title><rect x="142" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x91</title><rect x="152" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x92</title><rect x="162" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x93</title><rect x="172" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x94</title><rect x="182" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x95</title><rect x="192" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x96</title><rect x="202" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x97</title><rect x="212" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x98</title><rect x="222" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x99</title><rect x="232" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x9A</title><rect x="242" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xA0</title><rect x="252" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB0</title><rect x="262" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB1</title><rect x="272" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB2</title><rect x="282" y="553" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB3</title><rect x="22" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB4</title><rect x="32" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB8</title><rect x="42" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xB9</title><rect x="52" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xBA</title><rect x="62" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xBB</title><rect x="72" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xBC</title><rect x="82" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xBD</title><rect x="92" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC0</title><rect x="102" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC1</title><rect x="112" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC2</title><rect x="122" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC3</title><rect x="132" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC4</title><rect x="142" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC5</title><rect x="152" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC8</title><rect x="162" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xC9</title><rect x="172" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD0</title><rect x="182" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD1</title><rect x="192" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD2</title><rect x="202" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD4</title><rect x="212" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD5</title><rect x="222" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD6</title><rect x="232" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xD7</title><rect x="242" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xE0</title><rect x="252" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xE1</title><rect x="262" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xE2</title><rect x="272" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xE3</title><rect x="282" y="563" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF0</title><rect x="22" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF4</title><rect x="32" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF5</title><rect x="42" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF6</title><rect x="52" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF7</title><rect x="62" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xFC</title><rect x="72" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xFD</title><rect x="82" y="573" width="8" height="8" fill="#2f9b53"/></g>
+<rect x="317" y="499" width="294" height="94" fill="#1b242c"/>
+<text x="325" y="516" font-size="12" fill="#edf3f8">KSC built-ins</text>
+<text x="603" y="516" font-size="11" fill="#a9bdce" text-anchor="end">42/42</text>
+<g data-layer="dispatch" data-status="present"><title>0x01</title><rect x="325" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x02</title><rect x="335" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x03</title><rect x="345" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x04</title><rect x="355" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x05</title><rect x="365" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x06</title><rect x="375" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x07</title><rect x="385" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x08</title><rect x="395" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x09</title><rect x="405" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0A</title><rect x="415" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0B</title><rect x="425" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0C</title><rect x="435" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0D</title><rect x="445" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x0E</title><rect x="455" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x10</title><rect x="465" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x11</title><rect x="475" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x20</title><rect x="485" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x21</title><rect x="495" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x22</title><rect x="505" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x23</title><rect x="515" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x24</title><rect x="525" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x26</title><rect x="535" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x27</title><rect x="545" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x35</title><rect x="555" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x40</title><rect x="565" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x42</title><rect x="575" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x50</title><rect x="585" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x51</title><rect x="325" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x52</title><rect x="335" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x53</title><rect x="345" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x60</title><rect x="355" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x61</title><rect x="365" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x62</title><rect x="375" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x63</title><rect x="385" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x70</title><rect x="395" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x71</title><rect x="405" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x72</title><rect x="415" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x80</title><rect x="425" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x90</title><rect x="435" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0x91</title><rect x="445" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xA0</title><rect x="455" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>0xF0</title><rect x="465" y="533" width="8" height="8" fill="#2f9b53"/></g>
+<rect x="620" y="499" width="294" height="94" fill="#1b242c"/>
+<text x="628" y="516" font-size="12" fill="#edf3f8">Room GAME IDs</text>
+<text x="906" y="516" font-size="11" fill="#a9bdce" text-anchor="end">23/23</text>
+<g data-layer="dispatch" data-status="present"><title>GAME6</title><rect x="628" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME7</title><rect x="638" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME12</title><rect x="648" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME21</title><rect x="658" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME22</title><rect x="668" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME23</title><rect x="678" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME26</title><rect x="688" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME27</title><rect x="698" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME28</title><rect x="708" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME36</title><rect x="718" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME37</title><rect x="728" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME40</title><rect x="738" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME41</title><rect x="748" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME42</title><rect x="758" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME43</title><rect x="768" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME44</title><rect x="778" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME45</title><rect x="788" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME49</title><rect x="798" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME62</title><rect x="808" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME68</title><rect x="818" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME72</title><rect x="828" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME73</title><rect x="838" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<g data-layer="dispatch" data-status="present"><title>GAME75</title><rect x="848" y="523" width="8" height="8" fill="#2f9b53"/></g>
+<rect x="14" y="602" width="218" height="61" fill="#1b242c"/>
+<text x="22" y="619" font-size="12" fill="#edf3f8">dokodemo-core / core</text>
+<text x="224" y="619" font-size="11" fill="#a9bdce" text-anchor="end">1</text>
+<g data-layer="file" data-status="file"><title>src/core/cp932.cpp</title><rect x="22" y="626" width="7" height="7" fill="#477fac"/></g>
+<rect x="241" y="602" width="218" height="61" fill="#1b242c"/>
+<text x="249" y="619" font-size="12" fill="#edf3f8">dokodemo-core / gameplay</text>
+<text x="451" y="619" font-size="11" fill="#a9bdce" text-anchor="end">64</text>
+<g data-layer="file" data-status="file"><title>src/gameplay/controller_input.cpp</title><rect x="249" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/boot_to_display.cpp</title><rect x="258" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/display.cpp</title><rect x="267" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/first_frame.cpp</title><rect x="276" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/first_frame_logos.cpp</title><rect x="285" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/gui_title_state.cpp</title><rect x="294" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/title_renderer.cpp</title><rect x="303" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/radial_wipe.cpp</title><rect x="312" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/pokepi_models.cpp</title><rect x="321" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/pokepi_raster.cpp</title><rect x="330" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/nickname_owner.cpp</title><rect x="339" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/profile_date.cpp</title><rect x="348" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/profile_fields.cpp</title><rect x="357" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/profile_adoption.cpp</title><rect x="366" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/ksc_save_graph.cpp</title><rect x="375" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/retail_save_profile.cpp</title><rect x="384" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/retail_savedata_envelope.cpp</title><rect x="393" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/retail_save_slot.cpp</title><rect x="402" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/retail_slot_files.cpp</title><rect x="411" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/retail_savedata_crypto.cpp</title><rect x="420" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_calendar_items.cpp</title><rect x="429" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_scene_rows.cpp</title><rect x="438" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_scene_models.cpp</title><rect x="249" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_motion_effects.cpp</title><rect x="258" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_save_owners.cpp</title><rect x="267" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/post_profile.cpp</title><rect x="276" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/roof_scene.cpp</title><rect x="285" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/roof_signs.cpp</title><rect x="294" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/cold_room_actor.cpp</title><rect x="303" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_friends_banner.cpp</title><rect x="312" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_friends.cpp</title><rect x="321" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_record_exchange.cpp</title><rect x="330" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_shiritori.cpp</title><rect x="339" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_talk_state.cpp</title><rect x="348" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_activity_selector.cpp</title><rect x="357" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_activity_phase.cpp</title><rect x="366" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_answer_renderer.cpp</title><rect x="375" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_input_gate.cpp</title><rect x="384" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_activity_event.cpp</title><rect x="393" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_activity_topic_history.cpp</title><rect x="402" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_exchange_save.cpp</title><rect x="411" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_rumor_save.cpp</title><rect x="420" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_messages.cpp</title><rect x="429" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_conversation_flow.cpp</title><rect x="438" y="635" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_vocabulary.cpp</title><rect x="249" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_entry.cpp</title><rect x="258" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_renderer.cpp</title><rect x="267" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_menu.cpp</title><rect x="276" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_options.cpp</title><rect x="285" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_options_renderer.cpp</title><rect x="294" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_notebook.cpp</title><rect x="303" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_notebook_extra.cpp</title><rect x="312" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_notebook_diary.cpp</title><rect x="321" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_notebook_renderer.cpp</title><rect x="330" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_conversion.cpp</title><rect x="339" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_reading.cpp</title><rect x="348" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_history.cpp</title><rect x="357" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_learned_word.cpp</title><rect x="366" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_fallback_list.cpp</title><rect x="375" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_word_traits.cpp</title><rect x="384" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_talk_renderer.cpp</title><rect x="393" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_inventory.cpp</title><rect x="402" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_inventory_renderer.cpp</title><rect x="411" y="644" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/room_item_placement.cpp</title><rect x="420" y="644" width="7" height="7" fill="#477fac"/></g>
+<rect x="468" y="602" width="218" height="61" fill="#1b242c"/>
+<text x="476" y="619" font-size="12" fill="#edf3f8">dokodemo-core / recovered</text>
+<text x="678" y="619" font-size="11" fill="#a9bdce" text-anchor="end">23</text>
+<g data-layer="file" data-status="file"><title>src/recovered/audio_sessions.cpp</title><rect x="476" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/startup_modules.cpp</title><rect x="485" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/startup_flow_native.cpp</title><rect x="494" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/audiocodec_module_native.cpp</title><rect x="503" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/module_manager_native.cpp</title><rect x="512" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/atrac3plus_module_native.cpp</title><rect x="521" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/game_primitives.cpp</title><rect x="530" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/menu_primitives.cpp</title><rect x="539" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/calendar_native.cpp</title><rect x="548" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/service47_native.cpp</title><rect x="557" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/bulk_array_native.cpp</title><rect x="566" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/manager_queue_native.cpp</title><rect x="575" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/string_native.cpp</title><rect x="584" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/service48_native.cpp</title><rect x="593" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/context_owner_native.cpp</title><rect x="602" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/context_callback_native.cpp</title><rect x="611" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/clock_native.cpp</title><rect x="620" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/service39_native.cpp</title><rect x="629" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/producer_native.cpp</title><rect x="638" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/array98_native.cpp</title><rect x="647" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/rng_native.cpp</title><rect x="656" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/current_tables_native.cpp</title><rect x="665" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/recovered/package_storage_native.cpp</title><rect x="476" y="635" width="7" height="7" fill="#477fac"/></g>
+<rect x="695" y="602" width="218" height="61" fill="#1b242c"/>
+<text x="703" y="619" font-size="12" fill="#edf3f8">dokodemo-core / src</text>
+<text x="905" y="619" font-size="11" fill="#a9bdce" text-anchor="end">4</text>
+<g data-layer="file" data-status="file"><title>src/core_hash.cpp</title><rect x="703" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/script_vm.cpp</title><rect x="712" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/startup_probe.cpp</title><rect x="721" y="626" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/model_formats.cpp</title><rect x="730" y="626" width="7" height="7" fill="#477fac"/></g>
+<rect x="14" y="672" width="218" height="43" fill="#1b242c"/>
+<text x="22" y="689" font-size="12" fill="#edf3f8">dokodemo-win32 / gameplay</text>
+<text x="224" y="689" font-size="11" fill="#a9bdce" text-anchor="end">4</text>
+<g data-layer="file" data-status="file"><title>src/gameplay/controller_input_win32.cpp</title><rect x="22" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/display_win32.cpp</title><rect x="31" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/title_bgm.cpp</title><rect x="40" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/gameplay/title_effects.cpp</title><rect x="49" y="696" width="7" height="7" fill="#477fac"/></g>
+<rect x="241" y="672" width="218" height="43" fill="#1b242c"/>
+<text x="249" y="689" font-size="12" fill="#edf3f8">dokodemo-win32 / platform</text>
+<text x="451" y="689" font-size="11" fill="#a9bdce" text-anchor="end">4</text>
+<g data-layer="file" data-status="file"><title>src/platform/audio_ffmpeg_win32.cpp</title><rect x="249" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/platform/startup_modules_win32.cpp</title><rect x="258" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/platform/room_meeting_win32.cpp</title><rect x="267" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/platform/room_meeting_crypto_win32.cpp</title><rect x="276" y="696" width="7" height="7" fill="#477fac"/></g>
+<rect x="468" y="672" width="218" height="43" fill="#1b242c"/>
+<text x="476" y="689" font-size="12" fill="#edf3f8">dokodemo-win32 / src</text>
+<text x="678" y="689" font-size="11" fill="#a9bdce" text-anchor="end">5</text>
+<g data-layer="file" data-status="file"><title>src/audio_native.cpp</title><rect x="476" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/clock_backend_win32.cpp</title><rect x="485" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/startup_runtime_win32.cpp</title><rect x="494" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/startup_memory_backend_win32.cpp</title><rect x="503" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/rng_backend_win32.cpp</title><rect x="512" y="696" width="7" height="7" fill="#477fac"/></g>
+<rect x="695" y="672" width="218" height="43" fill="#1b242c"/>
+<text x="703" y="689" font-size="12" fill="#edf3f8">dokodemo-game</text>
+<text x="905" y="689" font-size="11" fill="#a9bdce" text-anchor="end">2</text>
+<g data-layer="file" data-status="file"><title>src/game/main_win32.cpp</title><rect x="703" y="696" width="7" height="7" fill="#477fac"/></g>
+<g data-layer="file" data-status="file"><title>src/game/verify_startup_room.cpp</title><rect x="712" y="696" width="7" height="7" fill="#477fac"/></g>
 </g>
 </svg>

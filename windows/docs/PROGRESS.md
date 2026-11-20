@@ -13,14 +13,14 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **50 of 60** requirements verified and 10 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The README badge shows how many feature tiles have a basic or better implementation, how many are byte-exact within the recorded scope, and how many Windows acceptance requirements have passed. The map shows feature groups, Windows acceptance requirements, and the native code inventory. The KSC section counts active opcode and built-in IDs with a branch in the native room dispatcher. The current total is **50 of 60** requirements verified and 10 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
 Run from the `windows` directory to rebuild the map and badges and refresh the main README from the checked-in snapshots:
 
 ```powershell
-python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --code-badge docs/native-code-progress.svg --overview docs/native-code-map.svg --readme ../README.md
+python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --code-badge docs/native-code-progress.svg --overview docs/native-code-map.svg --map-badge docs/native-map-progress.svg --readme ../README.md
 ```
 
 With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.

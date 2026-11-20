@@ -50,6 +50,35 @@
 #native-coverage [hidden]{display:none}
 @media(max-width:320px){#native-coverage .tiles{grid-template-columns:repeat(5,minmax(0,1fr))}}
 </style>
+<header class="rail">
+  <strong class="total"></strong>
+  <p class="verdict" aria-live="polite" style="margin:0"></p>
+  <div class="legend implementation-legend" aria-label="Статусы реализации"></div>
+</header>
+<div class="map implementation-map" aria-label="Группы функций"></div>
+<div class="detail implementation-detail" aria-live="polite">
+  <h3></h3>
+  <p class="state"></p>
+  <p class="description"></p>
+  <p class="evidence"></p>
+  <ul class="related" aria-label="Связанные требования"></ul>
+</div>
+<section class="verification" aria-labelledby="native-verification-heading">
+  <header class="verification-head">
+    <h3 id="native-verification-heading">Windows acceptance</h3>
+    <label><input type="checkbox" class="open-only"> Только открытые требования</label>
+  </header>
+  <div class="legend check-legend" aria-label="Статусы проверок"></div>
+  <div class="map check-map" aria-label="Проверки по подсистемам"></div>
+  <div class="detail check-detail" aria-live="polite">
+    <h4></h4>
+    <p class="check-state"></p>
+    <p class="check-expect"></p>
+    <p class="check-gap" hidden></p>
+    <p class="check-tests evidence" hidden></p>
+    <p class="check-requires" hidden></p>
+  </div>
+</section>
 <section class="code-inventory" aria-labelledby="native-code-heading">
   <h2 id="native-code-heading">Карта кода</h2>
   <p class="code-scope">Один квадрат — один ID команды, встроенной функции или вызова GAME. Зелёные квадраты показывают ветки или проверки ID в коде комнаты. Слоты BOOT с общим обработчиком по умолчанию исключены.</p>
@@ -66,40 +95,11 @@
     <p class="code-location evidence"></p>
   </div>
 </section>
-<header class="rail">
-  <strong class="total"></strong>
-  <p class="verdict" aria-live="polite" style="margin:0"></p>
-  <div class="legend implementation-legend" aria-label="Статусы реализации"></div>
-</header>
-<div class="map implementation-map" aria-label="Группы функций"></div>
-<div class="detail implementation-detail" aria-live="polite">
-  <h3></h3>
-  <p class="state"></p>
-  <p class="description"></p>
-  <p class="evidence"></p>
-  <ul class="related" aria-label="Связанные требования"></ul>
-</div>
-<section class="verification" aria-labelledby="native-verification-heading">
-  <header class="verification-head">
-    <h3 id="native-verification-heading">Проверка сборки</h3>
-    <label><input type="checkbox" class="open-only"> Только открытые требования</label>
-  </header>
-  <div class="legend check-legend" aria-label="Статусы проверок"></div>
-  <div class="map check-map" aria-label="Проверки по подсистемам"></div>
-  <div class="detail check-detail" aria-live="polite">
-    <h4></h4>
-    <p class="check-state"></p>
-    <p class="check-expect"></p>
-    <p class="check-gap" hidden></p>
-    <p class="check-tests evidence" hidden></p>
-    <p class="check-requires" hidden></p>
-  </div>
-</section>
 <script type="application/json" class="coverage-data">__NATIVE_COVERAGE_DATA__</script>
 <script>
 (() => {
   const root = document.getElementById("native-coverage");
-  const {groups, verification, code} = JSON.parse(root.querySelector(".coverage-data").textContent);
+  const {groups, verification, code, progress} = JSON.parse(root.querySelector(".coverage-data").textContent);
   const codeLabels = {
     present:"Ветка найдена в коде комнаты",
     absent:"Ветка не найдена в коде комнаты",
@@ -153,8 +153,14 @@
   const markers = {missing:"·",basic:"✓",exact:"≡"};
   const all = groups.flatMap(group => group.items);
   const amount = status => all.filter(item => item.status === status).length;
-  const covered = amount("basic") + amount("exact");
-  root.querySelector(".total").textContent = covered + " из " + all.length + " с базовой реализацией или выше";
+  const ratio = (value, total) => new Intl.NumberFormat("ru", {
+    style: "percent", maximumFractionDigits: 1
+  }).format(value / total) + " (" + value + "/" + total + ")";
+  root.querySelector(".total").textContent = [
+    "Базовая или выше " + ratio(progress.implemented, progress.features),
+    "Побайтово точная " + ratio(progress.exact, progress.features),
+    "Windows acceptance " + ratio(progress.passed, progress.checks),
+  ].join(" · ");
   for (const [status, label] of Object.entries(labels)) {
     const piece = document.createElement("span");
     const swatch = document.createElement("i");
