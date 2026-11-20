@@ -2331,6 +2331,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 Require(argc<=stack_.size(),"Invalid KSC discard argument count");
                 stack_.resize(stack_.size()-argc);
                 result_={};
+            } else if(id==0x03 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::integer || value.kind==Kind::truth ||
+                        value.kind==Kind::nil || value.kind==Kind::calendar_time,
+                        "Invalid KSC scalar truth conversion");
+                result_={Kind::truth,value.data!=0};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
