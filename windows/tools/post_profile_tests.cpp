@@ -1910,6 +1910,8 @@ int main(int argc, char **argv) try {
         return CheckFinalDaySlot(argv[1],argv[3],true);
     if (argc==4 && std::string_view(argv[2])=="--final-day-slot")
         return CheckFinalDaySlot(argv[1],argv[3]);
+    if (argc==4 && std::string_view(argv[2])=="--calendar-seam")
+        return CheckCalendarSeam(argv[1],argv[3]);
     if (argc==3 && std::string_view(argv[2])=="--toro-ending-linked")
         return CheckToroLinkedStay(argv[1]);
     if (argc==6) {

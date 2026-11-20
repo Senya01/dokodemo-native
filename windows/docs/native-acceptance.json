@@ -821,12 +821,15 @@
             "save-all"
           ],
           "expect": "Единый тест проверяет смену дат, окончание пребывания и два холодных чтения со штатным управлением на контрольных точках.",
-          "gap": "Связка пока разбита на независимые проверки. Нужен единый автоматический сценарий с тем же слотом.",
           "requires": [
             "toro-calendar",
             "toro-ending",
             "save-recovery"
-          ]
+          ],
+          "tests": [
+            "game-seam-calendar"
+          ],
+          "evidence": "A fresh Toro profile recovered the previous protected save on cold startup, crossed November 30 to December 1 in the running room, and saved again through System. The same slot advanced through day 14 and the farewell. A separate cold process opened the departed room through Continue."
         },
         {
           "id": "seam-links",
@@ -924,7 +927,7 @@
     "startup-to-room": "passed",
     "contact-to-save": "passed",
     "out-and-back": "passed",
-    "seam-calendar": "blocked",
+    "seam-calendar": "passed",
     "seam-links": "passed",
     "model-completeness": "blocked"
   },
@@ -1001,7 +1004,8 @@
     "game-peer-shiritori": "passed",
     "game-seam-links": "passed",
     "game-save-recovery": "passed",
-    "game-toro-ending": "passed"
+    "game-toro-ending": "passed",
+    "game-seam-calendar": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1072,6 +1076,12 @@
       "routes_passed": 2,
       "routes_total": 2,
       "scope": "Windows Release, headless, null audio. Fresh Toro adoption and native daily saves; ordinary and extended endings branched from day 13. Controlled time, answers and extended-stay qualification before the fork; cold Continue in both branches."
+    },
+    "game-seam-calendar": {
+      "test_binary_sha256": "79e45dc65c7172cada506e1221a069948713c9edc400640781791f29eaeec9a4",
+      "routes_passed": 1,
+      "routes_total": 1,
+      "scope": "Windows Release, headless and null audio. Four independent processes used the same temporary installation. A real System save was staged as the previous generation with an incomplete sibling. Recovery preserved all six files. Controlled in-game month rollover, diary, days 2–14, farewell and cold Continue with restricted room controls."
     }
   }
 }

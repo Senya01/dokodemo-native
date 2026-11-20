@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The README badge shows how many feature tiles have a basic or better implementation, how many are byte-exact within the recorded scope, and how many Windows acceptance requirements have passed. The map shows feature groups, Windows acceptance requirements, and the native code inventory. The KSC section counts active opcode and built-in IDs with a branch in the native room dispatcher. The current total is **50 of 60** requirements verified and 10 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The README badge shows how many feature tiles have a basic or better implementation, how many are byte-exact within the recorded scope, and how many Windows acceptance requirements have passed. The map shows feature groups, Windows acceptance requirements, and the native code inventory. The KSC section counts active opcode and built-in IDs with a branch in the native room dispatcher. The current total is **51 of 60** requirements verified and 9 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, protected slot recovery, and the same slot across calendar rollover and farewell. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -24,6 +24,10 @@ python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs
 ```
 
 With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.
+
+## Calendar rollover on a recovered slot
+
+With local media configured, build the Release target `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-seam-calendar$' --output-on-failure`. The test starts with a fresh Toro profile and writes a real System save. In its temporary installation it moves that save to the recovery path and creates an incomplete staging file. An independent cold process recovers all six original files, crosses midnight from November 30 to December 1 while the room is active, opens the previous diary page, and saves day 2 through System. The same slot advances through day 14 and the farewell. A separate cold process uses Continue, opens the notebook in the departed room and returns to the title. Only the test's game clock is controlled. The four processes are headless and use null audio.
 
 ## Startup to Toro's room
 

@@ -1,11 +1,11 @@
 # dokodemo-native
 
 <!-- native-progress:start -->
-[![Native map progress](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-map-progress.svg?v=236eb62b506c)](windows/docs/native-coverage.html)
+[![Native map progress](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-map-progress.svg?v=978139aebd01)](windows/docs/native-coverage.html)
 
-**Native implementations: 68/68 basic or better, 1/68 byte-exact.** **Windows acceptance: 83.3% (50/60).**
+**Native implementations: 68/68 basic or better, 1/68 byte-exact.** **Windows acceptance: 85% (51/60).**
 
-[![Native port tile map](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-code-map.svg?v=056fa012a51e)](windows/docs/native-coverage.html)
+[![Native port tile map](https://raw.githubusercontent.com/Senya01/dokodemo-native/main/windows/docs/native-code-map.svg?v=6b3a30ac1501)](windows/docs/native-coverage.html)
 <!-- native-progress:end -->
 
 The figures are from recorded headless Windows Release checks. [Download the interactive map](windows/docs/native-coverage.html) or [read the acceptance scope](windows/docs/PROGRESS.md#acceptance-and-code-map).
