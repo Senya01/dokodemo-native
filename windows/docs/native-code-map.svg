@@ -156,7 +156,7 @@
 <rect x="82" y="138" width="8" height="8" fill="#63707a"/>
 <rect x="318" y="60" width="294" height="96" fill="#1b242c"/>
 <text x="326" y="79" font-size="13" fill="#edf3f8">KSC built-ins</text>
-<text x="604" y="79" font-size="12" fill="#a9bdce" text-anchor="end">27/42</text>
+<text x="604" y="79" font-size="12" fill="#a9bdce" text-anchor="end">28/42</text>
 <rect x="326" y="88" width="8" height="8" fill="#2f9b53"/>
 <rect x="336" y="88" width="8" height="8" fill="#2f9b53"/>
 <rect x="346" y="88" width="8" height="8" fill="#2f9b53"/>
@@ -192,7 +192,7 @@
 <rect x="376" y="98" width="8" height="8" fill="#63707a"/>
 <rect x="386" y="98" width="8" height="8" fill="#2f9b53"/>
 <rect x="396" y="98" width="8" height="8" fill="#63707a"/>
-<rect x="406" y="98" width="8" height="8" fill="#63707a"/>
+<rect x="406" y="98" width="8" height="8" fill="#2f9b53"/>
 <rect x="416" y="98" width="8" height="8" fill="#63707a"/>
 <rect x="426" y="98" width="8" height="8" fill="#63707a"/>
 <rect x="436" y="98" width="8" height="8" fill="#63707a"/>

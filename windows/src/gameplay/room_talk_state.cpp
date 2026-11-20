@@ -52,6 +52,30 @@ int IntegerCompound(unsigned op,int lhs,int rhs) {
     }
     throw std::runtime_error("Unknown KSC compound operation");
 }
+// BOOT 7C2D8 and 7C360 share the hiragana normalization table.
+std::string KanaEndpoint(std::string_view text,bool last) {
+    unsigned selected=0;
+    for(std::size_t i=0;i<text.size() && text[i]!=0;i+=2) {
+        if(i+1>=text.size() || text[i+1]==0) return {};
+        const auto lead=static_cast<unsigned char>(text[i]),trail=static_cast<unsigned char>(text[i+1]);
+        if(lead==0x81 && trail==0x5b) continue; // Long vowel mark.
+        if(lead!=0x82 || trail<0x9f || trail>0xf1) return {};
+        unsigned normalized=trail;
+        if(trail>=0xee && trail<=0xf0) {
+            constexpr unsigned legacy_vowels[]={0xa2,0xa6,0xa8};
+            normalized=legacy_vowels[trail-0xee];
+        } else if((trail>=0x9f && trail<=0xa7 && (trail&1u)) ||
+                  trail==0xe1 || trail==0xe3 || trail==0xe5 || trail==0xec) {
+            ++normalized;
+        } else if(trail==0xc1) { // Small tsu contributes no endpoint.
+            continue;
+        }
+        selected=normalized;
+        if(!last) break;
+    }
+    return selected ? std::string{static_cast<char>(0x82),static_cast<char>(selected)} : std::string{};
+}
+
 unsigned Word(const unsigned char* p,unsigned bytes) {
     unsigned v=0;
     for(unsigned i=0;i<bytes;++i) v|=unsigned(p[i])<<(8*i);
@@ -2391,6 +2415,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 const auto pos=query.empty()?std::string_view::npos:source.find(query);
                 result_=pos==0 || pos==std::string_view::npos
                     ? Value{} : Value{Kind::integer,ScriptInteger(unsigned(pos))};
+            } else if(id==0x71 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::string,"Invalid KSC first kana operand");
+                auto text=KanaEndpoint(value.text,false);
+                result_=text.empty()?Value{}:Value{Kind::string,0,std::move(text)};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
