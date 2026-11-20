@@ -1900,7 +1900,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(op==0x52) stack_.push_back(value);
             break;
         }
-        case 0x56: {
+        case 0x56: case 0x57: {
             auto source_ref=Pop();
             const auto target=Dereference(Pop()),source=Dereference(source_ref);
             Require(target.kind==Kind::array && source.kind==Kind::array && target.cells && source.cells,
