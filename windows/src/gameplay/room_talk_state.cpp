@@ -1736,6 +1736,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x92:
             stack_.push_back(script_locals_.at(Read(2)));
             break;
+        case 0x93: {
+            const unsigned index=Read(2);
+            Require(index<script_locals_.size(),"Invalid KSC local reference");
+            stack_.push_back({Kind::script_local_ref,int(index)});
+            break;
+        }
         case 0x94: case 0x95: {
             const int id=Read(2);
             const unsigned flags=contact_scripts[actor_number_].flags;
