@@ -2379,7 +2379,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             random_use_=RandomUse::procedure; phase_=Phase::random; return;
         }
         case 0x2c:
-        case 0x2d: {
+        case 0x2d:
+        case 0x2e: {
             // The argument-bearing direct form places the count first and
             // the owner after the index. The other forms start with the owner.
             unsigned argc=0,table=0,index=0;
