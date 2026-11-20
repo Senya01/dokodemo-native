@@ -1239,7 +1239,7 @@ void RoomTalkState::ReturnFromGreeting() {
     phase_=Phase::done;
 }
 
-void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) {
+void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result) {
     const auto argc=args.size();
     const auto* source=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
     if(scheduled_room_event_ && ((robo_greeting_ && target==0x1a89 && pc_==0x676b5) ||
@@ -1597,7 +1597,8 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
     }
     callers_.push_back({pc_,std::move(locals_),indirect_topic_});
     if (indirect) indirect_topic_=target;
-    pc_=target; locals_=std::move(args); result_={};
+    pc_=target; locals_=std::move(args);
+    if(!preserve_result) result_={};
 }
 
 int RoomTalkState::ApplyArrayRecords(bool filtered) {
@@ -1709,6 +1710,41 @@ void RoomTalkState::InitializeArray(unsigned opcode) {
             "Invalid KSC array initializer");
     // 6B554 consumes stack arguments in reverse and overwrites the leading cells.
     for(unsigned i=unsigned(count.data);i>0;--i) cells->at(begin+i-1)=Pop();
+}
+
+void RoomTalkState::RememberProcedure(unsigned table,unsigned index,unsigned target) {
+    const auto remember=[target](std::vector<Value>& cells,std::size_t first,std::size_t count,
+                                 std::size_t& cursor) {
+        // BOOT 77354 stores the code value at the current index, then
+        // advances the index modulo the positive signed 14-bit length.
+        Require(count && count<0x2000 && cursor<count && first<=cells.size() &&
+                count<=cells.size()-first,"Invalid KSC procedure ring");
+        cells[first+cursor]={Kind::code,int(target)};
+        cursor=(cursor+1)%count;
+    };
+    switch(table) {
+    case 1:
+    case 4: {
+        auto& row=table==1?locals_.at(index):friends_cells_.at(index);
+        Require(row.kind==Kind::array && row.cells,"Expected an owned KSC procedure ring");
+        remember(*row.cells,0,row.cells->size(),row.procedure_cursor);
+        break;
+    }
+    case 2: {
+        auto& row=script_locals_.at(index);
+        Require(row.kind==Kind::script_local_array && row.depth==index && row.data>0,
+                "Invalid KSC script-local procedure ring");
+        remember(script_locals_,index+1,unsigned(row.data),row.procedure_cursor);
+        break;
+    }
+    case 3: {
+        auto& row=global_arrays_.at(index);
+        remember(row,0,row.size(),global_procedure_cursors_[index]);
+        break;
+    }
+    default:
+        throw std::runtime_error("Unsupported KSC procedure ring owner");
+    }
 }
 
 void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
@@ -2341,6 +2377,33 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             pending_procedure_arguments_=arguments;
             random_bound_=static_cast<unsigned>(procedure_lists_.at(table).size());
             random_use_=RandomUse::procedure; phase_=Phase::random; return;
+        }
+        case 0x2c: {
+            // The argument-bearing direct form places the count first and
+            // the owner after the index. The other forms start with the owner.
+            unsigned argc=0,table=0,index=0;
+            if((op&3)==0) {
+                argc=Read(1); index=Read(2); table=Read(1);
+            } else {
+                table=Read(1); index=Read(2);
+                if((op&3)==2) argc=Read(1);
+            }
+            const bool indirect=(op&2)!=0;
+            unsigned target=indirect?0:Read(3);
+            Require(stack_.size()>=argc+unsigned(indirect),"Insufficient KSC procedure ring arguments");
+            if(indirect) {
+                const auto& selected=stack_[stack_.size()-argc-1];
+                Require(selected.kind==Kind::code && selected.data>=0 && selected.data<=0x00ffffff,
+                        "Invalid KSC procedure ring target");
+                target=unsigned(selected.data);
+            }
+            RememberProcedure(table,index,target);
+            std::vector<Value> args(argc);
+            for(unsigned i=argc;i>0;--i) args[i-1]=Pop();
+            if(indirect) (void)Pop();
+            Call(target,std::move(args),false,true);
+            if(phase_!=Phase::running) return;
+            break;
         }
         case 0x20: case 0x21: case 0x22: case 0x23: {
             const unsigned argc=(op==0x20 || op==0x22)?Read(1):0;

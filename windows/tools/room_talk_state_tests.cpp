@@ -398,7 +398,75 @@ struct RoomTalkOpcodeTests {
         CheckValue(interpreter.stack_[2],Kind::integer,51,opcode);
     }
 
+    static void ProcedureRingCall(unsigned char opcode,unsigned owner) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        const unsigned index=owner==1?0:0x102;
+        const auto lo=static_cast<unsigned char>(index&255);
+        const auto hi=static_cast<unsigned char>(index>>8);
+        const auto scope=static_cast<unsigned char>(owner);
+        auto cells=std::make_shared<std::vector<Value>>(2);
+        if(owner==1) vm.locals_={{Kind::array,0,{},0,cells}};
+        if(owner==2) {
+            vm.script_locals_.resize(index+3);
+            vm.script_locals_[index]={Kind::script_local_array,2,{},index};
+        }
+        if(owner==3) vm.global_arrays_[index].resize(2);
+        if(owner==4) vm.friends_cells_[index]={Kind::array,0,{},0,cells};
+        const auto slot=[&](unsigned i) -> const Value& {
+            if(owner==2) return vm.script_locals_.at(index+1+i);
+            if(owner==3) return vm.global_arrays_.at(index).at(i);
+            return cells->at(i);
+        };
+
+        const unsigned char argc=(opcode&1U)?0:2;
+        for(unsigned call=0;call<3;++call) {
+            constexpr unsigned entry=0x10;
+            const auto target=static_cast<unsigned char>(0x50+call*0x10);
+            std::vector<unsigned char> program;
+            switch(opcode) {
+            case 0x2c: program={opcode,argc,lo,hi,scope,target,0,0}; break;
+            default: throw std::runtime_error("Unexpected KSC procedure ring test command");
+            }
+            const unsigned resume=entry+unsigned(program.size());
+            program.insert(program.end(),{0x89,0x43});
+            vm.code_.insert_or_assign(entry,std::move(program));
+            std::vector<unsigned char> callee{0x30,argc,0x43};
+            if(argc) callee.insert(callee.end(),{0x90,1,0,0x70});
+            callee.push_back(0x31);
+            vm.code_.emplace(target,std::move(callee));
+            vm.pc_=entry;
+            vm.result_={Kind::integer,65};
+            vm.stack_={{Kind::integer,63}};
+            if(opcode&2U) vm.stack_.push_back({Kind::code,target});
+            if(argc) {
+                vm.stack_.push_back({Kind::integer,71});
+                vm.stack_.push_back({Kind::integer,72});
+            }
+
+            vm.Step(0,true,true,nullptr,false);
+            if(!vm.error_.empty() || vm.pc_!=unsigned(target)+3 || vm.callers_.size()!=1 ||
+               vm.callers_.back().resume!=resume || vm.stack_.size()!=1 || vm.locals_.size()!=argc)
+                throw std::runtime_error("KSC procedure ring did not enter its callee: "+vm.error_);
+            CheckValue(slot(call%2),Kind::code,target,opcode);
+            if(call) CheckValue(slot((call-1)%2),Kind::code,target-0x10,opcode);
+            CheckValue(vm.result_,Kind::integer,65,opcode);
+            if(argc) {
+                CheckValue(vm.locals_[0],Kind::integer,71,opcode);
+                CheckValue(vm.locals_[1],Kind::integer,72,opcode);
+            }
+
+            vm.Step(0,true,true,nullptr,false);
+            if(!vm.error_.empty() || vm.pc_!=resume+2 || !vm.callers_.empty() || vm.stack_.size()!=2)
+                throw std::runtime_error("KSC procedure ring did not return to its caller: "+vm.error_);
+            CheckValue(vm.stack_[0],Kind::integer,63,opcode);
+            CheckValue(vm.stack_[1],Kind::integer,argc?72:65,opcode);
+        }
+    }
+
     static void Run() {
+        ProcedureRingCall(0x2c,1);
         CallbackReturn(0x32);
         CallbackReturn(0x1c);
         CallbackReturn(0x1c,false);

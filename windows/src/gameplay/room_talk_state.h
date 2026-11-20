@@ -188,6 +188,7 @@ private:
         std::shared_ptr<std::vector<Value>> cells;
         std::vector<RoomMessageWord> word_operands;
         std::shared_ptr<std::map<std::string,Value>> entries;
+        std::size_t procedure_cursor=0;
     };
     struct Frame { unsigned resume; std::vector<Value> locals; unsigned indirect_topic; };
     Phase phase_=Phase::unsupported;
@@ -199,9 +200,11 @@ private:
     std::map<unsigned,std::vector<unsigned>> procedure_lists_;
     // Mutable NEKO arrays belong to this script instance across room contacts.
     std::map<unsigned,std::vector<Value>> global_arrays_;
+    std::map<unsigned,std::size_t> global_procedure_cursors_;
     std::vector<Value> script_locals_;
     void LoadScriptLocals(const std::filesystem::path& dir);
     void InitializeArray(unsigned opcode);
+    void RememberProcedure(unsigned table,unsigned index,unsigned target);
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;
@@ -332,7 +335,7 @@ private:
     void Assign(const Value& ref,Value value);
     int ApplyArrayRecords(bool filtered);
     void Execute(recovered::RngNativeOwner* rng);
-    void Call(unsigned target,std::vector<Value> args,bool indirect);
+    void Call(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result=false);
     void ReturnFromGreeting();
     struct NamedSchedule {
         unsigned table, wrapper, contact_cleanup;

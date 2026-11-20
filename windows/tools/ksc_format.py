@@ -20,6 +20,7 @@ NO_IMMEDIATE = set(bytes.fromhex(
     "C0 C1 C2 C3 C4 C5 C8 C9 D0 D1 D2 D4 D5 D6 D7 E0 E1 E2 E3 F0 F4 F5 FC FD"))
 FIXED = {0x10: 3, 0x11: 3, 0x12: 3, 0x15: 3, 0x18: 3,
          0x20: 4, 0x21: 3, 0x22: 1, 0x28: 4, 0x29: 3,
+         0x2C: 7,
          0x30: 1, 0x4E: 4, 0x71: 2, 0x72: 2, 0x73: 2, 0x75: 2,
          0x80: 1, 0x81: 2, 0x82: 3, 0x83: 4, 0x88: 3, 0x8A: 3, 0x8B: 2,
          **{op: 2 for op in range(0x90, 0x9A)}, 0xA0: 1}
@@ -145,6 +146,9 @@ def parse_code(data):
                 row["references"].append(dict(at=start + 1, width=3, kind="code", target=read_uint(data, start + 1, 3, limit)))
             elif opcode in (0x20, 0x28):
                 row["references"].append(dict(at=start + 2, width=3, kind="code", target=read_uint(data, start + 2, 3, limit)))
+            elif opcode == 0x2C:
+                at = start + 5
+                row["references"].append(dict(at=at, width=3, kind="code", target=read_uint(data, at, 3, limit)))
             elif opcode == 0x88:
                 row["references"].append(dict(at=start + 1, width=3, kind="pool", target=read_uint(data, start + 1, 3, limit)))
         if pos > limit:
