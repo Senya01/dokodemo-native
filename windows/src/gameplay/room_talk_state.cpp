@@ -2209,6 +2209,10 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             script_timer_base_=script_ticks_+unsigned(ScriptInteger(unsigned(offset.data)));
             break;
         }
+        case 0x43:
+            // 6E684 has no operand. It sets the deadline to the next tick.
+            script_deadline_=script_ticks_+1;
+            return;
         case 0x44:
             delay_=Pop().data;
             if(queued_outing_callback_ && site==0x1c69) {
