@@ -346,18 +346,41 @@ def project_named_intro(bits, boot, species):
     return bytes(result)
 
 
+def project_local_table(bits):
+    header = parse_header(bits)
+    words = struct.unpack_from(f"<{header.local_count}I", bits, header.pool_end)
+    result = bytearray(struct.pack("<H",len(words)))
+    for index, word in enumerate(words):
+        tag, value = word >> 28, word & 0x0fffffff
+        if word == 0:
+            result.extend(struct.pack("<BH",0,0))
+        elif tag == 9:
+            require(value <= 0xfff and index + value < len(words),"Invalid room KSC local array")
+            result.extend(struct.pack("<BH",9,value))
+        else:
+            require(tag == 5 and value < header.pool_size,"Unknown room KSC local cell")
+            start = header.pool_start + value
+            text = bits[start:bits.index(b"\0",start,header.pool_end)]
+            result.extend(struct.pack("<BH",5,len(text)) + text)
+    return result
+
+
 def room_talk_media(root,boot):
-    pkg = BparArchive(root.payload(root.by_name("KSNEKO.BPM")))
-    script = pkg.payload(pkg.by_name("NEKO.KSC"))
-    image = Region(project_toro_intro(script.read(0, script.size),boot))
-    robo = BparArchive(root.payload(root.by_name("KSROBO.BPM")))
-    actor = robo.payload(robo.by_name("ROBO.KSC"))
-    robo_image = Region(project_robo_intro(actor.read(0,actor.size),boot))
-    files = {Path("assets/game/post-profile/toro-introduction.bin"): (image,image.sha256()),
-             Path("assets/game/post-profile/robo-introduction.bin"): (robo_image,robo_image.sha256())}
-    for species in NAMED_INTROS:
+    files = {}
+    locals_blob = bytearray(b"RLS1")
+    for species in ("NEKO","ROBO","USAGI","INU","KAERU"):
         archive = BparArchive(root.payload(root.by_name("KS"+species+".BPM")))
         actor = archive.payload(archive.by_name(species+".KSC"))
-        projected = Region(project_named_intro(actor.read(0,actor.size),boot,species))
-        files[Path(f"assets/game/post-profile/{species.lower()}-introduction.bin")] = projected, projected.sha256()
+        bits = actor.read(0,actor.size)
+        if species == "NEKO":
+            name, projected = "toro", project_toro_intro(bits,boot)
+        elif species == "ROBO":
+            name, projected = "robo", project_robo_intro(bits,boot)
+        else:
+            name, projected = species.lower(), project_named_intro(bits,boot,species)
+        image = Region(projected)
+        files[Path(f"assets/game/post-profile/{name}-introduction.bin")] = image, image.sha256()
+        locals_blob.extend(project_local_table(bits))
+    locals_image = Region(bytes(locals_blob))
+    files[Path("assets/game/post-profile/room-ksc-locals.bin")] = locals_image, locals_image.sha256()
     return files

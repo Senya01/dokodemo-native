@@ -2,6 +2,8 @@
 
 This source tree builds the standalone native Windows game, `dokodemo-game.exe`. The [progress report](docs/PROGRESS.md) covers all five Poképi, save and resume, outings, conversations, and Windows peer meetings. The root CMake project builds the earlier recovery application.
 
+The room KSC component tests use the local-table projection generated from your own media. Regenerate older prepared packages to add the new projection.
+
 ## Build
 
 Install Visual Studio 2022 with Desktop development with C++, a Windows SDK, CMake 3.21 or newer, and Python 3.10 or newer. Run these commands from this directory.

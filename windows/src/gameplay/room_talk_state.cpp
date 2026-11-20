@@ -168,11 +168,51 @@ void RoomTalkState::RestoreContactHistory(const std::array<KscSaveValue,3>& tabl
     outing_enabled_=progress[1].word & 0x0fffffffu;
 }
 
+void RoomTalkState::LoadScriptLocals(const std::filesystem::path& dir) {
+    std::ifstream file(dir/"room-ksc-locals.bin",std::ios::binary|std::ios::ate);
+    if(!file) return; // Earlier media can still run paths that never use these cells.
+    const auto size=file.tellg();
+    Require(size>=4 && size<=65536,"Invalid KSC local table size");
+    std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+    Require(bool(file.seekg(0).read(reinterpret_cast<char*>(bytes.data()),size)) &&
+            std::string_view(reinterpret_cast<const char*>(bytes.data()),4)=="RLS1",
+            "Invalid KSC local table format");
+    std::size_t at=4;
+    const auto read=[&](unsigned count) {
+        Require(count<=bytes.size()-at,"Truncated KSC local table");
+        const unsigned value=Word(bytes.data()+at,count);
+        at+=count;
+        return value;
+    };
+    for(unsigned actor=0;actor<5;++actor) {
+        const unsigned count=read(2);
+        std::vector<Value> table;
+        for(unsigned i=0;i<count;++i) {
+            const unsigned tag=read(1),length=read(2);
+            if(tag==5) {
+                Require(length<=bytes.size()-at,"Truncated KSC local string");
+                table.push_back({Kind::string,0,
+                    std::string(reinterpret_cast<const char*>(bytes.data()+at),length)});
+                at+=length;
+            } else if(tag==9) {
+                Require(length<=0xfff && i+length<count,"Invalid KSC local array range");
+                table.push_back({Kind::script_local_array,int(length),{},i});
+            } else {
+                Require(!tag && !length,"Unsupported KSC local cell");
+                table.push_back({});
+            }
+        }
+        if(actor==actor_number_) script_locals_=std::move(table);
+    }
+    Require(at==bytes.size(),"Unexpected KSC local table data");
+}
+
 bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile& p,std::string& error) {
     *this={};
     try {
         Require(p.actor<std::size(contact_scripts),"Unknown actor contact layout");
         actor_number_=p.actor;
+        LoadScriptLocals(dir);
         const auto& adopted=p.adopted_at;
         if (adopted[6] && adopted[5] && adopted[4])
             adoption_minute_=recovered::CalendarScalar7C660(recovered::CalendarRecord689B8(
@@ -958,6 +998,7 @@ RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
         Require(raw>>28==2 || raw>>28==3,"Unexpected prepared question field");
         return {raw>>28==3?Kind::calendar_time:Kind::integer,ScriptInteger(raw)};
     }
+    if(v.kind==Kind::script_local_ref) return script_locals_.at(v.data);
     if(v.kind==Kind::element) return v.cells->at(v.data);
     if(v.kind==Kind::global_element) return global_arrays_.at(v.data).at(v.depth);
     if(v.kind==Kind::teach_field) return teaching_.at(v.data);
@@ -1007,6 +1048,7 @@ void RoomTalkState::Assign(const Value& ref,Value value) {
         vocabulary_.WriteQuestionField(ref.data,unsigned(ref.depth),
                 value.kind==Kind::nil?0:tag|(unsigned(value.data)&0x0fffffffu));
     }
+    else if(ref.kind==Kind::script_local_ref) script_locals_.at(ref.data)=std::move(value);
     else if(ref.kind==Kind::element) ref.cells->at(ref.data)=std::move(value);
     else if(ref.kind==Kind::global_element) global_arrays_.at(ref.data).at(ref.depth)=std::move(value);
     else if(ref.kind==Kind::word_field) {
@@ -1691,6 +1733,9 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x8e: stack_.push_back(ReadText()); break;
         case 0x90: stack_.push_back(locals_.at(Read(2))); break;
         case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
+        case 0x92:
+            stack_.push_back(script_locals_.at(Read(2)));
+            break;
         case 0x94: case 0x95: {
             const int id=Read(2);
             const unsigned flags=contact_scripts[actor_number_].flags;
@@ -1768,7 +1813,10 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0xf0: {
             auto ref=Pop();
-            if(excursion_ && ref.kind==Kind::constant_ref && ref.data==0x243f)
+            if(ref.kind==Kind::script_local_ref) ref=Dereference(std::move(ref));
+            if(ref.kind==Kind::script_local_array)
+                stack_.push_back({Kind::integer,ref.data});
+            else if(excursion_ && ref.kind==Kind::constant_ref && ref.data==0x243f)
                 stack_.push_back({Kind::integer,int(global_arrays_.at(0x243f).size())});
             else if(excursion_ && ref.kind==Kind::constant_ref && outing_tables_.count(ref.data))
                 stack_.push_back({Kind::array,0,{},0,std::make_shared<std::vector<Value>>(outing_tables_.at(ref.data))});
@@ -1786,7 +1834,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0xf4: {
             auto index=Pop(),array=Pop();
-            if(array.kind==Kind::frame_ref) array=Dereference(array);
+            if(array.kind==Kind::frame_ref || array.kind==Kind::script_local_ref) array=Dereference(array);
+            if(array.kind==Kind::script_local_array) {
+                Require(index.kind==Kind::integer && index.data>=0 && index.data<array.data,
+                        "Invalid KSC local array index");
+                stack_.push_back(script_locals_.at(array.depth+1+unsigned(index.data)));
+                break;
+            }
             // The two actor scripts address the same verified trait forms at different slots.
             const auto trait_table=unsigned(array.data)-(robo_greeting_?0xfcu:0u);
             if(array.kind==Kind::array) stack_.push_back(array.cells->at(index.data));
@@ -1865,8 +1919,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0xf5: {
             auto index=Pop(),array=Pop();
             Require(index.kind==Kind::integer,"Invalid KSC field");
-            if(array.kind==Kind::frame_ref) array=Dereference(array);
-            if((excursion_ || scheduled_room_event_) && array.kind==Kind::constant_ref && array.data==0x243f)
+            if(array.kind==Kind::frame_ref || array.kind==Kind::script_local_ref) array=Dereference(array);
+            if(array.kind==Kind::script_local_array) {
+                Require(index.data>=0 && index.data<array.data,"Invalid KSC local array reference");
+                stack_.push_back({Kind::script_local_ref,int(array.depth+1+unsigned(index.data))});
+            }
+            else if((excursion_ || scheduled_room_event_) && array.kind==Kind::constant_ref && array.data==0x243f)
                 stack_.push_back({Kind::global_element,0x243f,{},unsigned(index.data)});
             else if(array.kind==Kind::constant_ref && unsigned(array.data)==contact_scripts[actor_number_].lesson_fields)
                 stack_.push_back({Kind::teach_field,index.data});
