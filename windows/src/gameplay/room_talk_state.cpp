@@ -1524,6 +1524,36 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
     pc_=target; locals_=std::move(args); result_={};
 }
 
+void RoomTalkState::InitializeArray(unsigned opcode) {
+    const unsigned index=Read(2);
+    const auto count=Pop();
+    std::vector<Value>* cells=nullptr;
+    std::size_t begin=0,capacity=0;
+    if(opcode==0x72) {
+        const auto& row=script_locals_.at(index);
+        Require(row.kind==Kind::script_local_array,"Expected a KSC script-local array");
+        cells=&script_locals_;
+        begin=row.depth+1;
+        capacity=unsigned(row.data);
+    } else if(opcode==0x73) {
+        cells=&global_arrays_.at(index);
+        capacity=cells->size();
+    } else {
+        if(opcode==0x75)
+            Require(friends_introduction_ && (index==0x2a3c || index==0x2a44),
+                    "Unknown KSC context table array");
+        const auto& row=opcode==0x71 ? locals_.at(index) : friends_cells_.at(index);
+        Require(row.kind==Kind::array && row.cells,"Expected an owned KSC array");
+        cells=row.cells.get();
+        capacity=cells->size();
+    }
+    Require(count.kind==Kind::integer && count.data>0 &&
+            unsigned(count.data)<=capacity && unsigned(count.data)<=stack_.size(),
+            "Invalid KSC array initializer");
+    // 6B554 consumes stack arguments in reverse and overwrites the leading cells.
+    for(unsigned i=unsigned(count.data);i>0;--i) cells->at(begin+i-1)=Pop();
+}
+
 void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
     const auto* named=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
     for(unsigned budget=0;budget<16384;++budget) {
@@ -1620,6 +1650,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             locals_.at(index)={Kind::array,0,{},0,std::make_shared<std::vector<Value>>(length)};
             break;
         }
+        case 0x71: InitializeArray(op); break;
         case 0xa0: {
             // The selector chooses a signed 28-bit or 14-bit limit in 71764.
             constexpr int limits[]={-0x08000000,0x07ffffff,-8192,8191};
