@@ -5,7 +5,7 @@
 
 [![Native code map](windows/docs/native-code-map.svg)](windows/docs/native-coverage.html)
 
-**43 of 60 Windows acceptance requirements verified.** The figures are from recorded headless Windows Release checks. [Download the interactive map](windows/docs/native-coverage.html) or [read the acceptance scope](windows/docs/PROGRESS.md#acceptance-and-code-map).
+**44 of 60 Windows acceptance requirements verified.** The figures are from recorded headless Windows Release checks. [Download the interactive map](windows/docs/native-coverage.html) or [read the acceptance scope](windows/docs/PROGRESS.md#acceptance-and-code-map).
 
 An **in-progress native Windows source port of Doko Demo Issyo Portable** (Japanese v1.01, UCJS10002). Reconstructed C++ and a KSC interpreter run on Windows without a PSP CPU emulator. **The full game is not complete.** Windows is the application target. Ubuntu x86_64 headless component testing is described below; a Linux game application/window backend is not implemented. A matching PSP rebuild remains unverified.
 

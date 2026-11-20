@@ -1112,6 +1112,9 @@ void CheckRoboDatedContact(PostProfile& room,const dokodemo::recovered::PackageV
     Require(memo.tab==13 && (learn ? memo.count==1 && memo.row==163 &&
                 memo.written==record.learned_written && memo.reading==record.learned_reading : memo.count==0),
             "Robo word memo disagreed with the completed lesson");
+    tap(0x4000);
+    for (unsigned tick=0;tick<120 && room.notebook_snapshot().visible;++tick) step(0);
+    Require(!room.notebook_snapshot().visible,"Robo word memo did not return to the room");
     std::cout<<"Robo 346B4, editor "<<(learn?"accepted row 163":"cancelled")
              <<", "<<prompts<<" prompts, activity and word memo verified\n";
 }
@@ -1212,7 +1215,7 @@ void CheckRoboMenuLesson(PostProfile& room,const dokodemo::recovered::PackageVie
              <<", "<<extra_questions<<" follow-up questions, activity and memo verified\n";
 }
 
-enum class RoboSlotCheck { none, save, penultimate, final_day };
+enum class RoboSlotCheck { none, save, penultimate, final_day, contact_save };
 
 void CheckRoboPenultimate(const std::filesystem::path& game,
                           const dokodemo::gameplay::RetailUtilityContents& source,
@@ -1331,6 +1334,67 @@ void CheckRoboPenultimate(const std::filesystem::path& game,
     std::cout<<"Robo day 13 protected save, memo retained and no event replay for all three routes\n";
 }
 
+void ReportContactWord(const char* checkpoint,std::string_view written,std::string_view reading) {
+    const auto hash=[](std::string_view value) {
+        return dokodemo::core::sha256_hex(reinterpret_cast<const std::uint8_t*>(value.data()),value.size());
+    };
+    std::cout<<checkpoint<<" row=163 written="<<hash(written)<<" reading="<<hash(reading)<<'\n';
+}
+
+void CheckColdRoboWord(const std::filesystem::path& game,
+                       dokodemo::gameplay::RetailSaveProfile::Calendar calendar,
+                       std::string_view written,std::string_view reading,
+                       const std::vector<std::uint8_t>& request) {
+    using namespace dokodemo::gameplay;
+    std::array<uint8_t,16> date{};
+    for(unsigned i=0;i<6;++i) {
+        date[2*i]=uint8_t(calendar[6-i]);
+        date[2*i+1]=uint8_t(calendar[6-i]>>8);
+    }
+    BootToDisplay boot;
+    Require(boot.Initialize() && boot.InitializeClock(date,168) &&
+            boot.MountDataArchive(game/"assets/iso/PSP_GAME/USRDIR/data/DATA.BP") &&
+            boot.PrepareTitle() && boot.Title().title_complete(),"Robo slot did not select cold room entry");
+    unsigned restored=0;
+    const auto advance=[&](unsigned buttons=0) {
+        if(!boot.AdvanceTitle(buttons))
+            throw std::runtime_error(boot.SaveReadBoundary()?boot.SaveReadBoundary():"Robo restart failed");
+        for(const auto& event:boot.DepartureEvents()) {
+            const std::string_view name=event.name;
+            if(name=="room-load-restored") ++restored;
+            Require(name!="gift-received" && name!="diary-created","Robo replayed introductory rewards");
+        }
+    };
+    for(unsigned i=0;i<1800 && !boot.RoomActivity().started_command;++i) advance();
+    Require(restored==1 && boot.RoomActivity().started_command,"Cold Robo did not start an owning room activity");
+    const auto wait=[&](unsigned ticks) { while(ticks--) advance(); };
+    const auto press=[&](unsigned buttons) { advance(); advance(buttons); wait(16); };
+    press(0x20); wait(22); press(0x40); press(0x40);
+    Require(boot.RoomTeaching().menu_cursor==3,"Reloaded Robo cannot open the notebook category");
+    press(0x2000); wait(24); press(0x40); press(0x2000);
+    for(unsigned i=0;i<180 && !boot.Notebook().list_ready;++i) advance();
+    Require(boot.Notebook().resource==8 && boot.Notebook().list_ready,"Reloaded Robo memo missing");
+    press(0x80);
+    const auto memo=boot.Notebook();
+    Require(memo.tab==13 && memo.count==1 && memo.row==163 && memo.written==written && memo.reading==reading &&
+            ReadRetailSlot(game/"savedata"/"UCJS10002000")==request,
+            "Cold Robo did not restore the exact word from its unchanged slot");
+    ReportContactWord("loaded_contact_word",memo.written,memo.reading);
+}
+
+int CheckColdRoboContactSlot(const std::filesystem::path& game) {
+    using namespace dokodemo::gameplay;
+    const auto request=ReadRetailSlot(game/"savedata"/"UCJS10002000");
+    const auto saved=DecodeRetailUtilityRequest(request,RetailSaveProfile{});
+    const auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
+    const auto& word=owners.dictionary.children.at(0).children.at(163).children.at(0).children;
+    const auto profile=saved.profile.ReadProfile();
+    Require(profile.actor==1 && profile.player.text()=="AKI" &&
+            !word.at(1).text.empty() && !word.at(2).text.empty(),"Missing saved Robo contact word");
+    CheckColdRoboWord(game,saved.profile.SavedAt(),word.at(1).text,word.at(2).text,request);
+    return 0;
+}
+
 void CheckRoboSlot(const std::filesystem::path& game,PostProfile& room,
                    const dokodemo::recovered::PackageView& font,dokodemo::recovered::RngNativeOwner& rng,
                    const dokodemo::gameplay::TitleRenderer& keyboard,std::vector<uint8_t>& vram,
@@ -1370,44 +1434,16 @@ void CheckRoboSlot(const std::filesystem::path& game,PostProfile& room,
             std::any_of(catalog.begin(),catalog.end(),[](const auto& cell){return (cell.word&0x0fffffffu)!=0;}),
             "Robo protected slot omitted live profile, memo, diary or date topic history");
 
+    if (check==RoboSlotCheck::contact_save) {
+        ReportContactWord("saved_contact_word",lesson.learned_written,lesson.learned_reading);
+        return;
+    }
     if (check==RoboSlotCheck::penultimate || check==RoboSlotCheck::final_day) {
         CheckRoboPenultimate(game,saved,calendar,check);
         return;
     }
     ++calendar[1];
-    std::array<uint8_t,16> date{};
-    for(unsigned i=0;i<6;++i) {
-        date[2*i]=uint8_t(calendar[6-i]);
-        date[2*i+1]=uint8_t(calendar[6-i]>>8);
-    }
-    BootToDisplay boot;
-    Require(boot.Initialize() && boot.InitializeClock(date,168) &&
-            boot.MountDataArchive(game/"assets/iso/PSP_GAME/USRDIR/data/DATA.BP") &&
-            boot.PrepareTitle() && boot.Title().title_complete(),"Robo slot did not select cold room entry");
-    unsigned restored=0;
-    const auto advance=[&](unsigned buttons=0) {
-        if(!boot.AdvanceTitle(buttons))
-            throw std::runtime_error(boot.SaveReadBoundary()?boot.SaveReadBoundary():"Robo restart failed");
-        for(const auto& event:boot.DepartureEvents()) {
-            const std::string_view name=event.name;
-            if(name=="room-load-restored") ++restored;
-            Require(name!="gift-received" && name!="diary-created","Robo replayed introductory rewards");
-        }
-    };
-    for(unsigned i=0;i<1800 && !boot.RoomActivity().started_command;++i) advance();
-    Require(restored==1 && boot.RoomActivity().started_command,"Cold Robo did not start an owning room activity");
-    const auto wait=[&](unsigned ticks) { while(ticks--) advance(); };
-    const auto press=[&](unsigned buttons) { advance(); advance(buttons); wait(16); };
-    press(0x20); wait(22); press(0x40); press(0x40);
-    Require(boot.RoomTeaching().menu_cursor==3,"Reloaded Robo cannot open the notebook category");
-    press(0x2000); wait(24); press(0x40); press(0x2000);
-    for(unsigned i=0;i<180 && !boot.Notebook().list_ready;++i) advance();
-    Require(boot.Notebook().resource==8 && boot.Notebook().list_ready,"Reloaded Robo memo missing");
-    press(0x80);
-    const auto memo=boot.Notebook();
-    Require(memo.count==1 && memo.row==163 && memo.written==lesson.learned_written &&
-            memo.reading==lesson.learned_reading && ReadRetailSlot(slot)==request,
-            "Cold Robo did not restore the exact word from its unchanged slot");
+    CheckColdRoboWord(game,calendar,lesson.learned_written,lesson.learned_reading,request);
     std::cout<<"Robo protected System Save and cold BootToDisplay returned to activity and restored word 163\n";
 
     ++calendar[4];
@@ -1823,6 +1859,10 @@ int main(int argc, char **argv) try {
         return CheckRoboIntroduction(argv[1],0,false,3);
     if(argc==3 && std::string_view(argv[2])=="--robo-contact-teach")
         return CheckRoboIntroduction(argv[1],0,false,4);
+    if(argc==3 && std::string_view(argv[2])=="--contact-save-write")
+        return CheckRoboIntroduction(argv[1],0,false,4,{},RoboSlotCheck::contact_save);
+    if(argc==3 && std::string_view(argv[2])=="--contact-save-read")
+        return CheckColdRoboContactSlot(argv[1]);
     if(argc==4 && std::string_view(argv[2])=="--robo-menu-lesson") {
         const std::string_view choice=argv[3];
         Require(choice=="cancel" || choice=="film" || choice=="robot","Invalid Robo menu lesson fixture");

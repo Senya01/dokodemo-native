@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **43 of 60** requirements verified and 17 open. The baseline recorded 62 of 62 Windows Release tests. Separate Release checks cover startup to Toro's room, the 10 scheduled-letter routes, the new-adoption route and the 15 outing routes. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **44 of 60** requirements verified and 16 open. The baseline recorded 62 of 62 Windows Release tests. Separate Release checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route and the 15 outing routes. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -41,6 +41,10 @@ The test selects each original fallback entry with a fresh controlled state. It 
 | Inu | 512 | 511 | 1 |
 | Kaeru | 547 | 538 | 9 |
 | **Total** | **3,118** | **3,094** | **24** |
+
+## Conversation, word memo and protected save
+
+Run `cmake --build <build> --config Release --target post-profile-tests` and `ctest --test-dir <build> -C Release -R '^game-contact-to-save$' --output-on-failure` with local game media configured. In a temporary installation, the first headless process starts the first day with Robo and takes the controlled route to his ordinary lesson. It accepts a new word through the game editor, checks its spelling and reading in the memo, closes the notebook and saves from the System menu. A new process cold-loads that slot, returns to room activity and checks both strings in the live memo. The runner verifies that all six slot files remain byte-identical after loading.
 
 ## Scheduled letters
 

@@ -771,7 +771,10 @@
             "notebook-diary",
             "save-game"
           ],
-          "gap": "Есть прежняя оконная проверка. Безоконная связка одного свежего занятия с записью и чтением того же слота пока не входит в матрицу."
+          "tests": [
+            "game-contact-to-save"
+          ],
+          "evidence": "Урок в обычном разговоре Робо, строка 163 в живом блокноте и штатное сохранение в первом процессе. Второй процесс подтвердил то же написание и чтение после холодной загрузки; все шесть файлов совпали."
         },
         {
           "id": "out-and-back",
@@ -899,7 +902,7 @@
     "peer-network": "blocked",
     "room-frame-input": "passed",
     "startup-to-room": "passed",
-    "contact-to-save": "blocked",
+    "contact-to-save": "passed",
     "out-and-back": "passed",
     "seam-calendar": "blocked",
     "seam-links": "blocked",
@@ -971,7 +974,8 @@
     "game-return-letter": "passed",
     "game-readoption": "passed",
     "game-out-and-back": "passed",
-    "game-startup-to-room": "passed"
+    "game-startup-to-room": "passed",
+    "game-contact-to-save": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1002,6 +1006,12 @@
       "routes_passed": 1,
       "routes_total": 1,
       "scope": "Windows Release, fresh temporary installation with local media and decoder. Normal startup worker and game frame path, no window, null audio, midday room clock and controlled input."
+    },
+    "game-contact-to-save": {
+      "test_binary_sha256": "71854d2a9c89e3fd6e59a3742de66d8d19f83455ef60ffc3f66535d7151f9e50",
+      "routes_passed": 1,
+      "routes_total": 1,
+      "scope": "Windows Release, headless, null audio. Controlled Robo room calendar and inputs, native contact and lesson, memo, System save, separate process cold load and exact slot preservation."
     }
   }
 }
