@@ -2356,6 +2356,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 const unsigned hi=unsigned(std::clamp(high.data,-8192,8191))&0x3fffu;
                 const unsigned lo=unsigned(std::clamp(low.data,-8192,8191))&0x3fffu;
                 result_={Kind::fixed14,ScriptInteger((hi<<14)|lo)};
+            } else if(id==0x08 && argc==1) {
+                auto value=Pop();
+                if(value.kind==Kind::integer) result_={Kind::string,0,std::to_string(value.data)};
+                else {
+                    Require(value.kind==Kind::string,"Invalid KSC string conversion");
+                    result_=std::move(value);
+                }
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
