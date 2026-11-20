@@ -1,4 +1,4 @@
-#include "retail_slot_files.h"
+#include "retail_slot_transaction.h"
 #include "retail_slot_lock.h"
 #include "retail_savedata_crypto.h"
 #include "retail_savedata_envelope.h"
@@ -191,6 +191,14 @@ Bytes ReadRetailSlot(const fs::path& slot) {
     return std::move(*result);
 }
 void WriteRetailSlot(const fs::path& slot,const fs::path& game,const Bytes& request) {
+    detail::CommitRetailSlot(slot,game,request,{});
+}
+
+void detail::CommitRetailSlot(const fs::path& slot,const fs::path& game,const Bytes& request,
+                              const SlotWriteObserver& observe) {
+    const auto announce=[&](SlotWritePhase phase,const fs::path& location) {
+        if (observe) observe(phase,location);
+    };
     ValidatePath(slot);
     const auto decoded=DecodeRetailUtilityRequest(request,RetailSaveProfile{});
     Require(decoded.profile.ReadProfile().actor<5,"Unknown savedata profile actor");
@@ -215,23 +223,41 @@ void WriteRetailSlot(const fs::path& slot,const fs::path& game,const Bytes& requ
     }
     // Preserve a terminated writer's private stage; only the canonical slot or backup can be authoritative.
     const auto stage=UnusedSibling(slot,".pending");
+    announce(SlotWritePhase::create_stage,stage);
     Require(fs::create_directory(stage),"Cannot create private savedata staging directory");
     bool moved=false;
     try {
-        for(size_t i=0;i<files.size();++i) Write(stage/names[i],files[i]);
+        for(size_t i=0;i<files.size();++i) {
+            const auto file=stage/names[i];
+            announce(SlotWritePhase::write_file,file);
+            Write(file,files[i]);
+        }
+        announce(SlotWritePhase::validate_stage,stage);
         Require(ReadSet(stage)==request,"Staged savedata differs from the current session");
         for(size_t i=2;i<files.size();++i)
             Require(Read(stage/names[i],files[i].size())==files[i],"Incomplete savedata media write");
-        if(replacing) { fs::rename(slot,backup); moved=true; }
+        if(replacing) {
+            announce(SlotWritePhase::preserve_previous,slot);
+            fs::rename(slot,backup);
+            moved=true;
+        }
+        announce(SlotWritePhase::publish,stage);
         fs::rename(stage,slot);
     } catch(...) {
-        if(moved && !fs::exists(slot)) fs::rename(backup,slot);
-        RemoveSet(stage);
+        // If rollback cannot rename a locked backup, retain it for the next
+        // reader. Cleanup errors must not replace the original write error.
+        std::error_code rollback_error;
+        if(moved && !fs::exists(slot,rollback_error) && !rollback_error)
+            fs::rename(backup,slot,rollback_error);
+        try { RemoveSet(stage); } catch(const std::exception&) {}
         throw;
     }
     if(moved) {
         // Publication already succeeded. A locked backup can be cleaned up on the next save.
-        try { Retire(slot,backup); } catch(const std::exception&) {}
+        try {
+            announce(SlotWritePhase::retire,backup);
+            Retire(slot,backup);
+        } catch(const std::exception&) {}
     }
 }
 } // namespace dokodemo::gameplay

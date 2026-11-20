@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **48 of 60** requirements verified and 12 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, and multiplayer shiritori. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **49 of 60** requirements verified and 11 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, multiplayer shiritori, and protected slot recovery. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -94,6 +94,12 @@ Three additional runs use a test peer behind the meeting-channel interface. Afte
 Run `ctest --test-dir <build> -C Release -R '^game-seam-links$' --output-on-failure` with the same `DOKODEMO_GAME_MEETING_TEST_SLOT` and `post-profile-tests` build. One pair of temporary slots passes through four visits on loopback: exchanging cards, cancelling a prepared gift exchange, exchanging gifts, and playing shiritori. Both players save from the System menu after each visit. Subsequent visits start from the saved slots, with no new fixture injection. The test compares cards, gift rows and learned words across those visits.
 
 Two final processes open their saved friend cards, bags and the three learned rows in their respective notebooks. The complete slot files stay unchanged across the cold reads. The cancellation uses the controlled pre-commit readiness boundary described above.
+
+## Protected slot recovery
+
+Configure the local-media build with `-DOKODEMO_GAME_RECOVERY_TEST_SLOT=<UCJS10002000 directory>`, build `retail-slot-recovery-tests` in Release and run `ctest --test-dir <build> -C Release -R '^game-save-recovery$' --output-on-failure`. The runner derives two distinct generations from the local protected fixture and works exclusively in temporary copies.
+
+The matrix damages, removes and truncates a staged copy of each of the six files. Invalid DATA.BIN or PARAM.SFO prevents loading and replacement. Preview damage allows gameplay to load, and the next successful save rewrites the previews. The matrix also executes 11 injected exceptions, 11 process exits at the same transaction boundaries, and six real Windows sharing conflicts. Fresh processes check the selected generation and retained file bytes. A deferred rollback keeps the backup available for recovery and reports the original write error. Abandoned stages and invalid backups are checked independently. The interruption model is Windows process exit.
 
 ## Open coverage
 

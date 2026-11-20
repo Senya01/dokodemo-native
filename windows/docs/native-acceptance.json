@@ -639,7 +639,11 @@
             "save-all"
           ],
           "expect": "Проверена матрица повреждения каждого файла, ошибки в каждой фазе замены, отказов доступа и повторного холодного чтения.",
-          "gap": "Есть проверки отдельных отказов. Полного перечня фаз замены и перезапусков после отказа нет."
+          "tests": [
+            "game-save-recovery",
+            "retail_savedata_envelope"
+          ],
+          "evidence": "Проверены порча, отсутствие и повреждение при подготовке всех шести файлов, 11 исключений, 11 прерываний процесса и шесть конфликтов доступа Windows. Холодные процессы сверили восстановленное поколение и сохранность файлов."
         }
       ]
     },
@@ -906,7 +910,7 @@
     "re-adopt": "passed",
     "save-format": "passed",
     "save-game": "passed",
-    "save-recovery": "blocked",
+    "save-recovery": "passed",
     "peer-transport": "passed",
     "peer-menu": "passed",
     "peer-card": "passed",
@@ -992,7 +996,8 @@
     "game-peer-card": "passed",
     "game-peer-gift": "passed",
     "game-peer-shiritori": "passed",
-    "game-seam-links": "passed"
+    "game-seam-links": "passed",
+    "game-save-recovery": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1053,6 +1058,10 @@
       "routes_passed": 1,
       "routes_total": 1,
       "scope": "Windows Release, headless, null audio. One linked four-visit route with two protected slots on loopback. Controlled cancellation before commit; System menu saves between operations, then two separate cold loads."
+    },
+    "game-save-recovery": {
+      "test_binary_sha256": "0ec74d79b9cb360360ce58f1ab146fb70b16dbac0c0f3af7ab15ba83ce4b8e0f",
+      "scope": "Windows Release, independent headless processes, null audio. Local protected donor and two test generations. Six files with three fault cases each, 11 thrown faults, 11 process exits, six sharing denials, and orphan staging and backup checks."
     }
   }
 }
