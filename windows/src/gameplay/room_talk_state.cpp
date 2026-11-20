@@ -2342,6 +2342,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 Require(value.kind==Kind::integer || value.kind==Kind::fixed14,
                         "Invalid KSC high-half operand");
                 result_={Kind::integer,ScriptInteger(ArithmeticShiftRight(value.data,14))};
+            } else if(id==0x06 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::integer || value.kind==Kind::fixed14,
+                        "Invalid KSC low-half operand");
+                const auto bits=unsigned(value.data)&0x3fffu;
+                result_={Kind::integer,static_cast<int>(bits^0x2000u)-0x2000};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
