@@ -1742,6 +1742,15 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             stack_.push_back({Kind::script_local_ref,int(index)});
             break;
         }
+        case 0x96: {
+            const unsigned index=Read(2);
+            const auto owner=Pop();
+            Require(owner.kind==Kind::context && index<script_locals_.size(),
+                    "Unsupported foreign KSC context local access");
+            if(op==0x96) stack_.push_back(script_locals_.at(index));
+            else stack_.push_back({Kind::script_local_ref,int(index)});
+            break;
+        }
         case 0x94: case 0x95: {
             const int id=Read(2);
             const unsigned flags=contact_scripts[actor_number_].flags;
