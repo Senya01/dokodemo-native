@@ -2348,6 +2348,14 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                         "Invalid KSC low-half operand");
                 const auto bits=unsigned(value.data)&0x3fffu;
                 result_={Kind::integer,static_cast<int>(bits^0x2000u)-0x2000};
+            } else if(id==0x07 && argc==2) {
+                const auto low=Pop(),high=Pop();
+                Require(low.kind==Kind::integer && high.kind==Kind::integer,
+                        "Invalid KSC fixed-point operands");
+                // 752B8 clamps two signed 14-bit halves before packing tag 4.
+                const unsigned hi=unsigned(std::clamp(high.data,-8192,8191))&0x3fffu;
+                const unsigned lo=unsigned(std::clamp(low.data,-8192,8191))&0x3fffu;
+                result_={Kind::fixed14,ScriptInteger((hi<<14)|lo)};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
