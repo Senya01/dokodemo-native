@@ -2380,7 +2380,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0x2c:
         case 0x2d:
-        case 0x2e: {
+        case 0x2e:
+        case 0x2f: {
             // The argument-bearing direct form places the count first and
             // the owner after the index. The other forms start with the owner.
             unsigned argc=0,table=0,index=0;
