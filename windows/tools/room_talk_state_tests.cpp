@@ -82,6 +82,12 @@ struct RoomTalkOpcodeTests {
         const auto byte_text=Execute({0x8b,0x0e,1,0x89},0,{{Kind::integer,0xa082}});
         const auto truncated=Execute({0x8b,0x0e,1,0x89},0,{{Kind::integer,0x0041}});
         const std::string kana="\x81\x5b\x82\xa1\x82\xef\x82\xc1";
+        std::string bounded;
+        for(int i=0;i<15;++i) bounded+="\x82\xa0";
+        check(0x70,{{Kind::string,0,bounded}},Kind::truth,1);
+        check(0x70,{{Kind::string,0,bounded+"\x82\xa0"}},Kind::truth,0);
+        check(0x70,{{Kind::string,0,kana+"A"}},Kind::truth,0);
+        check(0x70,{{Kind::string,0,"\x82\xc1"}},Kind::truth,0);
         const auto first=Execute({0x8b,0x71,1,0x89},0,{{Kind::string,0,kana}});
         const auto last=Execute({0x8b,0x72,1,0x89},0,{{Kind::string,0,kana}});
         const auto invalid=Execute({0x8b,0x72,1,0x89},0,{{Kind::string,0,kana+"A"}});
@@ -342,8 +348,18 @@ struct RoomTalkOpcodeTests {
             throw std::runtime_error("KSC associative table allocations were shared");
     }
 
+    static void DebugText() {
+        for(unsigned char opcode:{0x49,0x4a}) {
+            const auto vm=Execute({opcode,0x14,0,0,'A',0,0x80,64},15,{});
+            CheckValue(vm.stack_.at(0),Kind::integer,64,opcode);
+            if(vm.message_wait_ || vm.visible() || vm.message_pc_!=0)
+                throw std::runtime_error("Retail debug text changed the visible message");
+        }
+    }
+
     static void Run() {
         Builtins();
+        DebugText();
         Associations();
         ProcedureArguments();
         ContextTables();

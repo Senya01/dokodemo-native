@@ -2541,6 +2541,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 const auto pos=query.empty()?std::string_view::npos:source.find(query);
                 result_=pos==0 || pos==std::string_view::npos
                     ? Value{} : Value{Kind::integer,ScriptInteger(unsigned(pos))};
+            } else if(id==0x70 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::string,"Invalid KSC kana eligibility operand");
+                // After the normal script initialization at 76AF4 the
+                // accepted branch is true and the default branch is false.
+                const std::string_view text(value.text.c_str());
+                result_={Kind::truth,text.size()<=30 && !KanaEndpoint(text,true).empty()};
             } else if(id==0x71 && argc==1) {
                 const auto value=Pop();
                 Require(value.kind==Kind::string,"Invalid KSC first kana operand");
