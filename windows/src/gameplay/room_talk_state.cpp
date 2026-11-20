@@ -2203,6 +2203,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             script_deadline_=script_timer_base_+unsigned(ScriptInteger(unsigned(offset.data)));
             return;
         }
+        case 0x41: {
+            const auto offset=Pop();
+            Require(offset.kind==Kind::integer,"Invalid KSC timer-base offset");
+            script_timer_base_=script_ticks_+unsigned(ScriptInteger(unsigned(offset.data)));
+            break;
+        }
         case 0x44:
             delay_=Pop().data;
             if(queued_outing_callback_ && site==0x1c69) {
