@@ -59,35 +59,42 @@ def test_channel(binary, output):
     return True
 
 
-def test_room_exchange(binary, output, package, source, operation):
+def test_room_exchange(binary, output, package, source, operation, paired_cancel=False):
     port = private_port()
     cancel_port = private_port()
     while cancel_port == port:
         cancel_port = private_port()
     cases = []
-    for side in (1, 2, 0):
+    sides = (1, 2) if paired_cancel else (1, 2, 0)
+    gate = output / "ready"
+    if paired_cancel:
+        gate.mkdir(parents=True)
+    for side in sides:
         install = output / str(side)
         donor = output / "inputs" / str(side) / source.name
         shutil.copytree(source, donor)
         shutil.copytree(package / "assets", install / "assets", copy_function=os.link)
-        cases.append((install, (install, operation, donor,
-                                port if side else cancel_port, side)))
+        request = (install, operation, donor, port if side else cancel_port, side)
+        cases.append((install, request + (gate,) if paired_cancel else request))
     if not run_group(binary, cases, 350):
         return False
-    if operation != "--card-exchange-slot":
-        return True
-    return check_saved_cards(binary, output)
+    if operation == "--card-exchange-slot":
+        return check_saved_cards(binary, output)
+    if operation == "--gift-exchange-slot":
+        return check_saved_gifts(binary, output, sides)
+    return True
+
+
+def slot_files(install):
+    slot = install / "savedata" / "UCJS10002000"
+    contents = {file.name: file.read_bytes() for file in slot.iterdir()}
+    if contents.keys() != {"DATA.BIN", "PARAM.SFO", "ICON0.PNG", "ICON1.PMF", "PIC1.PNG", "SND0.AT3"}:
+        raise ValueError("Meeting did not produce a six-file slot")
+    return contents
 
 
 def check_saved_cards(binary, output):
-    def files(side):
-        slot = output / str(side) / "savedata" / "UCJS10002000"
-        contents = {file.name: file.read_bytes() for file in slot.iterdir()}
-        if contents.keys() != {"DATA.BIN", "PARAM.SFO", "ICON0.PNG", "ICON1.PMF", "PIC1.PNG", "SND0.AT3"}:
-            raise ValueError("Card exchange did not produce a six-file slot")
-        return contents
-
-    original = [files(side) for side in (1, 2)]
+    original = [slot_files(output / str(side)) for side in (1, 2)]
     cases = [(output / "cold" / str(side), (output / str(side), "--cold-meeting-card", side))
              for side in (1, 2)]
     if not run_group(binary, cases, 120):
@@ -97,9 +104,32 @@ def check_saved_cards(binary, output):
         records.append(re.findall(rb"^cold_card own=\w+ peer=\w+ sent=([0-9a-f]{64}) received=([0-9a-f]{64})\r?$",
                                   (folder / "test.log").read_bytes(), re.MULTILINE))
     if (any(len(record) != 1 for record in records) or
-            records[0][0] != records[1][0][::-1] or original != [files(side) for side in (1, 2)]):
+            records[0][0] != records[1][0][::-1] or
+            original != [slot_files(output / str(side)) for side in (1, 2)]):
         raise ValueError("Cold cards differ from the other player's own card or the slot changed")
     print("Both cold processes opened their peer's card and preserved all six files")
+    return True
+
+
+def check_saved_gifts(binary, output, sides):
+    def inventory_receipt(folder, checkpoint):
+        log = (folder / "test.log").read_bytes()
+        records = re.findall(rb"^" + checkpoint + rb" inventory=([0-9a-f]{64})\r?$", log, re.MULTILINE)
+        if len(records) != 1:
+            raise ValueError("Missing inventory receipt")
+        return records[0]
+
+    installs = [output / str(side) for side in sides]
+    original = [slot_files(install) for install in installs]
+    cases = [(output / "cold" / install.name, (install, "--cold-meeting-gift")) for install in installs]
+    if not run_group(binary, cases, 120):
+        return False
+    for install, (cold, _) in zip(installs, cases):
+        if inventory_receipt(install, b"saved_gift") != inventory_receipt(cold, b"cold_gift"):
+            raise ValueError("The cold gift inventory differs from System Save")
+    if original != [slot_files(install) for install in installs]:
+        raise ValueError("A cold gift session changed its slot")
+    print(f"Cold gift bags matched all 170 inventory rows and six files for {len(sides)} slots")
     return True
 
 
@@ -123,7 +153,13 @@ def main():
             return int(not test_channel(binary, output))
         operation = {"cards": "--card-exchange-slot", "gifts": "--gift-exchange-slot",
                      "shiritori": "--shiritori-slot"}[args.mode]
-        return int(not test_room_exchange(binary, output, package, args.source.resolve(strict=True), operation))
+        source = args.source.resolve(strict=True)
+        if not test_room_exchange(binary, output, package, source, operation):
+            return 1
+        if args.mode == "gifts" and not test_room_exchange(
+                binary, output / "cancel-pair", package, source, operation, paired_cancel=True):
+            return 1
+        return 0
 
     if args.output:
         output = args.output.resolve()

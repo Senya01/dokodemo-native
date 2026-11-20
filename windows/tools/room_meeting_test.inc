@@ -1,9 +1,65 @@
+class HoldGiftReady final : public dokodemo::gameplay::RoomMeetingChannel {
+public:
+    HoldGiftReady(std::unique_ptr<RoomMeetingChannel> channel,std::filesystem::path marker)
+        : channel_(std::move(channel)), marker_(std::move(marker)) {}
+
+    dokodemo::gameplay::MeetingConnection Poll() override { return channel_->Poll(); }
+    bool FirstParticipant() const override { return channel_->FirstParticipant(); }
+    bool HasPendingOutput() const override { return channel_->HasPendingOutput(); }
+    std::optional<std::vector<std::uint8_t>> Receive() override { return channel_->Receive(); }
+    bool Send(const std::vector<std::uint8_t>& message) override {
+        // Offers and receipts go over the real channel. The exchange's
+        // type-3 readiness message waits until the test cancels.
+        if (message.size()!=1 || message.front()!=3) return channel_->Send(message);
+        if (!reached_) {
+            std::ofstream file(marker_);
+            if (!file) throw std::runtime_error("Cannot record the prepared gift offer");
+            reached_=true;
+        }
+        return false;
+    }
+private:
+    std::unique_ptr<RoomMeetingChannel> channel_;
+    std::filesystem::path marker_;
+    bool reached_=false;
+};
+
+void CheckMeetingBag(ResumeDayRoom& room,int expected,int other) {
+    room.OpenMenu(); room.Key(0x10); room.Key(0x10);
+    Require(room.room.teaching_snapshot().menu_cursor==5,"The inventory menu did not select");
+    room.Key(0x2000);
+    room.Until([&]{return room.room.inventory_snapshot().list_ready;},"Could not open the bag");
+    auto bag=room.room.inventory_snapshot();
+    if (bag.slot==1) {
+        Require(bag.id==other,"The unrelated gift differs");
+        room.Key(0x40);
+        bag=room.room.inventory_snapshot();
+    }
+    Require(bag.count==2 && bag.slot==0 && bag.id==expected && bag.category==1,
+            "The bag did not show the expected gift in the offered slot");
+    room.Key(0x40);
+    bag=room.room.inventory_snapshot();
+    Require(bag.slot==1 && bag.id==other,"The unrelated gift did not survive");
+    room.Key(0x4000);
+    room.Until([&]{return !room.room.inventory_snapshot().visible;},"The inventory did not close");
+    room.Rest(40);
+}
+
+void ReportMeetingInventory(const char* checkpoint,const dokodemo::gameplay::KscSaveValue& inventory) {
+    const auto bytes=EncodeKscSaveGraph(inventory.children.at(0));
+    std::cout<<checkpoint<<" inventory="<<dokodemo::core::sha256_hex(bytes.data(),bytes.size())<<'\n';
+}
+
 int CheckRecordExchange(const std::filesystem::path& install,const std::filesystem::path& source,
-                        unsigned port,unsigned side,dokodemo::gameplay::MeetingMode mode) {
+                        unsigned port,unsigned side,dokodemo::gameplay::MeetingMode mode,
+                        const std::filesystem::path& ready_gate={}) {
     using namespace dokodemo::gameplay;
     const bool gifts=mode==MeetingMode::gifts, words=mode==MeetingMode::shiritori;
     namespace fs=std::filesystem;
     Require(port && port<=65535 && side<=2,"Invalid private meeting port or participant");
+    const bool cancel_pair=!ready_gate.empty();
+    Require(!cancel_pair || (gifts && side && fs::is_directory(ready_gate)),"Invalid paired gift cancellation");
+    const bool exchanges=side && !cancel_pair;
     const auto input=ReadRetailSlot(source);
     auto saved=DecodeRetailUtilityRequest(input,RetailSaveProfile{});
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
@@ -22,7 +78,8 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         card.at(25)={0x50000000u,phone,{}};
     }
     saved.profile.Adopt(profile);
-    int local_id=-1, peer_id=-1;
+    int local_id=-1, peer_id=-1, other_id=-1;
+    KscSaveValue expected_inventory;
     if (gifts) {
         RoomInventory definitions;
         std::string error;
@@ -32,11 +89,18 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         Require(definitions.AwardGift(0,own_round,"TORO",int(date[6]),int(date[5]),int(date[4]))==0,
                 "Cannot prepare the private offered gift");
         local_id=definitions.slot_item(0)->id;
+        const auto acquired=definitions.slot_item(0)->fields[4]&0x0fffffffu;
+        Require(definitions.AwardGift(0,1,"TORO",int(date[6]),int(date[5]),int(date[4]))==1,
+                "Cannot prepare the unrelated gift");
+        other_id=definitions.slot_item(1)->id;
         owners.inventory=definitions.SaveTable();
-        Require(definitions.AwardGift(0,2-own_round,"TORO",int(date[6]),int(date[5]),int(date[4]))==1,
+        auto expected=definitions;
+        Require(definitions.AwardGift(0,2-own_round,"TORO",int(date[6]),int(date[5]),int(date[4]))==2,
                 "Cannot verify the recipient's original gift");
-        peer_id=definitions.slot_item(1)->id;
-        Require(local_id!=peer_id,"Gift fixture needs two distinct items");
+        peer_id=definitions.slot_item(2)->id;
+        Require(local_id!=peer_id && other_id!=local_id && other_id!=peer_id,"Gift fixture needs distinct items");
+        expected_inventory=exchanges ? expected.WithGiftSwap(0,definitions.OfferGift(2),acquired).SaveTable()
+                                     : owners.inventory;
     }
     constexpr std::array<std::string_view,3> chain_a{
         "\x82\xe8\x82\xb7", "\x82\xdf\x82\xbe\x82\xa9", "\x82\xa2\x82\xca"};
@@ -66,7 +130,15 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     auto calendar=saved.profile.SavedAt();
     const auto previous_day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
     ResumeDayRoom run(install,saved,calendar);
-    run.room.BindMeetingOpener(dokodemo::platform::MakeLanMeetingOpener(std::uint16_t(port),true));
+    auto opener=dokodemo::platform::MakeLanMeetingOpener(std::uint16_t(port),true);
+    if (cancel_pair) {
+        const auto marker=ready_gate/std::to_string(side);
+        run.room.BindMeetingOpener([opener,marker](MeetingPlace place) -> std::unique_ptr<RoomMeetingChannel> {
+            auto channel=opener(place);
+            if (!channel) return {};
+            return std::make_unique<HoldGiftReady>(std::move(channel),marker);
+        });
+    } else run.room.BindMeetingOpener(std::move(opener));
     run.Start(previous_day,previous_day);
     const auto activity=run.room.activity_snapshot().serial;
     run.OpenMenu();
@@ -85,7 +157,9 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         // Choose the first of the five actual venue options. Once GAME49
         // is active, the no-partner scenario sends a fresh Cross edge.
         const bool select=!meeting && (choosing_gift || conversation.option_count==5) && i%12==0;
-        const bool cancel=meeting && !side && !closed && i%23==0;
+        const bool waiting_cancel=!side && i%23==0;
+        const bool ready_cancel=cancel_pair && side==1 && fs::exists(ready_gate/"1") && fs::exists(ready_gate/"2");
+        const bool cancel=meeting && !closed && (waiting_cancel || ready_cancel);
         run.Step(select ? 0x2000 : cancel ? 0x4000 : 0);
         for (const auto& event:run.room.departure_events()) {
             const std::string_view name=event.name;
@@ -96,11 +170,11 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
                 std::cout<<"GAME49 selected "<<(words?"shiritori":gifts?"gift exchange":"card exchange")
                          <<" and venue 0"<<std::endl;
             } else if (name=="meeting-gift-choice") {
-                Require(!choosing_gift && gifts && event.values.front().second==1,
-                        "Owned gift did not reach the offer prompt");
+                Require(!choosing_gift && gifts && event.values.front().second==2,
+                        "The two stored gifts did not reach the offer prompt");
                 choosing_gift=true;
             } else if (name=="meeting-gift-received") {
-                Require(side && gifts && event.values.at(0).second==0 && event.values.at(1).second==peer_id,
+                Require(exchanges && gifts && event.values.at(0).second==0 && event.values.at(1).second==peer_id,
                         "Gift was not replaced by the peer's item");
                 received=closed=true;
                 std::cout<<"Received gift "<<peer_id<<" in exchange for "<<local_id<<std::endl;
@@ -130,12 +204,13 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
                 received=closed=true;
                 std::cout<<"Received and acknowledged friend row 601"<<std::endl;
             } else if (name=="meeting-closed") {
-                Require(!side && event.values.at(0).second==1,"Unexpected connection failure or close");
+                Require(!exchanges && event.values.at(0).second==int(!side || side==1),
+                        "Unexpected connection failure or close");
                 closed=true;
             }
         }
     }
-    Require(meeting && closed && received==bool(side) && run.room.activity_snapshot().serial>activity &&
+    Require(meeting && closed && received==exchanges && run.room.activity_snapshot().serial>activity &&
             ReadRetailSlot(slot)==baseline,"Exchange did not return to activity or saved without a request");
     if (words) {
         if (side) {
@@ -152,28 +227,25 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         return 0;
     }
     if (gifts) {
-        const auto check_inventory=[](ResumeDayRoom& current,int expected) {
-            current.OpenMenu(); current.Key(0x10); current.Key(0x10);
-            Require(current.room.teaching_snapshot().menu_cursor==5,"The inventory menu did not select");
-            current.Key(0x2000);
-            current.Until([&]{return current.room.inventory_snapshot().list_ready;},"Could not open the bag");
-            const auto bag=current.room.inventory_snapshot();
-            Require(bag.count==1 && bag.slot==0 && bag.id==expected && bag.category==1,
-                    "Inventory did not retain one stored gift");
-            current.Key(0x4000);
-            current.Until([&]{return !current.room.inventory_snapshot().visible;},"The inventory did not close");
-            current.Rest(40);
-        };
-        check_inventory(run,side?peer_id:local_id);
-        if (side) {
-            run.Save();
-            const auto replacement=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
-            ResumeDayRoom reboot(install,replacement,calendar);
-            reboot.Start(previous_day,previous_day);
-            check_inventory(reboot,peer_id);
+        if (cancel_pair) {
+            Require(fs::exists(ready_gate/"1") && fs::exists(ready_gate/"2"),"Cancelled before both gifts were prepared");
+            std::cout<<"Prepared gift exchange closed without committing (participant "<<side<<")\n";
         }
+        CheckMeetingBag(run,exchanges?peer_id:local_id,other_id);
+        run.Save();
+        const auto replacement=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
+        const auto after=RoomSaveOwners::FromActorGraph(replacement.actor);
+        Require(EncodeKscSaveGraph(after.inventory.children.at(0))==
+                EncodeKscSaveGraph(expected_inventory.children.at(0)),
+                "Unexpected saved inventory row or gift ownership");
+        const auto& initial=owners.inventory.children.at(0).children;
+        const auto& final=after.inventory.children.at(0).children;
+        for (unsigned row=1;row<RoomInventory::slot_count;++row)
+            Require(EncodeKscSaveGraph(initial.at(row).children.at(0))==
+                    EncodeKscSaveGraph(final.at(row).children.at(0)),
+                    "Gift exchange changed an unrelated slot");
         Require(ReadRetailSlot(source)==input,"The source slot changed while exchanging gifts");
-        std::cout<<(side ? "Protected slot and cold bag contain the gift" : "Cancelled offer preserved the original gift")<<'\n';
+        ReportMeetingInventory("saved_gift",after.inventory);
         return 0;
     }
     run.OpenSection(0,9);
@@ -241,5 +313,27 @@ int CheckColdMeetingCard(const std::filesystem::path& install,unsigned side) {
         return dokodemo::core::sha256_hex(bytes.data(),bytes.size());
     };
     std::cout<<"cold_card own="<<own<<" peer="<<peer<<" sent="<<hash(sent)<<" received="<<hash(received)<<'\n';
+    return 0;
+}
+
+int CheckColdMeetingGift(const std::filesystem::path& install) {
+    using namespace dokodemo::gameplay;
+    const auto slot=install/"savedata"/"UCJS10002000";
+    const auto request=ReadRetailSlot(slot);
+    const auto saved=DecodeRetailUtilityRequest(request,RetailSaveProfile{});
+    const auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
+    const int day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
+    RoomInventory inventory;
+    std::string error;
+    if (!inventory.Load(install/"assets/game",error)) throw std::runtime_error(error);
+    inventory.RestoreSaveTable(owners.inventory);
+    const auto* offered=inventory.slot_item(0);
+    const auto* other=inventory.slot_item(1);
+    Require(offered && other,"The cold gift slot lacked either stored item");
+    ResumeDayRoom room(install,saved,saved.profile.SavedAt());
+    room.Start(day,day);
+    CheckMeetingBag(room,offered->id,other->id);
+    Require(ReadRetailSlot(slot)==request,"Cold bag wrote the slot");
+    ReportMeetingInventory("cold_gift",owners.inventory);
     return 0;
 }

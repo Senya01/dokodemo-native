@@ -694,7 +694,10 @@
             "meet-gifts"
           ],
           "expect": "Обмен и отказ обновляют только нужные слоты в двух процессах и переживают сбой или новое чтение.",
-          "gap": "Обмен через loopback проверялся отдельно. Матрица отказов и повторов для игры неполна."
+          "tests": [
+            "game-peer-gift"
+          ],
+          "evidence": "Двусторонняя замена одного подарка, отмена без партнёра и отказ после подготовки обоих участников до применения обмена. Сверены все 170 строк сумки и шесть файлов каждого слота после холодного чтения."
         },
         {
           "id": "peer-shiritori",
@@ -900,7 +903,7 @@
     "peer-transport": "passed",
     "peer-menu": "passed",
     "peer-card": "passed",
-    "peer-gift": "blocked",
+    "peer-gift": "passed",
     "peer-shiritori": "blocked",
     "peer-network": "blocked",
     "room-frame-input": "passed",
@@ -979,7 +982,8 @@
     "game-out-and-back": "passed",
     "game-startup-to-room": "passed",
     "game-contact-to-save": "passed",
-    "game-peer-card": "passed"
+    "game-peer-card": "passed",
+    "game-peer-gift": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1022,6 +1026,12 @@
       "routes_passed": 2,
       "routes_total": 2,
       "scope": "Windows Release, headless, null audio. Loopback card exchange with System Save and two cold processes, plus no-partner cancellation, on local protected Toro fixtures."
+    },
+    "game-peer-gift": {
+      "test_binary_sha256": "b9f34b2473593ca00935cc7ba2f7b5cfefcd87cec17e6faf8138f32389723703",
+      "routes_passed": 3,
+      "routes_total": 3,
+      "scope": "Windows Release, headless, null audio. Loopback gift exchange, no-partner cancellation and bilateral prepared abort before commit; five cold processes and intact six-file slots."
     }
   }
 }

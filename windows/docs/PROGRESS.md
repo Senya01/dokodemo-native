@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **45 of 60** requirements verified and 15 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes and card exchange with cold loads for both players. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **46 of 60** requirements verified and 14 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, and card and gift exchange with cold loads for both players. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -76,6 +76,12 @@ Configure the Windows CMake build with local media and `-DOKODEMO_GAME_OUTING_TE
 Configure the Windows CMake build with local media and `-DOKODEMO_GAME_MEETING_TEST_SLOT=<UCJS10002000 directory>` pointing to a Toro slot with an empty friend notebook. Build `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-peer-card$' --output-on-failure`.
 
 The runner copies the input into separate installations and exchanges two cards over loopback. It also cancels a separate wait without a partner. Both players save through the System menu, exit, and are relaunched as separate headless processes. Each opens the peer card from disk in the live notebook. The runner compares all 30 card fields across the two slots after applying the receive path's own-card flag change. All six files of each slot are unchanged by the cold load.
+
+## Peer gift exchange
+
+With the same local fixture setting, build `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-peer-gift$' --output-on-failure`. The players exchange the first of two gifts and save through the System menu. The test compares the other 169 inventory rows with their original state. It also checks waiting without a partner and cancelling after both peers have prepared the exchange. In the paired cancellation case, the test holds the final readiness message at the channel boundary and one player cancels with Cross. Both inventories stay unchanged and both players return to ordinary room activity.
+
+A fresh process opens each saved bag. The live gift rows, complete inventory hashes and all six slot files agree with the recorded save in every case. The network runs on loopback. Cancellation is exercised before either peer commits.
 
 ## Open coverage
 

@@ -1919,6 +1919,11 @@ int main(int argc, char **argv) try {
     }
     if (argc==4 && std::string_view(argv[2])=="--cold-meeting-card")
         return CheckColdMeetingCard(argv[1],unsigned(std::stoul(argv[3])));
+    if (argc==7 && std::string_view(argv[2])=="--gift-exchange-slot")
+        return CheckRecordExchange(argv[1],argv[3],unsigned(std::stoul(argv[4])),unsigned(std::stoul(argv[5])),
+                                   dokodemo::gameplay::MeetingMode::gifts,argv[6]);
+    if (argc==3 && std::string_view(argv[2])=="--cold-meeting-gift")
+        return CheckColdMeetingGift(argv[1]);
     if (argc==4 && std::string_view(argv[2])=="--replacement-slot")
         return CheckReplacementSlot(argv[1],argv[3]);
     if (argc==4 && std::string_view(argv[2])=="--expired-stay-slot")
