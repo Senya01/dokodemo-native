@@ -1751,6 +1751,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             else stack_.push_back({Kind::script_local_ref,int(index)});
             break;
         }
+        case 0x9a: {
+            const auto owner=Pop();
+            Require(owner.kind==Kind::context,"Unsupported foreign KSC timer owner");
+            stack_.push_back({Kind::integer,ScriptInteger(script_ticks_-script_timer_base_)});
+            break;
+        }
         case 0x94: case 0x95: {
             const int id=Read(2);
             const unsigned flags=contact_scripts[actor_number_].flags;
