@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <utility>
 
@@ -996,6 +997,7 @@ void RoomTalkState::LoadNamedOutings(const std::filesystem::path& dir) {
         named_outing_destinations_.push_back(std::move(destination));
     }
     Require(file.peek()==std::char_traits<char>::eof(),"Trailing actor outing data");
+    std::iota(named_outing_order_.begin(),named_outing_order_.end(),1u);
 }
 
 void RoomTalkState::NamedOutingSpeech(unsigned line,const std::string& label,unsigned verb) {
@@ -1035,20 +1037,24 @@ bool RoomTalkState::BeginNamedOuting(unsigned period,bool returning,recovered::R
     }
     outing_snapshot_.reset();
     named_outing_options_.clear();
-    std::vector<unsigned> eligible;
-    for(unsigned id=1;id<named_outing_destinations_.size();++id) {
-        const auto& item=named_outing_destinations_[id];
-        if(item.kind && (outing_enabled_ & (1u<<item.kind)) &&
-           (outing_period_masks_[item.kind] & (1u<<period)) && vocabulary_.FirstOutingMatch(item.primary)>=0)
-            eligible.push_back(id);
+    // The source shuffles the entire live order with n/2 random swaps,
+    // then takes at most three distinct eligible kinds.
+    const auto size=named_outing_order_.size();
+    for(std::size_t i=0;i<size/2;++i) {
+        const auto first=rng.NextC3234()%size;
+        const auto second=rng.NextC3234()%size;
+        std::swap(named_outing_order_[first],named_outing_order_[second]);
     }
-    unsigned kinds=0;
-    while(!eligible.empty() && named_outing_options_.size()<4) {
-        const auto id=eligible[rng.NextC3234()%eligible.size()];
-        const unsigned kind=1u<<named_outing_destinations_[id].kind;
-        if(!(kinds&kind)) named_outing_options_.push_back(id);
-        kinds|=kind;
-        eligible.erase(std::find(eligible.begin(),eligible.end(),id));
+    unsigned offered=0;
+    for(const auto id:named_outing_order_) {
+        const auto& item=named_outing_destinations_[id];
+        const unsigned bit=1u<<item.kind;
+        if(!item.kind || (offered&bit) || !(outing_enabled_&bit) ||
+           !(outing_period_masks_[item.kind]&(1u<<period)) || vocabulary_.FirstOutingMatch(item.primary)<0)
+            continue;
+        named_outing_options_.push_back(id);
+        offered|=bit;
+        if(named_outing_options_.size()==3) break;
     }
     named_outing_stage_=named_outing_options_.empty()?NamedOutingStage::finish:NamedOutingStage::menu;
     NamedOutingSpeech(named_outing_options_.empty()?0:1);

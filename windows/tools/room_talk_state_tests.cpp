@@ -22,6 +22,49 @@ struct RoomTalkOpcodeTests {
     using Value = RoomTalkState::Value;
     using Kind = RoomTalkState::Kind;
 
+    static void NamedOutingOrder(const std::filesystem::path& media) {
+        if (!std::filesystem::exists(media/"robo-outings.bin")) return;
+        for (unsigned actor=1;actor<=4;++actor) {
+            RoomTalkState talk;
+            AcceptedProfile profile{};
+            profile.actor=actor;
+            std::string error;
+            if (!talk.Load(media,profile,error)) throw std::runtime_error(error);
+            talk.outing_enabled_=0x000ffffe;
+            talk.EnterWithoutIntroduction();
+            recovered::RngNativeOwner rng;
+            rng.ApplyInitializerTimeT32(168,1,"outing selector");
+            auto expected_rng=rng;
+            std::vector<unsigned> ids;
+            for (unsigned id=1;id<talk.named_outing_destinations_.size();++id) ids.push_back(id);
+            for (unsigned pass=0;pass<12;++pass) {
+                const unsigned period=pass%6;
+                for (std::size_t i=0;i<ids.size()/2;++i) {
+                    const auto a=expected_rng.NextC3234()%ids.size();
+                    const auto b=expected_rng.NextC3234()%ids.size();
+                    std::swap(ids[a],ids[b]);
+                }
+                std::vector<unsigned> expected;
+                std::array<bool,20> seen{};
+                for (const auto id:ids) {
+                    const auto& row=talk.named_outing_destinations_.at(id);
+                    if (!row.kind || seen.at(row.kind) || !(talk.outing_period_masks_[row.kind]&(1u<<period)) ||
+                        talk.vocabulary().FirstOutingMatch(row.primary)<0) continue;
+                    seen[row.kind]=true;
+                    expected.push_back(id);
+                    if (expected.size()==3) break;
+                }
+                if (!talk.BeginNamedOuting(period,false,rng) || talk.named_outing_options_!=expected ||
+                    rng.Snapshot().seed!=expected_rng.Snapshot().seed)
+                    throw std::runtime_error("Actor "+std::to_string(actor)+" outing order or RNG differs in period "+
+                                             std::to_string(period));
+                talk.ordinary_=false;
+                talk.EnterWithoutIntroduction();
+            }
+        }
+        std::cout<<"48 named outing menu selections agree with the shuffled roster and period filters\n";
+    }
+
     static RoomTalkState Execute(std::vector<unsigned char> code,int initial,std::vector<Value> arguments) {
         RoomTalkState interpreter;
         interpreter.phase_=RoomTalkState::Phase::running;
@@ -4420,6 +4463,7 @@ int main(int argc,char** argv) {
         }
         CheckFriendsIntroduction(argv[1],font);
         CheckFriendsExchange(argv[1],font);
+        gameplay::RoomTalkOpcodeTests::NamedOutingOrder(argv[1]);
         gameplay::RoomTalkState idle;
         gameplay::AcceptedProfile fresh{};
         std::string error;

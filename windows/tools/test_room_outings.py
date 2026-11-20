@@ -10,7 +10,7 @@ import sys
 from tempfile import TemporaryDirectory
 
 
-def run_named(test, package, jobs):
+def run_named(test, package, jobs, roofs):
     actors = (("robo", 19), ("usagi", 3), ("inu", 16), ("kaeru", 11))
     slot = Path("savedata/UCJS10002000")
     with TemporaryDirectory(prefix="named-outings-", dir=package.parent) as directory:
@@ -27,16 +27,19 @@ def run_named(test, package, jobs):
             created = launch(start, f"--{actor}-save")
             if created.returncode:
                 return created
-            return launch(root / actor / "route", "--destination-slot", start / slot, str(scene))
+            route = ("--additional-roof-slot", start / slot) if roofs else (
+                "--destination-slot", start / slot, str(scene))
+            return launch(root / actor / "route", *route)
 
+        label = "additional roof" if roofs else "initial outing"
         passed = 0
         with ThreadPoolExecutor(max_workers=jobs) as workers:
             for (actor, _), result in zip(actors, workers.map(run, actors)):
-                print(f"{actor} natural outing: {'failed' if result.returncode else 'passed'}", flush=True)
+                print(f"{actor} {label}: {'failed' if result.returncode else 'passed'}", flush=True)
                 sys.stdout.buffer.write(result.stdout)
                 sys.stdout.buffer.flush()
                 passed += result.returncode == 0
-    print(f"{passed}/{len(actors)} alternate actors cancelled, left and returned twice")
+    print(f"{passed}/{len(actors)} alternate actors passed the {label} route")
     return int(passed != len(actors))
 
 
@@ -46,16 +49,19 @@ def main():
     parser.add_argument("package", type=Path, help="locally prepared Windows game package")
     parser.add_argument("slot", nargs="?", type=Path, help="Toro save directory with a learned word in row 163")
     parser.add_argument("--named", action="store_true", help="Create new saves and use the other four characters")
+    parser.add_argument("--roofs", action="store_true", help="Test an additional unlocked roof for each named actor")
     parser.add_argument("--jobs", type=int, default=3)
     args = parser.parse_args()
     if os.name != "nt" or os.environ.get("DOKODEMO_TEST_AUDIO") != "null" or args.jobs < 1:
         parser.error("Windows, DOKODEMO_TEST_AUDIO=null and a positive job count are required")
     test = args.test.resolve(strict=True)
     package = args.package.resolve(strict=True)
+    if args.roofs and not args.named:
+        parser.error("--roofs requires --named.")
     if args.named:
         if args.slot is not None:
             parser.error("Named outing tests use new System saves.")
-        return run_named(test, package, args.jobs)
+        return run_named(test, package, args.jobs, args.roofs)
     if args.slot is None:
         parser.error("Pass a Toro slot or use --named.")
     slot = args.slot.resolve(strict=True)

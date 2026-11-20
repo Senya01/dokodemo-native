@@ -1967,6 +1967,8 @@ int main(int argc, char **argv) try {
         return CheckNamedContactSlot(argv[1],argv[3],std::stoul(argv[4]));
     if (argc==5 && std::string_view(argv[2])=="--destination-slot")
         return CheckDestinationSlot(argv[1],argv[3],std::stoul(argv[4]));
+    if (argc==4 && std::string_view(argv[2])=="--additional-roof-slot")
+        return CheckDestinationSlot(argv[1],argv[3],12,true);
     if (argc==3 && std::string_view(argv[2])=="--destination-resources") return CheckDestinationResources(argv[1]);
     if (argc==4 && std::string_view(argv[2])=="--next-day-slot") return CheckNextDaySlot(argv[1],argv[3]);
     if (argc==4 && std::string_view(argv[2])=="--penultimate-clock")

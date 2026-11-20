@@ -397,6 +397,7 @@ private:
     std::array<NamedOutingMessage,3> named_outing_messages_{};
     std::array<std::string,3> named_outing_choices_;
     std::vector<NamedOutingDestination> named_outing_destinations_;
+    std::array<unsigned,132> named_outing_order_{};
     std::vector<unsigned> named_outing_options_;
     void LoadNamedOutings(const std::filesystem::path& dir);
     void AdvanceNamedOuting(recovered::RngNativeOwner& rng,bool actor_ready);

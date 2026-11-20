@@ -117,7 +117,7 @@
           "id": "gfx-destinations",
           "status": "basic",
           "title": "Other game scenes",
-          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Robo, Usagi, Inu and Kaeru each returned manually and automatically from their default destination. Other destinations for those characters and location-specific tasks remain open.",
+          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Robo, Usagi, Inu and Kaeru each returned manually and automatically from their default destination and the roof. The roof test uses a prepared unlocked destination and learned word. Other destinations and location-specific tasks remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {

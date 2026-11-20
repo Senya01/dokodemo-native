@@ -367,8 +367,15 @@ def actor_outing_source(root, spec):
     _, indices = table(data, h.global_start, order)
     require(len(periods) == 20 and all(v >> 28 == 2 and (v & 0x0fffffff) < 64 for v in periods),
             f"{name} invalid outing time table")
-    require(len(indices) == 132 and sorted(indices) == list(range(0x20000001,0x20000085)),
-            f"{name} invalid initial outing index")
+    menu = int.from_bytes(code[depart+0x1c:depart+0x1f], "little")
+    shuffle = int.from_bytes(code[menu+12:menu+15], "little")
+    require(code[depart+0x18:depart+0x1c] == b"\x80\x03\x20\x02"
+            and code[menu+7:menu+12] == b"\x95" + order.to_bytes(2,"little") + b"\x20\x01"
+            and indices == tuple(range(0x20000001,0x20000085)),
+            f"{name} outing menu no longer scans the source order with a three-place limit")
+    require(code[shuffle+0xe:shuffle+0x17] == bytes.fromhex("9102009001008002d1")
+            and code[shuffle+0x28:shuffle+0x3f] == bytes.fromhex("9000009001008b110189f5")*2 + b"\x78",
+            f"{name} outing menu shuffle changed")
     rows = tuple(outing_rows(data, h, roster))
     require(any(row[0] == (0x20000000 | kind) for row in rows)
             and periods[kind] & 0x3f, f"{name} starting destination absent from roster")

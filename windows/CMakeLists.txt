@@ -146,6 +146,9 @@ if(BUILD_TESTING)
             add_test(NAME game-named-outings COMMAND "${Python3_EXECUTABLE}" -B
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_outings.py"
                 "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --named)
+            add_test(NAME game-named-outing-roofs COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_outings.py"
+                "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --named --roofs)
         endif()
         add_test(NAME game-starting-outings COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_actor_outing_masks.py"

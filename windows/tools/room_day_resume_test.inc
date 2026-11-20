@@ -147,13 +147,15 @@ int CheckNamedContactSlot(const std::filesystem::path& game,const std::filesyste
 }
 
 int CheckDestinationSlot(const std::filesystem::path& install,const std::filesystem::path& input,
-                         unsigned scene) {
+                         unsigned scene,bool extra=false) {
     using namespace dokodemo::gameplay;
     const auto original=ReadRetailSlot(input);
     auto saved=DecodeRetailUtilityRequest(original,RetailSaveProfile{});
     const auto actor=saved.profile.ReadProfile().actor;
+    Require(actor<=4,"The outing slot has an unknown actor");
     const bool named=actor!=0;
     const bool check_deadline=named || scene==12;
+    Require(!extra || (named && scene==12),"Additional route requires an alternate actor and a roof destination");
     Require((scene>=1 && scene<=13) || scene==17 || scene==18 || (named && scene>=14 && scene<=19),
             "The ordinary destination roster does not include this scene");
     Require(!std::filesystem::exists(install/"savedata"),
@@ -172,18 +174,26 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         word.at(12).word=0x20000006u;
     }
     if (named) {
-        Require(owners.progress_flags[1].children.at(0).word==(0x20000000u|(1u<<scene)),
+        constexpr unsigned defaults[]{0,19,3,16,11};
+        const unsigned initial_kind=extra?defaults[actor]:scene;
+        Require(owners.progress_flags[1].children.at(0).word==(0x20000000u|(1u<<initial_kind)),
                 "The new actor's initial destination does not match the expected scene");
-        if(actor==2) {
-            // Usagi's cafe requires learned vocabulary. Use a private
-            // word from the donor dictionary with the fields required by CT2113.
+        if(extra) {
+            // Isolate a previously unlocked destination in the test graph.
+            // The input slot on disk is unchanged.
+            owners.progress_flags[1].children.at(0).word=0x20000000u|(1u<<scene);
+        }
+        if(extra || actor==2) {
+            // The cafe and the additional roofs require learned vocabulary.
+            // Give a donor word the relevant classification in the test graph.
             auto& rows=owners.dictionary.children.at(0).children;
-            Require(!rows.at(1).children.at(0).children.at(1).text.empty(),"Missing Usagi word fixture");
+            Require(!rows.at(1).children.at(0).children.at(1).text.empty(),"Missing outing word fixture");
             rows.at(163)=rows.at(1);
             auto& fields=rows.at(163).children.at(0).children;
             fields.at(0).word=0x20000024u;
             fields.at(3).word=fields.at(4).word=fields.at(11).word=0x20000000u;
             fields.at(7).word=0x20000008u;
+            if(extra) fields.at(12).word=0x20000006u;
             saved.actor=owners.ToActorGraph();
         }
     } else {
@@ -320,6 +330,25 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
                       << deadline-arrival_minute << " minutes from departure";
         std::cout << '\n';
         initial_serial=active.serial;
+    }
+    if(extra) {
+        run.Save();
+        const auto saved_bytes=ReadRetailSlot(install/"savedata"/"UCJS10002000");
+        const auto cold=DecodeRetailUtilityRequest(saved_bytes,RetailSaveProfile{});
+        const auto reloaded=RoomSaveOwners::FromActorGraph(cold.actor);
+        Require(reloaded.progress_flags[1].children.at(0).word==owners.progress_flags[1].children.at(0).word &&
+                cold.profile.ReadProfile().actor==actor,"System save lost the additional destination");
+        ResumeDayRoom independent(install,cold,run.calendar);
+        independent.Start(day,day);
+        independent.OpenMenu();
+        independent.Key(0x40);
+        Require(independent.room.teaching_snapshot().menu_cursor==1,"Missing cold outing menu entry");
+        independent.Key(0x2000);
+        independent.Until([&]{return independent.room.conversation_snapshot().option_count==2;},
+                          "Cold room lost the additional destination option");
+        Require(ReadRetailSlot(input)==original && ReadRetailSlot(install/"savedata"/"UCJS10002000")==saved_bytes,
+                "Donor or output slot changed during cold verification");
+        std::cout<<"Actor "<<actor<<" destination "<<scene<<" survived System save and cold menu\n";
     }
     return 0;
 }
