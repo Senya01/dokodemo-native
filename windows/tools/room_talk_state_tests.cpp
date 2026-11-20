@@ -505,7 +505,146 @@ struct RoomTalkOpcodeTests {
         }
     }
 
+    static void AppendChildCall(std::vector<unsigned char>& program,unsigned char opcode,unsigned char target) {
+        if(opcode==0x28) program.insert(program.end(),{0x80,41,0x80,52,opcode,2,target,0,0});
+        else program.insert(program.end(),{opcode,target,0,0});
+    }
+
+    static void ChildScriptSchedule(unsigned char opcode) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.locals_={{Kind::integer,88}};
+        vm.stack_={{Kind::integer,61}};
+        vm.result_={Kind::integer,99};
+        vm.script_timer_base_=50;
+        vm.script_locals_.resize(6);
+        const auto args=static_cast<unsigned char>(opcode==0x28?2:0);
+        std::vector<unsigned char> root;
+        AppendChildCall(root,opcode,0x40);
+        root.push_back(0x43);
+        AppendChildCall(root,opcode,0x80);
+        root.insert(root.end(),{0x43,0x80,4,0x44});
+        AppendChildCall(root,opcode,0x40);
+        root.push_back(0x0f);
+        vm.code_.emplace(0,std::move(root));
+        const auto worker=[args](unsigned char index,unsigned char finish) {
+            std::vector<unsigned char> code{0x30,args,0x93,index,0};
+            if(args) code.insert(code.end(),{0x90,0,0});
+            else code.insert(code.end(),{0x80,14});
+            code.insert(code.end(),{0x51,0x21,0xc0,0,0,0x93,static_cast<unsigned char>(index+1),0});
+            if(args) code.insert(code.end(),{0x90,1,0});
+            else code.insert(code.end(),{0x80,17});
+            code.insert(code.end(),{0x51,0x93,static_cast<unsigned char>(index+2),0,0x8d,0x51,finish});
+            return code;
+        };
+        vm.code_.emplace(0x40,worker(0,0x31));
+        vm.code_.emplace(0x80,worker(3,0x38));
+        vm.code_.emplace(0xc0,std::vector<unsigned char>{0x30,0,0x80,101,0x70,0x80,2,0x44,0x31});
+        const auto step=[&] {
+            vm.Step(0,true,true,nullptr,false);
+            if(!vm.error_.empty() || vm.executing_child_ || vm.locals_.size()!=1 ||
+               vm.stack_.size()!=1 || vm.script_timer_base_!=50)
+                throw std::runtime_error("Child KSC modified its parent execution: "+vm.error_);
+            CheckValue(vm.locals_[0],Kind::integer,88,opcode);
+            CheckValue(vm.stack_[0],Kind::integer,61,opcode);
+            CheckValue(vm.result_,Kind::integer,99,opcode);
+        };
+        step();
+        if(vm.child_scripts_.size()!=1 || vm.child_scripts_.front().calls.size()!=1)
+            throw std::runtime_error("Child KSC did not keep its procedure frame over a yield");
+        const auto first_lifetime=vm.child_scripts_.front().generation;
+        CheckValue(vm.child_scripts_.front().result,Kind::integer,101,opcode);
+        CheckValue(vm.script_locals_[0],Kind::integer,args?41:14,opcode);
+        CheckValue(vm.script_locals_[1],Kind::nil,0,opcode);
+        step();
+        if(vm.child_scripts_.size()!=2 || vm.child_scripts_.back().phase!=RoomTalkState::Phase::running)
+            throw std::runtime_error("Child KSC reused a live sibling");
+        CheckValue(vm.script_locals_[3],Kind::integer,args?41:14,opcode);
+        step();
+        CheckValue(vm.script_locals_[1],Kind::integer,args?52:17,opcode);
+        CheckValue(vm.script_locals_[2],Kind::integer,2,opcode);
+        CheckValue(vm.script_locals_[4],Kind::nil,0,opcode);
+        step();
+        CheckValue(vm.script_locals_[4],Kind::integer,args?52:17,opcode);
+        CheckValue(vm.script_locals_[5],Kind::integer,2,opcode);
+        for(unsigned i=0;i<3;++i) step();
+        if(vm.phase_!=RoomTalkState::Phase::suspended || vm.child_scripts_.size()!=2 ||
+           vm.child_scripts_.front().generation==first_lifetime ||
+           vm.child_scripts_.front().phase!=RoomTalkState::Phase::running)
+            throw std::runtime_error("Child KSC did not recycle its first inactive slot");
+        step();
+        step();
+        if(vm.phase_!=RoomTalkState::Phase::suspended ||
+           vm.child_scripts_.front().phase!=RoomTalkState::Phase::done)
+            throw std::runtime_error("Child KSC did not finish while its parent was suspended");
+    }
+
+    static void ChildScriptIsolation(unsigned char opcode) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.result_={Kind::integer,77};
+        std::vector<unsigned char> root,worker;
+        AppendChildCall(root,opcode,0x30);
+        root.push_back(0x43);
+        AppendChildCall(worker,opcode,0x60);
+        worker.push_back(0x31);
+        vm.code_.emplace(0,std::move(root));
+        vm.code_.emplace(0x30,std::move(worker));
+        vm.code_.emplace(0x60,std::vector<unsigned char>{0x48,0});
+        vm.Step(0,true,true,nullptr,false);
+        if(vm.error_.find("Unsupported child KSC operation")==std::string::npos ||
+           vm.executing_child_ || vm.visible() || vm.root_children_.size()!=1 ||
+           vm.child_scripts_.size()!=2 || vm.child_scripts_.front().children.size()!=1)
+            throw std::runtime_error("Nested KSC child escaped its script-only scope: "+vm.error_);
+        CheckValue(vm.result_,Kind::integer,77,opcode);
+    }
+
+    static void ChildScriptSiblingOrder(unsigned char opcode) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.script_locals_.resize(2);
+        std::vector<unsigned char> root,worker;
+        AppendChildCall(root,opcode,0x30);
+        AppendChildCall(root,opcode,0x60);
+        root.push_back(0x43);
+        AppendChildCall(worker,opcode,0xc0);
+        worker.push_back(0x38);
+        vm.code_.emplace(0,std::move(root));
+        vm.code_.emplace(0x30,std::move(worker));
+        vm.code_.emplace(0x60,std::vector<unsigned char>{0x93,0,0,0x80,22,0x51,0x38});
+        vm.code_.emplace(0xc0,std::vector<unsigned char>{0x93,1,0,0x92,0,0,0x51,0x38});
+        vm.Step(0,true,true,nullptr,false);
+        if(!vm.error_.empty() || vm.root_children_.size()!=2 || vm.child_scripts_.size()!=3)
+            throw std::runtime_error("KSC sibling scheduling failed: "+vm.error_);
+        CheckValue(vm.script_locals_[1],Kind::integer,22,opcode);
+    }
+
+    static void ChildScriptForeignFrame(unsigned char opcode) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.locals_={{Kind::integer,11}};
+        vm.script_locals_={{Kind::frame_ref,0}};
+        std::vector<unsigned char> root;
+        AppendChildCall(root,opcode,0x40);
+        root.push_back(0x43);
+        vm.code_.emplace(0,std::move(root));
+        // A reference read indirectly from shared data still has its root owner.
+        vm.code_.emplace(0x40,std::vector<unsigned char>{0x30,1,0x92,0,0,0x80,20,0x51,0x38});
+        vm.Step(0,true,true,nullptr,false);
+        if(vm.error_.find("different context")==std::string::npos || vm.executing_child_)
+            throw std::runtime_error("KSC child accepted a foreign frame reference: "+vm.error_);
+        CheckValue(vm.locals_.at(0),Kind::integer,11,opcode);
+    }
+
     static void Run() {
+        ChildScriptSchedule(0x28);
+        ChildScriptIsolation(0x28);
+        ChildScriptForeignFrame(0x28);
+        ChildScriptSiblingOrder(0x28);
         WordKeyboardResult(0,true);
         WordKeyboardResult(0,false);
         WordKeyboardResult(2,true);

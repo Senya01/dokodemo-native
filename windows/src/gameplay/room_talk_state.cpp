@@ -996,6 +996,13 @@ bool RoomTalkState::TakeFirstDayDiaryRequest() {
     return std::exchange(first_day_diary_request_, false);
 }
 
+bool RoomTalkState::HasCodeAt(unsigned pc) const {
+    const auto after=code_.upper_bound(pc);
+    if(after==code_.begin()) return false;
+    const auto& [start,bytes]=*std::prev(after);
+    return pc-start<bytes.size();
+}
+
 unsigned RoomTalkState::Read(unsigned n) {
     auto it=code_.upper_bound(pc_);
     Require(it!=code_.begin(),"Outside the cold NEKO callback");
@@ -1013,7 +1020,10 @@ RoomTalkState::Value RoomTalkState::Pop() {
 }
 
 RoomTalkState::Value RoomTalkState::Dereference(Value v) const {
-    if(v.kind==Kind::frame_ref) return (v.depth==callers_.size()?locals_:callers_.at(v.depth).locals).at(v.data);
+    if(v.kind==Kind::frame_ref) {
+        Require(v.frame_owner==FrameOwner(),"KSC frame reference belongs to a different context");
+        return (v.depth==callers_.size()?locals_:callers_.at(v.depth).locals).at(v.data);
+    }
     if(v.kind==Kind::word_field) return DictionaryField(v.data,int(v.depth));
     if(v.kind==Kind::question_field) {
         const auto raw=vocabulary_.QuestionField(v.data,unsigned(v.depth));
@@ -1059,9 +1069,14 @@ RoomTalkState::Value RoomTalkState::DictionaryField(int row,int field) const {
 }
 
 void RoomTalkState::Assign(const Value& ref,Value value) {
-    if(ref.kind==Kind::frame_ref)
+    if(executing_child_)
+        Require(ref.kind==Kind::frame_ref || ref.kind==Kind::script_local_ref ||
+                ref.kind==Kind::element || ref.kind==Kind::global_element ||
+                ref.kind==Kind::association_ref,"Child KSC cannot write a room-owned field");
+    if(ref.kind==Kind::frame_ref) {
+        Require(ref.frame_owner==FrameOwner(),"KSC frame reference belongs to a different context");
         (ref.depth==callers_.size()?locals_:callers_.at(ref.depth).locals).at(ref.data)=std::move(value);
-    else if(ref.kind==Kind::teach_field) teaching_.at(ref.data)=std::move(value);
+    } else if(ref.kind==Kind::teach_field) teaching_.at(ref.data)=std::move(value);
     else if(ref.kind==Kind::question_field) {
         if(value.kind==Kind::string) {
             vocabulary_.WriteQuestionText(ref.data,unsigned(ref.depth),value.text);
@@ -1240,6 +1255,11 @@ void RoomTalkState::ReturnFromGreeting() {
 }
 
 void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result) {
+    if(executing_child_) {
+        Require(HasCodeAt(target),"Missing child KSC procedure");
+        EnterProcedure(target,std::move(args),indirect,preserve_result);
+        return;
+    }
     const auto argc=args.size();
     const auto* source=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
     if(scheduled_room_event_ && ((robo_greeting_ && target==0x1a89 && pc_==0x676b5) ||
@@ -1595,6 +1615,10 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect,b
     if(ordinary_ && !code_.count(target)) {
         frontier_=target; phase_=Phase::frontier; return;
     }
+    EnterProcedure(target,std::move(args),indirect,preserve_result);
+}
+
+void RoomTalkState::EnterProcedure(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result) {
     callers_.push_back({pc_,std::move(locals_),indirect_topic_});
     if (indirect) indirect_topic_=target;
     pc_=target; locals_=std::move(args);
@@ -1747,17 +1771,122 @@ void RoomTalkState::RememberProcedure(unsigned table,unsigned index,unsigned tar
     }
 }
 
+namespace {
+constexpr unsigned script_instruction_limit=16384;
+
+bool IsChildOpcode(unsigned op) {
+    // Data operations can share the script image and actor-local storage. Modal
+    // services need a separate host owner and cannot use the root's state.
+    switch(op) {
+    case 0x0b: case 0x0c: case 0x0f: case 0x10: case 0x11: case 0x13:
+    case 0x18: case 0x1a: case 0x20: case 0x21: case 0x22: case 0x23:
+    case 0x28: case 0x2c: case 0x2d: case 0x2e: case 0x2f:
+    case 0x30: case 0x31: case 0x38: case 0x40: case 0x41: case 0x43: case 0x44:
+    case 0x4e: case 0x4f: case 0x50: case 0x51: case 0x52: case 0x53:
+    case 0x54: case 0x55: case 0x56: case 0x57: case 0x70: case 0x71:
+    case 0x72: case 0x73: case 0x78: case 0x89: case 0x8a: case 0x8b:
+    case 0x8d: case 0x8f: case 0x90: case 0x91: case 0x92: case 0x93:
+    case 0x94: case 0x95: case 0xa0: case 0xd0: case 0xd1: case 0xd2:
+    case 0xd4: case 0xd5: case 0xd6: case 0xd7: case 0xe0: case 0xe1:
+    case 0xe2: case 0xe3: case 0xf4: case 0xf5: case 0xfc: case 0xfd:
+        return true;
+    default:
+        return (op>=0x5a && op<=0x6d && op!=0x65 && op!=0x67) ||
+               (op>=0x80 && op<=0x88) || (op>=0xb0 && op<=0xb4) ||
+               (op>=0xb8 && op<=0xbd) || (op>=0xc0 && op<=0xc5);
+    }
+}
+}
+
+void RoomTalkState::ChildScript::SwapExecution(RoomTalkState& vm) {
+    using std::swap;
+    swap(phase,vm.phase_);
+    swap(pc,vm.pc_);
+    swap(timer_base,vm.script_timer_base_);
+    swap(deadline,vm.script_deadline_);
+    swap(indirect_topic,vm.indirect_topic_);
+    swap(delay,vm.delay_);
+    swap(instruction_cost,vm.instruction_cost_);
+    swap(stack,vm.stack_);
+    swap(locals,vm.locals_);
+    swap(calls,vm.callers_);
+    swap(blocks,vm.blocks_);
+    swap(result,vm.result_);
+}
+
+void RoomTalkState::StartChildScript(unsigned target,unsigned argc) {
+    Require(HasCodeAt(target),"Missing child KSC entry");
+    Require(stack_.size()>=argc,"Insufficient child KSC arguments");
+    const auto first=stack_.end()-argc;
+    Require(std::none_of(first,stack_.end(),[](const Value& value) {
+        return value.kind==Kind::frame_ref;
+    }),"Cannot pass a frame reference to a child KSC context");
+    std::vector<Value> args(first,stack_.end());
+    auto& children=executing_child_?executing_child_->children:root_children_;
+    const auto inactive=std::find_if(children.begin(),children.end(),[this](std::size_t index) {
+        return child_scripts_[index].phase==Phase::done;
+    });
+    const auto index=inactive==children.end()?child_scripts_.size():*inactive;
+    if(index==child_scripts_.size()) {
+        child_scripts_.emplace_back();
+        children.push_back(index);
+    }
+    auto& slot=child_scripts_[index];
+    // 680A4 takes the first inactive child. 680D0 gives the activation
+    // its own PC, argument frame and clock base without running the caller's frame.
+    ChildScript fresh;
+    fresh.generation=++child_generation_;
+    fresh.pc=target;
+    fresh.timer_base=script_ticks_;
+    fresh.locals=std::move(args);
+    fresh.phase=Phase::running;
+    fresh.children.swap(slot.children);
+    slot=std::move(fresh);
+    stack_.erase(first,stack_.end());
+}
+
+void RoomTalkState::StepChildren(recovered::RngNativeOwner* rng) {
+    if(root_children_.empty() || phase_==Phase::failed || phase_==Phase::unsupported) return;
+    child_budget_=script_instruction_limit;
+    std::vector<const std::vector<std::size_t>*> pending{&root_children_};
+    while(!pending.empty()) {
+        const auto& siblings=*pending.back();
+        pending.pop_back();
+        // 74CF8 advances the next sibling before it descends into the current
+        // context's first child. Queue descendants for the corresponding unwind.
+        for(const auto index:siblings) {
+            auto& child=child_scripts_[index];
+            if(child.phase==Phase::running) {
+                child.SwapExecution(*this);
+                executing_child_=&child;
+                try {
+                    AdvanceScript(rng);
+                } catch(const std::exception& e) {
+                    child.SwapExecution(*this);
+                    executing_child_=nullptr;
+                    throw std::runtime_error("Child KSC PC "+std::to_string(child.pc)+": "+e.what());
+                }
+                child.SwapExecution(*this);
+                executing_child_=nullptr;
+            }
+            if(!child.children.empty()) pending.push_back(&child.children);
+        }
+    }
+}
+
 void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
     const auto* named=alternate_greeting_? &alternate_greeting_->schedule : nullptr;
-    for(unsigned budget=0;budget<16384;++budget) {
-        if(ordinary_) {
-            const auto after=code_.upper_bound(pc_);
-            if(after==code_.begin() || pc_-std::prev(after)->first>=std::prev(after)->second.size()) {
-                frontier_=pc_; phase_=Phase::frontier; return;
-            }
+    for(unsigned budget=0;budget<script_instruction_limit;++budget) {
+        if(executing_child_) {
+            Require(child_budget_!=0,"Child KSC instruction budget exhausted");
+            --child_budget_;
+        }
+        if(ordinary_ && !executing_child_ && !HasCodeAt(pc_)) {
+            frontier_=pc_; phase_=Phase::frontier; return;
         }
         const auto site=pc_, op=Read(1);
-        if(excursion_) {
+        if(executing_child_) Require(IsChildOpcode(op),"Unsupported child KSC operation");
+        if(excursion_ && !executing_child_) {
             switch(site) {
             case 0x13090: case 0x130e0: case 0x130c9: case 0x130d6: case 0x130e9:
             case 0x1269f: case 0x1c57: case 0x1c59: case 0x1c5a: case 0x1c64: case 0x1c69: case 0x126ad: case 0x13411: case 0x13218:
@@ -1917,7 +2046,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x90: stack_.push_back(locals_.at(Read(2))); break;
-        case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
+        case 0x91: {
+            Value ref{Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()};
+            ref.frame_owner=FrameOwner();
+            stack_.push_back(std::move(ref));
+            break;
+        }
         case 0x92:
             stack_.push_back(script_locals_.at(Read(2)));
             break;
@@ -2379,6 +2513,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             random_bound_=static_cast<unsigned>(procedure_lists_.at(table).size());
             random_use_=RandomUse::procedure; phase_=Phase::random; return;
         }
+        case 0x28: {
+            const auto argc=op==0x28?Read(1):0u;
+            const auto target=Read(3);
+            StartChildScript(target,argc);
+            break;
+        }
         case 0x2c:
         case 0x2d:
         case 0x2e:
@@ -2427,6 +2567,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x70: result_=Pop(); break;
         case 0x31: {
             if(callers_.empty()) {
+                if(executing_child_) { phase_=Phase::done; return; }
                 if(robo_contact_greeting_) {
                     Require(site==0x5be18 && result_.kind==Kind::truth && result_.data,
                             "Unexpected Robo contact greeting return");
@@ -2519,7 +2660,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             return;
         case 0x44:
             delay_=Pop().data;
-            if(queued_outing_callback_ && site==0x1c69) {
+            if(!executing_child_ && queued_outing_callback_ && site==0x1c69) {
                 // 1C64 posted to this context. Deliver at its first scheduler yield,
                 // preserving the caller's next PC, operands and one-tick deadline.
                 Require(delay_==1 && !outing_callback_,"Invalid outing callback deadline");
@@ -2539,6 +2680,9 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         case 0x8b: {
             const unsigned id=Read(1),argc=Read(1);
+            if(executing_child_)
+                Require(id<=0x10 || id==0x50 || id==0x52 || (id>=0x70 && id<=0x72),
+                        "Unsupported child KSC service");
             if(id==0x01 && argc==1) {
                 // 6857C returns the original tag, so only kinds with an
                 // unambiguous source representation can use this branch.
@@ -3090,63 +3234,75 @@ void RoomTalkState::Step(std::uint32_t buttons,bool available,bool actor_ready,c
                          bool prompt_expired,std::optional<bool> invitation_event,recovered::RngNativeOwner* rng,
                          bool secondary_ready) {
     const auto edges=buttons&~previous_;
-    const bool edge=(edges&circle)!=0;
     previous_=buttons; available_=available; consumed_=false; actor_command_.reset();
     wide_camera_requested_=false;
     ordinary_return_=ordinary_rejected_=false;
     attention_return_=false; outing_sites_.clear();
     ++script_ticks_; // 74DD4 advances the KSC scheduler clock once, independent of DIALOG's tick.
     try {
-        if(phase_==Phase::unsupported || phase_==Phase::failed) return;
-        if(visible() || message_wait_) {
-            Require(font!=nullptr,"Missing conversation FONT.XFT");
-            AdvanceBalloon(*font);
-        }
-        if(phase_==Phase::prompt && ((available && invitation_event.value_or(edge)) || prompt_expired)) {
-            consumed_=available && invitation_event.value_or(edge);
-            if((robo_greeting_ || alternate_greeting_) && !consumed_) {
-                // 677FA cancels the invitation and requests ASC 30. An
-                // expired prompt does not execute the gift callback.
-                actor_command_=30;
-                ReturnFromGreeting();
-                return;
-            }
-            phase_=Phase::running;
-            pc_=alternate_greeting_?alternate_greeting_->entry:robo_greeting_?0x6746du:0x89556u;
-        }
-        if(phase_==Phase::answer_pending) {
-            // MSG (1E0C8) and ASK (1E618) use the same actor's balloon slot.
-            // ASK waits for its +64 state to reach zero before opening SELECT.
-            if(message_wait_ || visible() || closing_) return;
-            effects_.push_back(10);
-            phase_=Phase::answer;
+        StepRoom(buttons,edges,actor_ready,font,prompt_expired,invitation_event,rng,secondary_ready);
+        StepChildren(rng);
+    } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }
+}
+
+void RoomTalkState::StepRoom(std::uint32_t buttons,std::uint32_t edges,bool actor_ready,
+                             const recovered::PackageView* font,bool prompt_expired,
+                             std::optional<bool> invitation_event,recovered::RngNativeOwner* rng,
+                             bool secondary_ready) {
+    const bool edge=(edges&circle)!=0;
+    if(phase_==Phase::unsupported || phase_==Phase::failed) return;
+    if(visible() || message_wait_) {
+        Require(font!=nullptr,"Missing conversation FONT.XFT");
+        AdvanceBalloon(*font);
+    }
+    if(phase_==Phase::prompt && ((available_ && invitation_event.value_or(edge)) || prompt_expired)) {
+        consumed_=available_ && invitation_event.value_or(edge);
+        if((robo_greeting_ || alternate_greeting_) && !consumed_) {
+            // 677FA cancels the invitation and requests ASC 30. An
+            // expired prompt does not execute the gift callback.
+            actor_command_=30;
+            ReturnFromGreeting();
             return;
         }
-        if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
-        if(phase_!=Phase::running || message_wait_) return;
-        if(scheduled_room_event_ && invitation_event.value_or(false) && scheduled_deadline_ &&
-           scheduled_deadline_->kind==Kind::calendar_time && !blocks_.empty()) {
-            const auto block=blocks_.back();
-            Require(block.close==(alternate_greeting_?0x1a8du:robo_greeting_?0x1a78u:0x1a77u) && block.depth==callers_.size() &&
-                    block.base<=stack_.size(),
-                    "Scheduled invitation no longer owns its protected wait");
-            // 8DA99 plays the confirm cue, then 8DA9E unwinds to the 1A44 handler.
-            scheduled_sound_=RoomSound{5,0,4,128,true};
-            blocks_.pop_back(); stack_.resize(block.base); pc_=block.close;
-            actor_wait_=false; delay_=0; script_deadline_=0;
-        }
-        if(actor_wait_) {
-            if(!(actor_wait_secondary_?secondary_ready:actor_ready)) return;
-            actor_wait_=false;
-        }
-        // 74C2C checks a positive signed deadline against the signed
-        // scheduler clock. Expired and nonpositive deadlines clear.
-        if(SignedClock(script_deadline_)>0 &&
-           SignedClock(script_ticks_)<SignedClock(script_deadline_)) return;
-        script_deadline_=0;
-        if(delay_>0 && --delay_>0) return;
-        Execute(rng);
-    } catch(const std::exception& e) { error_=std::string(e.what())+" (next KSC PC "+std::to_string(pc_)+")"; phase_=Phase::failed; }
+        phase_=Phase::running;
+        pc_=alternate_greeting_?alternate_greeting_->entry:robo_greeting_?0x6746du:0x89556u;
+    }
+    if(phase_==Phase::answer_pending) {
+        // MSG (1E0C8) and ASK (1E618) use the same actor's balloon slot.
+        // ASK waits for its +64 state to reach zero before opening SELECT.
+        if(message_wait_ || visible() || closing_) return;
+        effects_.push_back(10);
+        phase_=Phase::answer;
+        return;
+    }
+    if(phase_==Phase::answer) { StepAnswer(buttons,edges); return; }
+    if(phase_!=Phase::running || message_wait_) return;
+    if(scheduled_room_event_ && invitation_event.value_or(false) && scheduled_deadline_ &&
+       scheduled_deadline_->kind==Kind::calendar_time && !blocks_.empty()) {
+        const auto block=blocks_.back();
+        Require(block.close==(alternate_greeting_?0x1a8du:robo_greeting_?0x1a78u:0x1a77u) && block.depth==callers_.size() &&
+                block.base<=stack_.size(),
+                "Scheduled invitation no longer owns its protected wait");
+        // 8DA99 plays the confirm cue, then 8DA9E unwinds to the 1A44 handler.
+        scheduled_sound_=RoomSound{5,0,4,128,true};
+        blocks_.pop_back(); stack_.resize(block.base); pc_=block.close;
+        actor_wait_=false; delay_=0; script_deadline_=0;
+    }
+    if(actor_wait_) {
+        if(!(actor_wait_secondary_?secondary_ready:actor_ready)) return;
+        actor_wait_=false;
+    }
+    AdvanceScript(rng);
+}
+
+void RoomTalkState::AdvanceScript(recovered::RngNativeOwner* rng) {
+    // 74C2C checks a positive signed deadline against the signed
+    // scheduler clock. Expired and nonpositive deadlines clear.
+    if(SignedClock(script_deadline_)>0 &&
+       SignedClock(script_ticks_)<SignedClock(script_deadline_)) return;
+    script_deadline_=0;
+    if(delay_>0 && --delay_>0) return;
+    Execute(rng);
 }
 
 void RoomTalkState::SupplyGift(int slot) {

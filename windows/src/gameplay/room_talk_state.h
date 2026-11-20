@@ -9,6 +9,7 @@
 #include "room_word_traits.h"
 #include "room_sound.h"
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -189,6 +190,7 @@ private:
         std::vector<RoomMessageWord> word_operands;
         std::shared_ptr<std::map<std::string,Value>> entries;
         std::size_t procedure_cursor=0;
+        std::uint64_t frame_owner=0;
     };
     struct Frame { unsigned resume; std::vector<Value> locals; unsigned indirect_topic; };
     Phase phase_=Phase::unsupported;
@@ -261,6 +263,28 @@ private:
     void LoadOutings(const std::filesystem::path& dir);
     struct ControlBlock { unsigned close; std::size_t depth,base; };
     std::vector<ControlBlock> blocks_;
+    struct ChildScript {
+        Phase phase=Phase::done;
+        std::uint64_t generation=0;
+        unsigned pc=0,timer_base=0,deadline=0,indirect_topic=0;
+        int delay=0,instruction_cost=1;
+        std::vector<Value> stack,locals;
+        std::vector<Frame> calls;
+        std::vector<ControlBlock> blocks;
+        Value result;
+        std::vector<std::size_t> children;
+        void SwapExecution(RoomTalkState& vm);
+    };
+    // A flat pool keeps slot indices stable and releases deep trees iteratively.
+    std::deque<ChildScript> child_scripts_;
+    std::vector<std::size_t> root_children_;
+    ChildScript* executing_child_=nullptr; // Set only for the duration of a child slice.
+    std::uint64_t child_generation_=0;
+    unsigned child_budget_=0;
+    void StartChildScript(unsigned target,unsigned argc);
+    void StepChildren(recovered::RngNativeOwner* rng);
+    void AdvanceScript(recovered::RngNativeOwner* rng);
+    std::uint64_t FrameOwner() const { return executing_child_?executing_child_->generation:0; }
     struct OutingCallback {
         unsigned resume;
         std::vector<Value> stack,locals;
@@ -330,12 +354,17 @@ private:
     unsigned pending_procedure_list_=0,pending_procedure_arguments_=0;
     RandomUse random_use_=RandomUse::value;
     void StepAnswer(std::uint32_t buttons,std::uint32_t edges);
+    bool HasCodeAt(unsigned pc) const;
     unsigned Read(unsigned n);
     Value Pop();
     Value Dereference(Value) const;
     void Assign(const Value& ref,Value value);
     int ApplyArrayRecords(bool filtered);
     void Execute(recovered::RngNativeOwner* rng);
+    void StepRoom(std::uint32_t buttons,std::uint32_t edges,bool actor_ready,
+                  const recovered::PackageView* font,bool prompt_expired,
+                  std::optional<bool> invitation_event,recovered::RngNativeOwner* rng,bool secondary_ready);
+    void EnterProcedure(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result);
     void Call(unsigned target,std::vector<Value> args,bool indirect,bool preserve_result=false);
     void ReturnFromGreeting();
     struct NamedSchedule {
