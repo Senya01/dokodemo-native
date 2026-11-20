@@ -1701,7 +1701,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             locals_.at(index)={Kind::array,0,{},0,std::make_shared<std::vector<Value>>(length)};
             break;
         }
-        case 0x71: case 0x72: case 0x73: InitializeArray(op); break;
+        case 0x71: case 0x72: case 0x73: case 0x75: InitializeArray(op); break;
         case 0x4f: {
             auto ref=Pop();
             // The BOOT handler leaves the destination reference in the
