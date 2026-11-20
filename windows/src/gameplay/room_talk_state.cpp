@@ -2370,6 +2370,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 // its terminator in the high byte at this address.
                 result_={Kind::integer,int(static_cast<unsigned char>(value.text[0]) |
                                           (unsigned(static_cast<unsigned char>(value.text[1]))<<8))};
+            } else if(id==0x0e && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::integer,"Invalid integer for KSC byte string");
+                const auto bits=unsigned(value.data);
+                const char bytes[]={static_cast<char>(bits&0xffu),static_cast<char>((bits>>8)&0xffu),0};
+                result_={Kind::string,0,std::string(bytes)};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
