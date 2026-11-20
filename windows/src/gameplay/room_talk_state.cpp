@@ -2638,6 +2638,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 result_={Kind::integer,int(CountIntroductionFriends(vocabulary_))};
             } else if(id==0x61 && argc==2) {
                 result_={Kind::integer,ApplyArrayRecords(false)};
+            } else if(id==0x62 && argc==3) {
+                result_={Kind::integer,ApplyArrayRecords(true)};
             } else if(id==0x63 && argc==2) {
                 const auto filter=Pop(),row=Pop();
                 Require(filter.kind==Kind::constant_ref && row.kind==Kind::word_row,"Invalid word predicate");
