@@ -2376,6 +2376,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 const auto bits=unsigned(value.data);
                 const char bytes[]={static_cast<char>(bits&0xffu),static_cast<char>((bits>>8)&0xffu),0};
                 result_={Kind::string,0,std::string(bytes)};
+            } else if(id==0x10 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::integer,"Invalid KSC absolute value operand");
+                const auto bits=unsigned(value.data);
+                result_={Kind::integer,ScriptInteger(value.data<0?0u-bits:bits)};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
