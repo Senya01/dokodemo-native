@@ -2456,7 +2456,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             }
             return;
         case 0x48: Message(); return;
-        case 0x49:
+        case 0x49: case 0x4a:
             // The retail debug sink at 5156C returns without output. Both
             // commands still expand and consume the inline text.
             (void)ReadText();
