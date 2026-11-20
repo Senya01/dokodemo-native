@@ -1954,6 +1954,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid KSC bitwise OR");
             stack_.push_back({Kind::integer,lhs.data|rhs.data}); break;
         }
+        case 0xd6: {
+            const auto rhs=Pop(),lhs=Pop();
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid KSC bitwise operands");
+            const unsigned left=unsigned(lhs.data),right=unsigned(rhs.data);
+            stack_.push_back({Kind::integer,ScriptInteger(op==0xd6 ? left^right : left&~right)});
+            break;
+        }
         case 0xd1: case 0xd2: {
             const auto divisor=Pop(),dividend=Pop();
             Require(divisor.kind==Kind::integer && dividend.kind==Kind::integer,
