@@ -4,7 +4,7 @@ from collections import Counter
 import json
 from pathlib import Path
 from native_code_inventory import collect_code
-from render_native_status_images import badge_svg, code_svg
+from render_native_status_images import badge_svg, code_badge_svg, code_svg
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +49,7 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--boot", type=Path, help="Optional original v1.01 BOOT.BIN for a local comparison")
     parser.add_argument("--badge", type=Path)
+    parser.add_argument("--code-badge", type=Path)
     parser.add_argument("--overview", type=Path)
     args = parser.parse_args()
     if args.boot and not args.boot.is_file():
@@ -67,6 +68,8 @@ if __name__ == "__main__":
     )
     if args.badge:
         args.badge.write_text(badge_svg(data["verification"]), encoding="utf-8", newline="\n")
+    if args.code_badge:
+        args.code_badge.write_text(code_badge_svg(data["code"]), encoding="utf-8", newline="\n")
     if args.overview:
         args.overview.write_text(code_svg(data["code"]), encoding="utf-8", newline="\n")
     print(dict(sorted(status_counts.items())))

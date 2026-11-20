@@ -2,14 +2,11 @@
 from html import escape
 
 
-def badge_svg(verification: dict) -> str:
-    results = verification["states"].values()
-    total = len(results)
-    success = sum(status == "passed" for status in results)
+def _badge(title: str, success: int, total: int, scope: str, complete: bool) -> str:
     percent = f"{success / total:.1%}".replace(".0%", "%")
-    label = f"Windows acceptance {percent}, {success} of {total} requirements verified"
-    color = "#257944" if verification["ready"] else "#e8ba25"
-    ink = "#fff" if verification["ready"] else "#171717"
+    label = escape(f"{title} {percent}, {success} of {total} {scope}")
+    color = "#257944" if complete else "#e8ba25"
+    ink = "#fff" if complete else "#171717"
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="173" height="25" viewBox="0 0 173 25" role="img" aria-label="{label}">
   <title>{label}</title>
   <clipPath id="badge"><rect width="173" height="25" rx="4"/></clipPath>
@@ -18,11 +15,24 @@ def badge_svg(verification: dict) -> str:
     <rect x="121" width="52" height="25" fill="{color}"/>
   </g>
   <g font-family="Verdana, sans-serif" font-size="11" text-anchor="middle">
-    <text x="60.5" y="16.5" fill="#fff">Windows acceptance</text>
+    <text x="60.5" y="16.5" fill="#fff">{escape(title)}</text>
     <text x="147" y="16.5" fill="{ink}" font-weight="bold">{percent}</text>
   </g>
 </svg>
 """
+
+
+def badge_svg(verification: dict) -> str:
+    results = verification["states"].values()
+    return _badge("Windows acceptance", sum(status=="passed" for status in results),
+                  len(results), "requirements verified", verification["ready"])
+
+
+def code_badge_svg(code: dict) -> str:
+    entries = [entry for group in code["groups"] if group["kind"]=="dispatch" for entry in group["items"]]
+    matched = sum(bool(entry["lines"]) for entry in entries)
+    return _badge("KSC room code", matched, len(entries), "dispatch IDs with a native branch",
+                  matched==len(entries))
 
 
 def text(x, y, value, size=13, color="#edf3f8", end=False):

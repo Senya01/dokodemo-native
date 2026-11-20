@@ -13,14 +13,14 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The badge measures verified requirements in the Windows acceptance matrix. This snapshot records **39 of 60** requirements verified and 21 open, with 62 of 62 tests passing in a local Windows Release run without sound or windows. The [snapshot](native-acceptance.json) records the executable hash, public source checkpoint and test results.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. This snapshot records **39 of 60** requirements verified and 21 open, with 62 of 62 tests passing in a local Windows Release run without sound or windows. The [snapshot](native-acceptance.json) records the executable hash, public source checkpoint and test results.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
-Run from the `windows` directory to rebuild all three assets from the checked-in snapshots:
+Run from the `windows` directory to rebuild the map and badges from the checked-in snapshots:
 
 ```powershell
-python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --overview docs/native-code-map.svg
+python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --code-badge docs/native-code-progress.svg --overview docs/native-code-map.svg
 ```
 
 With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.

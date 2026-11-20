@@ -1,5 +1,6 @@
 # dokodemo-native
 
+[![KSC room code](windows/docs/native-code-progress.svg)](windows/docs/PROGRESS.md#acceptance-and-code-map)
 [![Windows acceptance](windows/docs/native-progress.svg)](windows/docs/PROGRESS.md#acceptance-and-code-map)
 
 [![Native code map](windows/docs/native-code-map.svg)](windows/docs/native-coverage.html)
