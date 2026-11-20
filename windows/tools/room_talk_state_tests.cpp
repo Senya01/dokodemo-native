@@ -468,7 +468,48 @@ struct RoomTalkOpcodeTests {
         }
     }
 
+    static void WordKeyboardResult(int mode,bool accept) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.code_.emplace(0,std::vector<unsigned char>{0x8b,0x20,2,0x89,0x57,0x43});
+        auto dest=std::make_shared<std::vector<Value>>(2,Value{Kind::integer,9});
+        vm.locals_={{Kind::array,0,{},0,dest}};
+        vm.stack_={{Kind::integer,41},{Kind::frame_ref,0},{Kind::integer,mode},
+                   {Kind::string,0,mode==2?"initial":""}};
+        vm.result_={Kind::integer,49};
+
+        vm.Step(0,true,true,nullptr,false);
+        if(!vm.error_.empty() || !vm.word_entry_requested() || vm.pc_!=3 ||
+           vm.stack_.size()!=2 || vm.result_.kind!=Kind::nil ||
+           vm.keyboard_initial_reading_.has_value()!=(mode==2) ||
+           (mode==2 && *vm.keyboard_initial_reading_!="initial"))
+            throw std::runtime_error("KSC word editor did not wait with its original operands: "+vm.error_);
+        vm.Step(0,true,true,nullptr,false);
+        if(vm.pc_!=3 || !vm.word_entry_requested())
+            throw std::runtime_error("KSC word editor advanced before host completion");
+        vm.FinishWordEntry(accept?"Written":"",accept?"Reading":"");
+        if(vm.keyboard_initial_reading_ || vm.result_.kind!=Kind::array || !vm.result_.cells)
+            throw std::runtime_error("KSC word editor did not publish a pair");
+        vm.Step(0,true,true,nullptr,false);
+        if(!vm.error_.empty() || vm.pc_!=6 || vm.stack_.size()!=1)
+            throw std::runtime_error("KSC word editor did not resume and copy its pair: "+vm.error_);
+        CheckValue(vm.stack_.back(),Kind::integer,41,0x20);
+        if(accept) {
+            if(dest->at(0).kind!=Kind::string || dest->at(0).text!="Written" ||
+               dest->at(1).kind!=Kind::string || dest->at(1).text!="Reading")
+                throw std::runtime_error("KSC word editor returned the wrong string order");
+        } else {
+            CheckValue(dest->at(0),Kind::nil,0,0x20);
+            CheckValue(dest->at(1),Kind::nil,0,0x20);
+        }
+    }
+
     static void Run() {
+        WordKeyboardResult(0,true);
+        WordKeyboardResult(0,false);
+        WordKeyboardResult(2,true);
+        WordKeyboardResult(2,false);
         ProcedureRingCall(0x2c,1);
         ProcedureRingCall(0x2d,2);
         ProcedureRingCall(0x2e,3);

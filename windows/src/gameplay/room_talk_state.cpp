@@ -1545,16 +1545,16 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect,b
     if(target==contact.keyboard) {
         Require(argc==3 && args[1].kind==Kind::string && args[2].kind==Kind::integer,
                 "Invalid word keyboard arguments");
-        if(args[2].data==2 && pc_==0x4cb7)
-            keyboard_initial_reading_=args[1].text;
-        else {
-            const bool question= friends_introduction_ && (pc_==0xcf85 || pc_==0xd176);
+        if(args[2].data!=2 || pc_!=0x4cb7) {
+            const bool question=friends_introduction_ && (pc_==0xcf85 || pc_==0xd176);
             Require(args[2].data==0 && args[1].text.empty() && (reserved_word_>=0 || question),
                     "Unsupported word keyboard owner");
         }
-        editor_pair_=Dereference(args[0]);
-        Require(editor_pair_.kind==Kind::array && editor_pair_.cells->size()==2,"Invalid word output pair");
-        phase_=Phase::word_entry; return;
+        auto destination=Dereference(args[0]);
+        Require(destination.kind==Kind::array && destination.cells && destination.cells->size()==2,
+                "Invalid word output pair");
+        OpenWordKeyboard(args[2].data,std::move(args[1].text),std::move(destination));
+        return;
     }
     if(target==0xf02) {
         Require(argc==1 && args[0].kind==Kind::string,"Missing lookup spelling");
@@ -2197,8 +2197,9 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             break;
         }
         case 0x56: case 0x57: {
-            auto source_ref=Pop();
-            const auto target=Dereference(Pop()),source=Dereference(source_ref);
+            auto source_ref=Pop(),target_ref=Pop();
+            const auto target=target_ref.kind==Kind::array?std::move(target_ref):Dereference(std::move(target_ref));
+            const auto source=source_ref.kind==Kind::array?source_ref:Dereference(source_ref);
             Require(target.kind==Kind::array && source.kind==Kind::array && target.cells && source.cells,
                     "Expected two KSC array references");
             const auto count=std::min(target.cells->size(),source.cells->size());
@@ -2633,6 +2634,21 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 Require(value.kind==Kind::string,"Invalid KSC last kana operand");
                 auto text=KanaEndpoint(value.text,true);
                 result_=text.empty()?Value{}:Value{Kind::string,0,std::move(text)};
+            } else if(id==0x20 && argc==2) {
+                Require(stack_.size()>=argc,"Insufficient KSC word keyboard arguments");
+                const auto& initial=stack_.back();
+                const auto& mode=stack_[stack_.size()-2];
+                Require(mode.kind==Kind::integer &&
+                        (initial.kind==Kind::string || initial.kind==Kind::nil) &&
+                        (mode.data==2 || (mode.data==0 && initial.text.empty())),
+                        "Unsupported KSC word keyboard mode");
+                auto argument=Pop();
+                const auto editor_mode=Pop().data;
+                // 697C0 waits for the host. 682B8 publishes the two-cell result
+                // before the script resumes after BI20.
+                result_={};
+                OpenWordKeyboard(editor_mode,std::move(argument.text),{});
+                return;
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
@@ -2923,10 +2939,27 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
     throw std::runtime_error("KSC introduction did not yield");
 }
 
+void RoomTalkState::OpenWordKeyboard(int mode,std::string initial,Value destination) {
+    editor_pair_=std::move(destination);
+    keyboard_initial_reading_.reset();
+    if(mode==2) keyboard_initial_reading_=std::move(initial);
+    phase_=Phase::word_entry;
+}
+
 void RoomTalkState::FinishWordEntry(std::string_view written,std::string_view reading) {
     if(phase_!=Phase::word_entry) return;
-    editor_pair_.cells->at(0)={Kind::string,0,std::string(written)};
-    editor_pair_.cells->at(1)={Kind::string,0,std::string(reading)};
+    if(editor_pair_.kind==Kind::nil) {
+        auto cells=std::make_shared<std::vector<Value>>(2);
+        // On cancellation the host supplies null pointers for both strings.
+        if(!written.empty()) {
+            cells->at(0)={Kind::string,0,std::string(written)};
+            cells->at(1)={Kind::string,0,std::string(reading)};
+        }
+        result_={Kind::array,0,{},0,std::move(cells)};
+    } else {
+        editor_pair_.cells->at(0)={Kind::string,0,std::string(written)};
+        editor_pair_.cells->at(1)={Kind::string,0,std::string(reading)};
+    }
     editor_pair_={}; keyboard_initial_reading_.reset(); phase_=Phase::running;
 }
 

@@ -257,6 +257,7 @@ private:
     int reserved_word_=-1;
     Value editor_pair_;
     std::optional<std::string> keyboard_initial_reading_;
+    void OpenWordKeyboard(int mode,std::string initial,Value destination);
     void LoadOutings(const std::filesystem::path& dir);
     struct ControlBlock { unsigned close; std::size_t depth,base; };
     std::vector<ControlBlock> blocks_;
