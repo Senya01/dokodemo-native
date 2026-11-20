@@ -1,8 +1,10 @@
 """Build the coverage map from the repository's reviewed feature inventory."""
+import argparse
 from collections import Counter
 import json
 from pathlib import Path
-import sys
+from native_code_inventory import collect_code
+from render_native_status_images import badge_svg, code_svg
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,7 +12,7 @@ STATUSES = {"missing", "basic", "exact"}
 PLACEHOLDER = "__NATIVE_COVERAGE_DATA__"
 
 
-def build() -> tuple[str, Counter]:
+def build(boot: Path | None = None) -> tuple[str, Counter, dict]:
     data = json.loads((ROOT / "docs/native-coverage.json").read_text(encoding="utf-8"))
     identifiers = set()
     counts = Counter()
@@ -26,18 +28,33 @@ def build() -> tuple[str, Counter]:
                 raise FileNotFoundError(item["evidence"])
             identifiers.add(item["id"])
             counts[item["status"]] += 1
+    data["code"] = collect_code(ROOT, boot)
+    data["verification"] = json.loads((ROOT / "docs/native-acceptance.json").read_bytes())
+    verification = data["verification"]
+    parts = [part for module in verification["modules"] for part in module["parts"]]
+    checks = {part["id"] for part in parts}
+    if len(checks) != len(parts) or checks != verification["states"].keys():
+        raise ValueError("Acceptance snapshot has inconsistent checks and results")
+    if not all(set(part["tiles"]) <= identifiers for part in parts):
+        raise ValueError("Acceptance snapshot refers to an unknown feature")
     template = (ROOT / "tools/native_coverage.html").read_text(encoding="utf-8")
     if template.count(PLACEHOLDER) != 1:
         raise ValueError("Expected one coverage-data placeholder")
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
-    return template.replace(PLACEHOLDER, payload), counts
+    return template.replace(PLACEHOLDER, payload), counts, data
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: python tools/render_native_coverage.py <output.html>")
-    fragment, status_counts = build()
-    Path(sys.argv[1]).write_text(
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--boot", type=Path, help="Optional original v1.01 BOOT.BIN for a local comparison")
+    parser.add_argument("--badge", type=Path)
+    parser.add_argument("--overview", type=Path)
+    args = parser.parse_args()
+    if args.boot and not args.boot.is_file():
+        parser.error("--boot must name an existing BOOT.BIN")
+    fragment, status_counts, data = build(args.boot)
+    args.output.write_text(
         '<!doctype html>\n<html lang="ru" style="color-scheme:light dark"><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>Карта нативного порта Doko Demo Issyo</title>'
@@ -46,5 +63,10 @@ if __name__ == "__main__":
         '--border:color-mix(in srgb,CanvasText 32%,Canvas)}</style>'
         + fragment + "\n</html>\n",
         encoding="utf-8",
+        newline="\n",
     )
+    if args.badge:
+        args.badge.write_text(badge_svg(data["verification"]), encoding="utf-8", newline="\n")
+    if args.overview:
+        args.overview.write_text(code_svg(data["code"]), encoding="utf-8", newline="\n")
     print(dict(sorted(status_counts.items())))

@@ -13,33 +13,142 @@
 #native-coverage .count{font-variant-numeric:tabular-nums;opacity:.75;white-space:nowrap}
 #native-coverage .tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px}
 #native-coverage .tile{appearance:none;min-width:0;height:32px;border:0;color:var(--foreground,#f0f5f8);border-radius:2px;font:inherit;font-size:.72rem;cursor:pointer;display:grid;place-items:center;position:relative}
-#native-coverage [data-status=basic]{background:color-mix(in srgb,var(--green,#43ba83) 32%,var(--background,#101820))}
+#native-coverage [data-status=basic],#native-coverage [data-result=passed]{background:color-mix(in srgb,var(--green,#43ba83) 32%,var(--background,#101820))}
 #native-coverage [data-status=exact]{background:color-mix(in srgb,var(--blue,#76b6ff) 44%,var(--background,#101820))}
-#native-coverage [data-status=missing]{background:var(--muted,#465260)}
+#native-coverage [data-status=missing],#native-coverage [data-result=blocked]{background:color-mix(in srgb,var(--foreground,#f0f5f8) 17%,var(--background,#101820))}
+#native-coverage [data-result=failed]{background:color-mix(in srgb,#df676d 36%,var(--background,#101820))}
+#native-coverage [data-result=unverified]{background:var(--background,#101820);box-shadow:inset 0 0 0 1px var(--border,#526070)}
+#native-coverage .check-legend .swatch{display:inline-grid;place-items:center;font-size:.64rem}
 #native-coverage .tile:focus-visible,#native-coverage .tile[aria-pressed=true]{outline:2px solid var(--foreground,#f0f5f8);outline-offset:-2px;z-index:1}
 #native-coverage .detail{min-height:8.5rem;border-top:1px solid var(--border,#526070);padding-top:.7rem;display:grid;gap:.35rem;align-content:start}
 #native-coverage .detail h3,#native-coverage .detail p{margin:0;overflow-wrap:anywhere}
 #native-coverage .detail h3{font-size:1rem}
 #native-coverage .detail p{font-size:.85rem;line-height:1.45}
 #native-coverage .evidence{font-family:Consolas,monospace;opacity:.75}
+#native-coverage .verification{border-top:1px solid var(--border,#526070);padding-top:1rem;display:grid;gap:.6rem}
+#native-coverage .verification h3,#native-coverage .verification p{margin:0}
+#native-coverage .verification-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.5rem}
+#native-coverage .verification-head label{font-size:.85rem}
+#native-coverage .rail .verdict{max-width:68ch;font-size:.9rem;line-height:1.45}
+#native-coverage .check-detail{min-height:0}
+#native-coverage .check-detail h4{margin:0;overflow-wrap:anywhere;font-size:1rem}
+#native-coverage .check-detail .check-state{font-weight:650}
+#native-coverage .related{font-size:.81rem;margin:0;padding-left:1.2rem}
+#native-coverage .related li+li{margin-top:.18rem}
+#native-coverage .related a,#native-coverage .related a:visited{color:inherit;text-underline-offset:.18em}
+#native-coverage .code-inventory{display:grid;gap:.75rem;padding-bottom:.9rem;border-bottom:1px solid var(--border,#526070)}
+#native-coverage .code-inventory h2{font-size:1rem;margin:0}
+#native-coverage .code-scope{margin:0;max-width:90ch;font-size:.84rem;line-height:1.45}
+#native-coverage .code-map{gap:.55rem}
+#native-coverage .code-group{padding:.45rem;background:color-mix(in srgb,var(--foreground,#f0f5f8) 5%,var(--background,#101820))}
+#native-coverage .code-cells{display:grid;grid-template-columns:repeat(auto-fill,10px);gap:2px}
+#native-coverage .code-cell{width:100%;height:10px;padding:0;border-radius:0}
+#native-coverage [data-code=present]{background:color-mix(in srgb,var(--green,#43ba83) 65%,var(--background,#101820))}
+#native-coverage [data-code=absent]{background:color-mix(in srgb,var(--foreground,#f0f5f8) 26%,var(--background,#101820))}
+#native-coverage [data-code=file]{background:color-mix(in srgb,var(--blue,#76b6ff) 58%,var(--background,#101820))}
+#native-coverage .code-detail{min-height:4.5rem}
+#native-coverage [hidden]{display:none}
 @media(max-width:320px){#native-coverage .tiles{grid-template-columns:repeat(5,minmax(0,1fr))}}
 </style>
+<section class="code-inventory" aria-labelledby="native-code-heading">
+  <h2 id="native-code-heading">Карта кода</h2>
+  <p class="code-scope">Один квадрат — один ID команды, встроенной функции или вызова GAME. Зелёные квадраты показывают ветки или проверки ID в коде комнаты. Слоты BOOT с общим обработчиком по умолчанию исключены.</p>
+  <div class="legend" aria-label="Легенда карты кода">
+    <span><i class="swatch" data-code="present" aria-hidden="true"></i>Ветка найдена в коде комнаты</span>
+    <span><i class="swatch" data-code="absent" aria-hidden="true"></i>Ветка не найдена в коде комнаты</span>
+    <span><i class="swatch" data-code="file" aria-hidden="true"></i>Файл в целях сборки Windows</span>
+  </div>
+  <div class="map code-map" aria-label="Команды и функции"></div>
+  <div class="map code-files" aria-label="Файлы нативной сборки"></div>
+  <div class="detail code-detail" aria-live="polite">
+    <h3></h3>
+    <p class="code-state"></p>
+    <p class="code-location evidence"></p>
+  </div>
+</section>
 <header class="rail">
   <strong class="total"></strong>
-  <div class="legend" aria-label="Статусы"></div>
+  <p class="verdict" aria-live="polite" style="margin:0"></p>
+  <div class="legend implementation-legend" aria-label="Статусы реализации"></div>
 </header>
-<div class="map" aria-label="Группы функций"></div>
-<div class="detail" aria-live="polite">
+<div class="map implementation-map" aria-label="Группы функций"></div>
+<div class="detail implementation-detail" aria-live="polite">
   <h3></h3>
   <p class="state"></p>
   <p class="description"></p>
   <p class="evidence"></p>
+  <ul class="related" aria-label="Связанные требования"></ul>
 </div>
+<section class="verification" aria-labelledby="native-verification-heading">
+  <header class="verification-head">
+    <h3 id="native-verification-heading">Проверка сборки</h3>
+    <label><input type="checkbox" class="open-only"> Только открытые требования</label>
+  </header>
+  <div class="legend check-legend" aria-label="Статусы проверок"></div>
+  <div class="map check-map" aria-label="Проверки по подсистемам"></div>
+  <div class="detail check-detail" aria-live="polite">
+    <h4></h4>
+    <p class="check-state"></p>
+    <p class="check-expect"></p>
+    <p class="check-gap" hidden></p>
+    <p class="check-tests evidence" hidden></p>
+    <p class="check-requires" hidden></p>
+  </div>
+</section>
 <script type="application/json" class="coverage-data">__NATIVE_COVERAGE_DATA__</script>
 <script>
 (() => {
   const root = document.getElementById("native-coverage");
-  const groups = JSON.parse(root.querySelector(".coverage-data").textContent).groups;
+  const {groups, verification, code} = JSON.parse(root.querySelector(".coverage-data").textContent);
+  const codeLabels = {
+    present:"Ветка найдена в коде комнаты",
+    absent:"Ветка не найдена в коде комнаты",
+    file:"Входит в цель сборки Windows"
+  };
+  let currentCell;
+  function selectCode(cell, item, group) {
+    currentCell?.setAttribute("aria-pressed", "false");
+    currentCell = cell;
+    cell.setAttribute("aria-pressed", "true");
+    root.querySelector(".code-detail h3").textContent = group.title + " · " + item.label;
+    const label = group.kind === "selectors" ? "Найдено условие для ID" : codeLabels[cell.dataset.code];
+    root.querySelector(".code-state").textContent =
+      label + (item.target ? " · Цель в BOOT " + item.target : "");
+    root.querySelector(".code-location").textContent = item.lines?.length
+      ? item.source + ":" + item.lines.join(", ")
+      : group.kind === "files" ? item.source : "";
+  }
+  for (const group of code.groups) {
+    const panel = document.createElement("section");
+    panel.className = "group code-group";
+    const title = document.createElement("h3");
+    const score = document.createElement("span");
+    score.className = "count";
+    const total = group.items.length;
+    score.textContent = group.kind === "dispatch"
+      ? group.items.filter(item => item.lines.length).length + "/" + total
+      : String(total);
+    if (group.kind === "dispatch") {
+      score.title = "Слотов в BOOT — " + group.slots + ". С общей веткой по умолчанию — " + group.fallback;
+    }
+    title.append(group.title, score);
+    const cells = document.createElement("div");
+    cells.className = "code-cells";
+    for (const item of group.items) {
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "tile code-cell";
+      cell.dataset.code = group.kind === "files" ? "file" : item.lines.length ? "present" : "absent";
+      cell.title = item.label + " — " + codeLabels[cell.dataset.code];
+      cell.setAttribute("aria-label", cell.title);
+      cell.setAttribute("aria-pressed", "false");
+      cell.addEventListener("click", () => selectCode(cell, item, group));
+      cells.append(cell);
+      if (item.label === "GAME75") selectCode(cell, item, group);
+    }
+    panel.append(title, cells);
+    root.querySelector(group.kind === "files" ? ".code-files" : ".code-map").append(panel);
+  }
   const labels = {missing:"Нет нативной реализации", basic:"Базовая реализация", exact:"Побайтово точная реализация"};
   const markers = {missing:"·",basic:"✓",exact:"≡"};
   const all = groups.flatMap(group => group.items);
@@ -53,17 +162,131 @@
     swatch.dataset.status = status;
     swatch.setAttribute("aria-hidden", "true");
     piece.append(swatch, label + " · " + amount(status));
-    root.querySelector(".legend").append(piece);
+    root.querySelector(".implementation-legend").append(piece);
   }
+  const checks = verification.modules.flatMap(module => module.parts);
+  const stateLabel = {passed:"Пройдено", blocked:"Открытое требование", failed:"Ошибка теста", unverified:"Нет результата"};
+  const stateMark = {passed:"✓", blocked:"·", failed:"!", unverified:"?"};
+  const titles = new Map(checks.map(part => [part.id, part.title]));
+  const summary = {passed:0, failed:0, blocked:0, unverified:0};
+  for (const part of checks) summary[verification.states[part.id]]++;
+  const build = verification.game_sha256 ? " Сборка " + verification.game_sha256.slice(0, 12) + "." : " Запуск ещё не приложен.";
+  root.querySelector(".verdict").textContent =
+    (verification.ready ? "Все требования пройдены." : "Полная готовность не подтверждена.") + build
+    + (verification.source_revision ? " Снимок приёмки от " + verification.source_revision.slice(0, 7) + "." : "");
+  const checkMap = root.querySelector(".check-map");
+  const openOnly = root.querySelector(".open-only");
+  const checkDetail = root.querySelector(".check-detail");
+  const checkTiles = new Map();
+  let currentCheck;
+  function selectCheck(part, tile) {
+    currentCheck?.setAttribute("aria-pressed", "false");
+    currentCheck = tile;
+    tile.setAttribute("aria-pressed", "true");
+    checkDetail.hidden = false;
+    root.querySelector(".check-detail h4").textContent = part.title;
+    root.querySelector(".check-state").textContent = stateLabel[tile.dataset.result];
+    root.querySelector(".check-expect").textContent = part.expect;
+    const gap = root.querySelector(".check-gap");
+    gap.hidden = !part.gap;
+    gap.textContent = part.gap || "";
+    const tests = root.querySelector(".check-tests");
+    tests.hidden = !part.tests?.length;
+    tests.textContent = (part.tests || []).map(name =>
+      name + " (" + stateLabel[verification.tests[name] || "unverified"] + ")").join(", ");
+    const dependencies = root.querySelector(".check-requires");
+    dependencies.hidden = !part.requires?.length;
+    dependencies.textContent = part.requires?.length
+      ? "Предусловия — " + part.requires.map(id => titles.get(id)).join(", ")
+      : "";
+  }
+  for (const [status, label] of Object.entries(stateLabel)) {
+    const piece = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = "swatch";
+    swatch.dataset.result = status;
+    swatch.setAttribute("aria-hidden", "true");
+    swatch.textContent = stateMark[status];
+    piece.append(swatch, label + " · " + summary[status]);
+    root.querySelector(".check-legend").append(piece);
+  }
+  for (const module of verification.modules) {
+    const panel = document.createElement("section");
+    panel.className = "group";
+    const heading = document.createElement("h3");
+    const score = document.createElement("span");
+    score.className = "count";
+    score.textContent = module.parts.filter(part => verification.states[part.id] === "passed").length + "/" + module.parts.length;
+    heading.append(module.title, score);
+    const tiles = document.createElement("div");
+    tiles.className = "tiles";
+    for (const part of module.parts) {
+      const tile = document.createElement("button");
+      tile.type = "button";
+      tile.className = "tile";
+      tile.id = "native-verification-" + part.id;
+      tile.dataset.result = verification.states[part.id];
+      tile.title = part.title + " — " + stateLabel[tile.dataset.result];
+      tile.textContent = stateMark[tile.dataset.result];
+      tile.setAttribute("aria-label", tile.title);
+      tile.setAttribute("aria-pressed", "false");
+      tile.addEventListener("click", () => selectCheck(part, tile));
+      checkTiles.set(part.id, tile);
+      tiles.append(tile);
+    }
+    panel.append(heading, tiles);
+    checkMap.append(panel);
+  }
+  function applyFilter() {
+    for (const panel of checkMap.children) {
+      const tiles = [...panel.querySelectorAll(".tile")];
+      tiles.forEach(tile => { tile.hidden = openOnly.checked && tile.dataset.result === "passed"; });
+      panel.hidden = tiles.every(tile => tile.hidden);
+    }
+    if (!currentCheck || currentCheck.hidden) {
+      const next = checks.find(part => !checkTiles.get(part.id).hidden);
+      if (next) {
+        selectCheck(next, checkTiles.get(next.id));
+      } else {
+        currentCheck?.setAttribute("aria-pressed", "false");
+        currentCheck = undefined;
+        checkDetail.hidden = true;
+      }
+    }
+  }
+  const initialCheck = checks.find(part => verification.states[part.id] !== "passed") || checks[0];
+  selectCheck(initialCheck, checkTiles.get(initialCheck.id));
+  openOnly.addEventListener("change", applyFilter);
+
   let current;
   function select(tile, item) {
     current?.setAttribute("aria-pressed", "false");
     current = tile;
     tile.setAttribute("aria-pressed", "true");
-    root.querySelector(".detail h3").textContent = item.title;
+    root.querySelector(".implementation-detail h3").textContent = item.title;
     root.querySelector(".state").textContent = labels[item.status];
     root.querySelector(".description").textContent = item.detail;
-    root.querySelector(".evidence").textContent = item.evidence;
+    root.querySelector(".implementation-detail .evidence").textContent = item.evidence;
+    const links = checks.filter(part => part.tiles.includes(item.id)).map(part => {
+      const entry = document.createElement("li");
+      const target = checkTiles.get(part.id);
+      const link = document.createElement("a");
+      link.href = "#" + target.id;
+      link.textContent = part.title + " (" + stateLabel[verification.states[part.id]] + ")";
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        if (target.hidden) {
+          openOnly.checked = false;
+          applyFilter();
+        }
+        selectCheck(part, target);
+        target.focus();
+        target.scrollIntoView({block:"nearest"});
+      });
+      entry.append(link);
+      return entry;
+    });
+    root.querySelector(".related").replaceChildren(...links);
   }
   for (const group of groups) {
     const panel = document.createElement("section");
@@ -89,7 +312,7 @@
       if (item.id === "story-toro-final") select(tile, item);
     }
     panel.append(title, tiles);
-    root.querySelector(".map").append(panel);
+    root.querySelector(".implementation-map").append(panel);
   }
 })();
 </script>

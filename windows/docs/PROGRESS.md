@@ -11,6 +11,20 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 | Local meetings | Independent Windows processes exercised discovery, visit cancellation, card and gift exchange, and shiritori on loopback |
 | Platform | Native rendering and audio, keyboard input, XInput mapping and recovery, and software suspend and resume checks |
 
+## Acceptance and code map
+
+The badge measures verified requirements in the Windows acceptance matrix. This snapshot records **39 of 60** requirements verified and 21 open, with 62 of 62 tests passing in a local Windows Release run without sound or windows. The [snapshot](native-acceptance.json) records the executable hash, public source checkpoint and test results.
+
+The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
+
+Run from the `windows` directory to rebuild all three assets from the checked-in snapshots:
+
+```powershell
+python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --overview docs/native-code-map.svg
+```
+
+With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.
+
 ## Ordinary conversation roster
 
 The test selects each original fallback entry with a fresh controlled state. It picks the first answer and cancels word entry if offered. Each run verifies that the actual selector chose the expected entry before checking for a room return. A return after a retry means that the script declined the selected topic and the dispatcher chose another.

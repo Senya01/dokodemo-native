@@ -1,0 +1,964 @@
+{
+  "modules": [
+    {
+      "title": "Платформа и пакет",
+      "parts": [
+        {
+          "id": "startup",
+          "title": "Запуск и закрытие",
+          "tiles": [
+            "boot-windows"
+          ],
+          "expect": "Windows-исполняемый файл загружает модули, достигает титульного кадра и завершает рабочие потоки.",
+          "tests": [
+            "game-packaged-startup"
+          ]
+        },
+        {
+          "id": "media",
+          "title": "Целостность и переносимость пакета",
+          "tiles": [
+            "boot-storage"
+          ],
+          "expect": "Перенос пакета сохраняет запуск. Отсутствующий или повреждённый модуль и отсутствующий декодер вызывают контролируемый отказ.",
+          "tests": [
+            "game-relocated-startup"
+          ]
+        },
+        {
+          "id": "suspend",
+          "title": "Логика сна и пробуждения",
+          "tiles": [
+            "boot-platform"
+          ],
+          "expect": "Имитация сна замораживает часы и PCM, после пробуждения игровой кадр и звук продолжаются с прежней позиции.",
+          "tests": [
+            "game-power-cycle"
+          ]
+        },
+        {
+          "id": "windows-device",
+          "title": "Интеграция с рабочим столом Windows",
+          "tiles": [
+            "boot-windows",
+            "boot-platform",
+            "gfx-display"
+          ],
+          "expect": "Обычное окно переживает смену фокуса, реальный сон и восстановление, корректно обрабатывает закрытие.",
+          "gap": "Нет повторяемого теста штатного окна на текущем пакете. Безоконные проверки покрывают только игровой код и буфер."
+        }
+      ]
+    },
+    {
+      "title": "Графика, анимация и интерфейс",
+      "parts": [
+        {
+          "id": "framebuffer",
+          "title": "Видеобуфер и дисплей",
+          "tiles": [
+            "gfx-display"
+          ],
+          "expect": "Проверяются формат, шаг строки, фиксация кадра и пиксели GDI в памяти.",
+          "tests": [
+            "native-framebuffer"
+          ]
+        },
+        {
+          "id": "logos",
+          "title": "Последовательность заставок",
+          "tiles": [
+            "boot-logos"
+          ],
+          "expect": "Сравниваются все 319 RGB-кадров зарегистрированной последовательности заставок.",
+          "tests": [
+            "startup-logo-sequence"
+          ]
+        },
+        {
+          "id": "title-ui",
+          "title": "Титульный интерфейс",
+          "tiles": [
+            "boot-title",
+            "gfx-ui"
+          ],
+          "expect": "Меню заголовка запускает штатные переходы. Проверяются рендер и круговое раскрытие.",
+          "tests": [
+            "game-title-state",
+            "game-title-renderer",
+            "game-radial-wipe"
+          ]
+        },
+        {
+          "id": "text-ui",
+          "title": "Шрифты и диалоги",
+          "tiles": [
+            "boot-words",
+            "gfx-ui"
+          ],
+          "expect": "Реплики и варианты ответа проходят тесты вывода, а меню и инвентарь проверяются через свои рендереры.",
+          "tests": [
+            "game-room-talk-renderer",
+            "game-room-answer-renderer",
+            "game-room-inventory-render"
+          ]
+        },
+        {
+          "id": "world-light",
+          "title": "Геометрия и освещение",
+          "tiles": [
+            "gfx-world",
+            "room-tv"
+          ],
+          "expect": "Проверяются рендер домашней сцены и изменение освещения телевизором в контрольных состояниях.",
+          "tests": [
+            "game-post-profile",
+            "game-room-television"
+          ]
+        },
+        {
+          "id": "actor-motion",
+          "title": "Скелет и движения",
+          "tiles": [
+            "gfx-actor"
+          ],
+          "expect": "Модели всех пяти персонажей загружаются, выполняют выбранные команды и отдают готовность.",
+          "tests": [
+            "game-room-actor"
+          ]
+        },
+        {
+          "id": "motion-fx",
+          "title": "Эффекты KSC/DAK",
+          "tiles": [
+            "gfx-ef9",
+            "gfx-motion-effects"
+          ],
+          "expect": "Проверяются выбранные эффекты EF1–EF4 и EF9, их появление и освобождение.",
+          "tests": [
+            "game-motion-effects"
+          ]
+        },
+        {
+          "id": "camera",
+          "title": "Камера и перекрытия",
+          "tiles": [
+            "gfx-camera"
+          ],
+          "expect": "Заданные переходы камеры и ветки подхода исполняются в рендере комнаты.",
+          "tests": [
+            "game-post-profile"
+          ]
+        },
+        {
+          "id": "render-matrix",
+          "title": "Материалы, пограничные кадры и сцены",
+          "tiles": [
+            "gfx-world",
+            "gfx-actor",
+            "gfx-camera",
+            "gfx-destinations"
+          ],
+          "expect": "Активные сцены, периоды, материалы, прозрачность, тени, перекрытия и границы анимаций покрыты сверкой кадров или числовыми инвариантами.",
+          "gap": "Матрица рендера всех сцен и фаз ещё не сведена. У отдельных материалов и сцен осталась функционально непроверенная область."
+        }
+      ]
+    },
+    {
+      "title": "Ввод и доступность",
+      "parts": [
+        {
+          "id": "input-policy",
+          "title": "Раскладка, фронты и фокус",
+          "tiles": [
+            "input-keyboard",
+            "input-gamepad"
+          ],
+          "expect": "Адаптер обработки кнопок и программное восстановление ввода после потери фокуса или устройства проходят регрессию.",
+          "tests": [
+            "controller-input",
+            "game-room-input-gate"
+          ]
+        },
+        {
+          "id": "input-dialog-flow",
+          "title": "Ввод в меню и редакторах",
+          "tiles": [
+            "input-keyboard",
+            "room-options",
+            "words-editor"
+          ],
+          "expect": "Проверяются маршрутизация кнопок в меню, ввод слова и правку чтения, подтверждение и отмена.",
+          "tests": [
+            "game-room-menu",
+            "game-room-word-entry",
+            "game-room-word-reading"
+          ]
+        },
+        {
+          "id": "xinput-device",
+          "title": "Физический контроллер",
+          "tiles": [
+            "input-gamepad"
+          ],
+          "expect": "Реальный XInput-контроллер управляет меню и игрой и восстанавливается после переподключения.",
+          "gap": "Программный адаптер проверен. В тестовой системе физических устройств не обнаружено."
+        }
+      ]
+    },
+    {
+      "title": "Звук",
+      "parts": [
+        {
+          "id": "decode",
+          "title": "Декодер и нативный рабочий блок",
+          "tiles": [
+            "prx-atrac",
+            "prx-codec"
+          ],
+          "expect": "После запуска декодер подаёт ненулевой PCM через рабочий нативный путь. Проверка проходит без физического выхода.",
+          "tests": [
+            "game-packaged-audio"
+          ]
+        },
+        {
+          "id": "music",
+          "title": "Музыка и события",
+          "tiles": [
+            "audio-bgm"
+          ],
+          "expect": "Музыкальный голос включается на правильном событии титула и переключается на следующую дорожку.",
+          "tests": [
+            "game-title-bgm"
+          ]
+        },
+        {
+          "id": "voices",
+          "title": "Очередь и голоса",
+          "tiles": [
+            "audio-se",
+            "audio-null",
+            "prx-sas"
+          ],
+          "expect": "Проверяются длительность, пауза, цикл, уровни и окончание голоса в null-приёмнике.",
+          "tests": [
+            "game-null-pcm"
+          ]
+        },
+        {
+          "id": "sound-matrix",
+          "title": "Микширование и весь каталог событий",
+          "tiles": [
+            "audio-bgm",
+            "audio-se",
+            "prx-sas",
+            "prx-codec"
+          ],
+          "expect": "Проверены все игровые группы событий, окончания голосов и одновременные каналы звука на эталонном PCM.",
+          "gap": "Есть контрольные потоки и сценарии. Полный каталог звуковых событий, перекрывающиеся голоса и граничные случаи ещё не составляют сквозную матрицу."
+        }
+      ]
+    },
+    {
+      "title": "Игровой цикл и KSC",
+      "parts": [
+        {
+          "id": "clock-scheduler",
+          "title": "Действия, часы и отмена ожидания",
+          "tiles": [
+            "boot-scheduler",
+            "room-activity",
+            "room-time"
+          ],
+          "expect": "Проверяются выбор деятельности, условные повторы, таймеры и возврат управления в контрольных комнатных сценариях.",
+          "tests": [
+            "game-room-activity-selector",
+            "game-room-activity-event",
+            "game-post-profile"
+          ]
+        },
+        {
+          "id": "vm-ordinary",
+          "title": "Обычные темы пяти персонажей",
+          "tiles": [
+            "room-contact",
+            "room-ksc",
+            "room-ksc-all"
+          ],
+          "expect": "Все 3118 записей обычных списков дают возврат. Отказ с предусмотренной сменой темы считается отдельным результатом.",
+          "tests": [
+            "game-room-talk-roster",
+            "game-room-fallback-list"
+          ]
+        },
+        {
+          "id": "vm-branches",
+          "title": "Особые и альтернативные ветки KSC",
+          "tiles": [
+            "room-ksc",
+            "room-ksc-all",
+            "room-contact"
+          ],
+          "expect": "Для доступных команд и процедур прослежены разные исходы по состояниям словаря, датам, ответам и местам. Приемлемые отказы отделены от неподдерживаемых путей.",
+          "gap": "Перечислены обычные списки и выбранные специальные пути. Полного перечня доступных процедур, исходов и переходов для всех пяти персонажей пока нет."
+        },
+        {
+          "id": "world-reactivity",
+          "title": "Предметы и настройки в комнате",
+          "tiles": [
+            "room-tv",
+            "room-inventory",
+            "room-options"
+          ],
+          "expect": "Контрольные переключения телевизора, расстановка и игровой системный экран обрабатываются настоящими компонентами.",
+          "tests": [
+            "game-room-television",
+            "game-room-item-placement",
+            "game-post-profile"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Язык, словарь и дневник",
+      "parts": [
+        {
+          "id": "lesson",
+          "title": "Обучение и повторное использование слова",
+          "tiles": [
+            "words-learn"
+          ],
+          "expect": "Тесты проходят принятие, отказ и повторный выбор принятого слова в разговоре.",
+          "tests": [
+            "game-room-talk-state",
+            "game-room-learned-word"
+          ]
+        },
+        {
+          "id": "kana-edit",
+          "title": "Клавиатуры и правка чтения",
+          "tiles": [
+            "words-editor"
+          ],
+          "expect": "Проверяются раскладки, ввод группы, подтверждение, отмена и обновление чтения.",
+          "tests": [
+            "game-room-word-entry",
+            "game-room-word-reading",
+            "game-room-word-renderer"
+          ]
+        },
+        {
+          "id": "kana-nj",
+          "title": "Конвертер и запросы с историей",
+          "tiles": [
+            "words-nj",
+            "words-nj-wide"
+          ],
+          "expect": "Перебираются проверочные группы одиночных и составных запросов, классы, границы чтения и конкурирующие разборы.",
+          "tests": [
+            "game-room-word-conversion",
+            "game-room-word-multi",
+            "game-room-word-competing"
+          ]
+        },
+        {
+          "id": "notebook-diary",
+          "title": "Блокнот и дневник",
+          "tiles": [
+            "words-notebook",
+            "words-diary"
+          ],
+          "expect": "В блокноте проверяются словарь и вкладки. Комнатный тест подтверждает создание первой записи дневника и её сохранение в состоянии.",
+          "tests": [
+            "game-room-notebook",
+            "game-post-profile"
+          ]
+        },
+        {
+          "id": "language-matrix",
+          "title": "Все категории и границы словаря",
+          "tiles": [
+            "words-learn",
+            "words-nj-wide",
+            "words-notebook"
+          ],
+          "expect": "Учёт всех классов слов и морфем, отказов, пустого словаря, переполнения, истории и сохранения у пяти персонажей.",
+          "gap": "Дифференциальная выборка конверсии и принятия слов покрывает часть возможных комбинаций."
+        }
+      ]
+    },
+    {
+      "title": "Инвентарь, меню и поездки",
+      "parts": [
+        {
+          "id": "inventory-actions",
+          "title": "Цикл инвентаря",
+          "tiles": [
+            "room-inventory",
+            "room-discard",
+            "room-trade-mark"
+          ],
+          "expect": "Проверяются активный слот, размещение и возврат, подтверждение и отказ выброса, отметка подарка и фильтр.",
+          "tests": [
+            "game-inventory",
+            "game-room-inventory-save",
+            "game-room-item-placement"
+          ]
+        },
+        {
+          "id": "room-menus",
+          "title": "Домашнее меню",
+          "tiles": [
+            "room-options",
+            "room-outing",
+            "meet-menu"
+          ],
+          "expect": "Отдельный тест меню подтверждает выбор настроек, применение, отмену и возврат управления.",
+          "tests": [
+            "game-room-menu"
+          ]
+        },
+        {
+          "id": "roof-flow",
+          "title": "Крыша и возвращение",
+          "tiles": [
+            "gfx-roof",
+            "room-outing",
+            "room-roof-contact"
+          ],
+          "expect": "В сценарии KSC проверяются запросы ухода, открытия крыши и возврата. Отдельно загружаются ресурсы крыши через компонент комнаты.",
+          "tests": [
+            "game-room-talk-state",
+            "game-post-profile"
+          ]
+        },
+        {
+          "id": "destination-media",
+          "title": "Ресурсы поездок",
+          "tiles": [
+            "gfx-destinations",
+            "room-outing"
+          ],
+          "expect": "Тест загружает 54 регистрации сцен и рисует их в обоих буферах.",
+          "tests": [
+            "game-destination-scenes"
+          ]
+        },
+        {
+          "id": "destination-matrix",
+          "title": "Маршруты по персонажам и сезону",
+          "tiles": [
+            "gfx-destinations",
+            "room-outing",
+            "room-roof-contact"
+          ],
+          "expect": "Доступные места достижимы у всех пяти на корректных входах. На месте работают меню, задания, возвращение и повторный выход.",
+          "gap": "Проверены ресурсы и 15 обычных поездок Торо. Эквивалентной матрицы для остальных персонажей и условных маршрутов нет."
+        }
+      ]
+    },
+    {
+      "title": "Дни, персонажи и финалы",
+      "parts": [
+        {
+          "id": "adoption",
+          "title": "Выбор и данные профиля",
+          "tiles": [
+            "story-roster"
+          ],
+          "expect": "Форма, даты, передача полей и изображения карусели проверяются отдельными тестами.",
+          "tests": [
+            "game-profile-date",
+            "game-profile-fields",
+            "game-profile-adoption",
+            "game-title-renderer"
+          ]
+        },
+        {
+          "id": "toro-intro",
+          "title": "Торо и первый подарок",
+          "tiles": [
+            "story-toro-gift"
+          ],
+          "expect": "Вступление, подарок и вступительные диалоги завершаются возвратом в комнату.",
+          "tests": [
+            "game-room-talk-state",
+            "game-post-profile"
+          ]
+        },
+        {
+          "id": "robo-days",
+          "title": "Робо и календарные сцены",
+          "tiles": [
+            "story-robo"
+          ],
+          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "tests": [
+            "game-robo-introduction",
+            "game-robo-save",
+            "game-robo-penultimate",
+            "game-robo-final-day"
+          ]
+        },
+        {
+          "id": "usagi-days",
+          "title": "Усаги и календарные сцены",
+          "tiles": [
+            "story-usagi"
+          ],
+          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "tests": [
+            "game-usagi-introduction",
+            "game-usagi-save",
+            "game-usagi-penultimate",
+            "game-usagi-final-day"
+          ]
+        },
+        {
+          "id": "inu-days",
+          "title": "Ину и календарные сцены",
+          "tiles": [
+            "story-inu"
+          ],
+          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "tests": [
+            "game-inu-introduction",
+            "game-inu-save",
+            "game-inu-penultimate",
+            "game-inu-final-day"
+          ]
+        },
+        {
+          "id": "kaeru-days",
+          "title": "Каэру и календарные сцены",
+          "tiles": [
+            "story-kaeru"
+          ],
+          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "tests": [
+            "game-kaeru-introduction",
+            "game-kaeru-save",
+            "game-kaeru-penultimate",
+            "game-kaeru-final-day"
+          ]
+        },
+        {
+          "id": "toro-calendar",
+          "title": "Торо и календарное состояние",
+          "tiles": [
+            "story-toro-days",
+            "story-toro-penultimate"
+          ],
+          "expect": "Контрольные состояния следующего дня и граф комнаты сохраняют данные календаря и дневника.",
+          "tests": [
+            "game-room-scene-rows"
+          ]
+        },
+        {
+          "id": "toro-ending",
+          "title": "Торо, GAME37 и GAME75",
+          "tiles": [
+            "story-toro-penultimate",
+            "story-toro-final",
+            "story-toro-extension"
+          ],
+          "expect": "Из свежего слота последовательно проходят предпоследний день, оба финала, загрузка и продолжение в том же проверяемом билде.",
+          "gap": "Этапы ранее проверялись на подготовленных слотах. В этой общей проверке пока нет автономной последовательности, которая воспроизводит их и проверяет переходы."
+        },
+        {
+          "id": "return-letter",
+          "title": "Письмо события 7 и поздние дни",
+          "tiles": [
+            "story-toro-extension",
+            "story-after",
+            "story-robo",
+            "story-usagi",
+            "story-inu",
+            "story-kaeru"
+          ],
+          "expect": "Письмо по расписанию, возврат к управлению и последующая холодная загрузка проходят у применимых персонажей.",
+          "gap": "Событие 7 остаётся открытым. Отдельные поздние ветки требуют покрытия."
+        },
+        {
+          "id": "re-adopt",
+          "title": "Уход и начало нового цикла",
+          "tiles": [
+            "story-after",
+            "save-all"
+          ],
+          "expect": "Слот ухода открывает пустую комнату. Новое усыновление сохраняет прежние словарь и карточки после холодной загрузки.",
+          "gap": "Есть отдельная проверка на специально подготовленном слоте. В общей автоматической проверке нет его воспроизводимого входа."
+        }
+      ]
+    },
+    {
+      "title": "Сохранение и дисковая целостность",
+      "parts": [
+        {
+          "id": "save-format",
+          "title": "Граф и формат слота",
+          "tiles": [
+            "save-slot",
+            "save-graph"
+          ],
+          "expect": "Проверяются сериализация, контроль целостности и защита содержимого слота, а также штатный отказ на повреждённых данных.",
+          "tests": [
+            "game-ksc-save-graph",
+            "game-retail-savedata-envelope",
+            "game-retail-save-slot"
+          ]
+        },
+        {
+          "id": "save-game",
+          "title": "Запись из комнаты и восстановление",
+          "tiles": [
+            "save-slot",
+            "save-graph",
+            "story-toro-days"
+          ],
+          "expect": "Робо, Усаги, Ину и Каэру создают защищённый слот из комнаты. Холодное чтение восстанавливает состояние. Отдельно проверяются схемы графа и инвентаря.",
+          "tests": [
+            "game-robo-save",
+            "game-usagi-save",
+            "game-inu-save",
+            "game-kaeru-save",
+            "game-room-inventory-save",
+            "game-room-scene-rows"
+          ]
+        },
+        {
+          "id": "save-recovery",
+          "title": "Атомарность и восстановление после отказа",
+          "tiles": [
+            "save-slot",
+            "save-all"
+          ],
+          "expect": "Проверена матрица повреждения каждого файла, ошибки в каждой фазе замены, отказов доступа и повторного холодного чтения.",
+          "gap": "Есть проверки отдельных отказов. Полного перечня фаз замены и перезапусков после отказа нет."
+        }
+      ]
+    },
+    {
+      "title": "Встречи и мини-игры",
+      "parts": [
+        {
+          "id": "peer-transport",
+          "title": "Обнаружение, изоляция и протокол",
+          "tiles": [
+            "meet-session",
+            "prx-ifhandle",
+            "prx-pspnet",
+            "prx-memab",
+            "prx-auth",
+            "prx-adhoc",
+            "prx-adhocctl"
+          ],
+          "expect": "Несколько Windows-процессов на loopback подтверждают совпадение сеанса, передачу, разделение мест и режимов, отказ при искажении.",
+          "tests": [
+            "game-network-channel"
+          ]
+        },
+        {
+          "id": "peer-menu",
+          "title": "Предложения и доступность с игроком",
+          "tiles": [
+            "meet-menu",
+            "meet-shiritory-gate"
+          ],
+          "expect": "Подготовка вопросов, условия предложения しりとり и выход из меню проходят текущие сценарии.",
+          "tests": [
+            "game-room-talk-state"
+          ]
+        },
+        {
+          "id": "peer-card",
+          "title": "Визитка, блокнот и сохранение",
+          "tiles": [
+            "meet-cards"
+          ],
+          "expect": "Два процесса сходятся на обмене, полученная визитка видна после повторного запуска обоих.",
+          "gap": "Такой прогон был на частном слоте. В общей проверке ещё нет воспроизводимого входа и двух холодных загрузок."
+        },
+        {
+          "id": "peer-gift",
+          "title": "Подарок, отказ и атомарность",
+          "tiles": [
+            "meet-gifts"
+          ],
+          "expect": "Обмен и отказ обновляют только нужные слоты в двух процессах и переживают сбой или новое чтение.",
+          "gap": "Обмен через loopback проверялся отдельно. Матрица отказов и повторов для игры неполна."
+        },
+        {
+          "id": "peer-shiritori",
+          "title": "Партия и выход",
+          "tiles": [
+            "meet-shiritory-play"
+          ],
+          "expect": "Партия проверяет заявки, победу, поражение, отмену, неверные ходы и возврат к самостоятельной игре.",
+          "gap": "Победа, поражение и отмена проверялись на тестовых словарях. Полная матрица сеанса не подключена."
+        },
+        {
+          "id": "peer-network",
+          "title": "Два независимых хоста",
+          "tiles": [
+            "meet-session",
+            "prx-ifhandle",
+            "prx-adhoc"
+          ],
+          "expect": "Поиск и обмен работают на разных Windows-хостах при обычной сетевой конфигурации и при потере связи.",
+          "gap": "Подтверждён loopback. На двух независимых Windows-хостах этот набор не проверялся."
+        }
+      ]
+    },
+    {
+      "title": "Связки подсистем",
+      "parts": [
+        {
+          "id": "room-frame-input",
+          "title": "Готовность актёра → ввод → кадр → занятие",
+          "tiles": [
+            "room-contact",
+            "room-activity",
+            "gfx-camera",
+            "gfx-actor"
+          ],
+          "expect": "Один контроллер комнаты обрабатывает ход актёра, выбранные кнопки и реплики. После возврата начинается новое самостоятельное занятие. Кадры отрисовываются в два буфера.",
+          "tests": [
+            "game-post-profile"
+          ],
+          "requires": [
+            "clock-scheduler",
+            "actor-motion",
+            "input-policy"
+          ]
+        },
+        {
+          "id": "startup-to-room",
+          "title": "Запуск → профиль → комната",
+          "tiles": [
+            "boot-windows",
+            "story-roster",
+            "story-toro-gift"
+          ],
+          "expect": "Один безоконный сценарий ведёт нативный игровой цикл от первого кадра до принятия профиля и самостоятельного занятия в комнате.",
+          "requires": [
+            "startup",
+            "adoption",
+            "toro-intro"
+          ],
+          "gap": "Запуск, титул, принятие профиля и вход в комнату проходят разные тесты. Шов титула и комнаты в общей проверке пока открыт."
+        },
+        {
+          "id": "contact-to-save",
+          "title": "Разговор → словарь → блокнот → слот",
+          "tiles": [
+            "words-learn",
+            "words-notebook",
+            "save-slot"
+          ],
+          "expect": "Один сценарий обучает слову, открывает блокнот, создаёт слот, затем новый процесс проверяет то же слово и чтение.",
+          "requires": [
+            "vm-ordinary",
+            "lesson",
+            "notebook-diary",
+            "save-game"
+          ],
+          "gap": "Есть прежняя оконная проверка. Безоконная связка одного свежего занятия с записью и чтением того же слота пока не входит в матрицу."
+        },
+        {
+          "id": "out-and-back",
+          "title": "Меню → сцена → возвращение",
+          "tiles": [
+            "gfx-roof",
+            "room-outing",
+            "room-activity"
+          ],
+          "expect": "Безоконный тест открывает меню, переводит игру в сцену и возвращает управление и следующее занятие дома.",
+          "requires": [
+            "roof-flow",
+            "destination-media",
+            "clock-scheduler"
+          ],
+          "gap": "Ресурсы, команды KSC и целевые поездки проверены отдельно. В общей проверке нет воспроизводимого входа, который проходит всю связку."
+        },
+        {
+          "id": "seam-calendar",
+          "title": "Слот → смена даты → событие → новый слот",
+          "tiles": [
+            "story-toro-days",
+            "story-toro-final",
+            "save-all"
+          ],
+          "expect": "Единый тест проверяет смену дат, окончание пребывания и два холодных чтения со штатным управлением на контрольных точках.",
+          "gap": "Связка пока разбита на независимые проверки. Нужен единый автоматический сценарий с тем же слотом.",
+          "requires": [
+            "toro-calendar",
+            "toro-ending",
+            "save-recovery"
+          ]
+        },
+        {
+          "id": "seam-links",
+          "title": "Встреча → игровой результат → повторная загрузка",
+          "tiles": [
+            "meet-session",
+            "meet-cards",
+            "meet-gifts",
+            "meet-shiritory-play",
+            "save-slot"
+          ],
+          "expect": "Состояние двух игроков выдерживает соединение, согласованную игровую операцию или отмену, затем сохранение и холодное чтение.",
+          "gap": "Есть отдельные прогоны. Единая матрица на текущем билде пока не закрыта.",
+          "requires": [
+            "peer-transport",
+            "peer-card",
+            "peer-gift",
+            "peer-shiritori",
+            "save-game"
+          ]
+        },
+        {
+          "id": "model-completeness",
+          "title": "Полнота перечня функций и переходов",
+          "tiles": [
+            "room-ksc-all",
+            "story-after",
+            "gfx-destinations",
+            "save-all"
+          ],
+          "expect": "Список требований сверен с исходными таблицами сцен, команд, переходов, модулей и меню. Каждый доступный игроку путь имеет проверку или ожидаемый отказ.",
+          "gap": "Текущий реестр из 68 возможностей описывает известный объём. Полнота исходного графа доступных путей ещё не подтверждена."
+        }
+      ]
+    }
+  ],
+  "states": {
+    "startup": "passed",
+    "media": "passed",
+    "suspend": "passed",
+    "windows-device": "blocked",
+    "framebuffer": "passed",
+    "logos": "passed",
+    "title-ui": "passed",
+    "text-ui": "passed",
+    "world-light": "passed",
+    "actor-motion": "passed",
+    "motion-fx": "passed",
+    "camera": "passed",
+    "render-matrix": "blocked",
+    "input-policy": "passed",
+    "input-dialog-flow": "passed",
+    "xinput-device": "blocked",
+    "decode": "passed",
+    "music": "passed",
+    "voices": "passed",
+    "sound-matrix": "blocked",
+    "clock-scheduler": "passed",
+    "vm-ordinary": "passed",
+    "vm-branches": "blocked",
+    "world-reactivity": "passed",
+    "lesson": "passed",
+    "kana-edit": "passed",
+    "kana-nj": "passed",
+    "notebook-diary": "passed",
+    "language-matrix": "blocked",
+    "inventory-actions": "passed",
+    "room-menus": "passed",
+    "roof-flow": "passed",
+    "destination-media": "passed",
+    "destination-matrix": "blocked",
+    "adoption": "passed",
+    "toro-intro": "passed",
+    "robo-days": "passed",
+    "usagi-days": "passed",
+    "inu-days": "passed",
+    "kaeru-days": "passed",
+    "toro-calendar": "passed",
+    "toro-ending": "blocked",
+    "return-letter": "blocked",
+    "re-adopt": "blocked",
+    "save-format": "passed",
+    "save-game": "passed",
+    "save-recovery": "blocked",
+    "peer-transport": "passed",
+    "peer-menu": "passed",
+    "peer-card": "blocked",
+    "peer-gift": "blocked",
+    "peer-shiritori": "blocked",
+    "peer-network": "blocked",
+    "room-frame-input": "passed",
+    "startup-to-room": "blocked",
+    "contact-to-save": "blocked",
+    "out-and-back": "blocked",
+    "seam-calendar": "blocked",
+    "seam-links": "blocked",
+    "model-completeness": "blocked"
+  },
+  "tests": {
+    "controller-input": "passed",
+    "game-destination-scenes": "passed",
+    "game-inu-final-day": "passed",
+    "game-inu-introduction": "passed",
+    "game-inu-penultimate": "passed",
+    "game-inu-save": "passed",
+    "game-inventory": "passed",
+    "game-kaeru-final-day": "passed",
+    "game-kaeru-introduction": "passed",
+    "game-kaeru-penultimate": "passed",
+    "game-kaeru-save": "passed",
+    "game-ksc-save-graph": "passed",
+    "game-motion-effects": "passed",
+    "game-network-channel": "passed",
+    "game-null-pcm": "passed",
+    "game-packaged-audio": "passed",
+    "game-packaged-startup": "passed",
+    "game-post-profile": "passed",
+    "game-power-cycle": "passed",
+    "game-profile-adoption": "passed",
+    "game-profile-date": "passed",
+    "game-profile-fields": "passed",
+    "game-radial-wipe": "passed",
+    "game-relocated-startup": "passed",
+    "game-retail-save-slot": "passed",
+    "game-retail-savedata-envelope": "passed",
+    "game-robo-final-day": "passed",
+    "game-robo-introduction": "passed",
+    "game-robo-penultimate": "passed",
+    "game-robo-save": "passed",
+    "game-room-activity-event": "passed",
+    "game-room-activity-selector": "passed",
+    "game-room-actor": "passed",
+    "game-room-answer-renderer": "passed",
+    "game-room-fallback-list": "passed",
+    "game-room-input-gate": "passed",
+    "game-room-inventory-render": "passed",
+    "game-room-inventory-save": "passed",
+    "game-room-item-placement": "passed",
+    "game-room-learned-word": "passed",
+    "game-room-menu": "passed",
+    "game-room-notebook": "passed",
+    "game-room-scene-rows": "passed",
+    "game-room-talk-renderer": "passed",
+    "game-room-talk-roster": "passed",
+    "game-room-talk-state": "passed",
+    "game-room-television": "passed",
+    "game-room-word-competing": "passed",
+    "game-room-word-conversion": "passed",
+    "game-room-word-entry": "passed",
+    "game-room-word-multi": "passed",
+    "game-room-word-reading": "passed",
+    "game-room-word-renderer": "passed",
+    "game-title-bgm": "passed",
+    "game-title-renderer": "passed",
+    "game-title-state": "passed",
+    "game-usagi-final-day": "passed",
+    "game-usagi-introduction": "passed",
+    "game-usagi-penultimate": "passed",
+    "game-usagi-save": "passed",
+    "native-framebuffer": "passed",
+    "startup-logo-sequence": "passed"
+  },
+  "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
+  "ready": false,
+  "source_revision": "b45b7cb4fee0fab9b1bdfa1b41d760b590cd4b29",
+  "scope": "Local Windows Release acceptance snapshot, executed without windows or audio output."
+}
