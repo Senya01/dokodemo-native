@@ -2314,7 +2314,20 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         case 0x48: Message(); return;
         case 0x8b: {
             const unsigned id=Read(1),argc=Read(1);
-            if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
+            if(id==0x01 && argc==1) {
+                // 6857C returns the original tag, so only kinds with an
+                // unambiguous source representation can use this branch.
+                const auto value=Pop();
+                switch(value.kind) {
+                case Kind::nil: result_={Kind::integer,0}; break;
+                case Kind::truth: result_={Kind::integer,1}; break;
+                case Kind::integer: result_={Kind::integer,2}; break;
+                case Kind::calendar_time: result_={Kind::integer,3}; break;
+                case Kind::fixed14: result_={Kind::integer,4}; break;
+                case Kind::code: result_={Kind::integer,7}; break;
+                default: throw std::runtime_error("Unsupported KSC tag query");
+                }
+            } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
                         mode.kind==Kind::integer && !mode.data && deadline.kind==Kind::integer && !deadline.data &&
