@@ -61,6 +61,7 @@ int fixed_width(int op) {
     case 0x82: case 0x88: case 0x8A: return 3;
     case 0x20: case 0x28: case 0x4E: case 0x83: return 4;
     case 0x2C: return 7;
+    case 0x2D: return 6;
     case 0x22: case 0x30: case 0x80: case 0xA0: return 1;
     case 0x71: case 0x72: case 0x73: case 0x75: case 0x81: case 0x8B:
     case 0x90: case 0x91: case 0x92: case 0x93: case 0x94: case 0x95:
@@ -221,6 +222,8 @@ void Program::parse() {
                     cmd.references.push_back({start + 2, uint_at(bytes_, start + 2, 3, limit), 3, false});
                 else if (cmd.opcode == 0x2C)
                     cmd.references.push_back({start + 5, uint_at(bytes_, start + 5, 3, limit), 3, false});
+                else if (cmd.opcode == 0x2D)
+                    cmd.references.push_back({start + 4, uint_at(bytes_, start + 4, 3, limit), 3, false});
                 else if (cmd.opcode == 0x88)
                     cmd.references.push_back({start + 1, uint_at(bytes_, start + 1, 3, limit), 3, true});
             }

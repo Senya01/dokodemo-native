@@ -427,6 +427,7 @@ struct RoomTalkOpcodeTests {
             std::vector<unsigned char> program;
             switch(opcode) {
             case 0x2c: program={opcode,argc,lo,hi,scope,target,0,0}; break;
+            case 0x2d: program={opcode,scope,lo,hi,target,0,0}; break;
             default: throw std::runtime_error("Unexpected KSC procedure ring test command");
             }
             const unsigned resume=entry+unsigned(program.size());
@@ -467,6 +468,7 @@ struct RoomTalkOpcodeTests {
 
     static void Run() {
         ProcedureRingCall(0x2c,1);
+        ProcedureRingCall(0x2d,2);
         CallbackReturn(0x32);
         CallbackReturn(0x1c);
         CallbackReturn(0x1c,false);
