@@ -1744,6 +1744,19 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             Require(random_bound_>0,"Empty fallback procedure array");
             random_use_=RandomUse::fallback; phase_=Phase::random; return;
         }
+        case 0xf7: {
+            // 77674 draws once from a nonempty array without a history list.
+            // Unlike F6 this returns a reference to the chosen cell.
+            Require(Read(1)==0,"Unsupported KSC reference selection history");
+            auto array=Dereference(Pop());
+            Require(array.kind==Kind::array && array.cells && !array.cells->empty(),
+                    "Expected a nonempty KSC array reference");
+            random_bound_=unsigned(array.cells->size());
+            stack_.push_back(std::move(array));
+            random_use_=RandomUse::array_reference;
+            phase_=Phase::random;
+            return;
+        }
         case 0xf0: {
             auto ref=Pop();
             if(excursion_ && ref.kind==Kind::constant_ref && ref.data==0x243f)
@@ -2715,6 +2728,9 @@ void RoomTalkState::SupplyRandom(unsigned value) {
         // The BOOT selector returns a one-based slot. This vector omits the list header.
         const auto offset=phrase_lists_.at(stack_.back().data).at(value);
         stack_.back()={Kind::string,0,pool_.at(offset)};
+    } else if(random_use_==RandomUse::array_reference) {
+        auto array=Pop();
+        stack_.push_back({Kind::element,int(value),{},0,std::move(array.cells)});
     } else if(random_use_==RandomUse::trait) {
         result_={Kind::integer,int(unasked_traits_.at(value))};
     } else if(random_use_==RandomUse::repeated_trait) {
