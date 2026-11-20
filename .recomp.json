@@ -14,5 +14,11 @@
     "Windows"
   ],
   "approach": "C++ reconstruction from the original PSP program with source-linked verification and a native Windows backend.",
-  "notes": "The standalone Windows source covers all five Pokepi, ordinary conversations, travel, saved progress, and local Windows peer meetings. A complete playthrough and PSP parity remain unverified. Supply game data locally."
+  "notes": "The standalone Windows source covers all five Pokepi, ordinary conversations, travel, saved progress, and local Windows peer meetings. A complete playthrough and PSP parity remain unverified. Supply game data locally.",
+  "links": [
+    {
+      "label": "Native code map and Windows acceptance",
+      "url": "https://github.com/Senya01/dokodemo-native#readme"
+    }
+  ]
 }

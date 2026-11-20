@@ -20,6 +20,35 @@ int ScriptInteger(unsigned bits) {
     return static_cast<int>((bits & 0x0fffffffu) ^ 0x08000000u)-0x08000000;
 }
 void Require(bool value,const char* error) { if (!value) throw std::runtime_error(error); }
+unsigned ArithmeticShiftRight(int value,unsigned count) {
+    const unsigned bits=unsigned(value);
+    return value<0 ? ~(~bits>>count) : bits>>count;
+}
+
+// The even/odd BOOT compound assignments share the operation, but only the
+// even form leaves the assigned value on the expression stack.
+int IntegerCompound(unsigned op,int lhs,int rhs) {
+    lhs=ScriptInteger(unsigned(lhs));
+    rhs=ScriptInteger(unsigned(rhs));
+    const unsigned left=unsigned(lhs),right=unsigned(rhs);
+    switch(op & ~1u) {
+    case 0x5a: return ScriptInteger(left+right);
+    case 0x5c: return ScriptInteger(left-right);
+    case 0x5e: return ScriptInteger(left*right);
+    case 0x60:
+        Require(rhs!=0,"KSC division by zero");
+        return ScriptInteger(unsigned(lhs/rhs));
+    case 0x62:
+        Require(rhs!=0,"KSC remainder by zero");
+        return ScriptInteger(unsigned(lhs%rhs));
+    case 0x64: return ScriptInteger(left&right);
+    case 0x66: return ScriptInteger(left|right);
+    case 0x68: return ScriptInteger(left^right);
+    case 0x6a: return ScriptInteger(ArithmeticShiftRight(lhs,right&31u));
+    case 0x6c: return ScriptInteger(left<<(right&31u));
+    }
+    throw std::runtime_error("Unknown KSC compound operation");
+}
 unsigned Word(const unsigned char* p,unsigned bytes) {
     unsigned v=0;
     for(unsigned i=0;i<bytes;++i) v|=unsigned(p[i])<<(8*i);
@@ -1815,14 +1844,21 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0x5b: case 0x5d: {
             const auto rhs=Pop(),ref=Pop(),lhs=Dereference(ref);
-            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid arithmetic assignment");
-            const auto bits=op==0x5b ? unsigned(lhs.data)+unsigned(rhs.data) : unsigned(lhs.data)-unsigned(rhs.data);
-            Assign(ref,{Kind::integer,ScriptInteger(bits)}); break;
+            Require(lhs.kind==Kind::integer && rhs.kind==Kind::integer,"Invalid integer compound assignment");
+            const Value result{Kind::integer,IntegerCompound(op,lhs.data,rhs.data)};
+            Assign(ref,result);
+            if(!(op&1u)) stack_.push_back(result);
+            break;
         }
-        case 0x55: case 0x53: {
-            auto ref=Pop(),value=Dereference(ref);
-            Require(value.kind==Kind::integer,"Cannot increment noninteger");
-            value.data+=op==0x53?1:-1; Assign(ref,std::move(value)); break;
+        case 0x53: case 0x55: {
+            const auto ref=Pop(),value=Dereference(ref);
+            Require(value.kind==Kind::integer,"Invalid KSC increment or decrement");
+            const auto bits=op<0x54 ? unsigned(value.data)+1u : unsigned(value.data)-1u;
+            Assign(ref,{Kind::integer,ScriptInteger(bits)});
+            // The decrement handler also compares against 0x52 at 6EEB8.
+            // Neither decrement opcode leaves the old value on the stack.
+            if(op==0x52) stack_.push_back(value);
+            break;
         }
         case 0xc9: case 0xc8: {
             auto rhs=Pop(),lhs=Pop();
@@ -1873,6 +1909,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             auto v=Pop(); stack_.push_back({Kind::truth,(v.kind==Kind::nil)==(op==0xb3)}); break;
         }
         case 0xb9: { auto v=Pop(); stack_.push_back({Kind::truth,v.data!=0}); break; }
+        case 0xba: {
+            const auto value=Pop();
+            Require(value.kind==Kind::integer,"Invalid KSC positive test");
+            stack_.push_back({Kind::truth,value.data>0});
+            break;
+        }
         case 0xbc: { auto v=Pop(); stack_.push_back({Kind::truth,v.kind==Kind::integer && v.data<0}); break; }
         case 0xbd: {
             const auto v=Pop();
@@ -1914,19 +1956,18 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
         }
         case 0xd1: case 0xd2: {
             const auto divisor=Pop(),dividend=Pop();
-            Require(divisor.kind==Kind::integer && dividend.kind==Kind::integer && divisor.data!=0,
+            Require(divisor.kind==Kind::integer && dividend.kind==Kind::integer,
                     "Invalid KSC integer division");
-            const int value=op==0xd1 ? dividend.data/divisor.data : dividend.data%divisor.data;
-            stack_.push_back({Kind::integer,ScriptInteger(unsigned(value))}); break;
+            const auto value=IntegerCompound(op==0xd1 ? 0x60 : 0x62,dividend.data,divisor.data);
+            stack_.push_back({Kind::integer,value}); break;
         }
         case 0xe2: case 0xe3: {
             const auto count=Pop(),value=Pop();
             Require(count.kind==Kind::integer && value.kind==Kind::integer,"Invalid KSC shift");
             const unsigned shift=unsigned(count.data)&31u;
             const unsigned bits=unsigned(value.data);
-            unsigned shifted=bits<<shift;
-            if(op==0xe2) // BOOT 73D5C: SRAV of the signed tag-2 payload.
-                shifted=value.data<0 ? ~(~bits>>shift) : bits>>shift;
+            // BOOT 73D5C uses SRAV of the signed tag-2 payload.
+            const unsigned shifted=op==0xe2 ? ArithmeticShiftRight(value.data,shift) : bits<<shift;
             stack_.push_back({Kind::integer,ScriptInteger(shifted)}); break;
         }
         case 0xb4: {
