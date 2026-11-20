@@ -1857,6 +1857,12 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             }
             break;
         }
+        case 0xb0: {
+            const auto value=Pop();
+            Require(value.kind==Kind::integer,"Invalid KSC negation");
+            stack_.push_back({Kind::integer,ScriptInteger(0u-unsigned(value.data))});
+            break;
+        }
         case 0xb1: {
             const auto value=Pop();
             Require(value.kind==Kind::truth,"Expected a predicate result for logical NOT");
