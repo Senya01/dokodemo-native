@@ -2420,6 +2420,11 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 Require(value.kind==Kind::string,"Invalid KSC first kana operand");
                 auto text=KanaEndpoint(value.text,false);
                 result_=text.empty()?Value{}:Value{Kind::string,0,std::move(text)};
+            } else if(id==0x72 && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::string,"Invalid KSC last kana operand");
+                auto text=KanaEndpoint(value.text,true);
+                result_=text.empty()?Value{}:Value{Kind::string,0,std::move(text)};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
