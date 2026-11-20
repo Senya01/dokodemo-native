@@ -122,6 +122,11 @@ constexpr ActorContactScript contact_scripts[]{
     {0x66058,0x9723,0x601c,0x2508,0x2502,0x6b170,0x6b68a,0x20bb,0x489a,0x4849,0x8715,0x18ba,0x24b5,0x59a6},
 };
 
+// Each actor's startup enables one destination kind. Local media preparation
+// checks these values against the original KSC startup calls.
+constexpr unsigned named_starting_outings[]{19,3,16,11};
+static_assert(std::size(named_starting_outings)+1==std::size(contact_scripts));
+
 }
 
 unsigned RoomTalkState::ContactGlobal(unsigned bank) const {
@@ -263,6 +268,7 @@ bool RoomTalkState::Load(const std::filesystem::path& dir,const AcceptedProfile&
             alternate_greeting_=&scripts[p.actor-2];
         }
         if(p.actor>=1) {
+            outing_enabled_=1u<<named_starting_outings[p.actor-1];
             if(!LoadNamedGreeting(dir,p,error)) return false;
             LoadReturnLetter(dir);
             return true;
@@ -2561,7 +2567,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             else if(op==0x94 && id==0x9a35 && exchange_inventory_)
                 stack_.push_back({Kind::integer,int(global_arrays_.at(id).size())});
             else if(op==0x94 && id==0x98c3 && exchange_inventory_) stack_.push_back(friends_cells_.at(id));
-            else if(op==0x94 && id==(robo_greeting_?0x59b6:0x59ae)) stack_.push_back({Kind::integer,int(outing_enabled_)});
+            else if(op==0x94 && unsigned(id)==flags+12) stack_.push_back({Kind::integer,int(outing_enabled_)});
             else stack_.push_back({Kind::global_ref,id});
             break;
         }

@@ -452,7 +452,10 @@
             "room-roof-contact"
           ],
           "expect": "Eligible destinations are reachable by all five characters with valid inputs. Menus, tasks, return and repeat outings work at the location.",
-          "gap": "Resources and Toro's 15 ordinary trips were tested. Equivalent coverage for the other characters and conditional routes is pending."
+          "gap": "Toro's 15 ordinary trips were tested. Source menu calls, rosters and period masks are checked for all five characters, and first protected saves retain the four alternate characters' initial destination flags. Departure, on-site tasks, return and repeat outings for the alternate characters still need runtime coverage.",
+          "tests": [
+            "game-starting-outings"
+          ]
         }
       ]
     },
@@ -1005,7 +1008,8 @@
     "game-seam-links": "passed",
     "game-save-recovery": "passed",
     "game-toro-ending": "passed",
-    "game-seam-calendar": "passed"
+    "game-seam-calendar": "passed",
+    "game-starting-outings": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1082,6 +1086,12 @@
       "routes_passed": 1,
       "routes_total": 1,
       "scope": "Windows Release, headless and null audio. Four independent processes used the same temporary installation. A real System save was staged as the previous generation with an incomplete sibling. Recovery preserved all six files. Controlled in-game month rollover, diary, days 2–14, farewell and cold Continue with restricted room controls."
+    },
+    "game-starting-outings": {
+      "test_binary_sha256": "54eb9700271fba91e6ce29968e3320adf0aee87953b39a2eecc1235efed9b76e",
+      "routes_passed": 4,
+      "routes_total": 4,
+      "scope": "Windows Release, headless and null audio. Independent new rooms for Robo, Usagi, Inu and Kaeru each wrote the source-backed initial destination flag in a protected System save. Robo retained the flag through a day-two save."
     }
   }
 }

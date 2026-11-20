@@ -75,6 +75,8 @@ The automated route opens the normal outing menu, enters and draws each of Toro'
 
 Configure the Windows CMake build with local media and `-DOKODEMO_GAME_OUTING_TEST_SLOT=<UCJS10002000 directory>` pointing to a Toro slot with a lesson in row 163. Build `post-profile-tests`, then run `ctest --test-dir <build> -C Release -R '^game-out-and-back$' --output-on-failure`. CTest sets null audio. The runner uses temporary installs beside the package and sends game frames to memory.
 
+Local media preparation checks the source menu dispatch, startup flag, destination roster and period masks for each of the five characters. The default destination kinds are 12 for Toro, 19 for Robo, 3 for Usagi, 16 for Inu and 11 for Kaeru. The headless `game-starting-outings` test starts a new room for each of the four alternate characters and checks the default flag in the protected System save. Robo's test also checks the flag after the day-two save. The alternate characters' departure and return callbacks are still open.
+
 ## Peer card exchange
 
 Configure the Windows CMake build with local media and `-DOKODEMO_GAME_MEETING_TEST_SLOT=<UCJS10002000 directory>` pointing to a Toro slot with an empty friend notebook. Build `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-peer-card$' --output-on-failure`.

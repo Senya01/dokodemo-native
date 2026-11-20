@@ -1435,6 +1435,8 @@ void CheckRoboSlot(const std::filesystem::path& game,PostProfile& room,
             lesson.learned_serial==1 && word.at(1).text==lesson.learned_written && word.at(2).text==lesson.learned_reading &&
             std::any_of(catalog.begin(),catalog.end(),[](const auto& cell){return (cell.word&0x0fffffffu)!=0;}),
             "Robo protected slot omitted live profile, memo, diary or date topic history");
+    Require(owners.progress_flags[1].children.at(0).word==0x20080000u,
+            "Robo's first System save lost the default outing");
 
     if (check==RoboSlotCheck::contact_save) {
         ReportContactWord("saved_contact_word",lesson.learned_written,lesson.learned_reading);
@@ -1457,6 +1459,7 @@ void CheckRoboSlot(const std::filesystem::path& game,PostProfile& room,
     const auto next_owners=RoomSaveOwners::FromActorGraph(next.actor);
     const auto next_page=next.profile.FirstDayDiary();
     Require(next_owners.day_words[0].children.at(0).word==0x20000002 &&
+            next_owners.progress_flags[1].children.at(0).word==owners.progress_flags[1].children.at(0).word &&
             EncodeKscSaveGraph(next_owners.topic_history.children.at(0))==EncodeKscSaveGraph(owners.topic_history.children.at(0)) &&
             next_page && next_page->revealed && next_page->text==page->text &&
             next_page->date==page->date,"Robo day-two save lost history or the first-day diary");
@@ -1501,6 +1504,10 @@ void CheckNamedFirstDaySlot(const std::filesystem::path& game, PostProfile& room
             (rows.front().children.at(0).children.at(0).word>>28)==2 &&
             !rows.front().children.at(0).children.at(1).text.empty(),
             "Protected save omitted the character or current first-day owners");
+    constexpr unsigned starting_outings[]{3,16,11};
+    const auto expected_outings=0x20000000u | (1u<<starting_outings[profile.actor-2]);
+    Require(owners.progress_flags[1].children.at(0).word==expected_outings,
+            "Character's first System save lost the default outing");
     Require(owners.day_words[0].children.at(0).word==0x20000001 &&
             owners.diary_staging.children.at(0).children.at(1).word==0x2000000c &&
             owners.contact_count.children.at(0).word==0x20000001,

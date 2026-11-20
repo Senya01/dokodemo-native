@@ -277,8 +277,8 @@ def room_fallback_list_media(root):
     return files
 
 
-def outing_rows(data, h):
-    _, refs = table(data, h.global_start, 0x59da)
+def outing_rows(data, h, roster=0x59da):
+    _, refs = table(data, h.global_start, roster)
     require(len(refs) == 133 and all(ref >> 16 == 0xb004 for ref in refs), "Invalid outing roster")
     for ref in refs:
         header, row = table(data, h.global_start, ref & 0xffff)
@@ -313,25 +313,58 @@ def outing_details(data, h):
     return roots, tables, filters
 
 
-def room_outing_media(root):
-    pack = BparArchive(root.payload(root.by_name("KSNEKO.BPM")))
-    script = pack.payload(pack.by_name("NEKO.KSC"))
+OUTING_ACTORS = (
+    # Script, progress global, initial kind, menu call, departure, return, roster, periods, indices.
+    ("NEKO", 0x59ae, 12, 0x8df88, 0x13219, 0x1320e, 0x59da, 0x28f6, 0x5f92),
+    ("ROBO", 0x59b6, 19, 0x6be49, 0x13c81, 0x13c76, 0x59e2, 0x29aa, 0x5f9a),
+    ("USAGI", 0x59b7, 3, 0x67d2c, 0x13820, 0x13815, 0x59e3, 0x260a, 0x5f9b),
+    ("INU", 0x59c7, 16, 0x6bf01, 0x142ab, 0x142a0, 0x59f3, 0x24e7, 0x5fab),
+    ("KAERU", 0x59b2, 11, 0x6bd14, 0x13d9c, 0x13d91, 0x59de, 0x2586, 0x5f96),
+)
+
+
+def actor_outing_source(root, spec):
+    name, flag, kind, call, depart, back, roster, clock, order = spec
+    pack = BparArchive(root.payload(root.by_name("KS" + name + ".BPM")))
+    script = pack.payload(pack.by_name(name + ".KSC"))
     data = script.read(0, script.size)
     h = parse_header(data)
     code = data[28:h.pool_start]
-    # Cold G59AE, followed by the mandatory actor-start 2C57 -> 2BC9(bit).
-    initial, = struct.unpack_from("<I", data, h.global_start + 4*0x59ae)
-    require(initial == 0x20000000 and code[0x8e15d:0x8e161] == bytes.fromhex("21572c00")
-            and code[0x2c57:0x2c61] == bytes.fromhex("3000800c2001c92b0031")
-            and code[0x2bd6:0x2be1] == bytes.fromhex("95ae598001900000e36731"), "Outing enable path changed")
-    mask = (initial & 0x0fffffff) | (1 << code[0x2c5a])
-    _, periods = table(data, h.constant_start, 0x28f6)
-    _, indices = table(data, h.global_start, 0x5f92)
-    require(len(periods) == 20 and all(v >> 28 == 2 for v in periods), "Invalid outing time table")
+    # The startup owner enables the actor's default kind by OR-ing its bit
+    # into a cold tagged integer. Verify the actual call and assignment.
+    require(h.entrypoint >= 62, f"{name} missing actor startup")
+    initializer = h.entrypoint - 62
+    start = int.from_bytes(code[initializer+1:initializer+4], "little")
+    setter = int.from_bytes(code[start+6:start+9], "little")
+    initial, = struct.unpack_from("<I", data, h.global_start + 4*flag)
+    require(initial == 0x20000000 and code[initializer] == 0x21
+            and code[start:start+6] == bytes((0x30, 0, 0x80, kind, 0x20, 1))
+            and code[start+9:start+10] == b"\x31"
+            and code[setter+13:setter+24] == b"\x95" + struct.pack("<H", flag)
+                + bytes.fromhex("8001900000e36731"), f"{name} outing enable path changed")
+    require(code[call-7:call-3] == b"\x03\0\0\x20"
+            and code[call:call+4] == b"\x21" + depart.to_bytes(3, "little")
+            and code[call+8:call+12] == b"\x04\0\0\x20"
+            and code[call+15:call+19] == b"\x21" + back.to_bytes(3, "little"),
+            f"{name} outing menu dispatch changed")
+    _, periods = table(data, h.constant_start, clock)
+    _, indices = table(data, h.global_start, order)
+    require(len(periods) == 20 and all(v >> 28 == 2 and (v & 0x0fffffff) < 64 for v in periods),
+            f"{name} invalid outing time table")
     require(len(indices) == 132 and sorted(indices) == list(range(0x20000001,0x20000085)),
-            "Invalid initial outing index")
+            f"{name} invalid initial outing index")
+    rows = tuple(outing_rows(data, h, roster))
+    require(any(row[0] == (0x20000000 | kind) for row in rows)
+            and periods[kind] & 0x3f, f"{name} starting destination absent from roster")
+    return data, h, 1 << kind, periods, indices, rows
+
+
+def room_outing_media(root):
+    data, h, mask, periods, indices, rows = actor_outing_source(root, OUTING_ACTORS[0])
+    for spec in OUTING_ACTORS[1:]:
+        actor_outing_source(root, spec)
     result = bytearray(b"ROT5" + struct.pack("<I20B132B", mask, *(v&255 for v in periods+indices)))
-    for row in outing_rows(data, h):
+    for row in rows:
         kind, primary, secondary = row[:3]
         if not kind:
             require(not any(row), "Unexpected empty outing descriptor")
