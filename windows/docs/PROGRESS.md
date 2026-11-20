@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **46 of 60** requirements verified and 14 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, and card and gift exchange with cold loads for both players. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **47 of 60** requirements verified and 13 open. The baseline recorded 62 of 62 Windows Release tests. Separate checks cover startup to Toro's room, Robo's lesson and cold load, the 10 scheduled-letter routes, the new-adoption route, the 15 outing routes, card and gift exchange with cold loads for both players, and multiplayer shiritori. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -82,6 +82,12 @@ The runner copies the input into separate installations and exchanges two cards 
 With the same local fixture setting, build `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-peer-gift$' --output-on-failure`. The players exchange the first of two gifts and save through the System menu. The test compares the other 169 inventory rows with their original state. It also checks waiting without a partner and cancelling after both peers have prepared the exchange. In the paired cancellation case, the test holds the final readiness message at the channel boundary and one player cancels with Cross. Both inventories stay unchanged and both players return to ordinary room activity.
 
 A fresh process opens each saved bag. The live gift rows, complete inventory hashes and all six slot files agree with the recorded save in every case. The network runs on loopback. Cancellation is exercised before either peer commits.
+
+## Shiritori
+
+With the same local fixture setting, build `post-profile-tests` and run `ctest --test-dir <build> -C Release -R '^game-peer-shiritori$' --output-on-failure`. Both players use the ordinary friends menu and the same venue. The loopback match has a winner and loser, returns control to both rooms and saves usage marks on the exact local words that were played. The no-partner cancellation returns control without marking any word.
+
+Three additional runs use a test peer behind the meeting-channel interface. After one legal local turn it replies with a wrong starting kana, a duplicate whose first kana matches, or a word ending in ん. Each case confirms the bad move was delivered and never added to the word history, the room resumes, and the saved word usage marks remain unchanged. The component suite exercises the three-word condition for the meeting offer.
 
 ## Open coverage
 

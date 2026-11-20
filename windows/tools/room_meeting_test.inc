@@ -24,6 +24,39 @@ private:
     bool reached_=false;
 };
 
+enum class BadShiritoriMove { none, wrong_link, repeated_word, terminal_n };
+
+class ShiritoriTestPeer final : public dokodemo::gameplay::RoomMeetingChannel {
+public:
+    ShiritoriTestPeer(BadShiritoriMove move,bool& delivered) : move_(move), delivered_(delivered) {}
+    dokodemo::gameplay::MeetingConnection Poll() override {
+        return dokodemo::gameplay::MeetingConnection::connected;
+    }
+    bool FirstParticipant() const override { return true; }
+    bool HasPendingOutput() const override { return false; }
+    bool Send(const std::vector<std::uint8_t>& message) override {
+        Require(!played_ && message.size()>2 && message.front()==1,"Expected one genuine local word before the test reply");
+        played_=true;
+        return true;
+    }
+    std::optional<std::vector<std::uint8_t>> Receive() override {
+        if (!played_ || delivered_) return {};
+        // Both いぬ (wrong link) and もも (repeat) have valid readings.
+        // あん is in the same position but has a forbidden final kana.
+        const std::string_view reply=move_==BadShiritoriMove::wrong_link ? "\x82\xa2\x82\xca" :
+            move_==BadShiritoriMove::repeated_word ? "\x82\xe0\x82\xe0" : "\x82\xa0\x82\xf1";
+        std::vector<std::uint8_t> packet{1,std::uint8_t(reply.size())};
+        packet.insert(packet.end(),reply.begin(),reply.end());
+        packet.insert(packet.end(),reply.begin(),reply.end());
+        delivered_=true;
+        return packet;
+    }
+private:
+    BadShiritoriMove move_;
+    bool& delivered_;
+    bool played_=false;
+};
+
 void CheckMeetingBag(ResumeDayRoom& room,int expected,int other) {
     room.OpenMenu(); room.Key(0x10); room.Key(0x10);
     Require(room.room.teaching_snapshot().menu_cursor==5,"The inventory menu did not select");
@@ -52,14 +85,17 @@ void ReportMeetingInventory(const char* checkpoint,const dokodemo::gameplay::Ksc
 
 int CheckRecordExchange(const std::filesystem::path& install,const std::filesystem::path& source,
                         unsigned port,unsigned side,dokodemo::gameplay::MeetingMode mode,
-                        const std::filesystem::path& ready_gate={}) {
+                        const std::filesystem::path& ready_gate={},
+                        BadShiritoriMove bad_move=BadShiritoriMove::none) {
     using namespace dokodemo::gameplay;
     const bool gifts=mode==MeetingMode::gifts, words=mode==MeetingMode::shiritori;
     namespace fs=std::filesystem;
     Require(port && port<=65535 && side<=2,"Invalid private meeting port or participant");
     const bool cancel_pair=!ready_gate.empty();
     Require(!cancel_pair || (gifts && side && fs::is_directory(ready_gate)),"Invalid paired gift cancellation");
-    const bool exchanges=side && !cancel_pair;
+    const bool bad_reply=bad_move!=BadShiritoriMove::none;
+    Require(!bad_reply || (words && side==1),"Invalid rejected reply case");
+    const bool exchanges=side && !cancel_pair && !bad_reply;
     const auto input=ReadRetailSlot(source);
     auto saved=DecodeRetailUtilityRequest(input,RetailSaveProfile{});
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
@@ -106,7 +142,8 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         "\x82\xe8\x82\xb7", "\x82\xdf\x82\xbe\x82\xa9", "\x82\xa2\x82\xca"};
     constexpr std::array<std::string_view,3> chain_b{
         "\x82\xb7\x82\xb8\x82\xdf", "\x82\xa9\x82\xa2", "\x82\xca\x82\xe8\x82\xa6"};
-    const auto& learned=side==1 ? chain_a : chain_b;
+    auto learned=side==1 ? chain_a : chain_b;
+    if (bad_move==BadShiritoriMove::repeated_word) learned[0]="\x82\xe0\x82\xe0"; // もも
     if (words) {
         const auto exemplar=rows.at(163);
         for (unsigned index=0;index<learned.size();++index) {
@@ -129,9 +166,14 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     const auto baseline=ReadRetailSlot(slot);
     auto calendar=saved.profile.SavedAt();
     const auto previous_day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
+    bool reply_delivered=false;
     ResumeDayRoom run(install,saved,calendar);
     auto opener=dokodemo::platform::MakeLanMeetingOpener(std::uint16_t(port),true);
-    if (cancel_pair) {
+    if (bad_reply) {
+        run.room.BindMeetingOpener([&reply_delivered,bad_move](MeetingPlace) {
+            return std::make_unique<ShiritoriTestPeer>(bad_move,reply_delivered);
+        });
+    } else if (cancel_pair) {
         const auto marker=ready_gate/std::to_string(side);
         run.room.BindMeetingOpener([opener,marker](MeetingPlace place) -> std::unique_ptr<RoomMeetingChannel> {
             auto channel=opener(place);
@@ -150,7 +192,7 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     run.Key(0x2000);
     bool choosing_gift=false, meeting=false, closed=false, received=false;
     std::vector<std::string> played;
-    unsigned own_turns=0;
+    unsigned own_rows=0;
     for (unsigned i=0;i<5500 && !(closed && run.room.activity_snapshot().serial>activity &&
                                 run.room.activity_snapshot().started_command);++i) {
         const auto conversation=run.room.conversation_snapshot();
@@ -184,27 +226,28 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
                         "Shiritori did not consume the test word and reading");
                 const bool own=event.values.at(1).second!=0;
                 const auto& expected=own ? learned : side==1 ? chain_b : chain_a;
-                Require(std::find(expected.begin(),expected.end(),event.text[0])!=expected.end() &&
+                const auto word=std::find(expected.begin(),expected.end(),event.text[0]);
+                Require(word!=expected.end() &&
                         std::find(played.begin(),played.end(),event.text[0])==played.end(),"Word repeated or belongs to the wrong player");
                 const auto kana=ShiritoriKana(event.text[1]);
                 Require(kana && (played.empty() || (*ShiritoriKana(played.back()))[1]==(*kana)[0]),
                         "Shiritori did not match the previous final kana");
                 played.push_back(event.text[0]);
-                own_turns+=own;
+                if (own) own_rows|=1u<<(word-expected.begin());
             } else if (name=="meeting-shiritori-finished") {
-                Require(side && words && event.values.at(0).second==(side==1?-1:1) &&
+                Require(exchanges && words && event.values.at(0).second==(side==1?-1:1) &&
                         event.values.at(1).second==int(played.size()) && played.size()>=5 && played.size()<=6,
                         "Shiritori did not finish on the unmatched tail");
                 received=closed=true;
                 std::cout<<"Shiritori finished, result "<<event.values.at(0).second<<", "<<played.size()
-                         <<" accepted words, "<<own_turns<<" local"<<std::endl;
+                         <<" accepted words"<<std::endl;
             } else if (name=="meeting-card-received") {
                 Require(side && event.values.at(0).second==601 && event.values.at(1).second==1,
                         "Card was not mutually acknowledged in row 601");
                 received=closed=true;
                 std::cout<<"Received and acknowledged friend row 601"<<std::endl;
             } else if (name=="meeting-closed") {
-                Require(!exchanges && event.values.at(0).second==int(!side || side==1),
+                Require(!exchanges && event.values.at(0).second==int(!side || (cancel_pair && side==1)),
                         "Unexpected connection failure or close");
                 closed=true;
             }
@@ -213,17 +256,23 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     Require(meeting && closed && received==exchanges && run.room.activity_snapshot().serial>activity &&
             ReadRetailSlot(slot)==baseline,"Exchange did not return to activity or saved without a request");
     if (words) {
-        if (side) {
-            run.Save();
-            const auto stored=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
-            const auto after=RoomSaveOwners::FromActorGraph(stored.actor);
-            const auto& dictionary=after.dictionary.children.front().children;
-            unsigned used=0;
-            for (unsigned row=163;row<166;++row)
-                used+=bool(dictionary.at(row).children.front().children.at(11).word&8);
-            Require(used==own_turns,"Saved shiritori word usage differs from the local turns");
-        } else Require(played.empty(),"A cancelled match without a partner played a word");
+        if (bad_reply)
+            Require(reply_delivered && played.size()==1 && played.front()==learned.front(),
+                    "An invalid reply was not delivered or was accepted");
+        if (!side) Require(played.empty(),"A cancelled match without a partner played a word");
+        run.Save();
+        const auto stored=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
+        const auto after=RoomSaveOwners::FromActorGraph(stored.actor);
+        const auto& dictionary=after.dictionary.children.front().children;
+        for (unsigned index=0;index<learned.size();++index) {
+            const auto& fields=dictionary.at(163+index).children.front().children;
+            Require(fields.at(1).text==learned[index] && fields.at(2).text==learned[index] &&
+                    bool(fields.at(11).word&8)==(exchanges && bool(own_rows&(1u<<index))),
+                    "Saved shiritori word or usage mark differs from the match");
+        }
         Require(ReadRetailSlot(source)==input,"Shiritori changed the source test slot");
+        if (bad_reply) std::cout<<"Shiritori rejected reply "<<unsigned(bad_move)<<" and returned without marking words\n";
+        if (!side) std::cout<<"Shiritori cancelled waiting and returned without marking words\n";
         return 0;
     }
     if (gifts) {

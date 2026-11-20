@@ -59,6 +59,11 @@ def test_channel(binary, output):
     return True
 
 
+def prepare_room_install(install, package, source, donor):
+    shutil.copytree(source, donor)
+    shutil.copytree(package / "assets", install / "assets", copy_function=os.link)
+
+
 def test_room_exchange(binary, output, package, source, operation, paired_cancel=False):
     port = private_port()
     cancel_port = private_port()
@@ -72,8 +77,7 @@ def test_room_exchange(binary, output, package, source, operation, paired_cancel
     for side in sides:
         install = output / str(side)
         donor = output / "inputs" / str(side) / source.name
-        shutil.copytree(source, donor)
-        shutil.copytree(package / "assets", install / "assets", copy_function=os.link)
+        prepare_room_install(install, package, source, donor)
         request = (install, operation, donor, port if side else cancel_port, side)
         cases.append((install, request + (gate,) if paired_cancel else request))
     if not run_group(binary, cases, 350):
@@ -83,6 +87,16 @@ def test_room_exchange(binary, output, package, source, operation, paired_cancel
     if operation == "--gift-exchange-slot":
         return check_saved_gifts(binary, output, sides)
     return True
+
+
+def test_shiritori_invalid_words(binary, output, package, source):
+    cases = []
+    for move in ("wrong-link", "repeat", "terminal-n"):
+        install = output / move
+        donor = output / "inputs" / move / source.name
+        prepare_room_install(install, package, source, donor)
+        cases.append((install, (install, "--shiritori-slot", donor, private_port(), 1, move)))
+    return run_group(binary, cases, 350)
 
 
 def slot_files(install):
@@ -158,6 +172,9 @@ def main():
             return 1
         if args.mode == "gifts" and not test_room_exchange(
                 binary, output / "cancel-pair", package, source, operation, paired_cancel=True):
+            return 1
+        if args.mode == "shiritori" and not test_shiritori_invalid_words(
+                binary, output / "invalid-words", package, source):
             return 1
         return 0
 

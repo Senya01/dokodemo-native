@@ -706,7 +706,11 @@
             "meet-shiritory-play"
           ],
           "expect": "Партия проверяет заявки, победу, поражение, отмену, неверные ходы и возврат к самостоятельной игре.",
-          "gap": "Победа, поражение и отмена проверялись на тестовых словарях. Полная матрица сеанса не подключена."
+          "tests": [
+            "game-peer-shiritori",
+            "game-room-talk-state"
+          ],
+          "evidence": "Заявка через игровое меню, победа и поражение в loopback-партии, отмена без партнёра. Неверная связка, повтор и конечная ん доставлены тестовым каналом и отвергнуты. Во всех случаях игра вернула управление комнате; отметки выученных слов сверены по сохранению."
         },
         {
           "id": "peer-network",
@@ -904,7 +908,7 @@
     "peer-menu": "passed",
     "peer-card": "passed",
     "peer-gift": "passed",
-    "peer-shiritori": "blocked",
+    "peer-shiritori": "passed",
     "peer-network": "blocked",
     "room-frame-input": "passed",
     "startup-to-room": "passed",
@@ -983,7 +987,8 @@
     "game-startup-to-room": "passed",
     "game-contact-to-save": "passed",
     "game-peer-card": "passed",
-    "game-peer-gift": "passed"
+    "game-peer-gift": "passed",
+    "game-peer-shiritori": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1032,6 +1037,12 @@
       "routes_passed": 3,
       "routes_total": 3,
       "scope": "Windows Release, headless, null audio. Loopback gift exchange, no-partner cancellation and bilateral prepared abort before commit; five cold processes and intact six-file slots."
+    },
+    "game-peer-shiritori": {
+      "test_binary_sha256": "07590ffef189242a8150b3ccbfbfeda276c5cd2a9d4143f15a8e94c6723133ba",
+      "routes_passed": 5,
+      "routes_total": 5,
+      "scope": "Windows Release, headless, null audio. One two-player loopback match, no-partner cancellation and three rejected moves at the game channel boundary, with room return and persisted word-use checks."
     }
   }
 }

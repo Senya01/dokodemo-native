@@ -1922,6 +1922,14 @@ int main(int argc, char **argv) try {
     if (argc==7 && std::string_view(argv[2])=="--gift-exchange-slot")
         return CheckRecordExchange(argv[1],argv[3],unsigned(std::stoul(argv[4])),unsigned(std::stoul(argv[5])),
                                    dokodemo::gameplay::MeetingMode::gifts,argv[6]);
+    if (argc==7 && std::string_view(argv[2])=="--shiritori-slot") {
+        const auto move=std::string_view(argv[6]);
+        Require(move=="wrong-link" || move=="repeat" || move=="terminal-n","Unknown rejected Shiritori move");
+        const auto bad_move=move=="wrong-link" ? BadShiritoriMove::wrong_link :
+            move=="repeat" ? BadShiritoriMove::repeated_word : BadShiritoriMove::terminal_n;
+        return CheckRecordExchange(argv[1],argv[3],unsigned(std::stoul(argv[4])),unsigned(std::stoul(argv[5])),
+                                   dokodemo::gameplay::MeetingMode::shiritori,{},bad_move);
+    }
     if (argc==3 && std::string_view(argv[2])=="--cold-meeting-gift")
         return CheckColdMeetingGift(argv[1]);
     if (argc==4 && std::string_view(argv[2])=="--replacement-slot")
