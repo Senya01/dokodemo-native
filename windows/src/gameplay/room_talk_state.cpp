@@ -1,4 +1,5 @@
 #include "room_talk_state.h"
+#include "script_vm.h"
 #include "room_friends.h"
 #include "room_inventory.h"
 #include "message_speed.h"
@@ -1852,6 +1853,29 @@ void RoomTalkState::InvokeHostBuiltin(HostBuiltin operation,unsigned argc) {
     stack_.resize(first);
 }
 
+void RoomTalkState::LoadScriptModule(unsigned argc) {
+    Require(argc!=0 && argc<=stack_.size(),"Missing KSC module name");
+    const auto first=stack_.size()-argc;
+    auto argument=std::move(stack_[first]);
+    stack_.resize(first);
+    result_={Kind::integer,-1};
+    // The eight entries precede the module count at E58A8. The script receives
+    // the previous count only after a successful open and registration.
+    constexpr unsigned module_slots=8;
+    if(!script_module_reader_ || script_modules_.size()>=module_slots) return;
+    std::string name;
+    if(argument.kind==Kind::string) name=argument.text.c_str();
+    else if(argument.kind==Kind::integer) name=std::to_string(ScriptInteger(unsigned(argument.data)));
+    if(name.empty()) return;
+    std::vector<std::uint8_t> bytes;
+    if(!script_module_reader_(name,bytes)) return;
+    if(bytes.size()>script::Program::resource_limit) return;
+    const auto index=int(script_modules_.size());
+    // 6A854 retains the raw member. The consuming builtin chooses its format.
+    script_modules_.push_back({std::move(name),std::move(bytes)});
+    result_={Kind::integer,index};
+}
+
 namespace {
 constexpr unsigned script_instruction_limit=16384;
 
@@ -2875,6 +2899,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 result_={};
                 OpenWordKeyboard(editor_mode,std::move(argument.text),{});
                 return;
+            } else if(id==0x80) {
+                LoadScriptModule(argc);
             } else if(id==0x24) {
                 InvokeHostBuiltin(HostBuiltin::command,argc);
             } else if(id==0x40) {

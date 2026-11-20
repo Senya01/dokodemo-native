@@ -1,5 +1,7 @@
 #include "gameplay/room_talk_state.h"
+#include "gameplay/boot_to_display.h"
 #include "gameplay/cold_room_actor.h"
+#include "script_vm.h"
 #include "gameplay/room_activity_phase.h"
 #include "gameplay/room_notebook.h"
 #include "gameplay/room_word_entry.h"
@@ -700,7 +702,77 @@ struct RoomTalkOpcodeTests {
         if(state!=1205) throw std::runtime_error("KSC host notification was lost or reordered");
     }
 
+    static void ScriptModuleBuiltin(RoomTalkState& vm,Value operand,int expected,unsigned char opcode=0x80) {
+        vm.pc_=0;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.result_={Kind::integer,96};
+        vm.stack_={{Kind::integer,61},std::move(operand)};
+        vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,opcode,1,0x89,0x43});
+        vm.Step(0,true,true,nullptr,false);
+        if(!vm.error_.empty() || vm.pc_!=5 || vm.stack_.size()!=2)
+            throw std::runtime_error("KSC module load did not return to its caller: "+vm.error_);
+        CheckValue(vm.stack_[0],Kind::integer,61,opcode);
+        CheckValue(vm.stack_[1],Kind::integer,expected,opcode);
+    }
+
+    static void ScriptModuleLoad() {
+        // Independently authored KSC with one routine and one local string.
+        const std::vector<std::uint8_t> example{
+            0x4b,0x53,0x43,0, 4,2,3,0x20, 0,0,0,0, 4,0,0,0, 3,0,0,0,
+            0,0, 1,0, 0,0, 0,0, 0x80,17,0x70,0x38, 'o','k',0, 0,0,0,0x50
+        };
+        RoomTalkState vm;
+        ScriptModuleBuiltin(vm,{Kind::string,0,"sample"},-1);
+        unsigned reads=0;
+        vm.BindScriptModuleReader([&](const std::string& name,std::vector<std::uint8_t>& bytes) {
+            ++reads;
+            if(name=="opaque") { bytes={42}; return true; }
+            if(name!="sample" && name!="7") return false;
+            bytes=example;
+            return true;
+        });
+        ScriptModuleBuiltin(vm,{Kind::string,0,"missing"},-1);
+        ScriptModuleBuiltin(vm,{Kind::integer,7},0);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"opaque"},1);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"sample"},2);
+        if(vm.script_modules_[0].name!="7" || vm.script_modules_[0].bytes!=example ||
+           vm.script_modules_[1].bytes!=std::vector<std::uint8_t>{42} ||
+           vm.script_modules_[2].bytes!=example)
+            throw std::runtime_error("KSC module handle does not retain the opened resource");
+        for(int i=3;i<8;++i) ScriptModuleBuiltin(vm,{Kind::string,0,"sample"},i);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"sample"},-1);
+        if(reads!=9 || vm.script_modules_.size()!=8)
+            throw std::runtime_error("KSC module registration did not preserve its slot limit");
+        script::Program original;
+        script::Diagnostic error;
+        if(original.load_original_bytes(example,"fixture.KSC",error) || original.loaded())
+            throw std::runtime_error("Package bytecode was accepted by the original-image path");
+    }
+
+    static void ScriptModuleArchive(const std::filesystem::path& game) {
+        BootToDisplay boot;
+        if(!boot.Initialize() || !boot.InitializeClock({},168) ||
+           !boot.MountDataArchive(game/"assets/iso/PSP_GAME/USRDIR/data/DATA.BP"))
+            throw std::runtime_error("Cannot mount the locally prepared archive");
+        RoomTalkState vm;
+        vm.BindScriptModuleReader([&](const auto& name,auto& bytes) { return boot.ReadScriptMember(name,bytes); });
+        ScriptModuleBuiltin(vm,{Kind::string,0,"KSNEKO.BPM/absent.KSC"},-1);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"KSNEKO.BPM/../NEKO.KSC"},-1);
+        int index=0;
+        for(std::string actor:{"NEKO","ROBO","USAGI","INU","KAERU"}) {
+            const auto name="KS"+actor+".BPM/"+actor+".KSC";
+            ScriptModuleBuiltin(vm,{Kind::string,0,name},index);
+            const auto& module=vm.script_modules_.at(index++);
+            script::Program verified;
+            script::Diagnostic error;
+            if(!verified.load_original_bytes(module.bytes,name,error))
+                throw std::runtime_error("KSC archive module did not match the original identity: "+error.text());
+        }
+    }
+
     static void Run() {
+        ScriptModuleLoad();
         HostCommand();
         HostQuery();
         HostNotification();
@@ -4030,6 +4102,11 @@ int main(int argc,char** argv) {
         gameplay::RoomTalkOpcodeTests::Run();
         if(argc==2 && std::string_view(argv[1])=="--integer-opcodes") {
             std::cout<<"KSC integer, array and builtin tests passed\n";
+            return 0;
+        }
+        if(argc==3 && std::string_view(argv[1])=="--script-module-archive") {
+            gameplay::RoomTalkOpcodeTests::ScriptModuleArchive(argv[2]);
+            std::cout<<"KSC module loading passed for five locally supplied archive members\n";
             return 0;
         }
         if(argc==3 && std::string_view(argv[1])=="--ksc-locals") {

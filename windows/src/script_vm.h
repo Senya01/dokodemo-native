@@ -50,6 +50,7 @@ public:
     bool load_original(const std::filesystem::path& path, Diagnostic& error);
     bool load_original_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
                              Diagnostic& error);
+    static constexpr std::size_t resource_limit = 16u * 1024u * 1024u;
     const Header& header() const { return header_; }
     const Source& source() const { return source_; }
     const std::vector<uint8_t>& bytes() const { return bytes_; }

@@ -676,6 +676,10 @@ void PostProfile::BindMeetingOpener(OpenRoomMeeting open) {
     data_->talk.EnablePeerMeetings();
 }
 
+void PostProfile::BindScriptModuleReader(RoomTalkState::ScriptModuleReader reader) {
+    if (data_) data_->talk.BindScriptModuleReader(std::move(reader));
+}
+
 void PostProfile::Data::UpdateMeeting(MeetingPlace request,std::uint32_t buttons,std::uint32_t minute) {
     if (!active_meeting) {
         active_meeting=request;

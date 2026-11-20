@@ -33,6 +33,7 @@ public:
     bool InitializeClock(const std::array<std::uint8_t,16>& date, std::uint32_t seconds);
     bool MountDataArchive(const std::filesystem::path& path);
     bool ReadMember(const std::string& name, std::vector<std::uint8_t>& bytes);
+    bool ReadScriptMember(const std::string& name, std::vector<std::uint8_t>& bytes);
     bool PrepareTitle();
     bool AdvanceTitle(std::uint32_t buttons = 0, bool character_voice_playing = false);
     void BindMeetingOpener(OpenRoomMeeting open) { open_meeting_=std::move(open); }
@@ -65,6 +66,7 @@ public:
     const recovered::RngNativeOwner& Rng() const { return rng_; }
 
 private:
+    bool ReadArchiveMember(const std::string& name,std::vector<std::uint8_t>& bytes,std::uint64_t limit);
     bool UpdateProfile(std::uint32_t buttons);
     bool DrawTitleScene();
     bool DrawPanel(bool foreground);

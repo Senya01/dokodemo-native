@@ -33,7 +33,8 @@ std::vector<uint8_t> read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input) throw std::runtime_error("Cannot open script resource");
     auto length = input.tellg();
-    if (length < 0 || length > 16 * 1024 * 1024) throw std::runtime_error("Invalid script resource size");
+    if (length < 0 || length > static_cast<std::streamoff>(Program::resource_limit))
+        throw std::runtime_error("Invalid script resource size");
     std::vector<uint8_t> bytes(static_cast<size_t>(length));
     input.seekg(0);
     if (!input.read(reinterpret_cast<char*>(bytes.data()), length)) throw std::runtime_error("Short script resource read");

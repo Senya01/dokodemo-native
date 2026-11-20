@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -95,6 +96,7 @@ class PostProfile {
     bool Load(const std::filesystem::path& game_directory, const RetailUtilityContents& saved,
               const std::array<std::uint32_t,7>& calendar, std::string& error);
     void BindMeetingOpener(OpenRoomMeeting open);
+    void BindScriptModuleReader(std::function<bool(const std::string&,std::vector<std::uint8_t>&)> reader);
     bool return_to_title_requested() const;
     bool music_requested() const;
     const std::string &last_error() const;

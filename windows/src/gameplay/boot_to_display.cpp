@@ -1,4 +1,5 @@
 #include "boot_to_display.h"
+#include "script_vm.h"
 #include "retail_slot_files.h"
 #include "core_hash.h"
 #include "radial_wipe.h"
@@ -343,6 +344,9 @@ bool BootToDisplay::AdvanceTitle(std::uint32_t buttons, bool character_voice_pla
             }
             saved_room_.reset();
             next_scene_.BindMeetingOpener(open_meeting_);
+            next_scene_.BindScriptModuleReader([this](const auto& name,auto& bytes) {
+                return ReadScriptMember(name,bytes);
+            });
             next_scene_ready_ = true;
             room_bank_ = SelectFirstRoomBank(calendar_[3], calendar_[2], rng_.NextC3234());
             view_bank_ = room_bank_;
@@ -558,10 +562,36 @@ bool BootToDisplay::DrawTitleScene() {
 }
 
 bool BootToDisplay::ReadMember(const std::string& name, std::vector<std::uint8_t>& bytes) {
+    return ReadArchiveMember(name,bytes,std::numeric_limits<std::size_t>::max());
+}
+
+bool BootToDisplay::ReadScriptMember(const std::string& name,std::vector<std::uint8_t>& bytes) {
+    constexpr auto limit=script::Program::resource_limit;
+    const auto split=name.find_first_of("/\\");
+    if(split==std::string::npos) return ReadArchiveMember(name,bytes,limit);
+    if(split==0 || split+1==name.size() || name.find_first_of("/\\",split+1)!=std::string::npos) return false;
+    std::vector<std::uint8_t> member;
+    if(!ReadArchiveMember(name.substr(0,split),member,limit)) return false;
+    try {
+        const auto package=MountPackage(std::move(member));
+        const auto entry=package.directory.Resolve(name.substr(split+1));
+        const auto& storage=package.lease->bytes;
+        const auto first=storage.begin()+static_cast<std::ptrdiff_t>(entry.offset);
+        bytes.assign(first,first+static_cast<std::ptrdiff_t>(entry.size));
+        return true;
+    } catch (const recovered::PackageStorageError&) {
+        return false;
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
+}
+
+bool BootToDisplay::ReadArchiveMember(const std::string& name,std::vector<std::uint8_t>& bytes,std::uint64_t limit) {
     if (!archive_.is_open()) return false;
     try {
         const auto entry = directory_.Resolve(name);
-        if (entry.size > std::numeric_limits<std::size_t>::max()) return false;
+        if (entry.size > limit || entry.size > std::uint64_t(std::numeric_limits<std::streamsize>::max()))
+            return false;
         std::vector<std::uint8_t> payload(static_cast<std::size_t>(entry.size));
         archive_.clear();
         archive_.seekg(static_cast<std::streamoff>(entry.offset));

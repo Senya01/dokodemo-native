@@ -86,6 +86,8 @@ public:
         std::function<void(int selector,int value)> notify;
     };
     void BindScriptHostCallbacks(ScriptHostCallbacks callbacks) { script_host_=std::move(callbacks); }
+    using ScriptModuleReader=std::function<bool(const std::string&,std::vector<std::uint8_t>&)>;
+    void BindScriptModuleReader(ScriptModuleReader reader) { script_module_reader_=std::move(reader); }
     bool BeginOuting(unsigned period);
     bool TakeOutingRoomRequest();
     bool BeginOutingReturn();
@@ -224,6 +226,10 @@ private:
     static int HostNumber(const Value& value);
     static ScriptHostValue HostValue(const Value& value);
     void InvokeHostBuiltin(HostBuiltin operation,unsigned argc);
+    ScriptModuleReader script_module_reader_;
+    struct ScriptModule { std::string name; std::vector<std::uint8_t> bytes; };
+    std::vector<ScriptModule> script_modules_;
+    void LoadScriptModule(unsigned argc);
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;
