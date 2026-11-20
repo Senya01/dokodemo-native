@@ -1742,7 +1742,7 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             stack_.push_back({Kind::script_local_ref,int(index)});
             break;
         }
-        case 0x96: {
+        case 0x96: case 0x97: {
             const unsigned index=Read(2);
             const auto owner=Pop();
             Require(owner.kind==Kind::context && index<script_locals_.size(),
