@@ -1853,6 +1853,25 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             result_={};
             break;
         }
+        case 0xfc: {
+            auto key=Pop(),table=Pop();
+            Require(key.kind==Kind::string && table.kind==Kind::association && table.entries,
+                    "Invalid KSC associative table access");
+            const std::string name(key.text.c_str());
+            Require(name.size()<255,"KSC table key exceeds the terminated source buffer");
+            if(op==0xfc) {
+                const auto it=table.entries->find(name);
+                stack_.push_back(it==table.entries->end()?Value{}:it->second);
+            } else {
+                // 76F50 clears the slot on both insertion and replacement.
+                table.entries->insert_or_assign(name,Value{});
+                Value ref{Kind::association_ref,0,name};
+                ref.entries=std::move(table.entries);
+                stack_.push_back(std::move(ref));
+            }
+            result_={};
+            break;
+        }
         case 0x90: stack_.push_back(locals_.at(Read(2))); break;
         case 0x91: stack_.push_back({Kind::frame_ref,static_cast<int>(Read(2)),{},callers_.size()}); break;
         case 0x92:
