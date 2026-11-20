@@ -2381,6 +2381,16 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 Require(value.kind==Kind::integer,"Invalid KSC absolute value operand");
                 const auto bits=unsigned(value.data);
                 result_={Kind::integer,ScriptInteger(value.data<0?0u-bits:bits)};
+            } else if(id==0x50 && argc==2) {
+                const auto needle=Pop(),haystack=Pop();
+                Require(needle.kind==Kind::string && haystack.kind==Kind::string,
+                        "Invalid KSC text lookup operands");
+                // 7BE34 searches byte positions in NUL-terminated text.
+                // At 6A328 both no match and byte position zero yield nil.
+                const std::string_view source{haystack.text.c_str()},query{needle.text.c_str()};
+                const auto pos=query.empty()?std::string_view::npos:source.find(query);
+                result_=pos==0 || pos==std::string_view::npos
+                    ? Value{} : Value{Kind::integer,ScriptInteger(unsigned(pos))};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
