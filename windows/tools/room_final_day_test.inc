@@ -198,6 +198,15 @@ int CheckFinalDaySlot(const std::filesystem::path& install, const std::filesyste
 }
 
 
+void AdvanceTestDate(dokodemo::gameplay::RetailSaveProfile::Calendar& calendar) {
+    using dokodemo::gameplay::ProfileMonthDays;
+    if (++calendar[4]<=unsigned(ProfileMonthDays(calendar[6],calendar[5]))) return;
+    calendar[4]=1;
+    if (++calendar[5]<=12) return;
+    calendar[5]=1;
+    ++calendar[6];
+}
+
 int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false) {
     using namespace dokodemo::gameplay;
     const auto slot=install/"savedata"/"UCJS10002000";
@@ -209,6 +218,7 @@ int CheckDepartedRoom(const std::filesystem::path& install, bool expired=false) 
     auto now=saved.profile.SavedAt();
     now[3]=15;
     now[2]=1;
+    if (!IsLoadedTitleClockCurrent(saved.profile,now)) AdvanceTestDate(now);
     std::array<std::uint8_t,16> date{};
     for (unsigned i=0;i<6;++i) {
         date[2*i]=static_cast<std::uint8_t>(now[6-i]);

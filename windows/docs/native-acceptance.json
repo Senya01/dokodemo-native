@@ -589,7 +589,10 @@
             "save-all"
           ],
           "expect": "Слот ухода открывает пустую комнату. Новое усыновление сохраняет прежние словарь и карточки после холодной загрузки.",
-          "gap": "Есть отдельная проверка на специально подготовленном слоте. В общей автоматической проверке нет его воспроизводимого входа."
+          "tests": [
+            "game-readoption"
+          ],
+          "evidence": "Торо → пустая комната → новое усыновление Робо → штатное сохранение. При холодном входе проверены слово и открытие карточки друга. Входной слот локальный; карточка добавлена тестом."
         }
       ]
     },
@@ -878,7 +881,7 @@
     "toro-calendar": "passed",
     "toro-ending": "blocked",
     "return-letter": "passed",
-    "re-adopt": "blocked",
+    "re-adopt": "passed",
     "save-format": "passed",
     "save-game": "passed",
     "save-recovery": "blocked",
@@ -959,7 +962,8 @@
     "game-usagi-save": "passed",
     "native-framebuffer": "passed",
     "startup-logo-sequence": "passed",
-    "game-return-letter": "passed"
+    "game-return-letter": "passed",
+    "game-readoption": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -972,6 +976,12 @@
       "routes_passed": 10,
       "routes_total": 10,
       "scope": "Windows Release, headless, null audio, locally prepared day-three slots, cold entry and one-second midnight transition."
+    },
+    "game-readoption": {
+      "test_binary_sha256": "d9f9a63beb9638b9163f0cc22a0b1fe239bd026f6a941ce06cfa8cd0c997cbef",
+      "routes_passed": 1,
+      "routes_total": 1,
+      "scope": "Windows Release, headless, null audio, completed Toro slot with a learned word and a controlled friend card. Empty room, title, Robo adoption, System save and independent cold notebook."
     }
   }
 }

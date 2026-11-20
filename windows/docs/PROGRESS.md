@@ -13,7 +13,7 @@ The current inventory has **67 basic entries and one exact entry**. The exact en
 
 ## Acceptance and code map
 
-The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **40 of 60** requirements verified and 20 open. The baseline recorded 62 of 62 Windows Release tests. The scheduled letter adds a separate 10-route Release check. Both ran without windows or sound. The [acceptance records](native-acceptance.json) identify both runs.
+The KSC badge measures how many active opcode and built-in IDs have a branch in the native room dispatcher. It is regenerated from the same inventory as the tiles. The Windows acceptance badge measures verified requirements in the acceptance matrix. The current total is **41 of 60** requirements verified and 19 open. The baseline recorded 62 of 62 Windows Release tests. Separate Release checks cover the 10 scheduled-letter routes and the new-adoption route. All ran without windows or sound. The [acceptance records](native-acceptance.json) identify the runs.
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
@@ -50,6 +50,12 @@ python -B tools/test_room_return_letters.py <post-profile-tests.exe> <package> <
 ```
 
 The test prepares day-three checkpoints in temporary slots. It advances the test calendar into day four on cold entry and across midnight in a running room, chooses both letter responses across the two routes per character, and saves through the System menu. A second boot checks that the room resumes without replaying the event. Game data and input slots are supplied locally.
+
+## New adoption after departure
+
+The headless test opens the empty room and checks the previous Pokepi's word memo. It returns to the title, checks the two cancellation paths, adopts Robo, and saves through the System menu. An independent cold loader opens both the inherited word and the friend card. The local Toro donor must be a completed stay with a lesson in row 163. The test adds a controlled friend card to a temporary copy.
+
+Configure the Windows CMake build with local media and `-DOKODEMO_GAME_DEPARTED_TEST_SLOT=<UCJS10002000 directory>`, build `post-profile-tests`, then run `ctest --test-dir <build> -C Release -R '^game-readoption$' --output-on-failure`. CTest sets the null audio mode and the runner creates a temporary installation next to the prepared package.
 
 ## Open coverage
 

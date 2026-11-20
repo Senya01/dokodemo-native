@@ -8,6 +8,8 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     const auto original_bytes=ReadRetailSlot(source);
     auto original=DecodeRetailUtilityRequest(original_bytes,RetailSaveProfile{});
     auto old=RoomSaveOwners::FromActorGraph(original.actor);
+    Require(old.progression_words[0].children.at(0).word==0x20000000u &&
+            (old.progress_flags[0].children.at(0).word&7)==7u,"Expected a completed stay");
     auto& old_rows=old.dictionary.children.at(0).children;
     const auto row_fields=[](const KscSaveValue& row) -> const std::vector<KscSaveValue>& {
         return row.children.at(0).children;
@@ -19,6 +21,8 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     // No exchange session is implied by how the fixture was prepared.
     auto friend_record=old_rows.at(600);
     auto& card=friend_record.children.at(0).children;
+    // The receipt path clears the sender's own-card bit.
+    card.at(0).word&=~2u;
     card.at(1)={0x50000000u,"FRIEND",{}};
     card.at(2)={0x50000000u,"\x82\xd3\x82\xea\x82\xf1\x82\xc7",{}};
     card.at(11).word=0x20000003u;
@@ -28,11 +32,11 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     original.profile.SetOptions({3,2,1});
     const auto staged=BuildRetailUtilityRequest(original.profile,old.ToActorGraph());
     WriteRetailSlot(slot,install,staged);
+    CheckDepartedRoom(install);
     const auto prior=ReadRetailSlot(slot);
     const auto old_profile=original.profile.ReadProfile();
-    auto calendar=original.profile.SavedAt();
-    Require(calendar[4]<28,"Replacement fixture needs tomorrow in the current month");
-    ++calendar[4];
+    auto calendar=DecodeRetailUtilityRequest(prior,RetailSaveProfile{}).profile.SavedAt();
+    AdvanceTestDate(calendar);
     calendar[3]=14;
     calendar[2]=5;
     const auto prepare=[&](BootToDisplay& boot) {
@@ -49,7 +53,8 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
         if (!boot.AdvanceTitle(buttons))
             throw std::runtime_error(boot.SaveReadBoundary()?boot.SaveReadBoundary():"Replacement update failed");
     };
-    BootToDisplay boot;
+    auto boot_owner=std::make_unique<BootToDisplay>();
+    auto& boot=*boot_owner;
     prepare(boot);
     const auto rest=[&](unsigned ticks) { while (ticks--) step(boot); };
     const auto key=[&](unsigned buttons) { step(boot,buttons); step(boot); };
@@ -123,15 +128,29 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     }
     Require(contacted && closed_bag && boot.RoomActivity().started_command && ReadRetailSlot(slot)==prior,
             "New Robo did not finish its introduction or it saved without a request");
-    const auto open_home_menu=[&] {
-        for (unsigned i=0;i<90 && !boot.RoomTeaching().menu_open;++i) { key(right); rest(10); }
-        Require(boot.RoomTeaching().menu_open && boot.RoomTeaching().menu_cursor==0,"New room did not open the main menu");
-        rest(24);
+    const auto open_home_menu=[&](BootToDisplay& current) {
+        for (unsigned i=0;i<90 && !current.RoomTeaching().menu_open;++i) {
+            step(current,right);
+            for (unsigned j=0;j<11;++j) step(current);
+        }
+        Require(current.RoomTeaching().menu_open && current.RoomTeaching().menu_cursor==0,
+                "New room did not open the main menu");
+        for (unsigned j=0;j<24;++j) step(current);
     };
-    open_home_menu(); key(down); key(down);
-    Require(boot.RoomTeaching().menu_cursor==3,"New room did not select the notebook category");
-    key(circle); rest(30); key(down); key(circle);
-    until([&]{return boot.Notebook().list_ready && boot.Notebook().resource==8;},"New room did not open its word memo");
+    const auto open_notebook=[&](BootToDisplay& current,bool memo) {
+        open_home_menu(current);
+        const auto press=[&](unsigned buttons) { step(current,buttons); step(current); };
+        press(down); press(down);
+        Require(current.RoomTeaching().menu_cursor==3,"New room did not select the notebook category");
+        press(circle);
+        for (unsigned j=0;j<30;++j) step(current);
+        if (memo) press(down);
+        press(circle);
+        const auto ready=[&]{return current.Notebook().list_ready && current.Notebook().resource==(memo?8:9);};
+        for (unsigned j=0;j<750 && !ready();++j) step(current);
+        Require(ready(),"New room did not open the requested notebook section");
+    };
+    open_notebook(boot,true);
     key(0x80);
     const auto memo=boot.Notebook();
     Require(memo.row==163 && memo.written==word.at(1).text && memo.reading==word.at(2).text,
@@ -139,7 +158,7 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     key(cross); rest(70);
 
     const auto save=[&] {
-        open_home_menu(); key(0x10); key(circle); rest(30); key(down); key(circle);
+        open_home_menu(boot); key(0x10); key(circle); rest(30); key(down); key(circle);
         bool written=false;
         for (unsigned i=0;i<250 && !written;++i) {
             for (const auto& event:boot.DepartureEvents()) {
@@ -152,7 +171,8 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
         Require(written,"System menu did not write replacement slot");
     };
     save();
-    const auto replacement=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
+    const auto replacement_bytes=ReadRetailSlot(slot);
+    const auto replacement=DecodeRetailUtilityRequest(replacement_bytes,RetailSaveProfile{});
     const auto profile=replacement.profile.ReadProfile();
     const auto new_owners=RoomSaveOwners::FromActorGraph(replacement.actor);
     const auto& new_rows=new_owners.dictionary.children.at(0).children;
@@ -170,7 +190,9 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     std::cout<<"Toro to Robo, row 163, friend row 601 (30 fields), options, fresh diary and day one saved"<<std::endl;
 
     ++calendar[2];
-    BootToDisplay cold;
+    boot_owner.reset();
+    auto cold_owner=std::make_unique<BootToDisplay>();
+    auto& cold=*cold_owner;
     prepare(cold);
     Require(cold.Title().title_complete(),"Replacement save did not select a cold room");
     unsigned restarts=0;
@@ -182,5 +204,23 @@ int CheckReplacementSlot(const std::filesystem::path& install,const std::filesys
     Require(restarts==1 && cold.RoomActivity().started_command && ReadRetailSlot(source)==original_bytes,
             "New slot did not boot independently, or the input fixture was modified");
     std::cout<<"Independent cold room started ASC "<<*cold.RoomActivity().started_command<<'\n';
+    const auto cold_key=[&](unsigned buttons) { step(cold,buttons); step(cold); };
+    open_notebook(cold,true);
+    cold_key(0x80);
+    const auto cold_word=cold.Notebook();
+    Require(cold_word.row==163 && cold_word.written==word.at(1).text && cold_word.reading==word.at(2).text,
+            "Cold notebook did not restore the inherited word");
+    cold_key(cross);
+    for (unsigned i=0;i<70;++i) step(cold);
+    open_notebook(cold,false);
+    const auto cold_friend=cold.Notebook();
+    Require(cold_friend.count==1 && cold_friend.row==601 && cold_friend.written==card.at(1).text,
+            "Cold notebook did not restore the inherited friend");
+    cold_key(circle);
+    for (unsigned i=0;i<150 && !cold.Notebook().detail;++i) step(cold);
+    Require(cold.Notebook().detail && cold.Notebook().written==card.at(1).text &&
+            ReadRetailSlot(slot)==replacement_bytes,
+            "Cold notebook did not open the inherited card or changed the slot");
+    std::cout<<"Cold notebook reopened both the inherited word and friend card\n";
     return 0;
 }

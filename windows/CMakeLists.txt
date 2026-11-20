@@ -89,6 +89,13 @@ if(BUILD_TESTING)
         configure_cpp(post-profile-tests)
         target_link_libraries(post-profile-tests PRIVATE dokodemo-win32)
         add_test(NAME game-post-profile COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+        set(DOKODEMO_GAME_DEPARTED_TEST_SLOT "" CACHE PATH "Local completed Toro slot for the new adoption test")
+        if(DOKODEMO_GAME_DEPARTED_TEST_SLOT)
+            add_test(NAME game-readoption COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_readoption.py"
+                "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}"
+                "${DOKODEMO_GAME_DEPARTED_TEST_SLOT}")
+        endif()
         add_test(NAME game-robo-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --robo-introduction 1)
         foreach(actor IN ITEMS usagi inu kaeru)
             add_test(NAME game-${actor}-introduction COMMAND post-profile-tests "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --${actor}-introduction)

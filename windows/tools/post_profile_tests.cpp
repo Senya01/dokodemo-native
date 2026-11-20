@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <stdexcept>
