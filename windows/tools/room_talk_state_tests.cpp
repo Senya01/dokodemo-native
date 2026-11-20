@@ -674,8 +674,25 @@ struct RoomTalkOpcodeTests {
         if(calls!=2) throw std::runtime_error("Unexpected number of KSC host commands");
     }
 
+    static void HostQuery() {
+        using Tag=RoomTalkState::ScriptHostValue::Tag;
+        CheckValue(HostBuiltin(0x40,{{},{},{}}),Kind::nil,0,0x40);
+        RoomTalkState::ScriptHostCallbacks callbacks;
+        unsigned calls=0;
+        callbacks.query=[&](int selector,const auto& a,const auto& b) {
+            if(a.tag!=Tag::string || a.text!="word" || b.tag!=Tag::vector || b.payload!=-49)
+                throw std::runtime_error("KSC host query altered a typed argument");
+            ++calls;
+            return selector-int(a.text.size())+b.payload;
+        };
+        CheckValue(HostBuiltin(0x40,{{Kind::integer,-12},{Kind::string,0,"word"},{Kind::fixed14,-49},
+                                     {Kind::integer,31}},callbacks),Kind::integer,-65,0x40);
+        if(calls!=1) throw std::runtime_error("Unexpected number of KSC host queries");
+    }
+
     static void Run() {
         HostCommand();
+        HostQuery();
         ChildScriptSchedule(0x28);
         ChildScriptIsolation(0x28);
         ChildScriptForeignFrame(0x28);
