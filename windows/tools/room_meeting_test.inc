@@ -83,10 +83,31 @@ void ReportMeetingInventory(const char* checkpoint,const dokodemo::gameplay::Ksc
     std::cout<<checkpoint<<" inventory="<<dokodemo::core::sha256_hex(bytes.data(),bytes.size())<<'\n';
 }
 
+void CheckMeetingCarry(const dokodemo::gameplay::RoomSaveOwners& before,
+                       const dokodemo::gameplay::RoomSaveOwners& after,
+                       dokodemo::gameplay::MeetingMode mode) {
+    using namespace dokodemo::gameplay;
+    const auto array_equals=[](const KscSaveValue& lhs,const KscSaveValue& rhs) {
+        return EncodeKscSaveGraph(lhs.children.at(0))==EncodeKscSaveGraph(rhs.children.at(0));
+    };
+    if (mode!=MeetingMode::gifts)
+        Require(array_equals(before.inventory,after.inventory),"A linked visit changed the previous inventory");
+    const auto check_row=[&](unsigned row) {
+        Require(array_equals(before.dictionary.children.at(0).children.at(row),
+                             after.dictionary.children.at(0).children.at(row)),
+                "A linked visit changed a previous word or card");
+    };
+    check_row(600);
+    if (mode!=MeetingMode::cards) check_row(601);
+    if (mode!=MeetingMode::shiritori)
+        for (unsigned row=163;row<166;++row) check_row(row);
+}
+
 int CheckRecordExchange(const std::filesystem::path& install,const std::filesystem::path& source,
                         unsigned port,unsigned side,dokodemo::gameplay::MeetingMode mode,
                         const std::filesystem::path& ready_gate={},
-                        BadShiritoriMove bad_move=BadShiritoriMove::none) {
+                        BadShiritoriMove bad_move=BadShiritoriMove::none,
+                        bool linked=false) {
     using namespace dokodemo::gameplay;
     const bool gifts=mode==MeetingMode::gifts, words=mode==MeetingMode::shiritori;
     namespace fs=std::filesystem;
@@ -96,8 +117,14 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     const bool bad_reply=bad_move!=BadShiritoriMove::none;
     Require(!bad_reply || (words && side==1),"Invalid rejected reply case");
     const bool exchanges=side && !cancel_pair && !bad_reply;
+    Require(!linked || (side && !bad_reply),"A linked visit requires both fixture participants");
+    const bool reuse=linked && mode!=MeetingMode::cards;
+    const bool seed_link=linked && !reuse;
+    const auto slot=install/"savedata"/"UCJS10002000";
     const auto input=ReadRetailSlot(source);
-    auto saved=DecodeRetailUtilityRequest(input,RetailSaveProfile{});
+    Require(reuse || !fs::exists(slot.parent_path()),"The LAN test needs a fresh private slot");
+    const auto previous=reuse ? ReadRetailSlot(slot) : input;
+    auto saved=DecodeRetailUtilityRequest(previous,RetailSaveProfile{});
     auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
     auto profile=saved.profile.ReadProfile();
     Require(profile.actor==0,"A Toro slot is required for the Toro meeting menu");
@@ -105,18 +132,23 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     auto& card=rows.at(600).children.at(0).children;
     const char* player=side==1 ? "HANA" : "SORA";
     const char* peer=side==1 ? "SORA" : "HANA";
-    Require(profile.player.Assign(player),"Could not prepare the test identity");
-    card.at(1)={0x50000000u,player,{}};
-    card.at(2)=card.at(1);
-    if (!gifts && !words) {
-        const char* phone=side==1 ? "111" : "222";
-        Require(profile.phone.Assign(phone),"Could not prepare the test phone number");
-        card.at(25)={0x50000000u,phone,{}};
+    if (reuse) {
+        Require(profile.player.text()==player && rows.at(601).children.at(0).children.at(1).text==peer,
+                "Linked visit did not cold-load the previous player and friend");
+    } else {
+        Require(profile.player.Assign(player),"Could not prepare the test identity");
+        card.at(1)={0x50000000u,player,{}};
+        card.at(2)=card.at(1);
+        if (mode==MeetingMode::cards) {
+            const char* phone=side==1 ? "111" : "222";
+            Require(profile.phone.Assign(phone),"Could not prepare the test phone number");
+            card.at(25)={0x50000000u,phone,{}};
+        }
+        saved.profile.Adopt(profile);
     }
-    saved.profile.Adopt(profile);
     int local_id=-1, peer_id=-1, other_id=-1;
     KscSaveValue expected_inventory;
-    if (gifts) {
+    if (gifts || seed_link) {
         RoomInventory definitions;
         std::string error;
         if (!definitions.Load(install/"assets/game",error)) throw std::runtime_error(error);
@@ -129,7 +161,11 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         Require(definitions.AwardGift(0,1,"TORO",int(date[6]),int(date[5]),int(date[4]))==1,
                 "Cannot prepare the unrelated gift");
         other_id=definitions.slot_item(1)->id;
-        owners.inventory=definitions.SaveTable();
+        if (reuse) {
+            Require(EncodeKscSaveGraph(definitions.SaveTable().children.at(0))==
+                    EncodeKscSaveGraph(owners.inventory.children.at(0)),
+                    "Linked visit changed the offered bag before the exchange");
+        } else owners.inventory=definitions.SaveTable();
         auto expected=definitions;
         Require(definitions.AwardGift(0,2-own_round,"TORO",int(date[6]),int(date[5]),int(date[4]))==2,
                 "Cannot verify the recipient's original gift");
@@ -144,7 +180,7 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         "\x82\xb7\x82\xb8\x82\xdf", "\x82\xa9\x82\xa2", "\x82\xca\x82\xe8\x82\xa6"};
     auto learned=side==1 ? chain_a : chain_b;
     if (bad_move==BadShiritoriMove::repeated_word) learned[0]="\x82\xe0\x82\xe0"; // もも
-    if (words) {
+    if ((words && !reuse) || seed_link) {
         const auto exemplar=rows.at(163);
         for (unsigned index=0;index<learned.size();++index) {
             auto row=exemplar;
@@ -159,11 +195,12 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
             rows.at(163+index)=std::move(row);
         }
     }
-    saved.actor=owners.ToActorGraph();
-    const auto slot=install/"savedata"/"UCJS10002000";
-    Require(!fs::exists(slot.parent_path()),"The LAN test needs a fresh private slot");
-    WriteRetailSlot(slot,install,BuildRetailUtilityRequest(saved.profile,saved.actor,saved.word_history));
+    if (!reuse) {
+        saved.actor=owners.ToActorGraph();
+        WriteRetailSlot(slot,install,BuildRetailUtilityRequest(saved.profile,saved.actor,saved.word_history));
+    }
     const auto baseline=ReadRetailSlot(slot);
+    Require(!reuse || baseline==previous,"Linked visit rewrote its disk checkpoint during setup");
     auto calendar=saved.profile.SavedAt();
     const auto previous_day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
     bool reply_delivered=false;
@@ -273,6 +310,10 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
         Require(ReadRetailSlot(source)==input,"Shiritori changed the source test slot");
         if (bad_reply) std::cout<<"Shiritori rejected reply "<<unsigned(bad_move)<<" and returned without marking words\n";
         if (!side) std::cout<<"Shiritori cancelled waiting and returned without marking words\n";
+        if (linked) {
+            CheckMeetingCarry(owners,after,mode);
+            ReportMeetingInventory("linked_inventory",after.inventory);
+        }
         return 0;
     }
     if (gifts) {
@@ -295,6 +336,7 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
                     "Gift exchange changed an unrelated slot");
         Require(ReadRetailSlot(source)==input,"The source slot changed while exchanging gifts");
         ReportMeetingInventory("saved_gift",after.inventory);
+        if (linked) CheckMeetingCarry(owners,after,mode);
         return 0;
     }
     run.OpenSection(0,9);
@@ -314,6 +356,7 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     run.Save();
     const auto replacement=DecodeRetailUtilityRequest(ReadRetailSlot(slot),RetailSaveProfile{});
     auto state=RoomSaveOwners::FromActorGraph(replacement.actor);
+    if (linked) CheckMeetingCarry(owners,state,mode);
     const auto& taken=state.dictionary.children.at(0).children.at(601).children.at(0).children;
     Require(taken.size()==30 && taken.at(1).text==peer && !(taken.at(0).word&2) &&
             replacement.profile.ReadProfile().player.text()==player,"Own identity or peer receipt did not persist");
@@ -384,5 +427,36 @@ int CheckColdMeetingGift(const std::filesystem::path& install) {
     CheckMeetingBag(room,offered->id,other->id);
     Require(ReadRetailSlot(slot)==request,"Cold bag wrote the slot");
     ReportMeetingInventory("cold_gift",owners.inventory);
+    return 0;
+}
+
+int CheckColdMeetingLinks(const std::filesystem::path& install,unsigned side) {
+    using namespace dokodemo::gameplay;
+    CheckColdMeetingCard(install,side);
+    CheckColdMeetingGift(install);
+    const auto slot=install/"savedata"/"UCJS10002000";
+    const auto request=ReadRetailSlot(slot);
+    const auto saved=DecodeRetailUtilityRequest(request,RetailSaveProfile{});
+    const auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
+    const int day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
+    const auto& dictionary=owners.dictionary.children.at(0).children;
+    ResumeDayRoom room(install,saved,saved.profile.SavedAt());
+    room.Start(day,day);
+    room.OpenSection(1,8);
+    room.Key(0x80);
+    std::set<unsigned> visited;
+    unsigned used=0;
+    for (unsigned i=0;i<3;++i) {
+        const auto row=room.room.notebook_snapshot();
+        Require(row.tab==13 && row.count==3 && row.row>=163 && row.row<=165 &&
+                visited.insert(unsigned(row.row)).second,"Cold word memo lost a linked word");
+        const auto& fields=dictionary.at(row.row).children.at(0).children;
+        Require(row.written==fields.at(1).text && row.reading==fields.at(2).text,
+                "Cold word memo did not display the saved word");
+        used+=bool(fields.at(11).word&8);
+        room.Key(0x40);
+    }
+    Require(used>=2 && ReadRetailSlot(slot)==request,"Cold linked room lost its used words or wrote the slot");
+    std::cout<<"Cold linked room reopened the friend card, gift bag and three dictionary rows\n";
     return 0;
 }

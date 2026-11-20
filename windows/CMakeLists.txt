@@ -108,6 +108,9 @@ if(BUILD_TESTING)
             add_test(NAME game-peer-shiritori COMMAND "${Python3_EXECUTABLE}" -B
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_meetings.py" shiritori "$<TARGET_FILE:post-profile-tests>"
                 --package "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --source "${DOKODEMO_GAME_MEETING_TEST_SLOT}")
+            add_test(NAME game-seam-links COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_meetings.py" linked "$<TARGET_FILE:post-profile-tests>"
+                --package "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --source "${DOKODEMO_GAME_MEETING_TEST_SLOT}")
         endif()
         set(DOKODEMO_GAME_DEPARTED_TEST_SLOT "" CACHE PATH "Local completed Toro slot for the new adoption test")
         if(DOKODEMO_GAME_DEPARTED_TEST_SLOT)

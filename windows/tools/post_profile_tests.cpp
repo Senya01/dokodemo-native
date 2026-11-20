@@ -1932,6 +1932,18 @@ int main(int argc, char **argv) try {
     }
     if (argc==3 && std::string_view(argv[2])=="--cold-meeting-gift")
         return CheckColdMeetingGift(argv[1]);
+    if (argc==4 && std::string_view(argv[2])=="--cold-meeting-links")
+        return CheckColdMeetingLinks(argv[1],unsigned(std::stoul(argv[3])));
+    if ((argc==7 || argc==8) && std::string_view(argv[2])=="--linked-meeting") {
+        using dokodemo::gameplay::MeetingMode;
+        const auto stage=std::string_view(argv[6]);
+        Require(stage=="cards" || stage=="gifts" || stage=="shiritori","Unknown linked visit stage");
+        const auto mode=stage=="cards" ? MeetingMode::cards :
+            stage=="gifts" ? MeetingMode::gifts : MeetingMode::shiritori;
+        const std::filesystem::path gate=argc==8 ? argv[7] : "";
+        return CheckRecordExchange(argv[1],argv[3],unsigned(std::stoul(argv[4])),unsigned(std::stoul(argv[5])),
+                                   mode,gate,BadShiritoriMove::none,true);
+    }
     if (argc==4 && std::string_view(argv[2])=="--replacement-slot")
         return CheckReplacementSlot(argv[1],argv[3]);
     if (argc==4 && std::string_view(argv[2])=="--expired-stay-slot")

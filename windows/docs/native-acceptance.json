@@ -832,14 +832,17 @@
             "save-slot"
           ],
           "expect": "Состояние двух игроков выдерживает соединение, согласованную игровую операцию или отмену, затем сохранение и холодное чтение.",
-          "gap": "Есть отдельные прогоны. Единая матрица на текущем билде пока не закрыта.",
           "requires": [
             "peer-transport",
             "peer-card",
             "peer-gift",
             "peer-shiritori",
             "save-game"
-          ]
+          ],
+          "tests": [
+            "game-seam-links"
+          ],
+          "evidence": "Та же пара слотов прошла обмен визитками, отмену подготовленного обмена подарками, успешный обмен подарками и партию しりとり. Штатные сохранения связали этапы. Оба холодных процесса открыли карточки, сумки и слова без изменения файлов."
         },
         {
           "id": "model-completeness",
@@ -915,7 +918,7 @@
     "contact-to-save": "passed",
     "out-and-back": "passed",
     "seam-calendar": "blocked",
-    "seam-links": "blocked",
+    "seam-links": "passed",
     "model-completeness": "blocked"
   },
   "tests": {
@@ -988,7 +991,8 @@
     "game-contact-to-save": "passed",
     "game-peer-card": "passed",
     "game-peer-gift": "passed",
-    "game-peer-shiritori": "passed"
+    "game-peer-shiritori": "passed",
+    "game-seam-links": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1043,6 +1047,12 @@
       "routes_passed": 5,
       "routes_total": 5,
       "scope": "Windows Release, headless, null audio. One two-player loopback match, no-partner cancellation and three rejected moves at the game channel boundary, with room return and persisted word-use checks."
+    },
+    "game-seam-links": {
+      "test_binary_sha256": "6fcd785cb82b26dcd86d724ffbdde76573ae467392d876829535b042d7cd500b",
+      "routes_passed": 1,
+      "routes_total": 1,
+      "scope": "Windows Release, headless, null audio. One linked four-visit route with two protected slots on loopback. Controlled cancellation before commit; System menu saves between operations, then two separate cold loads."
     }
   }
 }

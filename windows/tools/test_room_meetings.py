@@ -113,26 +113,31 @@ def check_saved_cards(binary, output):
              for side in (1, 2)]
     if not run_group(binary, cases, 120):
         return False
-    records = []
-    for folder, _ in cases:
-        records.append(re.findall(rb"^cold_card own=\w+ peer=\w+ sent=([0-9a-f]{64}) received=([0-9a-f]{64})\r?$",
-                                  (folder / "test.log").read_bytes(), re.MULTILINE))
-    if (any(len(record) != 1 for record in records) or
-            records[0][0] != records[1][0][::-1] or
+    if (not verify_reciprocal_cards(folder for folder, _ in cases) or
             original != [slot_files(output / str(side)) for side in (1, 2)]):
         raise ValueError("Cold cards differ from the other player's own card or the slot changed")
     print("Both cold processes opened their peer's card and preserved all six files")
     return True
 
 
-def check_saved_gifts(binary, output, sides):
-    def inventory_receipt(folder, checkpoint):
-        log = (folder / "test.log").read_bytes()
-        records = re.findall(rb"^" + checkpoint + rb" inventory=([0-9a-f]{64})\r?$", log, re.MULTILINE)
-        if len(records) != 1:
-            raise ValueError("Missing inventory receipt")
-        return records[0]
+def verify_reciprocal_cards(folders):
+    records = [
+        re.findall(rb"^cold_card own=\w+ peer=\w+ sent=([0-9a-f]{64}) received=([0-9a-f]{64})\r?$",
+                   (folder / "test.log").read_bytes(), re.MULTILINE)
+        for folder in folders
+    ]
+    return all(len(record) == 1 for record in records) and records[0][0] == records[1][0][::-1]
 
+
+def inventory_receipt(folder, checkpoint):
+    log = (folder / "test.log").read_bytes()
+    records = re.findall(rb"^" + checkpoint + rb" inventory=([0-9a-f]{64})\r?$", log, re.MULTILINE)
+    if len(records) != 1:
+        raise ValueError("Missing inventory receipt")
+    return records[0]
+
+
+def check_saved_gifts(binary, output, sides):
     installs = [output / str(side) for side in sides]
     original = [slot_files(install) for install in installs]
     cases = [(output / "cold" / install.name, (install, "--cold-meeting-gift")) for install in installs]
@@ -147,9 +152,48 @@ def check_saved_gifts(binary, output, sides):
     return True
 
 
+def test_linked_visits(binary, output, package, source):
+    installs = [output / "players" / str(side) for side in (1, 2)]
+    donors = [output / "inputs" / install.name / source.name for install in installs]
+    for install, donor in zip(installs, donors):
+        prepare_room_install(install, package, source, donor)
+
+    phases = (("cards", "cards"), ("cancel", "gifts"), ("gifts", "gifts"), ("shiritori", "shiritori"))
+    for phase, mode in phases:
+        port = private_port()
+        gate = output / "prepared"
+        if phase == "cancel":
+            gate.mkdir()
+        cases = []
+        for install, donor in zip(installs, donors):
+            request = (install, "--linked-meeting", donor, port, install.name, mode)
+            arguments = request + (gate,) if phase == "cancel" else request
+            cases.append((output / phase / install.name, arguments))
+        print(f"Linked visit: {phase}", flush=True)
+        if not run_group(binary, cases, 350):
+            return False
+
+    original = [slot_files(install) for install in installs]
+    cases = [(output / "cold" / install.name, (install, "--cold-meeting-links", install.name))
+             for install in installs]
+    if not run_group(binary, cases, 180):
+        return False
+    if not verify_reciprocal_cards(folder for folder, _ in cases):
+        raise ValueError("Linked visits changed the reciprocal cards")
+    for folder, _ in cases:
+        expected = inventory_receipt(output / "gifts" / folder.name, b"saved_gift")
+        if (inventory_receipt(output / "shiritori" / folder.name, b"linked_inventory") != expected or
+                inventory_receipt(folder, b"cold_gift") != expected):
+            raise ValueError("The bag changed between exchange, shiritori and cold load")
+    if original != [slot_files(install) for install in installs]:
+        raise ValueError("A cold linked visit modified its saved slot")
+    print("Linked visit finished all four stages and both cold loads on the same two slots")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("channel", "cards", "gifts", "shiritori"))
+    parser.add_argument("mode", choices=("channel", "cards", "gifts", "shiritori", "linked"))
     parser.add_argument("binary", type=Path)
     parser.add_argument("output", type=Path, nargs="?", help="keep the logs in a fresh directory")
     parser.add_argument("--package", type=Path)
@@ -165,9 +209,11 @@ def main():
     def run(output):
         if args.mode == "channel":
             return int(not test_channel(binary, output))
+        source = args.source.resolve(strict=True)
+        if args.mode == "linked":
+            return int(not test_linked_visits(binary, output, package, source))
         operation = {"cards": "--card-exchange-slot", "gifts": "--gift-exchange-slot",
                      "shiritori": "--shiritori-slot"}[args.mode]
-        source = args.source.resolve(strict=True)
         if not test_room_exchange(binary, output, package, source, operation):
             return 1
         if args.mode == "gifts" and not test_room_exchange(
