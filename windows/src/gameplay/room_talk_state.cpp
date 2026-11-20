@@ -1620,6 +1620,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             locals_.at(index)={Kind::array,0,{},0,std::make_shared<std::vector<Value>>(length)};
             break;
         }
+        case 0xa0: {
+            // The selector chooses a signed 28-bit or 14-bit limit in 71764.
+            constexpr int limits[]={-0x08000000,0x07ffffff,-8192,8191};
+            const auto index=Read(1);
+            stack_.push_back({Kind::integer,index<4?limits[index]:0});
+            break;
+        }
         case 0x80: stack_.push_back({Kind::integer,static_cast<std::int8_t>(Read(1))}); break;
         case 0x81: stack_.push_back({Kind::integer,static_cast<std::int16_t>(Read(2))}); break;
         case 0x82: stack_.push_back({Kind::integer,static_cast<int>(Read(3))}); break;
