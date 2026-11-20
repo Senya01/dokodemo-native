@@ -17,10 +17,10 @@ The KSC badge measures how many active opcode and built-in IDs have a branch in 
 
 The [interactive map](native-coverage.html) includes the acceptance requirements and code inventory. Download the HTML and open it locally to select cells. The code inventory compares active IDs in the original BOOT v1.01 dispatch tables with explicit branches in the native room handler. A green cell records a branch or ID check in that handler. The file map comes from the Windows CMake source lists. These counts measure their respective inventories.
 
-Run from the `windows` directory to rebuild the map and badges from the checked-in snapshots:
+Run from the `windows` directory to rebuild the map and badges and refresh the main README from the checked-in snapshots:
 
 ```powershell
-python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --code-badge docs/native-code-progress.svg --overview docs/native-code-map.svg
+python -B tools/render_native_coverage.py docs/native-coverage.html --badge docs/native-progress.svg --code-badge docs/native-code-progress.svg --overview docs/native-code-map.svg --readme ../README.md
 ```
 
 With a local copy of the original executable, pass `--boot private/BOOT.BIN` to also show original dispatch target addresses. The published map records ID membership and source references.

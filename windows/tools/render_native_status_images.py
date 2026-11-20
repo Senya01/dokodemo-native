@@ -2,8 +2,17 @@
 from html import escape
 
 
+def format_progress_percent(success: int, total: int) -> str:
+    return f"{success / total:.1%}".replace(".0%", "%")
+
+
+def acceptance_counts(verification: dict) -> tuple[int, int]:
+    results = verification["states"].values()
+    return sum(status == "passed" for status in results), len(results)
+
+
 def _badge(title: str, success: int, total: int, scope: str, complete: bool) -> str:
-    percent = f"{success / total:.1%}".replace(".0%", "%")
+    percent = format_progress_percent(success, total)
     label = escape(f"{title} {percent}, {success} of {total} {scope}")
     color = "#257944" if complete else "#e8ba25"
     ink = "#fff" if complete else "#171717"
@@ -23,9 +32,8 @@ def _badge(title: str, success: int, total: int, scope: str, complete: bool) -> 
 
 
 def badge_svg(verification: dict) -> str:
-    results = verification["states"].values()
-    return _badge("Windows acceptance", sum(status=="passed" for status in results),
-                  len(results), "requirements verified", verification["ready"])
+    passed, total = acceptance_counts(verification)
+    return _badge("Windows acceptance", passed, total, "requirements verified", verification["ready"])
 
 
 def code_badge_svg(code: dict) -> str:

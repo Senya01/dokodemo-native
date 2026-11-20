@@ -1,10 +1,13 @@
 """Build the coverage map from the repository's reviewed feature inventory."""
 import argparse
 from collections import Counter
+from hashlib import sha256
 import json
 from pathlib import Path
 from native_code_inventory import collect_code
-from render_native_status_images import badge_svg, code_badge_svg, code_svg
+from render_native_status_images import (
+    acceptance_counts, badge_svg, code_badge_svg, code_svg, format_progress_percent,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +47,28 @@ def build(boot: Path | None = None) -> tuple[str, Counter, dict]:
     return template.replace(PLACEHOLDER, payload), counts, data
 
 
+def update_readme(path: Path, verification: dict, acceptance_badge: str, code_badge: str) -> None:
+    start = "<!-- native-progress:start -->"
+    end = "<!-- native-progress:end -->"
+    original = path.read_text(encoding="utf-8")
+    if original.count(start) != 1 or original.count(end) != 1 or original.index(start) > original.index(end):
+        raise ValueError(f"Expected one native progress block in {path}")
+
+    passed, total = acceptance_counts(verification)
+    percent = format_progress_percent(passed, total)
+    scope = "windows/docs/PROGRESS.md#acceptance-and-code-map"
+    acceptance_version = sha256(acceptance_badge.encode("utf-8")).hexdigest()[:12]
+    code_version = sha256(code_badge.encode("utf-8")).hexdigest()[:12]
+    progress = (
+        f"\n**Windows port verification: {percent} ({passed} of {total} requirements).**\n\n"
+        f"[![Windows acceptance](windows/docs/native-progress.svg?v={acceptance_version})]({scope})\n"
+        f"[![KSC room dispatch IDs](windows/docs/native-code-progress.svg?v={code_version})]({scope})\n"
+    )
+    updated = original[:original.index(start) + len(start)] + progress + original[original.index(end):]
+    if original != updated:
+        path.write_text(updated, encoding="utf-8", newline="\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
@@ -51,6 +76,7 @@ if __name__ == "__main__":
     parser.add_argument("--badge", type=Path)
     parser.add_argument("--code-badge", type=Path)
     parser.add_argument("--overview", type=Path)
+    parser.add_argument("--readme", type=Path, help="Update the main README progress block")
     args = parser.parse_args()
     if args.boot and not args.boot.is_file():
         parser.error("--boot must name an existing BOOT.BIN")
@@ -66,10 +92,14 @@ if __name__ == "__main__":
         encoding="utf-8",
         newline="\n",
     )
+    acceptance_badge = badge_svg(data["verification"])
+    code_badge = code_badge_svg(data["code"])
     if args.badge:
-        args.badge.write_text(badge_svg(data["verification"]), encoding="utf-8", newline="\n")
+        args.badge.write_text(acceptance_badge, encoding="utf-8", newline="\n")
     if args.code_badge:
-        args.code_badge.write_text(code_badge_svg(data["code"]), encoding="utf-8", newline="\n")
+        args.code_badge.write_text(code_badge, encoding="utf-8", newline="\n")
+    if args.readme:
+        update_readme(args.readme, data["verification"], acceptance_badge, code_badge)
     if args.overview:
         args.overview.write_text(code_svg(data["code"]), encoding="utf-8", newline="\n")
     print(dict(sorted(status_counts.items())))
