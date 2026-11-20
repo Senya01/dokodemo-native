@@ -1872,7 +1872,7 @@ void RoomTalkState::LoadScriptModule(unsigned argc) {
     if(bytes.size()>script::Program::resource_limit) return;
     const auto index=int(script_modules_.size());
     // 6A854 retains the raw member. The consuming builtin chooses its format.
-    script_modules_.push_back({std::move(name),std::move(bytes)});
+    script_modules_.push_back({std::move(name),std::move(bytes),{}});
     result_={Kind::integer,index};
 }
 
@@ -1908,6 +1908,56 @@ void RoomTalkState::RegisterScriptMap(unsigned argc) {
         map.records.push_back({Word(bytes.data()+offset,4),Word(bytes.data()+offset+4,4)});
     const auto handle=int(script_maps_.size());
     script_maps_.push_back(std::move(map));
+    result_={Kind::integer,handle};
+}
+
+void RoomTalkState::RegisterScriptContext(unsigned argc) {
+    Require(argc>=2 && argc<=stack_.size(),"Missing KSC context registration operands");
+    const auto first=stack_.size()-argc;
+    const auto module_index=HostNumber(stack_[first]);
+    const auto map_index=stack_[first+1].kind==Kind::nil
+        ? std::optional<int>{} : std::optional<int>{HostNumber(stack_[first+1])};
+    stack_.resize(first);
+    result_={Kind::integer,-1};
+    // 66FDC prepares the image and local table; 67F1C starts execution later.
+    // E58FC..E591B holds eight context pointers, separate from module and map indices.
+    if(module_index<0 || std::size_t(module_index)>=script_modules_.size() ||
+       (map_index && (*map_index<0 || std::size_t(*map_index)>=script_maps_.size())) ||
+       registered_scripts_.size()>=8) return;
+    auto& module=script_modules_[module_index];
+    if(!module.program) {
+        auto program=std::make_shared<script::Program>();
+        script::Diagnostic error;
+        if(!program->load_module_bytes(module.bytes,module.name,error)) return;
+        module.program=std::move(program);
+    }
+    ChildScript context;
+    context.program=module.program;
+    if(map_index) context.map_index=unsigned(*map_index);
+    const auto& program=*context.program;
+    const auto count=program.header().local_count;
+    context.script_locals.reserve(count);
+    for(unsigned index=0;index<count;++index) {
+        const auto word=program.initial_word(script::Table::Local,std::uint16_t(index));
+        const auto payload=word&0x0fffffffu;
+        switch(word>>28) {
+        case 0: context.script_locals.push_back({}); break;
+        case 1: context.script_locals.push_back({Kind::truth,payload!=0}); break;
+        case 2: context.script_locals.push_back({Kind::integer,ScriptInteger(word)}); break;
+        case 3: context.script_locals.push_back({Kind::calendar_time,ScriptInteger(word)}); break;
+        case 4: context.script_locals.push_back({Kind::fixed14,ScriptInteger(word)}); break;
+        case 5: context.script_locals.push_back({Kind::string,0,program.pool_bytes(payload)}); break;
+        case 7: context.script_locals.push_back({Kind::code,int(payload)}); break;
+        case 9:
+            if((payload&0xfffu)>=count-index) return;
+            context.script_locals.push_back({Kind::script_local_array,int(payload&0xfffu),{},index});
+            break;
+        default: return;
+        }
+    }
+    const auto handle=int(registered_scripts_.size());
+    context.generation=++child_generation_;
+    registered_scripts_.push_back(std::move(context));
     result_={Kind::integer,handle};
 }
 
@@ -2936,6 +2986,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 return;
             } else if(id==0x80) {
                 LoadScriptModule(argc);
+            } else if(id==0x90) {
+                RegisterScriptContext(argc);
             } else if(id==0x91) {
                 RegisterScriptMap(argc);
             } else if(id==0x24) {

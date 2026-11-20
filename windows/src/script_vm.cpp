@@ -129,13 +129,24 @@ bool Program::load_original(const std::filesystem::path& path, Diagnostic& error
     catch (const std::exception& ex) { *this = Program{}; error = {ex.what()}; return false; }
 }
 bool Program::load_original_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source, Diagnostic& error) {
+    return load_bytes(std::move(bytes), source, error, true);
+}
+
+bool Program::load_module_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source, Diagnostic& error) {
+    return load_bytes(std::move(bytes), source, error, false);
+}
+
+bool Program::load_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
+                         Diagnostic& error, bool require_original) {
     *this = Program{};
     error = {};
     try {
+        if (bytes.size() > resource_limit) throw std::runtime_error("Invalid script resource size");
         source_ = {source, hash_bytes(bytes)};
         bytes_ = std::move(bytes);
         parse();
-        if (!known(source_.sha256, ksc_hashes)) throw std::runtime_error("Unverified KSC SHA256; execution refused");
+        if (require_original && !known(source_.sha256, ksc_hashes))
+            throw std::runtime_error("Unverified KSC SHA256; execution refused");
         error = {};
         return true;
     } catch (const LocatedError& ex) {
@@ -149,7 +160,8 @@ bool Program::load_original_bytes(std::vector<uint8_t> bytes, const std::filesys
     }
 }
 recovered::CurrentTablesOwner Program::load_current_tables(recovered::CurrentTablesInput input) const {
-    if (!loaded()) throw std::runtime_error("Current source loader requires a verified original Program");
+    if (!loaded() || !known(source_.sha256, ksc_hashes))
+        throw std::runtime_error("Current source loader requires a verified original Program");
     if (input.readable.size() != bytes_.size() || input.writable.size() != bytes_.size())
         throw std::runtime_error("Current source loader requires exact explicit image byte masks");
     input.image = bytes_;

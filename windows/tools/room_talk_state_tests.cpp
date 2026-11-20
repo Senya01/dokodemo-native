@@ -702,13 +702,16 @@ struct RoomTalkOpcodeTests {
         if(state!=1205) throw std::runtime_error("KSC host notification was lost or reordered");
     }
 
-    static void ScriptModuleBuiltin(RoomTalkState& vm,Value operand,int expected,unsigned char opcode=0x80) {
+    static void ScriptModuleBuiltin(RoomTalkState& vm,Value operand,int expected,unsigned char opcode=0x80,
+                                    std::optional<Value> map={}) {
         vm.pc_=0;
         vm.phase_=RoomTalkState::Phase::running;
         vm.ordinary_=true;
         vm.result_={Kind::integer,96};
         vm.stack_={{Kind::integer,61},std::move(operand)};
-        vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,opcode,1,0x89,0x43});
+        if(map) vm.stack_.push_back(std::move(*map));
+        vm.code_.insert_or_assign(0,std::vector<unsigned char>{0x8b,opcode,
+            static_cast<unsigned char>(map?2:1),0x89,0x43});
         vm.Step(0,true,true,nullptr,false);
         if(!vm.error_.empty() || vm.pc_!=5 || vm.stack_.size()!=2)
             throw std::runtime_error("KSC module load did not return to its caller: "+vm.error_);
@@ -776,6 +779,45 @@ struct RoomTalkOpcodeTests {
             throw std::runtime_error("KSC metadata map did not retain its names and aligned records");
     }
 
+    static void ScriptContextRegistration() {
+        const std::vector<std::uint8_t> example{
+            'K','S','C',0, 4,2,3,0x20, 1,0,0,0, 5,0,0,0, 3,0,0,0,
+            0,0, 3,0, 0,0, 0,0, 0x38,0x80,17,0x70,0x38, 'o','k',0,
+            0,0,0,0x50, 1,0,0,0x90, 42,0,0,0x20
+        };
+        RoomTalkState vm;
+        vm.BindScriptModuleReader([&](const std::string& name,std::vector<std::uint8_t>& bytes) {
+            if(name=="map") bytes={'k','s','m',0,0,0,0,0,0,0,0,0};
+            else if(name=="invalid") bytes={'K','S','C',0};
+            else bytes=example;
+            return true;
+        });
+        ScriptModuleBuiltin(vm,{Kind::string,0,"context"},0);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"invalid"},1);
+        ScriptModuleBuiltin(vm,{Kind::string,0,"map"},2);
+        ScriptModuleBuiltin(vm,{Kind::integer,2},0,0x91);
+        ScriptModuleBuiltin(vm,{Kind::integer,1},-1,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,0},-1,0x90,Value{Kind::integer,1});
+        ScriptModuleBuiltin(vm,{Kind::integer,-1},-1,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,0},0,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,0},1,0x90,Value{Kind::integer,0});
+        auto& first=vm.registered_scripts_.at(0);
+        const auto& second=vm.registered_scripts_.at(1);
+        if(first.phase!=RoomTalkState::Phase::done || first.program->header().entrypoint!=1 ||
+           first.map_index || second.map_index!=0 || first.program!=second.program ||
+           first.generation==second.generation || first.script_locals.at(0).text!="ok")
+            throw std::runtime_error("Wrong registered KSC context identity or initial state");
+        CheckValue(first.script_locals.at(1),Kind::script_local_array,1,0x90);
+        CheckValue(first.script_locals.at(2),Kind::integer,42,0x90);
+        first.script_locals.at(2)={Kind::integer,72};
+        CheckValue(second.script_locals.at(2),Kind::integer,42,0x90);
+        for(int i=2;i<8;++i) ScriptModuleBuiltin(vm,{Kind::integer,0},i,0x90,Value{});
+        ScriptModuleBuiltin(vm,{Kind::integer,0},-1,0x90,Value{});
+        if(vm.registered_scripts_.size()!=8 || vm.script_modules_[1].program ||
+           vm.registered_scripts_[0].phase!=RoomTalkState::Phase::done)
+            throw std::runtime_error("KSC context overflow or execution before activation");
+    }
+
     static void ScriptModuleArchive(const std::filesystem::path& game) {
         BootToDisplay boot;
         if(!boot.Initialize() || !boot.InitializeClock({},168) ||
@@ -794,12 +836,19 @@ struct RoomTalkOpcodeTests {
             script::Diagnostic error;
             if(!verified.load_original_bytes(module.bytes,name,error))
                 throw std::runtime_error("KSC archive module did not match the original identity: "+error.text());
+            ScriptModuleBuiltin(vm,{Kind::integer,index-1},index-1,0x90,Value{});
+            const auto& context=vm.registered_scripts_.at(index-1);
+            if(context.program->source().sha256!=verified.source().sha256 ||
+               context.script_locals.size()!=verified.header().local_count ||
+               context.phase!=RoomTalkState::Phase::done)
+                throw std::runtime_error("Original KSC module did not register as a dormant context");
         }
     }
 
     static void Run() {
         ScriptModuleLoad();
         ScriptMapRegistration();
+        ScriptContextRegistration();
         HostCommand();
         HostQuery();
         HostNotification();

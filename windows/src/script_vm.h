@@ -6,6 +6,8 @@
 #include <vector>
 #include "recovered/current_tables_native.h"
 
+namespace dokodemo::gameplay { class RoomTalkState; }
+
 // Restricted KSC v20030204 reader/interpreter. No PSP CPU, OS or GPU emulation.
 // Source tables and strings are data; reading them never emits dialogue.
 namespace dokodemo::script {
@@ -66,12 +68,19 @@ public:
     // The original verified image and its identity always come from Program.
     recovered::CurrentTablesOwner load_current_tables(recovered::CurrentTablesInput input) const;
 private:
+    friend class gameplay::RoomTalkState;
+    // Only the mounted-resource dispatcher can opt into structural loading
+    // without the five original identity pins.
+    bool load_module_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
+                           Diagnostic& error);
     Header header_;
     Source source_;
     std::vector<uint8_t> bytes_;
     std::vector<Command> commands_;
     std::vector<Reference> references_;
     std::vector<uint32_t> command_index_;
+    bool load_bytes(std::vector<uint8_t> bytes, const std::filesystem::path& source,
+                    Diagnostic& error, bool require_original);
     void parse();
 };
 

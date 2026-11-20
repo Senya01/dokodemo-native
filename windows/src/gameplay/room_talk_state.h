@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace dokodemo::recovered { class PackageView; class RngNativeOwner; }
+namespace dokodemo::script { class Program; }
 namespace dokodemo::gameplay {
 class RoomInventory;
 
@@ -227,7 +228,11 @@ private:
     static ScriptHostValue HostValue(const Value& value);
     void InvokeHostBuiltin(HostBuiltin operation,unsigned argc);
     ScriptModuleReader script_module_reader_;
-    struct ScriptModule { std::string name; std::vector<std::uint8_t> bytes; };
+    struct ScriptModule {
+        std::string name;
+        std::vector<std::uint8_t> bytes;
+        std::shared_ptr<const script::Program> program;
+    };
     std::vector<ScriptModule> script_modules_;
     struct ScriptMap {
         std::vector<std::string> names;
@@ -236,6 +241,7 @@ private:
     std::vector<ScriptMap> script_maps_;
     void LoadScriptModule(unsigned argc);
     void RegisterScriptMap(unsigned argc);
+    void RegisterScriptContext(unsigned argc);
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;
@@ -302,11 +308,15 @@ private:
         std::vector<ControlBlock> blocks;
         Value result;
         std::vector<std::size_t> children;
+        std::shared_ptr<const script::Program> program;
+        std::optional<unsigned> map_index;
+        std::vector<Value> script_locals;
         void SwapExecution(RoomTalkState& vm);
     };
     // A flat pool keeps slot indices stable and releases deep trees iteratively.
     std::deque<ChildScript> child_scripts_;
     std::vector<std::size_t> root_children_;
+    std::vector<ChildScript> registered_scripts_;
     ChildScript* executing_child_=nullptr; // Set only for the duration of a child slice.
     std::uint64_t child_generation_=0;
     unsigned child_budget_=0;
