@@ -1107,6 +1107,10 @@ void RoomTalkState::AdvanceNamedOuting(recovered::RngNativeOwner& rng,bool actor
         return;
     case NamedOutingStage::scene_request:
         if(!actor_ready) return;
+        Require(calendar_minute_.has_value(),"Missing calendar minute for outing transfer");
+        // The shared scene-transfer procedure samples the game clock and
+        // adds one inclusive 5–10 minute draw before requesting the scene.
+        named_outing_deadline_=(*calendar_minute_+5+rng.NextC3234()%6)&0x0fffffffu;
         outing_scene_request_=outing_returning_?0:outing_snapshot_->kind;
         phase_=Phase::outing_scene;
         return;
@@ -1216,8 +1220,10 @@ std::vector<std::string> RoomTalkState::current_outing_names() const {
 }
 
 std::optional<unsigned> RoomTalkState::outing_return_deadline() const {
+    if(!outing_current_scene_) return {};
+    if(actor_number_!=0) return named_outing_deadline_;
     const auto it=outing_script_cells_.find(0x2875);
-    if(!outing_current_scene_ || it==outing_script_cells_.end() || it->second.kind!=Kind::calendar_time)
+    if(it==outing_script_cells_.end() || it->second.kind!=Kind::calendar_time)
         return {};
     return unsigned(it->second.data)&0x0fffffffu;
 }
@@ -1234,6 +1240,7 @@ bool RoomTalkState::FinishOutingScene(unsigned selector) {
     // The actual scene owner releases the caller suspended by the callback.
     outing_current_scene_=selector; outing_scene_request_.reset(); phase_=Phase::running;
     if(named_outing_stage_!=NamedOutingStage::inactive) {
+        if(!selector) named_outing_deadline_.reset();
         if(calendar_minute_) StampContactLocation(*calendar_minute_);
         named_outing_stage_=NamedOutingStage::arrived;
         outing_wipe_=true;

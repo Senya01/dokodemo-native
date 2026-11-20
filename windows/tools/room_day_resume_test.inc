@@ -153,6 +153,7 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     auto saved=DecodeRetailUtilityRequest(original,RetailSaveProfile{});
     const auto actor=saved.profile.ReadProfile().actor;
     const bool named=actor!=0;
+    const bool check_deadline=named || scene==12;
     Require((scene>=1 && scene<=13) || scene==17 || scene==18 || (named && scene>=14 && scene<=19),
             "The ordinary destination roster does not include this scene");
     Require(!std::filesystem::exists(install/"savedata"),
@@ -202,6 +203,7 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
     };
     bool arrived=false,handed_off=false,returned=false,home_control=false;
     unsigned model=0,away=0,away_serial=0;
+    int arrival_minute=-1,deadline=-1;
     std::vector<int> motions;
     std::string unavailable;
     auto step=[&](unsigned key=0) {
@@ -211,6 +213,8 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
             if (name=="consumed" && field(event,"scene")==int(scene)) {
                 model=unsigned(field(event,"resource",0));
                 Require(model>=30+3*scene && model<=32+3*scene,"Wrong adopted scene model");
+                arrival_minute=field(event,"minute");
+                deadline=field(event,"deadline");
                 arrived=true;
             }
             if (name=="control" && field(event,"scene")==int(scene)) handed_off=true;
@@ -266,9 +270,10 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         Require(!arrived && !handed_off && !returned && motions.empty(),"Cancelled outing changed scenes");
         initial_serial=run.room.activity_snapshot().serial;
     }
-    for(unsigned trip=0;trip<(named?2u:1u);++trip) {
+    for(unsigned trip=0;trip<(check_deadline?2u:1u);++trip) {
         arrived=handed_off=returned=home_control=false;
         model=away=away_serial=0;
+        arrival_minute=deadline=-1;
         motions.clear();
         unavailable.clear();
         open_outing();
@@ -277,12 +282,27 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         const auto image=Visible(run.frame,((run.frames-1)%2)*surface);
         Require(arrived && image.visible>1000,"Destination was not drawn");
         if(named) Require(motions==std::vector<int>{174,175},"Wrong actor departure motion order");
-        for (unsigned i=0;i<80 && !run.room.teaching_snapshot().menu_open;++i) key(0x20);
-        Require(run.room.teaching_snapshot().menu_cursor==0,"Away menu did not open");
-        for(unsigned i=0;i<30;++i) step();
-        key(0x40);
-        Require(run.room.teaching_snapshot().menu_cursor==2,"The away menu did not select return home");
-        key(0x2000);
+        if(check_deadline)
+            Require(arrival_minute>=0 && deadline-arrival_minute>=5 && deadline-arrival_minute<=10,
+                    "Outing did not arm a return deadline 5 to 10 minutes after departure");
+        if(trip==1) {
+            const unsigned elapsed=unsigned(deadline-arrival_minute);
+            for(const unsigned minute:{elapsed-1,elapsed}) {
+                const auto previous_serial=away_serial;
+                run.calendar[2]=minute;
+                until([&]{return returned || away_serial>previous_serial;},
+                      "No away activity turn at or before the return deadline");
+                Require(!returned && !home_control,"Automatic return occurred before the deadline expired");
+            }
+            run.calendar[2]=elapsed+1;
+        } else {
+            for (unsigned i=0;i<80 && !run.room.teaching_snapshot().menu_open;++i) key(0x20);
+            Require(run.room.teaching_snapshot().menu_cursor==0,"Away menu did not open");
+            for(unsigned i=0;i<30;++i) step();
+            key(0x40);
+            Require(run.room.teaching_snapshot().menu_cursor==2,"The away menu did not select return home");
+            key(0x2000);
+        }
         until([&]{return home_control;},"No source return from destination");
         until([&]{
             const auto activity=run.room.activity_snapshot();
@@ -294,7 +314,11 @@ int CheckDestinationSlot(const std::filesystem::path& install,const std::filesys
         std::cout << "Actor " << actor << " trip " << trip+1 << " destination " << scene << " model " << model
                   << " RGB " << image.visible << " ASC " << away << " then home ASC " << *active.started_command
                   << ", activity serials " << initial_serial << " -> " << away_serial << " -> " << active.serial
-                  << " at update " << run.frames << '\n';
+                  << " at update " << run.frames;
+        if(check_deadline)
+            std::cout << ", " << (trip?"automatic":"manual") << " return, deadline "
+                      << deadline-arrival_minute << " minutes from departure";
+        std::cout << '\n';
         initial_serial=active.serial;
     }
     return 0;

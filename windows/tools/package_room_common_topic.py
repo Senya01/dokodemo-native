@@ -347,6 +347,22 @@ def actor_outing_source(root, spec):
             and code[call+8:call+12] == b"\x04\0\0\x20"
             and code[call+15:call+19] == b"\x21" + back.to_bytes(3, "little"),
             f"{name} outing menu dispatch changed")
+    # Both menu return and departure use the same transfer procedure. Its
+    # first call arms the deadline from BI 09 and an inclusive 5..10 roll.
+    transfer = int.from_bytes(code[back+7:back+10], "little")
+    arm = int.from_bytes(code[transfer+3:transfer+6], "little")
+    timer = code[arm+3:arm+5]
+    expired = code[arm+22:arm+42]
+    require(code[back+5:back+7] == b"\x20\x02"
+            and code[depart+0x1f3:depart+0x1f8] == b"\x20\x02" + code[back+7:back+10]
+            and code[transfer:transfer+3] == b"\x30\x02\x21"
+            and code[arm:arm+3] == b"\x30\0\x99"
+            and code[arm+5:arm+15] == bytes.fromhex("8b0900898005800a2002")
+            and code[arm+18:arm+22] == bytes.fromhex("89e05131"),
+            f"{name} outing deadline calculation changed")
+    require(expired[:3] == b"\x30\0\x99"
+            and expired[5:] == bytes.fromhex("85f4b8b18b09008998") + timer + bytes.fromhex("c4c87031"),
+            f"{name} outing deadline comparison changed")
     _, periods = table(data, h.constant_start, clock)
     _, indices = table(data, h.global_start, order)
     require(len(periods) == 20 and all(v >> 28 == 2 and (v & 0x0fffffff) < 64 for v in periods),

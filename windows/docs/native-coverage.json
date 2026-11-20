@@ -117,7 +117,7 @@
           "id": "gfx-destinations",
           "status": "basic",
           "title": "Other game scenes",
-          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Robo, Usagi, Inu and Kaeru each travelled to their default destination twice and returned. Some destination effects and additional routes remain open.",
+          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Robo, Usagi, Inu and Kaeru each returned manually and automatically from their default destination. Other destinations for those characters and location-specific tasks remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {
@@ -384,7 +384,7 @@
           "id": "room-outing",
           "status": "basic",
           "title": "Roof outing and return",
-          "detail": "The normal route goes from the room to the roof and back. Toro starts an autonomous activity after arrival.",
+          "detail": "Toro starts an autonomous activity on the roof. Both the return menu and the game clock can bring him back to a new activity at home.",
           "evidence": "docs/PROGRESS.md"
         },
         {

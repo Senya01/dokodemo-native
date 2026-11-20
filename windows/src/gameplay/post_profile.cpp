@@ -1029,8 +1029,13 @@ void PostProfile::Data::HandleTravel(unsigned period, recovered::RngNativeOwner&
     if (!talk.FinishOutingScene(scene)) throw std::logic_error("No waiting outing caller for adopted scene");
     pending_scene.reset();
     caller_parked = false;
-    if (scene) DepartureEvent("consumed", {{"scene",int(scene)},{"resource",int(SceneResource())},{"period",int(period)},{"bank",bank}});
-    else DepartureEvent("consumed", {{"scene",0},{"period",int(period)},{"bank",bank}});
+    if (scene) {
+        DepartureEvent("consumed", {{"scene",int(scene)},{"resource",int(SceneResource())},{"period",int(period)},{"bank",bank}});
+        if (const auto deadline=talk.outing_return_deadline()) {
+            departure_events.back().values.emplace_back("minute",int(CurrentMinute()));
+            departure_events.back().values.emplace_back("deadline",int(*deadline));
+        }
+    } else DepartureEvent("consumed", {{"scene",0},{"period",int(period)},{"bank",bank}});
 }
 
 bool PostProfile::Data::HandleNamedOuting(unsigned minute,unsigned period,recovered::RngNativeOwner& rng) {

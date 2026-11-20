@@ -452,9 +452,10 @@
             "room-roof-contact"
           ],
           "expect": "Eligible destinations are reachable by all five characters with valid inputs. Menus, tasks, return and repeat outings work at the location.",
-          "gap": "Toro's 15 ordinary trips and two round trips to each alternate character's default destination passed. The alternate routes also cover cancellation and a new activity after returning home. The alternate destinations, seasonal coverage and location-specific tasks are still open.",
+          "gap": "Toro's 15 ordinary destinations passed. Manual and automatic return passed from Toro's roof and each of the other four characters' default destinations. The tests also check activities after return and cancellation for the four alternate characters. Other destinations for those characters, seasonal coverage and location-specific tasks remain open.",
           "tests": [
             "game-starting-outings",
+            "game-out-and-back",
             "game-named-outings"
           ]
         }
@@ -814,7 +815,7 @@
           "tests": [
             "game-out-and-back"
           ],
-          "evidence": "All 15 ordinary Toro destinations passed: menu, rendered scene, activity away from home, manual return and activity at home. Eligibility was prepared in memory."
+          "evidence": "All 15 ordinary Toro destinations passed the manual round trip and resumed activities in both scenes. A second roof trip passed automatic return after the deadline. Eligibility was prepared in memory."
         },
         {
           "id": "seam-calendar",
@@ -1032,10 +1033,10 @@
       "scope": "Windows Release, headless, null audio, completed Toro slot with a learned word and a controlled friend card. Empty room, title, Robo adoption, System save and independent cold notebook."
     },
     "game-out-and-back": {
-      "test_binary_sha256": "f5fb003ffdec9b2f0d4aca83f570441e53c025fbbfc6e081c3ad67c2746b3738",
+      "test_binary_sha256": "cc6ce534bc312a969318300a5104048698f4afebd78a2efada2ef8257e91ecd5",
       "routes_passed": 15,
       "routes_total": 15,
-      "scope": "Windows Release, headless, null audio. Toro's ordinary destinations, eligibility prepared in memory, native menu and return with a new activity in both scenes."
+      "scope": "Windows Release, headless, null audio. Toro's ordinary destinations, eligibility prepared in memory, native menu, manual return and activities in both scenes. A second roof trip checked a new away activity one minute before and at the deadline, then no-input return one minute later."
     },
     "game-startup-to-room": {
       "game_sha256": "348a6df59a1c49fedccd1204b6c4df8f543b78d84366df86d2445c457d82d2e4",
@@ -1096,10 +1097,10 @@
       "scope": "Windows Release, headless and null audio. Independent new rooms for Robo, Usagi, Inu and Kaeru each wrote the source-backed initial destination flag in a protected System save. Robo retained the flag through a day-two save."
     },
     "game-named-outings": {
-      "test_binary_sha256": "c2c3ad9c2a2cad6403d232a2de0587112c368f87c3284a38f5d1e5a05274179a",
+      "test_binary_sha256": "cc6ce534bc312a969318300a5104048698f4afebd78a2efada2ef8257e91ecd5",
       "routes_passed": 4,
       "routes_total": 4,
-      "scope": "Windows Release, headless and null audio. Fresh protected saves, four cancellations and eight round trips across Robo, Usagi, Inu and Kaeru. Ordered departure motions, rendered arrivals, away activities, manual return and new home activities. Usagi's route uses a controlled learned word."
+      "scope": "Windows Release, headless and null audio. Fresh protected saves, four cancellations and eight round trips across Robo, Usagi, Inu and Kaeru. Ordered departure motions, rendered arrivals, manual and automatic return, and new home activities. Automatic return uses a controlled clock, with away activities one minute before and at the deadline and no input one minute after. Usagi's route uses a controlled learned word."
     }
   }
 }

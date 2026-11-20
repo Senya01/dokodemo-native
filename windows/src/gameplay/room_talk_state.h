@@ -393,6 +393,7 @@ private:
     enum class NamedOutingStage { inactive, menu, answer, depart, walk, prepare_return, scene_request, arrived, finish };
     NamedOutingStage named_outing_stage_=NamedOutingStage::inactive;
     unsigned named_outing_departure_=0,named_outing_return_=0;
+    std::optional<unsigned> named_outing_deadline_;
     std::array<NamedOutingMessage,3> named_outing_messages_{};
     std::array<std::string,3> named_outing_choices_;
     std::vector<NamedOutingDestination> named_outing_destinations_;
