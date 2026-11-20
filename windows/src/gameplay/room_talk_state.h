@@ -74,6 +74,18 @@ public:
     unsigned SelectHomeInvitation(unsigned mode,unsigned period,recovered::RngNativeOwner& rng);
     bool BeginHomeInvitation();
     void BindHomeInvitationReturn(std::function<void()> callback) { home_invitation_return_=std::move(callback); }
+    struct ScriptHostValue {
+        enum class Tag { nil,truth,integer,calendar_time,vector,code,string };
+        Tag tag;
+        int payload=0;
+        std::string text;
+    };
+    struct ScriptHostCallbacks {
+        std::function<int(int selector,int secondary)> command;
+        std::function<int(int selector,const ScriptHostValue&,const ScriptHostValue&)> query;
+        std::function<void(int selector,int value)> notify;
+    };
+    void BindScriptHostCallbacks(ScriptHostCallbacks callbacks) { script_host_=std::move(callbacks); }
     bool BeginOuting(unsigned period);
     bool TakeOutingRoomRequest();
     bool BeginOutingReturn();
@@ -207,6 +219,11 @@ private:
     void LoadScriptLocals(const std::filesystem::path& dir);
     void InitializeArray(unsigned opcode);
     void RememberProcedure(unsigned table,unsigned index,unsigned target);
+    enum class HostBuiltin { command, query, notify };
+    ScriptHostCallbacks script_host_;
+    static int HostNumber(const Value& value);
+    static ScriptHostValue HostValue(const Value& value);
+    void InvokeHostBuiltin(HostBuiltin operation,unsigned argc);
     RoomVocabulary vocabulary_;
     bool first_day_diary_request_ = false;
     bool friends_introduction_=false,friend_timer_requested_=false;

@@ -10,7 +10,10 @@
 #include "recovered/rng_native.h"
 #include "recovered/package_storage_native.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -1771,6 +1774,84 @@ void RoomTalkState::RememberProcedure(unsigned table,unsigned index,unsigned tar
     }
 }
 
+int RoomTalkState::HostNumber(const Value& value) {
+    switch(value.kind) {
+    case Kind::nil: return 0;
+    case Kind::truth: case Kind::integer: case Kind::calendar_time: case Kind::code:
+        return ScriptInteger(unsigned(value.data));
+    case Kind::fixed14: {
+        const auto high=ScriptInteger(ArithmeticShiftRight(value.data,14));
+        const auto low=int((unsigned(value.data)&0x3fffu)^0x2000u)-0x2000;
+        return int(std::sqrt(float(high*high+low*low)));
+    }
+    case Kind::string: {
+        // C1E0C is a base-ten conversion with a signed 32-bit result.
+        const auto number=std::strtoll(value.text.c_str(),nullptr,10);
+        return int(std::clamp(number,static_cast<long long>(std::numeric_limits<std::int32_t>::min()),
+                                     static_cast<long long>(std::numeric_limits<std::int32_t>::max())));
+    }
+    case Kind::array:
+        Require(bool(value.cells),"Missing KSC array for host conversion");
+        return int(value.cells->size()&0xfffu);
+    case Kind::script_local_array:
+        return value.data&0xfff;
+    default:
+        throw std::runtime_error("Unsupported KSC host selector type");
+    }
+}
+
+RoomTalkState::ScriptHostValue RoomTalkState::HostValue(const Value& value) {
+    using Tag=ScriptHostValue::Tag;
+    switch(value.kind) {
+    case Kind::nil: return {Tag::nil};
+    case Kind::truth: return {Tag::truth,value.data};
+    case Kind::integer: return {Tag::integer,value.data};
+    case Kind::calendar_time: return {Tag::calendar_time,value.data};
+    case Kind::fixed14: return {Tag::vector,value.data};
+    case Kind::code: return {Tag::code,value.data};
+    case Kind::string: return {Tag::string,0,value.text};
+    default: throw std::runtime_error("Unsupported KSC host query argument");
+    }
+}
+
+void RoomTalkState::InvokeHostBuiltin(HostBuiltin operation,unsigned argc) {
+    Require(argc<=stack_.size(),"Insufficient KSC host arguments");
+    const auto first=stack_.size()-argc;
+    result_={};
+    // An absent callback still consumes the operands and returns nil.
+    switch(operation) {
+    case HostBuiltin::command:
+        if(script_host_.command) {
+            Require(argc>=1,"Missing KSC host command selector");
+            const auto selector=HostNumber(stack_[first]);
+            stack_.resize(first);
+            result_={Kind::integer,ScriptInteger(unsigned(script_host_.command(selector,-1)))};
+            return;
+        }
+        break;
+    case HostBuiltin::query:
+        if(script_host_.query) {
+            Require(argc>=3,"Missing KSC host query operands");
+            const auto selector=HostNumber(stack_[first]);
+            const auto a=HostValue(stack_[first+1]),b=HostValue(stack_[first+2]);
+            stack_.resize(first);
+            result_={Kind::integer,ScriptInteger(unsigned(script_host_.query(selector,a,b)))};
+            return;
+        }
+        break;
+    case HostBuiltin::notify:
+        if(script_host_.notify) {
+            Require(argc>=2,"Missing KSC host notification operands");
+            const auto selector=HostNumber(stack_[first]),value=HostNumber(stack_[first+1]);
+            stack_.resize(first);
+            script_host_.notify(selector,value);
+            return;
+        }
+        break;
+    }
+    stack_.resize(first);
+}
+
 namespace {
 constexpr unsigned script_instruction_limit=16384;
 
@@ -2794,6 +2875,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                 result_={};
                 OpenWordKeyboard(editor_mode,std::move(argument.text),{});
                 return;
+            } else if(id==0x24) {
+                InvokeHostBuiltin(HostBuiltin::command,argc);
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&

@@ -640,7 +640,42 @@ struct RoomTalkOpcodeTests {
         CheckValue(vm.locals_.at(0),Kind::integer,11,opcode);
     }
 
+    static Value HostBuiltin(unsigned char opcode,std::vector<Value> args,
+                             RoomTalkState::ScriptHostCallbacks callbacks={}) {
+        RoomTalkState vm;
+        vm.phase_=RoomTalkState::Phase::running;
+        vm.ordinary_=true;
+        vm.result_={Kind::integer,98};
+        vm.BindScriptHostCallbacks(std::move(callbacks));
+        const auto argc=static_cast<unsigned char>(args.size());
+        vm.code_.emplace(0,std::vector<unsigned char>{0x8b,opcode,argc,0x89,0x43});
+        vm.stack_={{Kind::integer,71}};
+        vm.stack_.insert(vm.stack_.end(),args.begin(),args.end());
+        vm.Step(0,true,true,nullptr,false);
+        if(!vm.error_.empty() || vm.pc_!=5 || vm.stack_.size()!=2)
+            throw std::runtime_error("KSC host builtin did not restore its operand stack: "+vm.error_);
+        CheckValue(vm.stack_[0],Kind::integer,71,opcode);
+        return vm.stack_[1];
+    }
+
+    static void HostCommand() {
+        CheckValue(HostBuiltin(0x24,{{Kind::integer,-8}}),Kind::nil,0,0x24);
+        RoomTalkState::ScriptHostCallbacks callbacks;
+        unsigned calls=0;
+        callbacks.command=[&](int selector,int secondary) {
+            if(secondary!=-1) throw std::runtime_error("KSC host command lost its secondary selector");
+            ++calls;
+            return selector==5?0x08000000:2*selector;
+        };
+        CheckValue(HostBuiltin(0x24,{{Kind::string,0,"  -13 rest"},{Kind::integer,33}},callbacks),
+                   Kind::integer,-26,0x24);
+        CheckValue(HostBuiltin(0x24,{{Kind::fixed14,-3*0x4000+4}},callbacks),
+                   Kind::integer,-0x08000000,0x24);
+        if(calls!=2) throw std::runtime_error("Unexpected number of KSC host commands");
+    }
+
     static void Run() {
+        HostCommand();
         ChildScriptSchedule(0x28);
         ChildScriptIsolation(0x28);
         ChildScriptForeignFrame(0x28);
