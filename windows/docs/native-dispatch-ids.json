@@ -1,7 +1,7 @@
 {
   "groups": [
     {
-      "title": "Команды KSC",
+      "title": "KSC opcodes",
       "slots": 254,
       "ids": [
         "0x0B",
@@ -149,7 +149,7 @@
       ]
     },
     {
-      "title": "Встроенные функции KSC",
+      "title": "KSC built-ins",
       "slots": 241,
       "ids": [
         "0x01",

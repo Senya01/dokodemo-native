@@ -60,14 +60,14 @@ def map_badge_svg(progress: dict) -> str:
     acceptance_percent = format_progress_percent(passed, checks)
     label = (f"Native map: basic or better {basic_percent} ({implemented}/{features}), "
              f"byte-exact {exact_percent} ({exact}/{features}), "
-             f"Windows acceptance {acceptance_percent} ({passed}/{checks})")
+             f"Windows build verification {acceptance_percent} ({passed}/{checks})")
     green = ("#257944", "#fff")
     amber = ("#e8ba25", "#171717")
     segments = (
         ("Native map", 90, "#444b55", "#fff"),
         (f"Basic+ {basic_percent}", 102, *(green if implemented == features else amber)),
         (f"Byte-exact {exact_percent}", 112, "#295b84", "#fff"),
-        (f"Windows {acceptance_percent}", 114, *(green if passed == checks else amber)),
+        (f"Windows checks {acceptance_percent}", 136, *(green if passed == checks else amber)),
     )
     width = sum(segment[1] for segment in segments)
     elements = [f'<title>{escape(label)}</title>',
@@ -90,11 +90,6 @@ def map_svg(data: dict) -> str:
     check_colors = {"passed": "#2f9b53", "blocked": "#63707a",
                     "failed": "#d55e66", "unverified": "#333e48"}
     code_colors = {"present": "#2f9b53", "absent": "#63707a", "file": "#477fac"}
-    code_names = {
-        "Команды KSC": "KSC opcodes",
-        "Встроенные функции KSC": "KSC built-ins",
-        "Вызовы GAME в комнате": "Room GAME IDs",
-    }
     width, gap, margin = 930, 9, 14
     svg = [text(margin, 25, "Native port map", 19)]
 
@@ -140,7 +135,7 @@ def map_svg(data: dict) -> str:
         feature_panels.append((group["name"], f"{count}/{len(items)}", items))
     top = panels(feature_panels, feature_colors, 4, top, 13, "implementation")
 
-    top = section(top + 11, f'Windows acceptance · {progress["passed"]}/{progress["checks"]} passed', (
+    top = section(top + 11, f'Windows build verification · {progress["passed"]}/{progress["checks"]} passed', (
         (check_colors["passed"], "Passed"), (check_colors["blocked"], "Open requirement"),
         (check_colors["failed"], "Test failed"), (check_colors["unverified"], "Unverified"),
     ))
@@ -158,7 +153,7 @@ def map_svg(data: dict) -> str:
     ))
     commands, files = [], []
     for group in code["groups"]:
-        name = code_names.get(group["title"], group["title"])
+        name = group["title"]
         if group["kind"] == "files":
             items = [(item["source"], "file") for item in group["items"]]
             files.append((name, str(len(items)), items))
@@ -171,7 +166,7 @@ def map_svg(data: dict) -> str:
     height = bottom + margin - gap
     return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' "
             f"viewBox='0 0 {width} {height}' role='img' aria-label='Native port map'>\n"
-            "<title>Native port map with implementations, Windows acceptance checks and code inventory</title>\n"
+            "<title>Native port map with implementations, Windows build verification and code inventory</title>\n"
             + rectangle(0, 0, width, height, "#10161d")
             + "\n<g font-family='Segoe UI, Arial, sans-serif'>\n"
             + "\n".join(svg) + "\n</g>\n</svg>\n")

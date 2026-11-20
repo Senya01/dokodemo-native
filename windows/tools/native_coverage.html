@@ -53,23 +53,24 @@
 <header class="rail">
   <strong class="total"></strong>
   <p class="verdict" aria-live="polite" style="margin:0"></p>
-  <div class="legend implementation-legend" aria-label="Статусы реализации"></div>
+  <div class="legend implementation-legend" aria-label="Implementation statuses"></div>
 </header>
-<div class="map implementation-map" aria-label="Группы функций"></div>
+<div class="map implementation-map" aria-label="Feature groups"></div>
 <div class="detail implementation-detail" aria-live="polite">
   <h3></h3>
   <p class="state"></p>
   <p class="description"></p>
   <p class="evidence"></p>
-  <ul class="related" aria-label="Связанные требования"></ul>
+  <ul class="related" aria-label="Related requirements"></ul>
 </div>
 <section class="verification" aria-labelledby="native-verification-heading">
   <header class="verification-head">
-    <h3 id="native-verification-heading">Windows acceptance</h3>
-    <label><input type="checkbox" class="open-only"> Только открытые требования</label>
+    <h3 id="native-verification-heading">Windows build verification</h3>
+    <label><input type="checkbox" class="open-only"> Open requirements only</label>
   </header>
-  <div class="legend check-legend" aria-label="Статусы проверок"></div>
-  <div class="map check-map" aria-label="Проверки по подсистемам"></div>
+  <p class="code-scope">Each tile is a requirement for the Windows build. Select a tile to see its checks and results.</p>
+  <div class="legend check-legend" aria-label="Verification statuses"></div>
+  <div class="map check-map" aria-label="Checks by subsystem"></div>
   <div class="detail check-detail" aria-live="polite">
     <h4></h4>
     <p class="check-state"></p>
@@ -80,15 +81,15 @@
   </div>
 </section>
 <section class="code-inventory" aria-labelledby="native-code-heading">
-  <h2 id="native-code-heading">Карта кода</h2>
-  <p class="code-scope">Один квадрат — один ID команды, встроенной функции или вызова GAME. Зелёные квадраты показывают ветки или проверки ID в коде комнаты. Слоты BOOT с общим обработчиком по умолчанию исключены.</p>
-  <div class="legend" aria-label="Легенда карты кода">
-    <span><i class="swatch" data-code="present" aria-hidden="true"></i>Ветка найдена в коде комнаты</span>
-    <span><i class="swatch" data-code="absent" aria-hidden="true"></i>Ветка не найдена в коде комнаты</span>
-    <span><i class="swatch" data-code="file" aria-hidden="true"></i>Файл в целях сборки Windows</span>
+  <h2 id="native-code-heading">Code inventory</h2>
+  <p class="code-scope">Each command tile represents an opcode, built-in or GAME call ID. Green tiles identify branches or ID checks in the room handler. The inventory excludes BOOT slots that share the default handler.</p>
+  <div class="legend" aria-label="Code inventory legend">
+    <span><i class="swatch" data-code="present" aria-hidden="true"></i>Branch present in room code</span>
+    <span><i class="swatch" data-code="absent" aria-hidden="true"></i>Branch absent from room code</span>
+    <span><i class="swatch" data-code="file" aria-hidden="true"></i>Windows build source file</span>
   </div>
-  <div class="map code-map" aria-label="Команды и функции"></div>
-  <div class="map code-files" aria-label="Файлы нативной сборки"></div>
+  <div class="map code-map" aria-label="Commands and functions"></div>
+  <div class="map code-files" aria-label="Native build source files"></div>
   <div class="detail code-detail" aria-live="polite">
     <h3></h3>
     <p class="code-state"></p>
@@ -101,9 +102,9 @@
   const root = document.getElementById("native-coverage");
   const {groups, verification, code, progress} = JSON.parse(root.querySelector(".coverage-data").textContent);
   const codeLabels = {
-    present:"Ветка найдена в коде комнаты",
-    absent:"Ветка не найдена в коде комнаты",
-    file:"Входит в цель сборки Windows"
+    present:"Branch present in room code",
+    absent:"Branch absent from room code",
+    file:"Windows build source file"
   };
   let currentCell;
   function selectCode(cell, item, group) {
@@ -111,9 +112,9 @@
     currentCell = cell;
     cell.setAttribute("aria-pressed", "true");
     root.querySelector(".code-detail h3").textContent = group.title + " · " + item.label;
-    const label = group.kind === "selectors" ? "Найдено условие для ID" : codeLabels[cell.dataset.code];
+    const label = group.kind === "selectors" ? "ID check present" : codeLabels[cell.dataset.code];
     root.querySelector(".code-state").textContent =
-      label + (item.target ? " · Цель в BOOT " + item.target : "");
+      label + (item.target ? " · BOOT target " + item.target : "");
     root.querySelector(".code-location").textContent = item.lines?.length
       ? item.source + ":" + item.lines.join(", ")
       : group.kind === "files" ? item.source : "";
@@ -129,7 +130,7 @@
       ? group.items.filter(item => item.lines.length).length + "/" + total
       : String(total);
     if (group.kind === "dispatch") {
-      score.title = "Слотов в BOOT — " + group.slots + ". С общей веткой по умолчанию — " + group.fallback;
+      score.title = "BOOT slots: " + group.slots + ". Slots using the default handler: " + group.fallback;
     }
     title.append(group.title, score);
     const cells = document.createElement("div");
@@ -149,17 +150,17 @@
     panel.append(title, cells);
     root.querySelector(group.kind === "files" ? ".code-files" : ".code-map").append(panel);
   }
-  const labels = {missing:"Нет нативной реализации", basic:"Базовая реализация", exact:"Побайтово точная реализация"};
+  const labels = {missing:"No native implementation", basic:"Basic implementation", exact:"Byte-exact implementation"};
   const markers = {missing:"·",basic:"✓",exact:"≡"};
   const all = groups.flatMap(group => group.items);
   const amount = status => all.filter(item => item.status === status).length;
-  const ratio = (value, total) => new Intl.NumberFormat("ru", {
+  const ratio = (value, total) => new Intl.NumberFormat("en", {
     style: "percent", maximumFractionDigits: 1
   }).format(value / total) + " (" + value + "/" + total + ")";
   root.querySelector(".total").textContent = [
-    "Базовая или выше " + ratio(progress.implemented, progress.features),
-    "Побайтово точная " + ratio(progress.exact, progress.features),
-    "Windows acceptance " + ratio(progress.passed, progress.checks),
+    "Basic or better " + ratio(progress.implemented, progress.features),
+    "Byte-exact " + ratio(progress.exact, progress.features),
+    "Windows build verification " + ratio(progress.passed, progress.checks),
   ].join(" · ");
   for (const [status, label] of Object.entries(labels)) {
     const piece = document.createElement("span");
@@ -171,16 +172,16 @@
     root.querySelector(".implementation-legend").append(piece);
   }
   const checks = verification.modules.flatMap(module => module.parts);
-  const stateLabel = {passed:"Пройдено", blocked:"Открытое требование", failed:"Ошибка теста", unverified:"Нет результата"};
+  const stateLabel = {passed:"Passed", blocked:"Open requirement", failed:"Test failed", unverified:"Unverified"};
   const stateMark = {passed:"✓", blocked:"·", failed:"!", unverified:"?"};
   const titles = new Map(checks.map(part => [part.id, part.title]));
   const summary = {passed:0, failed:0, blocked:0, unverified:0};
   for (const part of checks) summary[verification.states[part.id]]++;
-  const build = verification.game_sha256 ? " Базовая сборка " + verification.game_sha256.slice(0, 12) + "." : " Запуск ещё не приложен.";
+  const build = verification.game_sha256 ? " Baseline build " + verification.game_sha256.slice(0, 12) + "." : " No baseline run recorded.";
   root.querySelector(".verdict").textContent =
-    (verification.ready ? "Все требования пройдены." : "Полная готовность не подтверждена.") + build
-    + (verification.source_revision ? " Снимок приёмки от " + verification.source_revision.slice(0, 7) + "." : "")
-    + (verification.supplemental ? " В итог включены дополнительные проверки." : "");
+    (verification.ready ? "All requirements passed." : "Some requirements remain open.") + build
+    + (verification.source_revision ? " Verification snapshot " + verification.source_revision.slice(0, 7) + "." : "")
+    + (verification.supplemental ? " Results include supplemental checks." : "");
   const checkMap = root.querySelector(".check-map");
   const openOnly = root.querySelector(".open-only");
   const checkDetail = root.querySelector(".check-detail");
@@ -204,7 +205,7 @@
     const dependencies = root.querySelector(".check-requires");
     dependencies.hidden = !part.requires?.length;
     dependencies.textContent = part.requires?.length
-      ? "Предусловия — " + part.requires.map(id => titles.get(id)).join(", ")
+      ? "Prerequisites: " + part.requires.map(id => titles.get(id)).join(", ")
       : "";
   }
   for (const [status, label] of Object.entries(stateLabel)) {

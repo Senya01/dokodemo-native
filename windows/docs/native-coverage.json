@@ -1,512 +1,512 @@
 {
   "groups": [
     {
-      "name": "Запуск и платформа",
+      "name": "Startup and platform",
       "items": [
         {
           "id": "boot-windows",
           "status": "basic",
-          "title": "Нативный запуск Windows",
-          "detail": "Пакет с локальными ресурсами запускает обычное окно и загружает комнату.",
+          "title": "Native Windows startup",
+          "detail": "The package uses local assets, opens the ordinary game window and loads the room.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-logos",
           "status": "exact",
-          "title": "319 кадров заставок",
-          "detail": "Сравнены все последовательные RGB-кадры 480×272 для проверенного входа. Контракт ограничен кадрами заставок.",
+          "title": "319 opening frames",
+          "detail": "All 319 consecutive 480×272 RGB frames match for the recorded input sequence. This result covers the opening logos.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-title",
           "status": "basic",
-          "title": "Главное меню и раскрытие",
-          "detail": "Вход через Select Menu и переход к выбору покепи. Сверены четыре границы раскрытия.",
+          "title": "Title menu and reveal",
+          "detail": "Select Menu leads to Poképi selection. Four points in the reveal were compared.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-storage",
           "status": "basic",
-          "title": "Чтение локальных ресурсов",
-          "detail": "Сборка извлекает нужные архивы из своей копии ISO, оконный пакет загружается из чистой распаковки.",
+          "title": "Local asset loading",
+          "detail": "The build extracts the required archives from a local ISO. The Windows package starts from a fresh extraction.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-words",
           "status": "basic",
-          "title": "Шрифты и японский текст",
-          "detail": "Игра отображает реплики, строки меню и имя из записи блокнота в обычном окне.",
+          "title": "Fonts and Japanese text",
+          "detail": "The ordinary window displays dialogue, menu labels and a name from a notebook entry.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-scheduler",
           "status": "basic",
-          "title": "Игровые обновления и таймеры",
-          "detail": "В комнате подтверждены ожидания, реальное начало занятия и возобновление после окна диалога.",
+          "title": "Game updates and timers",
+          "detail": "Room tests verified waits, actual activity start and resumption after dialogue.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "boot-platform",
           "status": "basic",
-          "title": "Приостановка и восстановление игры",
-          "detail": "Нативный обработчик сна Windows замораживает игровой таймер и PCM. Безоконный Release-тест продолжил с соседнего кадра после имитации часа сна. Физическое пробуждение не проверялось.",
+          "title": "Suspend and resume",
+          "detail": "The Windows sleep handler pauses the game clock and PCM. A headless Release test resumed at the next frame after a simulated hour of sleep. Physical wake remains unverified.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Графика и ввод",
+      "name": "Graphics and input",
       "items": [
         {
           "id": "gfx-display",
           "status": "basic",
-          "title": "Окно и кадровый буфер",
-          "detail": "Вывод кадра 480×272 в обычное Win32-окно, финальное закрытие по WM_CLOSE.",
+          "title": "Window and framebuffer",
+          "detail": "The ordinary Win32 window presents 480×272 frames and handles WM_CLOSE.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-ui",
           "status": "basic",
-          "title": "Фон, меню, переходы и слои",
-          "detail": "Круговое раскрытие заголовка, окна разговора, инвентарь и блокнот работают штатно.",
+          "title": "Backgrounds, menus and layers",
+          "detail": "The title reveal, dialogue windows, inventory and notebook run through their normal paths.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-world",
           "status": "basic",
-          "title": "Геометрия, материалы и свет комнаты",
-          "detail": "Комната, модели предметов и сезонный свет работают. Полное совпадение теней и произвольных кадров открыто.",
+          "title": "Room geometry, materials and lighting",
+          "detail": "The room, item models and seasonal lighting work. Shadow and arbitrary-frame parity remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-actor",
           "status": "basic",
-          "title": "Скелет и анимация покепи",
-          "detail": "Модели всех пяти покепи проходят компонентный вход. В событиях Торо отдельно работают команды Куро.",
+          "title": "Poképi rigs and animation",
+          "detail": "All five models load in component tests. Kuro's commands also run in Toro's events.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-ef9",
           "status": "basic",
-          "title": "Эффект EF9 в прощании Торо",
-          "detail": "Два запуска исходной модели и анимации EF9 завершились. Восемь кадров изменились при сравнении с контрольной копией с прозрачной текстурой.",
+          "title": "EF9 effect in Toro's farewell",
+          "detail": "Two runs of the original EF9 model and animation completed. Eight frames differed from a control with a transparent texture.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-motion-effects",
           "status": "basic",
-          "title": "Остальные визуальные события DAK",
-          "detail": "EF1–EF4 и EF9 проходят от оригинального ключа DAK до отрисовки и завершения. Проверены 13 точечных команд ASC на шести моделях и штатное прощание Торо.",
+          "title": "Other DAK visual events",
+          "detail": "EF1–EF4 and EF9 run from the original DAK trigger through rendering and cleanup. Tests covered 13 selected ASC commands on six models and Toro's normal farewell.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-camera",
           "status": "basic",
-          "title": "Камера и привязка реплик",
-          "detail": "Проверены подход, кадр реплики, возвращение к широкому плану и повторный ход.",
+          "title": "Camera and speech placement",
+          "detail": "Checks covered approach, the dialogue shot, the return to a wide shot and the next turn.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-roof",
           "status": "basic",
-          "title": "Крыша и смена сцены",
-          "detail": "Дом, крыша, панорама и возврат. В компоненте проверены три варианта ресурсов крыши.",
+          "title": "Roof and scene transitions",
+          "detail": "Home, roof, panorama and return work. Component tests covered three roof resource variants.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "gfx-destinations",
           "status": "basic",
-          "title": "Остальные игровые сцены",
-          "detail": "54 регистрации фона проверены в памяти. Все 15 мест обычного списка Торо прошли поездку и возврат. Открыты эффекты отдельных мест и дополнительные маршруты.",
+          "title": "Other game scenes",
+          "detail": "54 scene registrations rendered in memory. All 15 destinations in Toro's ordinary list supported travel and return. Some destination effects and additional routes remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "input-keyboard",
           "status": "basic",
-          "title": "Клавиатура и приоритет отмены",
-          "detail": "Обычные клавиши проходят меню, ASK, редакторы и переходы. Проверены фронты и удержание.",
+          "title": "Keyboard input and cancel priority",
+          "detail": "Normal keys work in menus, ASK prompts, editors and transitions. Tests cover new key presses and held buttons.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "input-gamepad",
           "status": "basic",
-          "title": "Ввод с контроллера XInput",
-          "detail": "Проверены Windows-адаптер, раскладка кнопок и восстановление после потери устройства. Физическая проверка открыта, Windows увидела 0 из 4 устройств.",
+          "title": "XInput controller support",
+          "detail": "The Windows adapter, button layout and disconnect recovery were tested. Windows detected no physical device across its four ports.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Звук и PRX",
+      "name": "Audio and PRX",
       "items": [
         {
           "id": "audio-bgm",
           "status": "basic",
-          "title": "Фоновая музыка",
-          "detail": "Windows-голоса, начало BGM по событию и смена дорожки. В тестах аудиоустройство не открывается.",
+          "title": "Background music",
+          "detail": "Native Windows voices, event-triggered BGM and track changes. Tests run with a null audio sink.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "audio-se",
           "status": "basic",
-          "title": "Эффекты и громкость",
-          "detail": "Покрыты оформление меню, звуки актёров и работа ползунков SE/BGM.",
+          "title": "Sound effects and volume",
+          "detail": "Coverage includes menu cues, actor sounds and SE/BGM volume controls.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "audio-null",
           "status": "basic",
-          "title": "Бесшумный тестовый выход",
-          "detail": "Свежий Release проверен на PCM, петлю, паузу, громкость и завершение с null-приёмником.",
+          "title": "Silent test output",
+          "detail": "A fresh Release build verified PCM, looping, pause, volume and completion through the null sink.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-atrac",
           "status": "basic",
-          "title": "libatrac3plus и декодер",
-          "detail": "Нативный путь Windows через FFmpeg использует оригинальные ATRAC-данные. Покрытие относится к высокоуровневому декодированию.",
+          "title": "libatrac3plus and decoding",
+          "detail": "The native Windows FFmpeg path consumes original ATRAC data. The check covers high-level decoding.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-codec",
           "status": "basic",
-          "title": "audiocodec и контракт Media Engine",
-          "detail": "Нативный рабочий блок выделяет входной буфер, открывает декодер, проверяет PCM и освобождает состояние. Проверены 25 потоков ATRAC3 и SND0 ATRAC3+.",
+          "title": "audiocodec and Media Engine contract",
+          "detail": "The native worker allocates the input buffer, opens the decoder, verifies PCM and releases decoder state. Tests covered 25 ATRAC3 streams and the ATRAC3+ SND0.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-sas",
           "status": "basic",
-          "title": "sc_sascore и микширование",
-          "detail": "Windows обслуживает игровые голоса и опции громкости. Область охватывает практический звук, а полнота API PSP ещё открыта.",
+          "title": "sc_sascore and mixing",
+          "detail": "Windows handles game voices and volume controls. Full PSP API coverage remains open.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-ifhandle",
           "status": "basic",
           "title": "ifhandle",
-          "detail": "Хост использует интерфейс Windows для поиска соседнего экземпляра. Выбор интерфейса и доставка проверены на loopback.",
+          "detail": "The Windows host discovers a peer instance. Interface selection and delivery were tested on loopback.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-pspnet",
           "status": "basic",
           "title": "pspnet",
-          "detail": "Два независимых процесса Windows использовали Winsock для поиска, подключения и двусторонней передачи.",
+          "detail": "Two independent Windows processes used Winsock for discovery, connection and bidirectional transfer.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-memab",
           "status": "basic",
           "title": "memab",
-          "detail": "Хост согласует эфемерный ключ и защищает данные AES-GCM. Изменение пакета, иной ключ и неверный номер кадра отвергаются.",
+          "detail": "The host negotiates an ephemeral key and protects data with AES-GCM. Tests rejected altered packets, mismatched keys and invalid frame numbers.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-auth",
           "status": "basic",
           "title": "pspnet_adhoc_auth",
-          "detail": "Два процесса подтверждают один и тот же ключ сеанса перед обменом. Проверяются версия, режим, место и оба идентификатора.",
+          "detail": "Two processes confirm the same session key before trading. Checks cover version, mode, location and both IDs.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-adhoc",
           "status": "basic",
           "title": "pspnet_adhoc",
-          "detail": "Транспорт передал 2048 байт в каждом направлении и реальные игровые визитки между двумя экземплярами.",
+          "detail": "The transport sent 2048 bytes in each direction and exchanged in-game cards between two instances.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "prx-adhocctl",
           "status": "basic",
           "title": "pspnet_adhocctl",
-          "detail": "Проверены совпадение режима и места, отказ от чужого режима, закрытие партнёром и отмена ожидания с возвратом в комнату.",
+          "detail": "Tests covered matching mode and location, rejecting a different mode, peer closure and cancelling a wait to return to the room.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Персонажи и сюжет",
+      "name": "Characters and story",
       "items": [
         {
           "id": "story-roster",
           "status": "basic",
-          "title": "Выбор покепи и создание профиля",
-          "detail": "Реальные модели в карусели, кличка, имя, пол, дата и поля анкеты. Нативное окно подтверждено для Торо.",
+          "title": "Poképi selection and profile setup",
+          "detail": "The carousel uses the game models. Profile entry covers nickname, player name, gender, date and other fields. Toro's native window route was verified.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-toro-gift",
           "status": "basic",
-          "title": "Торо — прибытие и знакомство",
-          "detail": "Первый разговор, подарок, выбор размещения, завершение и домашнее занятие.",
+          "title": "Toro's arrival and introduction",
+          "detail": "The first conversation, gift, placement choice and farewell lead to an activity in the room.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-toro-days",
           "status": "basic",
-          "title": "Торо — обычные дни",
-          "detail": "Независимые процессы прошли естественную смену дня 1→2, слово и дневник, запись и повторную загрузку.",
+          "title": "Toro's ordinary days",
+          "detail": "Independent processes verified the natural day 1 to day 2 rollover, a learned word and diary, saving and reloading.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-toro-penultimate",
           "status": "basic",
-          "title": "Торо — предпоследний день",
-          "detail": "Куро, четыре выбора, возврат к занятию, сохранение и независимое продолжение на 13-м дне.",
+          "title": "Toro's penultimate day",
+          "detail": "Kuro, four choices, return to activity, protected save and independent continuation on day 13.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-toro-final",
           "status": "basic",
-          "title": "Торо — последний день",
-          "detail": "Обычный уход на 14-й день. Проверены семь выборов, две вспышки EF9, завершение через GAME75, защищённое сохранение и холодная загрузка меню. Компонент отрисовывал кадры в память.",
+          "title": "Toro's last day",
+          "detail": "The ordinary day 14 departure exercised seven choices, two EF9 flashes, GAME75 completion, protected saving and a cold load into the title menu. Frames were rendered to memory.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-toro-extension",
           "status": "basic",
-          "title": "Торо — продление пребывания и возвращение",
-          "detail": "Проверены продление до 24-го дня, холодное возвращение, предпоследний день с Куро и защищённое сохранение последнего дня. Вход состоялся с контролируемых слотов. Письмо события 7 открыто.",
+          "title": "Toro's extended stay and return",
+          "detail": "Controlled slots verified extension to day 24, cold return, the penultimate day with Kuro and a protected final save. The former event 7 gap is tracked separately in acceptance.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-robo",
           "status": "basic",
-          "title": "Робо — история",
-          "detail": "Проверены вступление, оба предпоследних дня с Куро, обычный уход на 14-м дне, продление и возвращение, прощание на 24-м дне. После ухода холодная загрузка открывает пустую комнату со словарём. Письмо события 7 открыто.",
+          "title": "Robo's story",
+          "detail": "Tests covered the introduction, both penultimate days with Kuro, ordinary day 14 departure, extension, return and day 24 farewell. A cold load after farewell opened the empty room and vocabulary.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-usagi",
           "status": "basic",
-          "title": "Усаги — история",
-          "detail": "Проверены знакомство, день 13 с Куро, обычный уход, продление до дня 24 и холодный вход после ухода. Письмо события 7 и общий охват тем открыты.",
+          "title": "Usagi's story",
+          "detail": "Tests covered the introduction, day 13 with Kuro, ordinary departure, extension to day 24 and cold loading after departure. Broad conversation coverage is tracked separately.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-inu",
           "status": "basic",
-          "title": "Ину — история",
-          "detail": "Проверены знакомство, день 13 с Куро, обычный уход, продление до дня 24 и холодный вход после ухода. Письмо события 7 и общий охват тем открыты.",
+          "title": "Inu's story",
+          "detail": "Tests covered the introduction, day 13 with Kuro, ordinary departure, extension to day 24 and cold loading after departure. Broad conversation coverage is tracked separately.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-kaeru",
           "status": "basic",
-          "title": "Каэру — история",
-          "detail": "Проверены знакомство, день 13 с Куро, обычный уход, продление до дня 24 и холодный вход после ухода. Письмо события 7 и общий охват тем открыты.",
+          "title": "Kaeru's story",
+          "detail": "Tests covered the introduction, day 13 with Kuro, ordinary departure, extension to day 24 and cold loading after departure. Broad conversation coverage is tracked separately.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "story-after",
           "status": "basic",
-          "title": "После ухода — титул и повторная игра",
-          "detail": "Холодное продолжение из сохранения прощания открывает пустую комнату. Из сокращённого меню проверены выученное слово и возврат на титул. Повторное усыновление с наследованием остаётся открытым.",
+          "title": "Departure, title and replay",
+          "detail": "Cold Continue from the farewell save opens the empty room. Tests checked a learned word through the restricted menu and returning to the title. Re-adoption is tracked separately in acceptance.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Жизнь в комнате",
+      "name": "Room life",
       "items": [
         {
           "id": "room-activity",
           "status": "basic",
-          "title": "Автономные занятия",
-          "detail": "Команда выбирается по текущему контексту, актёр входит, завершает и начинает новый цикл.",
+          "title": "Autonomous activities",
+          "detail": "The current context selects a command. The actor starts, finishes and begins a new activity cycle.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-time",
           "status": "basic",
-          "title": "Календарь, освещение и дневные события",
-          "detail": "Используются игровые часы, сезон и переход дня. Оконная смена дня подтверждена без изменения часов Windows.",
+          "title": "Calendar, lighting and daily events",
+          "detail": "The game uses its clock and season and processes day rollover. A Windows run crossed midnight without changing system time.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-contact",
           "status": "basic",
-          "title": "Обычный разговор",
-          "detail": "Оклик, выбор темы, варианты ответа, реплика, прощание и возврат к занятию. Подтверждены несколько цепочек подряд.",
+          "title": "Ordinary conversation",
+          "detail": "Greeting, topic selection, answers, dialogue, farewell and return to activity. Multiple consecutive contacts were verified.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-ksc",
           "status": "basic",
-          "title": "Поддерживаемые команды KSC",
-          "detail": "Нативное исполнение сохранённых сценариев в типовых домашних маршрутах, с диагностикой неизвестной операции.",
+          "title": "Supported KSC commands",
+          "detail": "Home routes execute the saved scripts natively and report unsupported operations.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-ksc-all",
           "status": "basic",
-          "title": "Остальные процедуры и темы KSC",
-          "detail": "Все 3118 записей обычных списков пяти покепи прошли контрольный маршрут до возврата. 3094 завершились напрямую и 24 после штатной смены темы. Остальные состояния и специальные сценарии охвачены частично.",
+          "title": "Other KSC procedures and topics",
+          "detail": "All 3118 ordinary entries across the five Poképi returned on the controlled route, 3094 directly and 24 after a normal topic change. Other states and special scripts have partial coverage.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-tv",
           "status": "basic",
-          "title": "Телевизор и освещение сцены",
-          "detail": "Компонентно подтверждена смена направленного света по состоянию телевизора. Область ограничена этой механикой.",
+          "title": "TV and scene lighting",
+          "detail": "A component test verified directional lighting changes driven by TV state.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-inventory",
           "status": "basic",
-          "title": "Инвентарь и размещение",
-          "detail": "Реальный подарок, осмотр, размещение, уборка, отмена и повторное открытие.",
+          "title": "Inventory and placement",
+          "detail": "The flow covers a real gift, inspection, placement, storage, cancel and reopening.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-discard",
           "status": "basic",
-          "title": "Удаление подарка",
-          "detail": "Да удаляет предмет из двух списков, отказ сохраняет состояние и фокус.",
+          "title": "Discarding gifts",
+          "detail": "Yes removes the item from both lists. Declining preserves the item and focus.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-trade-mark",
           "status": "basic",
-          "title": "Локальная отметка подарка для обмена",
-          "detail": "Подарок появляется в нужной вкладке и снимается с отметки по команде.",
+          "title": "Marking gifts for exchange",
+          "detail": "A marked gift appears in the relevant tab and can be unmarked.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-options",
           "status": "basic",
-          "title": "Настройки",
-          "detail": "Скорость текста, SE и BGM. Отмена, отказ, применение и повторное открытие в одном сеансе.",
+          "title": "Options",
+          "detail": "Text speed, sound effects and music. The same session covers cancel, decline, apply and reopen.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-outing",
           "status": "basic",
-          "title": "Выход на крышу и возврат",
-          "detail": "Штатный маршрут из комнаты на крышу, отдельные возвращения, автономное занятие по выходе.",
+          "title": "Roof outing and return",
+          "detail": "The normal route goes from the room to the roof and back. Toro starts an autonomous activity after arrival.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "room-roof-contact",
           "status": "basic",
-          "title": "Действия на крыше",
-          "detail": "Разговор с вариантами ответа, блокнот, дневник и возврат на то же место.",
+          "title": "Roof interactions",
+          "detail": "Dialogue with choices, notebook, diary and return to the same location.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Слова, дневник и сохранения",
+      "name": "Words, diary and saves",
       "items": [
         {
           "id": "words-learn",
           "status": "basic",
-          "title": "Обучение словам",
-          "detail": "Новый урок, категория, реакция, запись и употребление выученного слова в обычной беседе.",
+          "title": "Word lessons",
+          "detail": "Learn a word, choose its category, see the response and record it. Ordinary conversation can reuse the word.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "words-editor",
           "status": "basic",
-          "title": "Экранные раскладки и отмена",
-          "detail": "Кана, другая раскладка, ABC и цифры. Проверены пустая строка, граница 16 символов и отмена.",
+          "title": "On-screen layouts and cancel",
+          "detail": "Kana, alternate layout, ABC and digits. Tests cover an empty entry, the 16-character limit and cancel.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "words-nj",
           "status": "basic",
-          "title": "Конвертация и история NJ",
-          "detail": "Холодные и тёплые списки, составное чтение и ранжирование после выбора в сеансе.",
+          "title": "NJ conversion and history",
+          "detail": "Cold and warm candidate lists, compound readings and reranking after a selection within the session.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "words-nj-wide",
           "status": "basic",
-          "title": "Широкий словарный поиск и сохранение истории NJ",
-          "detail": "Поиск хираганы до восьми знаков по 57 718 записям и грамматике NJCON. История переживает сохранение и перезапуск. Полное ранжирование PSP, NJYOMI и многоблочные записи открыты.",
+          "title": "Expanded NJ lookup and persistent history",
+          "detail": "Hiragana queries up to eight characters search 57,718 entries using NJCON grammar. History survives save and reload. Full PSP ranking, NJYOMI and multi-block entries remain open.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "words-notebook",
           "status": "basic",
-          "title": "Словарь в блокноте",
-          "detail": "Вкладки чтения и даты, правка чтения, удаление с отказом и согласием, повторное использование свободного слота.",
+          "title": "Word memo",
+          "detail": "Reading and date tabs, editing a reading, declining and confirming deletion, and reusing the freed slot.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "words-diary",
           "status": "basic",
-          "title": "Дневник",
-          "detail": "Дневной пустой лист, вечернее раскрытие и прошлые страницы после холодной загрузки. Охват привязан к проверенным датам.",
+          "title": "Diary",
+          "detail": "Blank daytime page, evening reveal and previous pages after cold loading. Coverage is limited to the recorded dates.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "save-slot",
           "status": "basic",
-          "title": "Реальное сохранение и продолжение",
-          "detail": "Запись и перенос шести файлов. Windows и тихий эталон читают перенесённый слот, отказ записи сохраняет старое.",
+          "title": "Protected saving and Continue",
+          "detail": "Six files are written and copied. Windows and the quiet reference loaded the transferred slot. A failed write preserves the previous generation.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "save-graph",
           "status": "basic",
-          "title": "Состояние комнаты и словаря",
-          "detail": "Словарь, инвентарь, живые предметы, вопросы и счётчики восстанавливаются через используемые владельцы графа Торо.",
+          "title": "Room state and vocabulary",
+          "detail": "Toro's graph restores vocabulary, inventory, placed items, questions and counters through their owners.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "save-all",
           "status": "basic",
-          "title": "Поздние и альтернативные сохранения",
-          "detail": "У пяти персонажей проверены обычный уход, продление и пропуск последнего дня. Новое усыновление Торо → Робо сохраняет слово и тестовую карточку друга, после System Save открывается новый слот.",
+          "title": "Late and alternate saves",
+          "detail": "Tests for all five characters covered ordinary departure, extension and skipping the final day. Toro-to-Robo adoption preserved a learned word and a test friend card across System Save and cold load.",
           "evidence": "docs/PROGRESS.md"
         }
       ]
     },
     {
-      "name": "Встречи и мини-игры",
+      "name": "Meetings and minigames",
       "items": [
         {
           "id": "meet-menu",
           "status": "basic",
-          "title": "Меню друзей и заготовка вопроса",
-          "detail": "Подготовка стандартного и своего вопроса, удаление и повторная карточка на крыше.",
+          "title": "Friends menu and prepared questions",
+          "detail": "Prepare a preset or custom question, remove it, and reopen the question card on the roof.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "meet-shiritory-gate",
           "status": "basic",
-          "title": "Доступность しりとり",
-          "detail": "Уроки и правка конечной ん изменяют условие доступности. Подтверждены предложение, выбор места и отказ от встречи.",
+          "title": "Shiritori eligibility",
+          "detail": "Word lessons and editing a final kana ん change eligibility. Tests covered the offer, destination choices and cancelling the meeting.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "meet-session",
           "status": "basic",
-          "title": "Встреча двух игроков",
-          "detail": "Два игрока выбрали одно место в игровом меню и открыли общую сессию. Без партнёра Esc вернул управление и занятие.",
+          "title": "Two-player meeting",
+          "detail": "Two players chose the same place and opened a shared session. With no partner, Escape restored room control and activity.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "meet-cards",
           "status": "basic",
-          "title": "Обмен визитками",
-          "detail": "Оба экземпляра показали визитку партнёра в блокноте, сохранили её защищённой записью и открыли после холодного чтения.",
+          "title": "Card exchange",
+          "detail": "Both instances displayed the peer card in the notebook, wrote a protected save and opened it after cold loading.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "meet-gifts",
           "status": "basic",
-          "title": "Обмен подарками",
-          "detail": "Два независимых процесса выбрали подарки, получили предметы партнёра и открыли их после System Save и холодного чтения. Отмена сохранила прежний предмет.",
+          "title": "Gift exchange",
+          "detail": "Two processes chose gifts, received their peer's item and checked both items after System Save and cold load. Cancellation preserved the previous item.",
           "evidence": "docs/PROGRESS.md"
         },
         {
           "id": "meet-shiritory-play",
           "status": "basic",
-          "title": "Партия しりとり",
-          "detail": "Два обычных игровых контроллера сыграли 6 слов из тестовых словарей. Победа, поражение, сохранение использованных слов и отмена подтверждены.",
+          "title": "Playing shiritori",
+          "detail": "Two ordinary game controllers played six words from test vocabularies. Tests covered win, loss, remembering used words and cancellation.",
           "evidence": "docs/PROGRESS.md"
         }
       ]

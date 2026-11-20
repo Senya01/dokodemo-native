@@ -1,5 +1,5 @@
 <svg xmlns='http://www.w3.org/2000/svg' width='930' height='729' viewBox='0 0 930 729' role='img' aria-label='Native port map'>
-<title>Native port map with implementations, Windows acceptance checks and code inventory</title>
+<title>Native port map with implementations, Windows build verification and code inventory</title>
 <rect x="0" y="0" width="930" height="729" fill="#10161d"/>
 <g font-family='Segoe UI, Arial, sans-serif'>
 <text x="14" y="25" font-size="19" fill="#edf3f8">Native port map</text>
@@ -11,38 +11,38 @@
 <rect x="450" y="58" width="9" height="9" fill="#63707a"/>
 <text x="464" y="66" font-size="11" fill="#edf3f8">Missing</text>
 <rect x="14" y="75" width="218" height="49" fill="#1b242c"/>
-<text x="22" y="92" font-size="12" fill="#edf3f8">Запуск и платформа</text>
+<text x="22" y="92" font-size="12" fill="#edf3f8">Startup and platform</text>
 <text x="224" y="92" font-size="11" fill="#a9bdce" text-anchor="end">7/7</text>
-<g data-layer="implementation" data-status="basic"><title>Нативный запуск Windows</title><rect x="22" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="exact"><title>319 кадров заставок</title><rect x="37" y="99" width="13" height="13" fill="#72b9ff"/></g>
-<g data-layer="implementation" data-status="basic"><title>Главное меню и раскрытие</title><rect x="52" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Чтение локальных ресурсов</title><rect x="67" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Шрифты и японский текст</title><rect x="82" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Игровые обновления и таймеры</title><rect x="97" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Приостановка и восстановление игры</title><rect x="112" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Native Windows startup</title><rect x="22" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="exact"><title>319 opening frames</title><rect x="37" y="99" width="13" height="13" fill="#72b9ff"/></g>
+<g data-layer="implementation" data-status="basic"><title>Title menu and reveal</title><rect x="52" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Local asset loading</title><rect x="67" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Fonts and Japanese text</title><rect x="82" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Game updates and timers</title><rect x="97" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Suspend and resume</title><rect x="112" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="241" y="75" width="218" height="49" fill="#1b242c"/>
-<text x="249" y="92" font-size="12" fill="#edf3f8">Графика и ввод</text>
+<text x="249" y="92" font-size="12" fill="#edf3f8">Graphics and input</text>
 <text x="451" y="92" font-size="11" fill="#a9bdce" text-anchor="end">11/11</text>
-<g data-layer="implementation" data-status="basic"><title>Окно и кадровый буфер</title><rect x="249" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Фон, меню, переходы и слои</title><rect x="264" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Геометрия, материалы и свет комнаты</title><rect x="279" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Скелет и анимация покепи</title><rect x="294" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Эффект EF9 в прощании Торо</title><rect x="309" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Остальные визуальные события DAK</title><rect x="324" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Камера и привязка реплик</title><rect x="339" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Крыша и смена сцены</title><rect x="354" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Остальные игровые сцены</title><rect x="369" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Клавиатура и приоритет отмены</title><rect x="384" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Ввод с контроллера XInput</title><rect x="399" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Window and framebuffer</title><rect x="249" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Backgrounds, menus and layers</title><rect x="264" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Room geometry, materials and lighting</title><rect x="279" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Poképi rigs and animation</title><rect x="294" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>EF9 effect in Toro&#x27;s farewell</title><rect x="309" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Other DAK visual events</title><rect x="324" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Camera and speech placement</title><rect x="339" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Roof and scene transitions</title><rect x="354" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Other game scenes</title><rect x="369" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Keyboard input and cancel priority</title><rect x="384" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>XInput controller support</title><rect x="399" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="468" y="75" width="218" height="49" fill="#1b242c"/>
-<text x="476" y="92" font-size="12" fill="#edf3f8">Звук и PRX</text>
+<text x="476" y="92" font-size="12" fill="#edf3f8">Audio and PRX</text>
 <text x="678" y="92" font-size="11" fill="#a9bdce" text-anchor="end">12/12</text>
-<g data-layer="implementation" data-status="basic"><title>Фоновая музыка</title><rect x="476" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Эффекты и громкость</title><rect x="491" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Бесшумный тестовый выход</title><rect x="506" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>libatrac3plus и декодер</title><rect x="521" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>audiocodec и контракт Media Engine</title><rect x="536" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>sc_sascore и микширование</title><rect x="551" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Background music</title><rect x="476" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Sound effects and volume</title><rect x="491" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Silent test output</title><rect x="506" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>libatrac3plus and decoding</title><rect x="521" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>audiocodec and Media Engine contract</title><rect x="536" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>sc_sascore and mixing</title><rect x="551" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <g data-layer="implementation" data-status="basic"><title>ifhandle</title><rect x="566" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <g data-layer="implementation" data-status="basic"><title>pspnet</title><rect x="581" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <g data-layer="implementation" data-status="basic"><title>memab</title><rect x="596" y="99" width="13" height="13" fill="#2f9b53"/></g>
@@ -50,56 +50,56 @@
 <g data-layer="implementation" data-status="basic"><title>pspnet_adhoc</title><rect x="626" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <g data-layer="implementation" data-status="basic"><title>pspnet_adhocctl</title><rect x="641" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="695" y="75" width="218" height="49" fill="#1b242c"/>
-<text x="703" y="92" font-size="12" fill="#edf3f8">Персонажи и сюжет</text>
+<text x="703" y="92" font-size="12" fill="#edf3f8">Characters and story</text>
 <text x="905" y="92" font-size="11" fill="#a9bdce" text-anchor="end">11/11</text>
-<g data-layer="implementation" data-status="basic"><title>Выбор покепи и создание профиля</title><rect x="703" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Торо — прибытие и знакомство</title><rect x="718" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Торо — обычные дни</title><rect x="733" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Торо — предпоследний день</title><rect x="748" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Торо — последний день</title><rect x="763" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Торо — продление пребывания и возвращение</title><rect x="778" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Робо — история</title><rect x="793" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Усаги — история</title><rect x="808" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Ину — история</title><rect x="823" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Каэру — история</title><rect x="838" y="99" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>После ухода — титул и повторная игра</title><rect x="853" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Poképi selection and profile setup</title><rect x="703" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Toro&#x27;s arrival and introduction</title><rect x="718" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Toro&#x27;s ordinary days</title><rect x="733" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Toro&#x27;s penultimate day</title><rect x="748" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Toro&#x27;s last day</title><rect x="763" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Toro&#x27;s extended stay and return</title><rect x="778" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Robo&#x27;s story</title><rect x="793" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Usagi&#x27;s story</title><rect x="808" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Inu&#x27;s story</title><rect x="823" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Kaeru&#x27;s story</title><rect x="838" y="99" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Departure, title and replay</title><rect x="853" y="99" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="14" y="133" width="218" height="49" fill="#1b242c"/>
-<text x="22" y="150" font-size="12" fill="#edf3f8">Жизнь в комнате</text>
+<text x="22" y="150" font-size="12" fill="#edf3f8">Room life</text>
 <text x="224" y="150" font-size="11" fill="#a9bdce" text-anchor="end">12/12</text>
-<g data-layer="implementation" data-status="basic"><title>Автономные занятия</title><rect x="22" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Календарь, освещение и дневные события</title><rect x="37" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Обычный разговор</title><rect x="52" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Поддерживаемые команды KSC</title><rect x="67" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Остальные процедуры и темы KSC</title><rect x="82" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Телевизор и освещение сцены</title><rect x="97" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Инвентарь и размещение</title><rect x="112" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Удаление подарка</title><rect x="127" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Локальная отметка подарка для обмена</title><rect x="142" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Настройки</title><rect x="157" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Выход на крышу и возврат</title><rect x="172" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Действия на крыше</title><rect x="187" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Autonomous activities</title><rect x="22" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Calendar, lighting and daily events</title><rect x="37" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Ordinary conversation</title><rect x="52" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Supported KSC commands</title><rect x="67" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Other KSC procedures and topics</title><rect x="82" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>TV and scene lighting</title><rect x="97" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Inventory and placement</title><rect x="112" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Discarding gifts</title><rect x="127" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Marking gifts for exchange</title><rect x="142" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Options</title><rect x="157" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Roof outing and return</title><rect x="172" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Roof interactions</title><rect x="187" y="157" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="241" y="133" width="218" height="49" fill="#1b242c"/>
-<text x="249" y="150" font-size="12" fill="#edf3f8">Слова, дневник и сохранения</text>
+<text x="249" y="150" font-size="12" fill="#edf3f8">Words, diary and saves</text>
 <text x="451" y="150" font-size="11" fill="#a9bdce" text-anchor="end">9/9</text>
-<g data-layer="implementation" data-status="basic"><title>Обучение словам</title><rect x="249" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Экранные раскладки и отмена</title><rect x="264" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Конвертация и история NJ</title><rect x="279" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Широкий словарный поиск и сохранение истории NJ</title><rect x="294" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Словарь в блокноте</title><rect x="309" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Дневник</title><rect x="324" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Реальное сохранение и продолжение</title><rect x="339" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Состояние комнаты и словаря</title><rect x="354" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Поздние и альтернативные сохранения</title><rect x="369" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Word lessons</title><rect x="249" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>On-screen layouts and cancel</title><rect x="264" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>NJ conversion and history</title><rect x="279" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Expanded NJ lookup and persistent history</title><rect x="294" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Word memo</title><rect x="309" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Diary</title><rect x="324" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Protected saving and Continue</title><rect x="339" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Room state and vocabulary</title><rect x="354" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Late and alternate saves</title><rect x="369" y="157" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="468" y="133" width="218" height="49" fill="#1b242c"/>
-<text x="476" y="150" font-size="12" fill="#edf3f8">Встречи и мини-игры</text>
+<text x="476" y="150" font-size="12" fill="#edf3f8">Meetings and minigames</text>
 <text x="678" y="150" font-size="11" fill="#a9bdce" text-anchor="end">6/6</text>
-<g data-layer="implementation" data-status="basic"><title>Меню друзей и заготовка вопроса</title><rect x="476" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Доступность しりとり</title><rect x="491" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Встреча двух игроков</title><rect x="506" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Обмен визитками</title><rect x="521" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Обмен подарками</title><rect x="536" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="implementation" data-status="basic"><title>Партия しりとり</title><rect x="551" y="157" width="13" height="13" fill="#2f9b53"/></g>
-<text x="14" y="202" font-size="15" fill="#edf3f8">Windows acceptance · 51/60 passed</text>
+<g data-layer="implementation" data-status="basic"><title>Friends menu and prepared questions</title><rect x="476" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Shiritori eligibility</title><rect x="491" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Two-player meeting</title><rect x="506" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Card exchange</title><rect x="521" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Gift exchange</title><rect x="536" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="implementation" data-status="basic"><title>Playing shiritori</title><rect x="551" y="157" width="13" height="13" fill="#2f9b53"/></g>
+<text x="14" y="202" font-size="15" fill="#edf3f8">Windows build verification · 51/60 passed</text>
 <rect x="14" y="212" width="9" height="9" fill="#2f9b53"/>
 <text x="28" y="220" font-size="11" fill="#edf3f8">Passed</text>
 <rect x="232" y="212" width="9" height="9" fill="#63707a"/>
@@ -109,98 +109,98 @@
 <rect x="668" y="212" width="9" height="9" fill="#333e48"/>
 <text x="682" y="220" font-size="11" fill="#edf3f8">Unverified</text>
 <rect x="14" y="229" width="294" height="49" fill="#1b242c"/>
-<text x="22" y="246" font-size="12" fill="#edf3f8">Платформа и пакет</text>
+<text x="22" y="246" font-size="12" fill="#edf3f8">Platform and package</text>
 <text x="300" y="246" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
-<g data-layer="acceptance" data-status="passed"><title>Запуск и закрытие</title><rect x="22" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Целостность и переносимость пакета</title><rect x="37" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Логика сна и пробуждения</title><rect x="52" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Интеграция с рабочим столом Windows</title><rect x="67" y="253" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Startup and shutdown</title><rect x="22" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Package integrity and portability</title><rect x="37" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Suspend and resume logic</title><rect x="52" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Windows desktop integration</title><rect x="67" y="253" width="13" height="13" fill="#63707a"/></g>
 <rect x="317" y="229" width="294" height="49" fill="#1b242c"/>
-<text x="325" y="246" font-size="12" fill="#edf3f8">Графика, анимация и интерфейс</text>
+<text x="325" y="246" font-size="12" fill="#edf3f8">Graphics, motion and UI</text>
 <text x="603" y="246" font-size="11" fill="#a9bdce" text-anchor="end">8/9</text>
-<g data-layer="acceptance" data-status="passed"><title>Видеобуфер и дисплей</title><rect x="325" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Последовательность заставок</title><rect x="340" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Титульный интерфейс</title><rect x="355" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Шрифты и диалоги</title><rect x="370" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Геометрия и освещение</title><rect x="385" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Скелет и движения</title><rect x="400" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Эффекты KSC/DAK</title><rect x="415" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Камера и перекрытия</title><rect x="430" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Материалы, пограничные кадры и сцены</title><rect x="445" y="253" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Framebuffer and display</title><rect x="325" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Opening sequence</title><rect x="340" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Title interface</title><rect x="355" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Fonts and dialogue</title><rect x="370" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Geometry and lighting</title><rect x="385" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Rigs and motion</title><rect x="400" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>KSC and DAK effects</title><rect x="415" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Camera and occlusion</title><rect x="430" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Materials, frame boundaries and scenes</title><rect x="445" y="253" width="13" height="13" fill="#63707a"/></g>
 <rect x="620" y="229" width="294" height="49" fill="#1b242c"/>
-<text x="628" y="246" font-size="12" fill="#edf3f8">Ввод и доступность</text>
+<text x="628" y="246" font-size="12" fill="#edf3f8">Input and accessibility</text>
 <text x="906" y="246" font-size="11" fill="#a9bdce" text-anchor="end">2/3</text>
-<g data-layer="acceptance" data-status="passed"><title>Раскладка, фронты и фокус</title><rect x="628" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Ввод в меню и редакторах</title><rect x="643" y="253" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Физический контроллер</title><rect x="658" y="253" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Layout, input edges and focus</title><rect x="628" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Menu and editor input</title><rect x="643" y="253" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Physical controller</title><rect x="658" y="253" width="13" height="13" fill="#63707a"/></g>
 <rect x="14" y="287" width="294" height="49" fill="#1b242c"/>
-<text x="22" y="304" font-size="12" fill="#edf3f8">Звук</text>
+<text x="22" y="304" font-size="12" fill="#edf3f8">Audio</text>
 <text x="300" y="304" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
-<g data-layer="acceptance" data-status="passed"><title>Декодер и нативный рабочий блок</title><rect x="22" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Музыка и события</title><rect x="37" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Очередь и голоса</title><rect x="52" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Микширование и весь каталог событий</title><rect x="67" y="311" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Decoder and native worker</title><rect x="22" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Music and events</title><rect x="37" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Queues and voices</title><rect x="52" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Mixing and full event catalog</title><rect x="67" y="311" width="13" height="13" fill="#63707a"/></g>
 <rect x="317" y="287" width="294" height="49" fill="#1b242c"/>
-<text x="325" y="304" font-size="12" fill="#edf3f8">Игровой цикл и KSC</text>
+<text x="325" y="304" font-size="12" fill="#edf3f8">Game loop and KSC</text>
 <text x="603" y="304" font-size="11" fill="#a9bdce" text-anchor="end">3/4</text>
-<g data-layer="acceptance" data-status="passed"><title>Действия, часы и отмена ожидания</title><rect x="325" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Обычные темы пяти персонажей</title><rect x="340" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Особые и альтернативные ветки KSC</title><rect x="355" y="311" width="13" height="13" fill="#63707a"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Предметы и настройки в комнате</title><rect x="370" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Activity, clocks and wait cancellation</title><rect x="325" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Ordinary topics for all five characters</title><rect x="340" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Special and alternate KSC paths</title><rect x="355" y="311" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Room objects and options</title><rect x="370" y="311" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="620" y="287" width="294" height="49" fill="#1b242c"/>
-<text x="628" y="304" font-size="12" fill="#edf3f8">Язык, словарь и дневник</text>
+<text x="628" y="304" font-size="12" fill="#edf3f8">Language, words and diary</text>
 <text x="906" y="304" font-size="11" fill="#a9bdce" text-anchor="end">4/5</text>
-<g data-layer="acceptance" data-status="passed"><title>Обучение и повторное использование слова</title><rect x="628" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Клавиатуры и правка чтения</title><rect x="643" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Конвертер и запросы с историей</title><rect x="658" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Блокнот и дневник</title><rect x="673" y="311" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Все категории и границы словаря</title><rect x="688" y="311" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Learning and reusing a word</title><rect x="628" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Keyboards and reading edits</title><rect x="643" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Conversion and query history</title><rect x="658" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Notebook and diary</title><rect x="673" y="311" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Vocabulary categories and limits</title><rect x="688" y="311" width="13" height="13" fill="#63707a"/></g>
 <rect x="14" y="345" width="294" height="49" fill="#1b242c"/>
-<text x="22" y="362" font-size="12" fill="#edf3f8">Инвентарь, меню и поездки</text>
+<text x="22" y="362" font-size="12" fill="#edf3f8">Inventory, menus and travel</text>
 <text x="300" y="362" font-size="11" fill="#a9bdce" text-anchor="end">4/5</text>
-<g data-layer="acceptance" data-status="passed"><title>Цикл инвентаря</title><rect x="22" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Домашнее меню</title><rect x="37" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Крыша и возвращение</title><rect x="52" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Ресурсы поездок</title><rect x="67" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Маршруты по персонажам и сезону</title><rect x="82" y="369" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Inventory lifecycle</title><rect x="22" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Home menu</title><rect x="37" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Roof and return</title><rect x="52" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Travel resources</title><rect x="67" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Travel by character and season</title><rect x="82" y="369" width="13" height="13" fill="#63707a"/></g>
 <rect x="317" y="345" width="294" height="49" fill="#1b242c"/>
-<text x="325" y="362" font-size="12" fill="#edf3f8">Дни, персонажи и финалы</text>
+<text x="325" y="362" font-size="12" fill="#edf3f8">Days, characters and endings</text>
 <text x="603" y="362" font-size="11" fill="#a9bdce" text-anchor="end">10/10</text>
-<g data-layer="acceptance" data-status="passed"><title>Выбор и данные профиля</title><rect x="325" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Торо и первый подарок</title><rect x="340" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Робо и календарные сцены</title><rect x="355" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Усаги и календарные сцены</title><rect x="370" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Ину и календарные сцены</title><rect x="385" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Каэру и календарные сцены</title><rect x="400" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Торо и календарное состояние</title><rect x="415" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Торо, GAME37 и GAME75</title><rect x="430" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Письмо по расписанию · событие 7</title><rect x="445" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Уход и начало нового цикла</title><rect x="460" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Character selection and profile fields</title><rect x="325" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Toro and the first gift</title><rect x="340" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Robo&#x27;s calendar scenes</title><rect x="355" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Usagi&#x27;s calendar scenes</title><rect x="370" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Inu&#x27;s calendar scenes</title><rect x="385" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Kaeru&#x27;s calendar scenes</title><rect x="400" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Toro&#x27;s calendar state</title><rect x="415" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Toro, GAME37 and GAME75</title><rect x="430" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Scheduled letter (event 7)</title><rect x="445" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Departure and starting a new stay</title><rect x="460" y="369" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="620" y="345" width="294" height="49" fill="#1b242c"/>
-<text x="628" y="362" font-size="12" fill="#edf3f8">Сохранение и дисковая целостность</text>
+<text x="628" y="362" font-size="12" fill="#edf3f8">Save and disk integrity</text>
 <text x="906" y="362" font-size="11" fill="#a9bdce" text-anchor="end">3/3</text>
-<g data-layer="acceptance" data-status="passed"><title>Граф и формат слота</title><rect x="628" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Запись из комнаты и восстановление</title><rect x="643" y="369" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Атомарность и восстановление после отказа</title><rect x="658" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Save graph and slot format</title><rect x="628" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Saving from the room and restoring</title><rect x="643" y="369" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Atomic save and recovery</title><rect x="658" y="369" width="13" height="13" fill="#2f9b53"/></g>
 <rect x="14" y="403" width="294" height="49" fill="#1b242c"/>
-<text x="22" y="420" font-size="12" fill="#edf3f8">Встречи и мини-игры</text>
+<text x="22" y="420" font-size="12" fill="#edf3f8">Meetings and minigames</text>
 <text x="300" y="420" font-size="11" fill="#a9bdce" text-anchor="end">5/6</text>
-<g data-layer="acceptance" data-status="passed"><title>Обнаружение, изоляция и протокол</title><rect x="22" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Предложения и доступность с игроком</title><rect x="37" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Визитка, блокнот и сохранение</title><rect x="52" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Подарок, отказ и атомарность</title><rect x="67" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Партия и выход</title><rect x="82" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Два независимых хоста</title><rect x="97" y="427" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Discovery, isolation and protocol</title><rect x="22" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Meeting offers and eligibility</title><rect x="37" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Friend card, notebook and save</title><rect x="52" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Gift exchange, cancellation and atomicity</title><rect x="67" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Shiritori match and exit</title><rect x="82" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Two independent Windows hosts</title><rect x="97" y="427" width="13" height="13" fill="#63707a"/></g>
 <rect x="317" y="403" width="294" height="49" fill="#1b242c"/>
-<text x="325" y="420" font-size="12" fill="#edf3f8">Связки подсистем</text>
+<text x="325" y="420" font-size="12" fill="#edf3f8">Integration paths</text>
 <text x="603" y="420" font-size="11" fill="#a9bdce" text-anchor="end">6/7</text>
-<g data-layer="acceptance" data-status="passed"><title>Готовность актёра → ввод → кадр → занятие</title><rect x="325" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Запуск → профиль → комната</title><rect x="340" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Разговор → словарь → блокнот → слот</title><rect x="355" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Меню → сцена → возвращение</title><rect x="370" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Слот → смена даты → событие → новый слот</title><rect x="385" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="passed"><title>Встреча → игровой результат → повторная загрузка</title><rect x="400" y="427" width="13" height="13" fill="#2f9b53"/></g>
-<g data-layer="acceptance" data-status="blocked"><title>Полнота перечня функций и переходов</title><rect x="415" y="427" width="13" height="13" fill="#63707a"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Actor readiness, input, frame and activity</title><rect x="325" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Startup, profile and room</title><rect x="340" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Conversation, vocabulary, notebook and save</title><rect x="355" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Menu, destination and return</title><rect x="370" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Save, date rollover, event and resave</title><rect x="385" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="passed"><title>Meeting, game result and cold reload</title><rect x="400" y="427" width="13" height="13" fill="#2f9b53"/></g>
+<g data-layer="acceptance" data-status="blocked"><title>Feature and transition inventory completeness</title><rect x="415" y="427" width="13" height="13" fill="#63707a"/></g>
 <text x="14" y="472" font-size="15" fill="#edf3f8">Code inventory</text>
 <rect x="14" y="482" width="9" height="9" fill="#2f9b53"/>
 <text x="28" y="490" font-size="11" fill="#edf3f8">Branch or ID check present</text>

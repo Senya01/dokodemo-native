@@ -70,7 +70,7 @@ def update_readme(path: Path, progress: dict, badge: str, overview: str) -> None
     generated = (
         f"\n[![Native map progress]({images}/native-map-progress.svg?v={badge_version})]({interactive})\n\n"
         f"**Native implementations: {implemented}/{features} basic or better, {exact}/{features} byte-exact.** "
-        f"**Windows acceptance: {percent} ({passed}/{checks}).**\n\n"
+        f"**Windows build verification: {percent} ({passed}/{checks}).**\n\n"
         f"[![Native port tile map]({images}/native-code-map.svg?v={map_version})]({interactive})\n"
     )
     updated = original[:original.index(start) + len(start)] + generated + original[original.index(end):]
@@ -92,9 +92,9 @@ if __name__ == "__main__":
         parser.error("--boot must name an existing BOOT.BIN")
     fragment, status_counts, data = build(args.boot)
     args.output.write_text(
-        '<!doctype html>\n<html lang="ru" style="color-scheme:light dark"><meta charset="utf-8">'
+        '<!doctype html>\n<html lang="en" style="color-scheme:light dark"><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<title>Карта нативного порта Doko Demo Issyo</title>'
+        '<title>Doko Demo Issyo native port map</title>'
         '<style>body{max-width:1160px;margin:2rem auto;padding:0 1rem;'
         '--background:Canvas;--foreground:CanvasText;--muted:color-mix(in srgb,CanvasText 15%,Canvas);'
         '--border:color-mix(in srgb,CanvasText 32%,Canvas)}</style>'

@@ -1,87 +1,87 @@
 {
   "modules": [
     {
-      "title": "Платформа и пакет",
+      "title": "Platform and package",
       "parts": [
         {
           "id": "startup",
-          "title": "Запуск и закрытие",
+          "title": "Startup and shutdown",
           "tiles": [
             "boot-windows"
           ],
-          "expect": "Windows-исполняемый файл загружает модули, достигает титульного кадра и завершает рабочие потоки.",
+          "expect": "The Windows executable loads modules, reaches the title frame and joins its workers at shutdown.",
           "tests": [
             "game-packaged-startup"
           ]
         },
         {
           "id": "media",
-          "title": "Целостность и переносимость пакета",
+          "title": "Package integrity and portability",
           "tiles": [
             "boot-storage"
           ],
-          "expect": "Перенос пакета сохраняет запуск. Отсутствующий или повреждённый модуль и отсутствующий декодер вызывают контролируемый отказ.",
+          "expect": "The package still starts after relocation. Missing or damaged modules and a missing decoder fail cleanly.",
           "tests": [
             "game-relocated-startup"
           ]
         },
         {
           "id": "suspend",
-          "title": "Логика сна и пробуждения",
+          "title": "Suspend and resume logic",
           "tiles": [
             "boot-platform"
           ],
-          "expect": "Имитация сна замораживает часы и PCM, после пробуждения игровой кадр и звук продолжаются с прежней позиции.",
+          "expect": "Simulated sleep pauses the game clock and PCM. After resume, frames and audio continue from the previous position.",
           "tests": [
             "game-power-cycle"
           ]
         },
         {
           "id": "windows-device",
-          "title": "Интеграция с рабочим столом Windows",
+          "title": "Windows desktop integration",
           "tiles": [
             "boot-windows",
             "boot-platform",
             "gfx-display"
           ],
-          "expect": "Обычное окно переживает смену фокуса, реальный сон и восстановление, корректно обрабатывает закрытие.",
-          "gap": "Нет повторяемого теста штатного окна на текущем пакете. Безоконные проверки покрывают только игровой код и буфер."
+          "expect": "The ordinary window survives focus changes and real sleep and resume, and closes cleanly.",
+          "gap": "A repeatable desktop test on the current package is pending. Existing headless checks cover game logic and the framebuffer."
         }
       ]
     },
     {
-      "title": "Графика, анимация и интерфейс",
+      "title": "Graphics, motion and UI",
       "parts": [
         {
           "id": "framebuffer",
-          "title": "Видеобуфер и дисплей",
+          "title": "Framebuffer and display",
           "tiles": [
             "gfx-display"
           ],
-          "expect": "Проверяются формат, шаг строки, фиксация кадра и пиксели GDI в памяти.",
+          "expect": "Tests check pixel format, stride, frame capture and GDI pixels in memory.",
           "tests": [
             "native-framebuffer"
           ]
         },
         {
           "id": "logos",
-          "title": "Последовательность заставок",
+          "title": "Opening sequence",
           "tiles": [
             "boot-logos"
           ],
-          "expect": "Сравниваются все 319 RGB-кадров зарегистрированной последовательности заставок.",
+          "expect": "Compare all 319 RGB frames of the recorded opening sequence.",
           "tests": [
             "startup-logo-sequence"
           ]
         },
         {
           "id": "title-ui",
-          "title": "Титульный интерфейс",
+          "title": "Title interface",
           "tiles": [
             "boot-title",
             "gfx-ui"
           ],
-          "expect": "Меню заголовка запускает штатные переходы. Проверяются рендер и круговое раскрытие.",
+          "expect": "The title menu starts normal transitions. Tests verify rendering and the circular reveal.",
           "tests": [
             "game-title-state",
             "game-title-renderer",
@@ -90,12 +90,12 @@
         },
         {
           "id": "text-ui",
-          "title": "Шрифты и диалоги",
+          "title": "Fonts and dialogue",
           "tiles": [
             "boot-words",
             "gfx-ui"
           ],
-          "expect": "Реплики и варианты ответа проходят тесты вывода, а меню и инвентарь проверяются через свои рендереры.",
+          "expect": "Dialogue and choices pass display tests. Menus and inventory are exercised through their own renderers.",
           "tests": [
             "game-room-talk-renderer",
             "game-room-answer-renderer",
@@ -104,12 +104,12 @@
         },
         {
           "id": "world-light",
-          "title": "Геометрия и освещение",
+          "title": "Geometry and lighting",
           "tiles": [
             "gfx-world",
             "room-tv"
           ],
-          "expect": "Проверяются рендер домашней сцены и изменение освещения телевизором в контрольных состояниях.",
+          "expect": "Checks cover home scene rendering and TV-driven light changes in controlled states.",
           "tests": [
             "game-post-profile",
             "game-room-television"
@@ -117,63 +117,63 @@
         },
         {
           "id": "actor-motion",
-          "title": "Скелет и движения",
+          "title": "Rigs and motion",
           "tiles": [
             "gfx-actor"
           ],
-          "expect": "Модели всех пяти персонажей загружаются, выполняют выбранные команды и отдают готовность.",
+          "expect": "All five models load, play the selected commands and report readiness.",
           "tests": [
             "game-room-actor"
           ]
         },
         {
           "id": "motion-fx",
-          "title": "Эффекты KSC/DAK",
+          "title": "KSC and DAK effects",
           "tiles": [
             "gfx-ef9",
             "gfx-motion-effects"
           ],
-          "expect": "Проверяются выбранные эффекты EF1–EF4 и EF9, их появление и освобождение.",
+          "expect": "Selected EF1–EF4 and EF9 effects are checked for appearance and cleanup.",
           "tests": [
             "game-motion-effects"
           ]
         },
         {
           "id": "camera",
-          "title": "Камера и перекрытия",
+          "title": "Camera and occlusion",
           "tiles": [
             "gfx-camera"
           ],
-          "expect": "Заданные переходы камеры и ветки подхода исполняются в рендере комнаты.",
+          "expect": "Selected camera transitions and approach branches execute in the room renderer.",
           "tests": [
             "game-post-profile"
           ]
         },
         {
           "id": "render-matrix",
-          "title": "Материалы, пограничные кадры и сцены",
+          "title": "Materials, frame boundaries and scenes",
           "tiles": [
             "gfx-world",
             "gfx-actor",
             "gfx-camera",
             "gfx-destinations"
           ],
-          "expect": "Активные сцены, периоды, материалы, прозрачность, тени, перекрытия и границы анимаций покрыты сверкой кадров или числовыми инвариантами.",
-          "gap": "Матрица рендера всех сцен и фаз ещё не сведена. У отдельных материалов и сцен осталась функционально непроверенная область."
+          "expect": "Compare frames or numeric invariants across active scenes, periods, materials, transparency, shadows, occlusion and animation boundaries.",
+          "gap": "The scene and phase matrix is incomplete. Some materials and scenes still lack functional coverage."
         }
       ]
     },
     {
-      "title": "Ввод и доступность",
+      "title": "Input and accessibility",
       "parts": [
         {
           "id": "input-policy",
-          "title": "Раскладка, фронты и фокус",
+          "title": "Layout, input edges and focus",
           "tiles": [
             "input-keyboard",
             "input-gamepad"
           ],
-          "expect": "Адаптер обработки кнопок и программное восстановление ввода после потери фокуса или устройства проходят регрессию.",
+          "expect": "Button mapping and software recovery after loss of focus or device pass regression checks.",
           "tests": [
             "controller-input",
             "game-room-input-gate"
@@ -181,13 +181,13 @@
         },
         {
           "id": "input-dialog-flow",
-          "title": "Ввод в меню и редакторах",
+          "title": "Menu and editor input",
           "tiles": [
             "input-keyboard",
             "room-options",
             "words-editor"
           ],
-          "expect": "Проверяются маршрутизация кнопок в меню, ввод слова и правку чтения, подтверждение и отмена.",
+          "expect": "Checks cover routing buttons in menus, entering words, editing readings, confirming and cancelling.",
           "tests": [
             "game-room-menu",
             "game-room-word-entry",
@@ -196,80 +196,80 @@
         },
         {
           "id": "xinput-device",
-          "title": "Физический контроллер",
+          "title": "Physical controller",
           "tiles": [
             "input-gamepad"
           ],
-          "expect": "Реальный XInput-контроллер управляет меню и игрой и восстанавливается после переподключения.",
-          "gap": "Программный адаптер проверен. В тестовой системе физических устройств не обнаружено."
+          "expect": "A physical XInput controller operates the menu and game and recovers after reconnection.",
+          "gap": "The software adapter passed. No physical controllers were detected on the test system."
         }
       ]
     },
     {
-      "title": "Звук",
+      "title": "Audio",
       "parts": [
         {
           "id": "decode",
-          "title": "Декодер и нативный рабочий блок",
+          "title": "Decoder and native worker",
           "tiles": [
             "prx-atrac",
             "prx-codec"
           ],
-          "expect": "После запуска декодер подаёт ненулевой PCM через рабочий нативный путь. Проверка проходит без физического выхода.",
+          "expect": "The native worker produces nonzero PCM after startup. The check uses a null sink.",
           "tests": [
             "game-packaged-audio"
           ]
         },
         {
           "id": "music",
-          "title": "Музыка и события",
+          "title": "Music and events",
           "tiles": [
             "audio-bgm"
           ],
-          "expect": "Музыкальный голос включается на правильном событии титула и переключается на следующую дорожку.",
+          "expect": "A music voice starts at the correct title event and changes to the next track.",
           "tests": [
             "game-title-bgm"
           ]
         },
         {
           "id": "voices",
-          "title": "Очередь и голоса",
+          "title": "Queues and voices",
           "tiles": [
             "audio-se",
             "audio-null",
             "prx-sas"
           ],
-          "expect": "Проверяются длительность, пауза, цикл, уровни и окончание голоса в null-приёмнике.",
+          "expect": "Tests verify duration, pause, looping, volume and voice completion through the null sink.",
           "tests": [
             "game-null-pcm"
           ]
         },
         {
           "id": "sound-matrix",
-          "title": "Микширование и весь каталог событий",
+          "title": "Mixing and full event catalog",
           "tiles": [
             "audio-bgm",
             "audio-se",
             "prx-sas",
             "prx-codec"
           ],
-          "expect": "Проверены все игровые группы событий, окончания голосов и одновременные каналы звука на эталонном PCM.",
-          "gap": "Есть контрольные потоки и сценарии. Полный каталог звуковых событий, перекрывающиеся голоса и граничные случаи ещё не составляют сквозную матрицу."
+          "expect": "Compare reference PCM across game event groups, voice completion and concurrent audio channels.",
+          "gap": "Selected streams and scenarios are covered. The full event catalog, overlapping voices and edge cases still lack an integrated matrix."
         }
       ]
     },
     {
-      "title": "Игровой цикл и KSC",
+      "title": "Game loop and KSC",
       "parts": [
         {
           "id": "clock-scheduler",
-          "title": "Действия, часы и отмена ожидания",
+          "title": "Activity, clocks and wait cancellation",
           "tiles": [
             "boot-scheduler",
             "room-activity",
             "room-time"
           ],
-          "expect": "Проверяются выбор деятельности, условные повторы, таймеры и возврат управления в контрольных комнатных сценариях.",
+          "expect": "Selected room scenarios check activity choice, conditional repeats, timers and return of control.",
           "tests": [
             "game-room-activity-selector",
             "game-room-activity-event",
@@ -278,13 +278,13 @@
         },
         {
           "id": "vm-ordinary",
-          "title": "Обычные темы пяти персонажей",
+          "title": "Ordinary topics for all five characters",
           "tiles": [
             "room-contact",
             "room-ksc",
             "room-ksc-all"
           ],
-          "expect": "Все 3118 записей обычных списков дают возврат. Отказ с предусмотренной сменой темы считается отдельным результатом.",
+          "expect": "All 3118 ordinary entries return control. A scripted topic change after declining an entry is counted separately.",
           "tests": [
             "game-room-talk-roster",
             "game-room-fallback-list"
@@ -292,24 +292,24 @@
         },
         {
           "id": "vm-branches",
-          "title": "Особые и альтернативные ветки KSC",
+          "title": "Special and alternate KSC paths",
           "tiles": [
             "room-ksc",
             "room-ksc-all",
             "room-contact"
           ],
-          "expect": "Для доступных команд и процедур прослежены разные исходы по состояниям словаря, датам, ответам и местам. Приемлемые отказы отделены от неподдерживаемых путей.",
-          "gap": "Перечислены обычные списки и выбранные специальные пути. Полного перечня доступных процедур, исходов и переходов для всех пяти персонажей пока нет."
+          "expect": "Trace command and procedure outcomes across vocabulary states, dates, answers and locations. Distinguish expected declines from unsupported paths.",
+          "gap": "Ordinary topics and selected special paths are listed. The procedure, outcome and transition inventory for all five characters is incomplete."
         },
         {
           "id": "world-reactivity",
-          "title": "Предметы и настройки в комнате",
+          "title": "Room objects and options",
           "tiles": [
             "room-tv",
             "room-inventory",
             "room-options"
           ],
-          "expect": "Контрольные переключения телевизора, расстановка и игровой системный экран обрабатываются настоящими компонентами.",
+          "expect": "The actual components handle selected TV changes, item placement and the in-game options screen.",
           "tests": [
             "game-room-television",
             "game-room-item-placement",
@@ -319,15 +319,15 @@
       ]
     },
     {
-      "title": "Язык, словарь и дневник",
+      "title": "Language, words and diary",
       "parts": [
         {
           "id": "lesson",
-          "title": "Обучение и повторное использование слова",
+          "title": "Learning and reusing a word",
           "tiles": [
             "words-learn"
           ],
-          "expect": "Тесты проходят принятие, отказ и повторный выбор принятого слова в разговоре.",
+          "expect": "Tests cover acceptance, refusal and selecting an accepted word again in conversation.",
           "tests": [
             "game-room-talk-state",
             "game-room-learned-word"
@@ -335,11 +335,11 @@
         },
         {
           "id": "kana-edit",
-          "title": "Клавиатуры и правка чтения",
+          "title": "Keyboards and reading edits",
           "tiles": [
             "words-editor"
           ],
-          "expect": "Проверяются раскладки, ввод группы, подтверждение, отмена и обновление чтения.",
+          "expect": "Test layouts, grouped entry, confirm, cancel and reading updates.",
           "tests": [
             "game-room-word-entry",
             "game-room-word-reading",
@@ -348,12 +348,12 @@
         },
         {
           "id": "kana-nj",
-          "title": "Конвертер и запросы с историей",
+          "title": "Conversion and query history",
           "tiles": [
             "words-nj",
             "words-nj-wide"
           ],
-          "expect": "Перебираются проверочные группы одиночных и составных запросов, классы, границы чтения и конкурирующие разборы.",
+          "expect": "Check single and compound queries, classes, reading limits and competing analyses.",
           "tests": [
             "game-room-word-conversion",
             "game-room-word-multi",
@@ -362,12 +362,12 @@
         },
         {
           "id": "notebook-diary",
-          "title": "Блокнот и дневник",
+          "title": "Notebook and diary",
           "tiles": [
             "words-notebook",
             "words-diary"
           ],
-          "expect": "В блокноте проверяются словарь и вкладки. Комнатный тест подтверждает создание первой записи дневника и её сохранение в состоянии.",
+          "expect": "Tests check vocabulary and tabs. A room test verifies the first diary entry is created and retained in state.",
           "tests": [
             "game-room-notebook",
             "game-post-profile"
@@ -375,29 +375,29 @@
         },
         {
           "id": "language-matrix",
-          "title": "Все категории и границы словаря",
+          "title": "Vocabulary categories and limits",
           "tiles": [
             "words-learn",
             "words-nj-wide",
             "words-notebook"
           ],
-          "expect": "Учёт всех классов слов и морфем, отказов, пустого словаря, переполнения, истории и сохранения у пяти персонажей.",
-          "gap": "Дифференциальная выборка конверсии и принятия слов покрывает часть возможных комбинаций."
+          "expect": "Cover all word and morpheme classes, refusals, empty and full vocabularies, history and saving for all five characters.",
+          "gap": "Differential conversion and lesson tests cover a subset of the possible combinations."
         }
       ]
     },
     {
-      "title": "Инвентарь, меню и поездки",
+      "title": "Inventory, menus and travel",
       "parts": [
         {
           "id": "inventory-actions",
-          "title": "Цикл инвентаря",
+          "title": "Inventory lifecycle",
           "tiles": [
             "room-inventory",
             "room-discard",
             "room-trade-mark"
           ],
-          "expect": "Проверяются активный слот, размещение и возврат, подтверждение и отказ выброса, отметка подарка и фильтр.",
+          "expect": "Check the active slot, placement and storage, discard confirm and decline, gift marking and filtering.",
           "tests": [
             "game-inventory",
             "game-room-inventory-save",
@@ -406,26 +406,26 @@
         },
         {
           "id": "room-menus",
-          "title": "Домашнее меню",
+          "title": "Home menu",
           "tiles": [
             "room-options",
             "room-outing",
             "meet-menu"
           ],
-          "expect": "Отдельный тест меню подтверждает выбор настроек, применение, отмену и возврат управления.",
+          "expect": "A focused test verifies opening options, applying, cancelling and returning control.",
           "tests": [
             "game-room-menu"
           ]
         },
         {
           "id": "roof-flow",
-          "title": "Крыша и возвращение",
+          "title": "Roof and return",
           "tiles": [
             "gfx-roof",
             "room-outing",
             "room-roof-contact"
           ],
-          "expect": "В сценарии KSC проверяются запросы ухода, открытия крыши и возврата. Отдельно загружаются ресурсы крыши через компонент комнаты.",
+          "expect": "The KSC scenario checks departure, roof and return requests. A room component loads roof resources separately.",
           "tests": [
             "game-room-talk-state",
             "game-post-profile"
@@ -433,39 +433,39 @@
         },
         {
           "id": "destination-media",
-          "title": "Ресурсы поездок",
+          "title": "Travel resources",
           "tiles": [
             "gfx-destinations",
             "room-outing"
           ],
-          "expect": "Тест загружает 54 регистрации сцен и рисует их в обоих буферах.",
+          "expect": "A test loads 54 scene registrations and renders each in both buffers.",
           "tests": [
             "game-destination-scenes"
           ]
         },
         {
           "id": "destination-matrix",
-          "title": "Маршруты по персонажам и сезону",
+          "title": "Travel by character and season",
           "tiles": [
             "gfx-destinations",
             "room-outing",
             "room-roof-contact"
           ],
-          "expect": "Доступные места достижимы у всех пяти на корректных входах. На месте работают меню, задания, возвращение и повторный выход.",
-          "gap": "Проверены ресурсы и 15 обычных поездок Торо. Эквивалентной матрицы для остальных персонажей и условных маршрутов нет."
+          "expect": "Eligible destinations are reachable by all five characters with valid inputs. Menus, tasks, return and repeat outings work at the location.",
+          "gap": "Resources and Toro's 15 ordinary trips were tested. Equivalent coverage for the other characters and conditional routes is pending."
         }
       ]
     },
     {
-      "title": "Дни, персонажи и финалы",
+      "title": "Days, characters and endings",
       "parts": [
         {
           "id": "adoption",
-          "title": "Выбор и данные профиля",
+          "title": "Character selection and profile fields",
           "tiles": [
             "story-roster"
           ],
-          "expect": "Форма, даты, передача полей и изображения карусели проверяются отдельными тестами.",
+          "expect": "Dedicated tests check the form, dates, field handoff and carousel images.",
           "tests": [
             "game-profile-date",
             "game-profile-fields",
@@ -475,11 +475,11 @@
         },
         {
           "id": "toro-intro",
-          "title": "Торо и первый подарок",
+          "title": "Toro and the first gift",
           "tiles": [
             "story-toro-gift"
           ],
-          "expect": "Вступление, подарок и вступительные диалоги завершаются возвратом в комнату.",
+          "expect": "The introduction, gift and initial conversations return control to the room.",
           "tests": [
             "game-room-talk-state",
             "game-post-profile"
@@ -487,11 +487,11 @@
         },
         {
           "id": "robo-days",
-          "title": "Робо и календарные сцены",
+          "title": "Robo's calendar scenes",
           "tiles": [
             "story-robo"
           ],
-          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "expect": "Selected introduction, saving, penultimate day and farewell tests reach their expected returns.",
           "tests": [
             "game-robo-introduction",
             "game-robo-save",
@@ -501,11 +501,11 @@
         },
         {
           "id": "usagi-days",
-          "title": "Усаги и календарные сцены",
+          "title": "Usagi's calendar scenes",
           "tiles": [
             "story-usagi"
           ],
-          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "expect": "Selected introduction, saving, penultimate day and farewell tests reach their expected returns.",
           "tests": [
             "game-usagi-introduction",
             "game-usagi-save",
@@ -515,11 +515,11 @@
         },
         {
           "id": "inu-days",
-          "title": "Ину и календарные сцены",
+          "title": "Inu's calendar scenes",
           "tiles": [
             "story-inu"
           ],
-          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "expect": "Selected introduction, saving, penultimate day and farewell tests reach their expected returns.",
           "tests": [
             "game-inu-introduction",
             "game-inu-save",
@@ -529,11 +529,11 @@
         },
         {
           "id": "kaeru-days",
-          "title": "Каэру и календарные сцены",
+          "title": "Kaeru's calendar scenes",
           "tiles": [
             "story-kaeru"
           ],
-          "expect": "Контрольные вступление, сохранение, предпоследний и финальный дни достигают ожидаемых возвратов.",
+          "expect": "Selected introduction, saving, penultimate day and farewell tests reach their expected returns.",
           "tests": [
             "game-kaeru-introduction",
             "game-kaeru-save",
@@ -543,33 +543,33 @@
         },
         {
           "id": "toro-calendar",
-          "title": "Торо и календарное состояние",
+          "title": "Toro's calendar state",
           "tiles": [
             "story-toro-days",
             "story-toro-penultimate"
           ],
-          "expect": "Контрольные состояния следующего дня и граф комнаты сохраняют данные календаря и дневника.",
+          "expect": "Next-day cases and the room graph preserve the calendar and diary data.",
           "tests": [
             "game-room-scene-rows"
           ]
         },
         {
           "id": "toro-ending",
-          "title": "Торо, GAME37 и GAME75",
+          "title": "Toro, GAME37 and GAME75",
           "tiles": [
             "story-toro-penultimate",
             "story-toro-final",
             "story-toro-extension"
           ],
-          "expect": "Из свежего слота последовательно проходят предпоследний день, оба финала, загрузка и продолжение в том же проверяемом билде.",
+          "expect": "A fresh slot reaches the penultimate day, both endings, cold loading and Continue on the tested build.",
           "tests": [
             "game-toro-ending"
           ],
-          "evidence": "Новый профиль Торо от титула до первого сохранения, последовательные даты и сцена предпоследнего дня. Обычный финал на дне 14 и продлённый на дне 24 прошли на ветках одного слота, обе завершились холодным входом в пустую комнату. Условия продления подготовлены на развилке."
+          "evidence": "A fresh Toro profile went from the title to the first save, successive dates and the penultimate scene. Day 14 and day 24 branched from the same slot and each cold-loaded into the empty room. Extension prerequisites were set at the branch."
         },
         {
           "id": "return-letter",
-          "title": "Письмо по расписанию · событие 7",
+          "title": "Scheduled letter (event 7)",
           "tiles": [
             "story-toro-extension",
             "story-after",
@@ -578,38 +578,38 @@
             "story-inu",
             "story-kaeru"
           ],
-          "expect": "Письмо по расписанию, возврат к управлению и последующая холодная загрузка проходят у применимых персонажей.",
+          "expect": "The scheduled letter, return to player control and a later cold load work for all applicable characters.",
           "tests": [
             "game-return-letter"
           ],
-          "evidence": "10 из 10 маршрутов на подготовленных слотах: холодный вход и смена дня в открытой комнате, по два маршрута на каждого из пяти персонажей."
+          "evidence": "All 10 prepared-slot routes passed: cold entry and a day change in the active room, two routes for each of the five characters."
         },
         {
           "id": "re-adopt",
-          "title": "Уход и начало нового цикла",
+          "title": "Departure and starting a new stay",
           "tiles": [
             "story-after",
             "save-all"
           ],
-          "expect": "Слот ухода открывает пустую комнату. Новое усыновление сохраняет прежние словарь и карточки после холодной загрузки.",
+          "expect": "A departed slot opens the empty room. Re-adoption preserves vocabulary and cards after a cold load.",
           "tests": [
             "game-readoption"
           ],
-          "evidence": "Торо → пустая комната → новое усыновление Робо → штатное сохранение. При холодном входе проверены слово и открытие карточки друга. Входной слот локальный; карточка добавлена тестом."
+          "evidence": "Toro's departure led to the empty room, Robo adoption and a normal save. A cold load verified the word and reopened a friend card. The input was a local slot and the card was supplied by the test."
         }
       ]
     },
     {
-      "title": "Сохранение и дисковая целостность",
+      "title": "Save and disk integrity",
       "parts": [
         {
           "id": "save-format",
-          "title": "Граф и формат слота",
+          "title": "Save graph and slot format",
           "tiles": [
             "save-slot",
             "save-graph"
           ],
-          "expect": "Проверяются сериализация, контроль целостности и защита содержимого слота, а также штатный отказ на повреждённых данных.",
+          "expect": "Check serialization, integrity, payload protection and controlled rejection of damaged data.",
           "tests": [
             "game-ksc-save-graph",
             "game-retail-savedata-envelope",
@@ -618,13 +618,13 @@
         },
         {
           "id": "save-game",
-          "title": "Запись из комнаты и восстановление",
+          "title": "Saving from the room and restoring",
           "tiles": [
             "save-slot",
             "save-graph",
             "story-toro-days"
           ],
-          "expect": "Робо, Усаги, Ину и Каэру создают защищённый слот из комнаты. Холодное чтение восстанавливает состояние. Отдельно проверяются схемы графа и инвентаря.",
+          "expect": "Robo, Usagi, Inu and Kaeru write a protected slot from the room. Cold loading restores state. Graph and inventory formats are checked separately.",
           "tests": [
             "game-robo-save",
             "game-usagi-save",
@@ -636,26 +636,26 @@
         },
         {
           "id": "save-recovery",
-          "title": "Атомарность и восстановление после отказа",
+          "title": "Atomic save and recovery",
           "tiles": [
             "save-slot",
             "save-all"
           ],
-          "expect": "Проверена матрица повреждения каждого файла, ошибки в каждой фазе замены, отказов доступа и повторного холодного чтения.",
+          "expect": "The matrix covers damage to each file, failures in each replacement phase, access denial and cold loading again.",
           "tests": [
             "game-save-recovery",
             "retail_savedata_envelope"
           ],
-          "evidence": "Проверены порча, отсутствие и повреждение при подготовке всех шести файлов, 11 исключений, 11 прерываний процесса и шесть конфликтов доступа Windows. Холодные процессы сверили восстановленное поколение и сохранность файлов."
+          "evidence": "Tests covered corruption, missing files and staging damage across all six members, 11 exceptions, 11 process exits and six Windows sharing conflicts. Cold processes checked the recovered generation and file integrity."
         }
       ]
     },
     {
-      "title": "Встречи и мини-игры",
+      "title": "Meetings and minigames",
       "parts": [
         {
           "id": "peer-transport",
-          "title": "Обнаружение, изоляция и протокол",
+          "title": "Discovery, isolation and protocol",
           "tiles": [
             "meet-session",
             "prx-ifhandle",
@@ -665,86 +665,86 @@
             "prx-adhoc",
             "prx-adhocctl"
           ],
-          "expect": "Несколько Windows-процессов на loopback подтверждают совпадение сеанса, передачу, разделение мест и режимов, отказ при искажении.",
+          "expect": "Windows processes on loopback check session matching, transfer, location and mode isolation, and tampering rejection.",
           "tests": [
             "game-network-channel"
           ]
         },
         {
           "id": "peer-menu",
-          "title": "Предложения и доступность с игроком",
+          "title": "Meeting offers and eligibility",
           "tiles": [
             "meet-menu",
             "meet-shiritory-gate"
           ],
-          "expect": "Подготовка вопросов, условия предложения しりとり и выход из меню проходят текущие сценарии.",
+          "expect": "Check prepared questions, shiritori eligibility and leaving the menu through the implemented routes.",
           "tests": [
             "game-room-talk-state"
           ]
         },
         {
           "id": "peer-card",
-          "title": "Визитка, блокнот и сохранение",
+          "title": "Friend card, notebook and save",
           "tiles": [
             "meet-cards"
           ],
-          "expect": "Два процесса сходятся на обмене, полученная визитка видна после повторного запуска обоих.",
+          "expect": "Two processes complete the exchange. Both received cards appear after each process restarts.",
           "tests": [
             "game-peer-card"
           ],
-          "evidence": "Два локальных Windows-процесса обменялись визитками и сохранились. После двух отдельных холодных запусков совпали все 30 полей принятых карточек, обе открылись в блокноте. Отдельно проверена отмена ожидания."
+          "evidence": "Two local Windows processes exchanged cards and saved. After separate cold starts all 30 fields of the received cards matched and both cards opened in the notebook. Cancelling while waiting was checked separately."
         },
         {
           "id": "peer-gift",
-          "title": "Подарок, отказ и атомарность",
+          "title": "Gift exchange, cancellation and atomicity",
           "tiles": [
             "meet-gifts"
           ],
-          "expect": "Обмен и отказ обновляют только нужные слоты в двух процессах и переживают сбой или новое чтение.",
+          "expect": "Across two processes, exchanges and cancellations affect only the intended slots and remain consistent after failure or reload.",
           "tests": [
             "game-peer-gift"
           ],
-          "evidence": "Двусторонняя замена одного подарка, отмена без партнёра и отказ после подготовки обоих участников до применения обмена. Сверены все 170 строк сумки и шесть файлов каждого слота после холодного чтения."
+          "evidence": "Tests covered a bilateral gift swap, cancelling without a partner, and aborting after both players prepared but before applying the swap. All 170 inventory rows and six slot files per player were checked after cold loading."
         },
         {
           "id": "peer-shiritori",
-          "title": "Партия и выход",
+          "title": "Shiritori match and exit",
           "tiles": [
             "meet-shiritory-play"
           ],
-          "expect": "Партия проверяет заявки, победу, поражение, отмену, неверные ходы и возврат к самостоятельной игре.",
+          "expect": "Check offers, wins, losses, cancellation, invalid moves and return to autonomous play.",
           "tests": [
             "game-peer-shiritori",
             "game-room-talk-state"
           ],
-          "evidence": "Заявка через игровое меню, победа и поражение в loopback-партии, отмена без партнёра. Неверная связка, повтор и конечная ん доставлены тестовым каналом и отвергнуты. Во всех случаях игра вернула управление комнате; отметки выученных слов сверены по сохранению."
+          "evidence": "Game-menu offer, wins and losses on loopback, and cancellation without a partner passed. Invalid links, repeats and final ん were sent through the test channel and rejected. All cases restored room control and saved word flags were checked."
         },
         {
           "id": "peer-network",
-          "title": "Два независимых хоста",
+          "title": "Two independent Windows hosts",
           "tiles": [
             "meet-session",
             "prx-ifhandle",
             "prx-adhoc"
           ],
-          "expect": "Поиск и обмен работают на разных Windows-хостах при обычной сетевой конфигурации и при потере связи.",
-          "gap": "Подтверждён loopback. На двух независимых Windows-хостах этот набор не проверялся."
+          "expect": "Peer discovery and exchange work across Windows hosts on an ordinary network, including loss of connectivity.",
+          "gap": "Loopback passed. This suite has yet to run across two independent Windows hosts."
         }
       ]
     },
     {
-      "title": "Связки подсистем",
+      "title": "Integration paths",
       "parts": [
         {
           "id": "room-frame-input",
-          "title": "Готовность актёра → ввод → кадр → занятие",
+          "title": "Actor readiness, input, frame and activity",
           "tiles": [
             "room-contact",
             "room-activity",
             "gfx-camera",
             "gfx-actor"
           ],
-          "expect": "Один контроллер комнаты обрабатывает ход актёра, выбранные кнопки и реплики. После возврата начинается новое самостоятельное занятие. Кадры отрисовываются в два буфера.",
+          "expect": "One room controller handles the actor turn, button choices and dialogue. A new autonomous activity starts after return. Frames render to both buffers.",
           "tests": [
             "game-post-profile"
           ],
@@ -756,13 +756,13 @@
         },
         {
           "id": "startup-to-room",
-          "title": "Запуск → профиль → комната",
+          "title": "Startup, profile and room",
           "tiles": [
             "boot-windows",
             "story-roster",
             "story-toro-gift"
           ],
-          "expect": "Один безоконный сценарий ведёт нативный игровой цикл от первого кадра до принятия профиля и самостоятельного занятия в комнате.",
+          "expect": "A headless route exercises the native game loop from the first frame through profile acceptance and an autonomous room activity.",
           "requires": [
             "startup",
             "adoption",
@@ -771,17 +771,17 @@
           "tests": [
             "game-startup-to-room"
           ],
-          "evidence": "Новый сеанс штатного Windows EXE: девять модулей, первый видимый кадр, семь полей профиля, знакомство, подарок и завершённое самостоятельное занятие Торо."
+          "evidence": "A fresh Windows EXE session loaded nine modules, produced a visible frame, accepted all seven fields, completed Toro's introduction and gift, and finished an autonomous activity."
         },
         {
           "id": "contact-to-save",
-          "title": "Разговор → словарь → блокнот → слот",
+          "title": "Conversation, vocabulary, notebook and save",
           "tiles": [
             "words-learn",
             "words-notebook",
             "save-slot"
           ],
-          "expect": "Один сценарий обучает слову, открывает блокнот, создаёт слот, затем новый процесс проверяет то же слово и чтение.",
+          "expect": "One route learns a word, opens the notebook, creates a slot and verifies the same spelling and reading in a new process.",
           "requires": [
             "vm-ordinary",
             "lesson",
@@ -791,17 +791,17 @@
           "tests": [
             "game-contact-to-save"
           ],
-          "evidence": "Урок в обычном разговоре Робо, строка 163 в живом блокноте и штатное сохранение в первом процессе. Второй процесс подтвердил то же написание и чтение после холодной загрузки; все шесть файлов совпали."
+          "evidence": "Robo's ordinary conversation taught the word. Row 163 was present in the live notebook before saving. A second cold process verified the spelling and reading and all six files matched."
         },
         {
           "id": "out-and-back",
-          "title": "Меню → сцена → возвращение",
+          "title": "Menu, destination and return",
           "tiles": [
             "gfx-roof",
             "room-outing",
             "room-activity"
           ],
-          "expect": "Безоконный тест открывает меню, переводит игру в сцену и возвращает управление и следующее занятие дома.",
+          "expect": "A headless path opens the menu, changes scenes and restores control and the next activity at home.",
           "requires": [
             "roof-flow",
             "destination-media",
@@ -810,17 +810,17 @@
           "tests": [
             "game-out-and-back"
           ],
-          "evidence": "15 из 15 обычных мест Торо: меню, отрисовка сцены, новое занятие вне дома, ручной возврат и новое занятие дома. Доступ к местам подготовлен в памяти."
+          "evidence": "All 15 ordinary Toro destinations passed: menu, rendered scene, activity away from home, manual return and activity at home. Eligibility was prepared in memory."
         },
         {
           "id": "seam-calendar",
-          "title": "Слот → смена даты → событие → новый слот",
+          "title": "Save, date rollover, event and resave",
           "tiles": [
             "story-toro-days",
             "story-toro-final",
             "save-all"
           ],
-          "expect": "Единый тест проверяет смену дат, окончание пребывания и два холодных чтения со штатным управлением на контрольных точках.",
+          "expect": "One test covers date changes, the end of the stay and two cold loads with ordinary controls at both checkpoints.",
           "requires": [
             "toro-calendar",
             "toro-ending",
@@ -833,7 +833,7 @@
         },
         {
           "id": "seam-links",
-          "title": "Встреча → игровой результат → повторная загрузка",
+          "title": "Meeting, game result and cold reload",
           "tiles": [
             "meet-session",
             "meet-cards",
@@ -841,7 +841,7 @@
             "meet-shiritory-play",
             "save-slot"
           ],
-          "expect": "Состояние двух игроков выдерживает соединение, согласованную игровую операцию или отмену, затем сохранение и холодное чтение.",
+          "expect": "Two players' state survives connection, a completed or cancelled operation, saving and loading again.",
           "requires": [
             "peer-transport",
             "peer-card",
@@ -852,19 +852,19 @@
           "tests": [
             "game-seam-links"
           ],
-          "evidence": "Та же пара слотов прошла обмен визитками, отмену подготовленного обмена подарками, успешный обмен подарками и партию しりとり. Штатные сохранения связали этапы. Оба холодных процесса открыли карточки, сумки и слова без изменения файлов."
+          "evidence": "The same two slots completed card exchange, prepared gift cancellation, successful gift exchange and shiritori. Normal saves linked the stages. Both independent cold processes opened the cards, inventories and words without changing files."
         },
         {
           "id": "model-completeness",
-          "title": "Полнота перечня функций и переходов",
+          "title": "Feature and transition inventory completeness",
           "tiles": [
             "room-ksc-all",
             "story-after",
             "gfx-destinations",
             "save-all"
           ],
-          "expect": "Список требований сверен с исходными таблицами сцен, команд, переходов, модулей и меню. Каждый доступный игроку путь имеет проверку или ожидаемый отказ.",
-          "gap": "Текущий реестр из 68 возможностей описывает известный объём. Полнота исходного графа доступных путей ещё не подтверждена."
+          "expect": "Compare the requirements against the original scene, command, transition, module and menu tables. Every player-accessible route has a test or an expected outcome.",
+          "gap": "The current 68-feature inventory describes known coverage. The full graph of player-accessible routes is still unverified."
         }
       ]
     }

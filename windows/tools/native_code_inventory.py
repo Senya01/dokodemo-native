@@ -11,9 +11,9 @@ BOOT_SHA256 = "2b361beb4c55e08af2828713861429e768a1140f284a11f606fba5f580cd483c"
 # Original BOOT v1.01 dispatch tables. The offsets, hashes and default
 # targets are recorded in research/code/ksc_dispatch.json and ksc_builtins.json.
 TABLES = (
-    ("Команды KSC", 918072, 254, 0x6B9B8,
+    ("KSC opcodes", 918072, 254, 0x6B9B8,
      "90ec2f37500d83a9429e0f04d733fc2ef89064d7cd57226e30b3e043f10008ec"),
-    ("Встроенные функции KSC", 916952, 241, 0x685C4,
+    ("KSC built-ins", 916952, 241, 0x685C4,
      "e1ac97815745b2860ff91e4d88bc992a9d730a4d90583e8fa305afbb87d8d931"),
 )
 CPP_TEXT = re.compile(r"""//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'""", re.DOTALL)
@@ -140,7 +140,7 @@ def collect_code(root: Path, boot_path: Path | None = None):
             groups.append({"title": title, "kind": "dispatch", "items": items,
                            "slots": slots, "fallback": slots - len(ids)})
     groups.append({
-        "title": "Вызовы GAME в комнате", "kind": "selectors",
+        "title": "Room GAME IDs", "kind": "selectors",
         "items": [{"label": f"GAME{key}", "source": ROOM, "lines": lines} for key, lines in sorted(game.items())],
     })
     return {"groups": groups + compilation_groups(root)}
