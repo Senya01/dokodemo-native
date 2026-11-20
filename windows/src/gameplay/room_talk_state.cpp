@@ -1900,6 +1900,17 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
             if(op==0x52) stack_.push_back(value);
             break;
         }
+        case 0x56: {
+            auto source_ref=Pop();
+            const auto target=Dereference(Pop()),source=Dereference(source_ref);
+            Require(target.kind==Kind::array && source.kind==Kind::array && target.cells && source.cells,
+                    "Expected two KSC array references");
+            const auto count=std::min(target.cells->size(),source.cells->size());
+            for(std::size_t i=0;i<count;++i) target.cells->at(i)=source.cells->at(i);
+            std::fill(target.cells->begin()+count,target.cells->end(),Value{});
+            if(op==0x56) stack_.push_back(std::move(source_ref));
+            break;
+        }
         case 0xc9: case 0xc8: {
             auto rhs=Pop(),lhs=Pop();
             stack_.push_back({Kind::truth,op==0xc9?(bool(rhs.data)||bool(lhs.data)):(bool(rhs.data)&&bool(lhs.data))}); break;
