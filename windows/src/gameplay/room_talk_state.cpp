@@ -4,6 +4,7 @@
 #include "message_speed.h"
 #include "room_learned_word.h"
 #include "core_hash.h"
+#include "recovered/bulk_array_native.h"
 #include "recovered/calendar_native.h"
 #include "recovered/game_primitives.h"
 #include "recovered/rng_native.h"
@@ -1593,6 +1594,87 @@ void RoomTalkState::Call(unsigned target,std::vector<Value> args,bool indirect) 
     pc_=target; locals_=std::move(args); result_={};
 }
 
+int RoomTalkState::ApplyArrayRecords(bool filtered) {
+    const auto array=[this](Value value) {
+        if(value.kind!=Kind::array) value=Dereference(std::move(value));
+        Require(value.kind==Kind::array && value.cells,"Expected an owned KSC table");
+        return value.cells;
+    };
+    const auto actions=array(Pop());
+    const auto conditions=filtered?array(Pop()):nullptr;
+    const auto rows=array(Pop());
+    Require(actions->size()%3==0 && (!conditions || conditions->size()%3==0),
+            "KSC table records require triples");
+    const auto numeric=[](const Value& v) {
+        if(v.kind==Kind::fixed14)
+            return int(recovered::BulkNumeric({0x40000000u | (unsigned(v.data)&0x0fffffffu)}));
+        if(v.kind==Kind::array && v.cells) return int(v.cells->size());
+        Require(v.kind==Kind::nil || v.kind==Kind::integer || v.kind==Kind::truth ||
+                v.kind==Kind::calendar_time || v.kind==Kind::code,"Invalid KSC record number");
+        return v.data;
+    };
+    const auto update=[&](std::vector<Value>& row,int index,int op,const Value& argument) {
+        if(op==16) return;
+        auto& cell=row.at(index);
+        if(op==0) {
+            cell=argument;
+            return;
+        }
+        Require(op>=1 && op<=3,"Unsupported KSC table action");
+        constexpr unsigned operations[]={0x66,0x64,0x68};
+        cell={Kind::integer,IntegerCompound(operations[op-1],numeric(cell),numeric(argument))};
+    };
+    const auto matches=[&](const std::vector<Value>& row,std::size_t at) {
+        const int index=numeric(conditions->at(at)),op=numeric(conditions->at(at+1));
+        if(op==16) return true;
+        const auto& left=row.at(index);
+        const auto& right=conditions->at(at+2);
+        if(op==0 || op==1) {
+            const bool eq=left.kind==right.kind && left.data==right.data &&
+                (left.kind!=Kind::string || std::string_view(left.text.c_str())==std::string_view(right.text.c_str()));
+            // Original equality rejects array headers and references.
+            const bool comparable=left.kind==Kind::nil || left.kind==Kind::integer || left.kind==Kind::truth ||
+                left.kind==Kind::calendar_time || left.kind==Kind::code || left.kind==Kind::fixed14 ||
+                left.kind==Kind::string;
+            return (comparable && eq)==(op==0);
+        }
+        const int a=numeric(left),b=numeric(right);
+        switch(op) {
+        case 2: return a>b;
+        case 3: return a>=b;
+        case 4: return a<b;
+        case 5: return a<=b;
+        case 6: return (a&b)==b;
+        case 7: return (a&b)==0;
+        case 8: return (a&b)!=0;
+        default: throw std::runtime_error("Unsupported KSC table condition");
+        }
+    };
+    if(!filtered) {
+        // 7773C applies each action to all rows before starting the next action.
+        for(std::size_t at=0;at<actions->size();at+=3) {
+            const int index=numeric(actions->at(at)),op=numeric(actions->at(at+1));
+            if(op==16) continue;
+            for(const auto& target:*rows)
+                update(*array(target),index,op,actions->at(at+2));
+        }
+        return 0;
+    }
+    // 7A64C filters and applies all actions to one row before reading the next.
+    int count=0;
+    for(const auto& target:*rows) {
+        const auto row=array(target);
+        if(conditions->empty()) continue;
+        std::size_t at=0;
+        while(at<conditions->size() && matches(*row,at)) at+=3;
+        if(at<conditions->size()) continue;
+        for(at=0;at<actions->size();at+=3)
+            update(*row,numeric(actions->at(at)),numeric(actions->at(at+1)),actions->at(at+2));
+        ++count;
+    }
+    return count;
+}
+
 void RoomTalkState::InitializeArray(unsigned opcode) {
     const unsigned index=Read(2);
     const auto count=Pop();
@@ -2554,6 +2636,8 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                         predicate.kind==Kind::constant_ref && predicate.data==0x2b01,
                         "Invalid friend notebook count operands");
                 result_={Kind::integer,int(CountIntroductionFriends(vocabulary_))};
+            } else if(id==0x61 && argc==2) {
+                result_={Kind::integer,ApplyArrayRecords(false)};
             } else if(id==0x63 && argc==2) {
                 const auto filter=Pop(),row=Pop();
                 Require(filter.kind==Kind::constant_ref && row.kind==Kind::word_row,"Invalid word predicate");
