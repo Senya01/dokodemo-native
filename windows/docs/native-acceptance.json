@@ -682,7 +682,10 @@
             "meet-cards"
           ],
           "expect": "Два процесса сходятся на обмене, полученная визитка видна после повторного запуска обоих.",
-          "gap": "Такой прогон был на частном слоте. В общей проверке ещё нет воспроизводимого входа и двух холодных загрузок."
+          "tests": [
+            "game-peer-card"
+          ],
+          "evidence": "Два локальных Windows-процесса обменялись визитками и сохранились. После двух отдельных холодных запусков совпали все 30 полей принятых карточек, обе открылись в блокноте. Отдельно проверена отмена ожидания."
         },
         {
           "id": "peer-gift",
@@ -896,7 +899,7 @@
     "save-recovery": "blocked",
     "peer-transport": "passed",
     "peer-menu": "passed",
-    "peer-card": "blocked",
+    "peer-card": "passed",
     "peer-gift": "blocked",
     "peer-shiritori": "blocked",
     "peer-network": "blocked",
@@ -975,7 +978,8 @@
     "game-readoption": "passed",
     "game-out-and-back": "passed",
     "game-startup-to-room": "passed",
-    "game-contact-to-save": "passed"
+    "game-contact-to-save": "passed",
+    "game-peer-card": "passed"
   },
   "game_sha256": "9de6a9b8d7660d2ff163ff21c03042d3d4120ef8b96f4c8f08cc9d3c1d211289",
   "ready": false,
@@ -1012,6 +1016,12 @@
       "routes_passed": 1,
       "routes_total": 1,
       "scope": "Windows Release, headless, null audio. Controlled Robo room calendar and inputs, native contact and lesson, memo, System save, separate process cold load and exact slot preservation."
+    },
+    "game-peer-card": {
+      "test_binary_sha256": "9eb69e60c1dc1904f1649e11db922af89fa8904b3d4eca95cd8f4137d96a4023",
+      "routes_passed": 2,
+      "routes_total": 2,
+      "scope": "Windows Release, headless, null audio. Loopback card exchange with System Save and two cold processes, plus no-partner cancellation, on local protected Toro fixtures."
     }
   }
 }

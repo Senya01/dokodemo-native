@@ -1917,6 +1917,8 @@ int main(int argc, char **argv) try {
                 operation=="--gift-exchange-slot"?MeetingMode::gifts:
                 operation=="--shiritori-slot"?MeetingMode::shiritori:MeetingMode::cards);
     }
+    if (argc==4 && std::string_view(argv[2])=="--cold-meeting-card")
+        return CheckColdMeetingCard(argv[1],unsigned(std::stoul(argv[3])));
     if (argc==4 && std::string_view(argv[2])=="--replacement-slot")
         return CheckReplacementSlot(argv[1],argv[3]);
     if (argc==4 && std::string_view(argv[2])=="--expired-stay-slot")

@@ -16,6 +16,11 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     Require(profile.player.Assign(player),"Could not prepare the test identity");
     card.at(1)={0x50000000u,player,{}};
     card.at(2)=card.at(1);
+    if (!gifts && !words) {
+        const char* phone=side==1 ? "111" : "222";
+        Require(profile.phone.Assign(phone),"Could not prepare the test phone number");
+        card.at(25)={0x50000000u,phone,{}};
+    }
     saved.profile.Adopt(profile);
     int local_id=-1, peer_id=-1;
     if (gifts) {
@@ -197,5 +202,44 @@ int CheckRecordExchange(const std::filesystem::path& install,const std::filesyst
     Require(reboot.room.notebook_snapshot().row==601 && reboot.room.notebook_snapshot().written==peer &&
             ReadRetailSlot(source)==input,"Cold notebook lost its saved friend or changed the source");
     std::cout<<"Protected slot and cold notebook contain "<<peer<<'\n';
+    return 0;
+}
+
+int CheckColdMeetingCard(const std::filesystem::path& install,unsigned side) {
+    using namespace dokodemo::gameplay;
+    Require(side==1 || side==2,"Invalid cold meeting participant");
+    const auto slot=install/"savedata"/"UCJS10002000";
+    const auto before=ReadRetailSlot(slot);
+    const auto saved=DecodeRetailUtilityRequest(before,RetailSaveProfile{});
+    const auto owners=RoomSaveOwners::FromActorGraph(saved.actor);
+    const auto profile=saved.profile.ReadProfile();
+    const std::string_view own=side==1 ? "HANA" : "SORA", peer=side==1 ? "SORA" : "HANA";
+    const std::string_view phone=side==1 ? "111" : "222", peer_phone=side==1 ? "222" : "111";
+    Require(profile.actor==0 && profile.player.text()==own && profile.phone.text()==phone,
+            "Wrong player identity on cold meeting load");
+    const auto& rows=owners.dictionary.children.at(0).children;
+    auto sent=rows.at(600).children.at(0);
+    const auto& received=rows.at(601).children.at(0);
+    Require(sent.children.size()==30 && received.children.size()==30 &&
+            sent.children.at(1).text==own && sent.children.at(25).text==phone &&
+            received.children.at(1).text==peer && received.children.at(25).text==peer_phone &&
+            !(received.children.at(0).word&2),"Saved friend card or own card differs");
+
+    const int day=int(owners.day_words[0].children.at(0).word&0x0fffffffu);
+    ResumeDayRoom room(install,saved,saved.profile.SavedAt());
+    room.Start(day,day);
+    room.OpenSection(0,9);
+    const auto page=room.room.notebook_snapshot();
+    Require(page.count==1 && page.row==601 && page.written==peer,"Cold notebook lost the peer's entry");
+    room.Key(0x2000);
+    const auto detail=room.room.notebook_snapshot();
+    Require(detail.detail && detail.written==peer && ReadRetailSlot(slot)==before,
+            "Cold notebook did not open the peer's card intact");
+    sent.children.at(0).word&=~2u; // The receive path removes the sender's own-card bit.
+    const auto hash=[](const auto& card) {
+        const auto bytes=EncodeKscSaveGraph(card);
+        return dokodemo::core::sha256_hex(bytes.data(),bytes.size());
+    };
+    std::cout<<"cold_card own="<<own<<" peer="<<peer<<" sent="<<hash(sent)<<" received="<<hash(received)<<'\n';
     return 0;
 }

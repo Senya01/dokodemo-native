@@ -97,6 +97,12 @@ if(BUILD_TESTING)
         add_test(NAME game-contact-to-save COMMAND "${Python3_EXECUTABLE}" -B
             "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_contact_save.py"
             "$<TARGET_FILE:post-profile-tests>" "${DOKODEMO_GAME_TEST_MEDIA_DIR}")
+        set(DOKODEMO_GAME_MEETING_TEST_SLOT "" CACHE PATH "Local Toro slot without friend cards for the meeting tests")
+        if(DOKODEMO_GAME_MEETING_TEST_SLOT)
+            add_test(NAME game-peer-card COMMAND "${Python3_EXECUTABLE}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/test_room_meetings.py" cards "$<TARGET_FILE:post-profile-tests>"
+                --package "${DOKODEMO_GAME_TEST_MEDIA_DIR}" --source "${DOKODEMO_GAME_MEETING_TEST_SLOT}")
+        endif()
         set(DOKODEMO_GAME_DEPARTED_TEST_SLOT "" CACHE PATH "Local completed Toro slot for the new adoption test")
         if(DOKODEMO_GAME_DEPARTED_TEST_SLOT)
             add_test(NAME game-readoption COMMAND "${Python3_EXECUTABLE}" -B
