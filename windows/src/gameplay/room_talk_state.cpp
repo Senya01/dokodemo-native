@@ -2363,6 +2363,13 @@ void RoomTalkState::Execute(recovered::RngNativeOwner* rng) {
                     Require(value.kind==Kind::string,"Invalid KSC string conversion");
                     result_=std::move(value);
                 }
+            } else if(id==0x0d && argc==1) {
+                const auto value=Pop();
+                Require(value.kind==Kind::string && !value.text.empty(),"Invalid KSC two-byte text operand");
+                // The source reads two bytes. A single-byte C string has
+                // its terminator in the high byte at this address.
+                result_={Kind::integer,int(static_cast<unsigned char>(value.text[0]) |
+                                          (unsigned(static_cast<unsigned char>(value.text[1]))<<8))};
             } else if(id==0x27 && argc==4 && excursion_ && site==0x1c64) {
                 const auto mode=Pop(),deadline=Pop(),callback=Pop(),caller=Pop();
                 Require(caller.kind==Kind::context && callback.kind==Kind::code && callback.data==0x1c57 &&
